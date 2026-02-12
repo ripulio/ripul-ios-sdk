@@ -11,6 +11,11 @@
 		A02 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B02 /* ContentView.swift */; };
 		A03 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B03 /* Assets.xcassets */; };
 		A04 /* Preview Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B04 /* Preview Assets.xcassets */; };
+		A05 /* AgentConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = B06 /* AgentConfiguration.swift */; };
+		A06 /* AgentBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = B07 /* AgentBridge.swift */; };
+		A07 /* AgentWebView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B08 /* AgentWebView.swift */; };
+		A08 /* AgentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B09 /* AgentView.swift */; };
+		A09 /* NativeTools.swift in Sources */ = {isa = PBXBuildFile; fileRef = B11 /* NativeTools.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -19,6 +24,12 @@
 		B03 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		B04 /* Preview Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = "Preview Assets.xcassets"; sourceTree = "<group>"; };
 		B05 /* TestApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = TestApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		B06 /* AgentConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentConfiguration.swift; sourceTree = "<group>"; };
+		B07 /* AgentBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentBridge.swift; sourceTree = "<group>"; };
+		B08 /* AgentWebView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentWebView.swift; sourceTree = "<group>"; };
+		B09 /* AgentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentView.swift; sourceTree = "<group>"; };
+		B10 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		B11 /* NativeTools.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeTools.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -45,6 +56,8 @@
 			children = (
 				B01 /* TestAppApp.swift */,
 				B02 /* ContentView.swift */,
+				B10 /* Info.plist */,
+				D05 /* Agent */,
 				B03 /* Assets.xcassets */,
 				D03 /* Preview Content */,
 			);
@@ -65,6 +78,18 @@
 				B05 /* TestApp.app */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		D05 /* Agent */ = {
+			isa = PBXGroup;
+			children = (
+				B06 /* AgentConfiguration.swift */,
+				B07 /* AgentBridge.swift */,
+				B08 /* AgentWebView.swift */,
+				B09 /* AgentView.swift */,
+				B11 /* NativeTools.swift */,
+			);
+			path = Agent;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -139,6 +164,11 @@
 			files = (
 				A02 /* ContentView.swift in Sources */,
 				A01 /* TestAppApp.swift in Sources */,
+				A05 /* AgentConfiguration.swift in Sources */,
+				A06 /* AgentBridge.swift in Sources */,
+				A07 /* AgentWebView.swift in Sources */,
+				A08 /* AgentView.swift in Sources */,
+				A09 /* NativeTools.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -274,6 +304,7 @@
 				DEVELOPMENT_ASSET_PATHS = "\"TestApp/Preview Content\"";
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = TestApp/Info.plist;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -302,6 +333,7 @@
 				DEVELOPMENT_ASSET_PATHS = "\"TestApp/Preview Content\"";
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = TestApp/Info.plist;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
