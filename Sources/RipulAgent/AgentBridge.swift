@@ -5,29 +5,33 @@ private let protocolVersion = "1.0.0"
 private let messagePrefix = "agent-framework:"
 
 @MainActor
-final class AgentBridge: NSObject, ObservableObject {
-    @Published var isConnected = false
-    @Published var isThemeReady = false
-    @Published var wantsMinimize = false
+public final class AgentBridge: NSObject, ObservableObject {
+    @Published public var isConnected = false
+    @Published public var isThemeReady = false
+    @Published public var wantsMinimize = false
 
     private weak var webView: WKWebView?
     private var registeredTools: [NativeTool] = []
 
+    public override init() {
+        super.init()
+    }
+
     // MARK: - Tool Registration
 
     /// Register native tools that the agent can discover and invoke.
-    func register(_ tools: [NativeTool]) {
+    public func register(_ tools: [NativeTool]) {
         registeredTools.append(contentsOf: tools)
     }
 
-    func attach(to webView: WKWebView) {
+    public func attach(to webView: WKWebView) {
         self.webView = webView
         NSLog("[AgentBridge] Attached to WKWebView")
     }
 
     // MARK: - Receive messages from web app
 
-    func handleMessage(_ body: Any) {
+    public func handleMessage(_ body: Any) {
         guard let dict = body as? [String: Any],
               let type = dict["type"] as? String,
               type.hasPrefix(messagePrefix) else {
@@ -61,13 +65,13 @@ final class AgentBridge: NSObject, ObservableObject {
         }
     }
 
-    func handleConsoleLog(_ message: String) {
+    public func handleConsoleLog(_ message: String) {
         NSLog("[JS] %@", message)
     }
 
     // MARK: - Send messages to web app
 
-    func setTheme(_ theme: AgentTheme) {
+    public func setTheme(_ theme: AgentTheme) {
         let requestId = UUID().uuidString
         send([
             "type": "\(messagePrefix)theme:set",

@@ -1,15 +1,20 @@
 import SwiftUI
 import WebKit
 
-struct AgentWebView: UIViewRepresentable {
-    let configuration: AgentConfiguration
-    let bridge: AgentBridge
+public struct AgentWebView: UIViewRepresentable {
+    public let configuration: AgentConfiguration
+    public let bridge: AgentBridge
 
-    func makeCoordinator() -> Coordinator {
+    public init(configuration: AgentConfiguration, bridge: AgentBridge) {
+        self.configuration = configuration
+        self.bridge = bridge
+    }
+
+    public func makeCoordinator() -> Coordinator {
         Coordinator(bridge: bridge)
     }
 
-    func makeUIView(context: Context) -> WKWebView {
+    public func makeUIView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
 
         // Inject the bridge script before any page JS runs
@@ -52,9 +57,9 @@ struct AgentWebView: UIViewRepresentable {
         return webView
     }
 
-    func updateUIView(_ webView: WKWebView, context: Context) {}
+    public func updateUIView(_ webView: WKWebView, context: Context) {}
 
-    static func dismantleUIView(_ webView: WKWebView, coordinator: Coordinator) {
+    public static func dismantleUIView(_ webView: WKWebView, coordinator: Coordinator) {
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "agentBridge")
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "agentLog")
         webView.configuration.userContentController.removeAllUserScripts()
@@ -181,14 +186,14 @@ struct AgentWebView: UIViewRepresentable {
 
     // MARK: - Coordinator
 
-    final class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
+    public final class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         let bridge: AgentBridge
 
         init(bridge: AgentBridge) {
             self.bridge = bridge
         }
 
-        func userContentController(
+        public func userContentController(
             _ userContentController: WKUserContentController,
             didReceive message: WKScriptMessage
         ) {
@@ -201,7 +206,7 @@ struct AgentWebView: UIViewRepresentable {
             }
         }
 
-        func webView(
+        public func webView(
             _ webView: WKWebView,
             decidePolicyFor navigationAction: WKNavigationAction
         ) async -> WKNavigationActionPolicy {
@@ -211,15 +216,15 @@ struct AgentWebView: UIViewRepresentable {
             return .allow
         }
 
-        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        public func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             NSLog("[AgentWebView] Page finished loading: %@", webView.url?.absoluteString ?? "nil")
         }
 
-        func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        public func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
             NSLog("[AgentWebView] Navigation failed: %@", error.localizedDescription)
         }
 
-        func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        public func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
             NSLog("[AgentWebView] Provisional navigation failed: %@", error.localizedDescription)
         }
     }

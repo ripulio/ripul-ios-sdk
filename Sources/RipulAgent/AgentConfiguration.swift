@@ -1,19 +1,37 @@
 import Foundation
 
-enum AgentTheme: String {
+public enum AgentTheme: String {
     case light, dark, system
 }
 
-struct AgentConfiguration {
-    var baseURL: URL
-    var path: String = "/app"
-    var siteKey: String? = nil
-    var sessionToken: String? = nil
-    var theme: AgentTheme = .system
-    var newChat: Bool = false
-    var prompt: String? = nil
+public struct AgentConfiguration {
+    public var baseURL: URL
+    public var path: String = "/app"
+    public var siteKey: String? = nil
+    public var sessionToken: String? = nil
+    public var theme: AgentTheme = .system
+    public var newChat: Bool = false
+    public var prompt: String? = nil
 
-    static let defaultBaseURL = URL(string: "https://demo.ripul.io")!
+    public static let defaultBaseURL = URL(string: "https://demo.ripul.io")!
+
+    public init(
+        baseURL: URL,
+        path: String = "/app",
+        siteKey: String? = nil,
+        sessionToken: String? = nil,
+        theme: AgentTheme = .system,
+        newChat: Bool = false,
+        prompt: String? = nil
+    ) {
+        self.baseURL = baseURL
+        self.path = path
+        self.siteKey = siteKey
+        self.sessionToken = sessionToken
+        self.theme = theme
+        self.newChat = newChat
+        self.prompt = prompt
+    }
 
     var embeddedURL: URL {
         var components = URLComponents(url: baseURL.appendingPathComponent(path), resolvingAgainstBaseURL: false)!

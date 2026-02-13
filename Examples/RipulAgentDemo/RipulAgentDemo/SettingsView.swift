@@ -1,4 +1,5 @@
 import SwiftUI
+import RipulAgent
 
 struct SettingsView: View {
     @AppStorage("agentBaseURL") private var baseURLString = AgentConfiguration.defaultBaseURL.absoluteString

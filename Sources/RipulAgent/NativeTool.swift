@@ -4,14 +4,14 @@ import Foundation
 //
 // Conform to this protocol to expose any native API as a tool the agent can call.
 
-protocol NativeTool {
+public protocol NativeTool {
     var name: String { get }
     var description: String { get }
     var inputSchema: [String: Any] { get }
     func execute(args: [String: Any]) async throws -> Any
 }
 
-extension NativeTool {
+public extension NativeTool {
     /// MCP-formatted definition sent to the agent during discovery.
     var definition: [String: Any] {
         ["name": name, "description": description, "inputSchema": inputSchema]
@@ -58,10 +58,10 @@ extension NativeTool {
     }
 }
 
-enum ToolError: LocalizedError {
+public enum ToolError: LocalizedError {
     case invalidArgs(String)
 
-    var errorDescription: String? {
+    public var errorDescription: String? {
         switch self {
         case .invalidArgs(let message): return message
         }
@@ -91,31 +91,31 @@ enum ToolError: LocalizedError {
 ///     .bool("isAllDay", "All-day event")
 /// )
 /// ```
-enum ToolSchema {
-    struct Property {
+public enum ToolSchema {
+    public struct Property {
         let name: String
         let type: String
         let description: String
         let isRequired: Bool
 
-        static func string(_ name: String, _ description: String, required: Bool = false) -> Property {
+        public static func string(_ name: String, _ description: String, required: Bool = false) -> Property {
             Property(name: name, type: "string", description: description, isRequired: required)
         }
 
-        static func bool(_ name: String, _ description: String, required: Bool = false) -> Property {
+        public static func bool(_ name: String, _ description: String, required: Bool = false) -> Property {
             Property(name: name, type: "boolean", description: description, isRequired: required)
         }
 
-        static func number(_ name: String, _ description: String, required: Bool = false) -> Property {
+        public static func number(_ name: String, _ description: String, required: Bool = false) -> Property {
             Property(name: name, type: "number", description: description, isRequired: required)
         }
 
-        static func integer(_ name: String, _ description: String, required: Bool = false) -> Property {
+        public static func integer(_ name: String, _ description: String, required: Bool = false) -> Property {
             Property(name: name, type: "integer", description: description, isRequired: required)
         }
     }
 
-    static func object(_ properties: Property...) -> [String: Any] {
+    public static func object(_ properties: Property...) -> [String: Any] {
         var props: [String: Any] = [:]
         var required: [String] = []
 

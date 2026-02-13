@@ -11,16 +11,12 @@
 		A02 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B02 /* ContentView.swift */; };
 		A03 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B03 /* Assets.xcassets */; };
 		A04 /* Preview Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B04 /* Preview Assets.xcassets */; };
-		A05 /* AgentConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = B06 /* AgentConfiguration.swift */; };
-		A06 /* AgentBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = B07 /* AgentBridge.swift */; };
-		A07 /* AgentWebView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B08 /* AgentWebView.swift */; };
-		A08 /* AgentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B09 /* AgentView.swift */; };
-		A09 /* NativeTool.swift in Sources */ = {isa = PBXBuildFile; fileRef = B11 /* NativeTool.swift */; };
 		A10 /* YourTools.swift in Sources */ = {isa = PBXBuildFile; fileRef = B12 /* YourTools.swift */; };
 		A11 /* AppServices.swift in Sources */ = {isa = PBXBuildFile; fileRef = B13 /* AppServices.swift */; };
 		A12 /* CalendarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B14 /* CalendarView.swift */; };
 		A13 /* GuideView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B15 /* GuideView.swift */; };
 		A14 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B16 /* SettingsView.swift */; };
+		A15 /* RipulAgent in Frameworks */ = {isa = PBXBuildFile; productRef = P01 /* RipulAgent */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -29,12 +25,7 @@
 		B03 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		B04 /* Preview Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = "Preview Assets.xcassets"; sourceTree = "<group>"; };
 		B05 /* RipulAgentDemo.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = RipulAgentDemo.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		B06 /* AgentConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentConfiguration.swift; sourceTree = "<group>"; };
-		B07 /* AgentBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentBridge.swift; sourceTree = "<group>"; };
-		B08 /* AgentWebView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentWebView.swift; sourceTree = "<group>"; };
-		B09 /* AgentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentView.swift; sourceTree = "<group>"; };
 		B10 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
-		B11 /* NativeTool.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeTool.swift; sourceTree = "<group>"; };
 		B12 /* YourTools.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = YourTools.swift; sourceTree = "<group>"; };
 		B13 /* AppServices.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppServices.swift; sourceTree = "<group>"; };
 		B14 /* CalendarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarView.swift; sourceTree = "<group>"; };
@@ -47,6 +38,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A15 /* RipulAgent in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -64,7 +56,6 @@
 		D02 /* RipulAgentDemo */ = {
 			isa = PBXGroup;
 			children = (
-				D05 /* AgentFramework */,
 				D06 /* _Your_Tools */,
 				B01 /* RipulAgentDemoApp.swift */,
 				B02 /* ContentView.swift */,
@@ -95,18 +86,6 @@
 			name = Products;
 			sourceTree = "<group>";
 		};
-		D05 /* AgentFramework */ = {
-			isa = PBXGroup;
-			children = (
-				B06 /* AgentConfiguration.swift */,
-				B07 /* AgentBridge.swift */,
-				B08 /* AgentWebView.swift */,
-				B09 /* AgentView.swift */,
-				B11 /* NativeTool.swift */,
-			);
-			path = AgentFramework;
-			sourceTree = "<group>";
-		};
 		D06 /* _Your_Tools */ = {
 			isa = PBXGroup;
 			children = (
@@ -131,6 +110,9 @@
 			dependencies = (
 			);
 			name = RipulAgentDemo;
+			packageProductDependencies = (
+				P01 /* RipulAgent */,
+			);
 			productName = RipulAgentDemo;
 			productReference = B05 /* RipulAgentDemo.app */;
 			productType = "com.apple.product-type.application";
@@ -159,6 +141,9 @@
 				Base,
 			);
 			mainGroup = D01;
+			packageReferences = (
+				PKG01 /* XCLocalSwiftPackageReference "../.." */,
+			);
 			productRefGroup = D04 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
@@ -187,11 +172,6 @@
 			files = (
 				A02 /* ContentView.swift in Sources */,
 				A01 /* RipulAgentDemoApp.swift in Sources */,
-				A05 /* AgentConfiguration.swift in Sources */,
-				A06 /* AgentBridge.swift in Sources */,
-				A07 /* AgentWebView.swift in Sources */,
-				A08 /* AgentView.swift in Sources */,
-				A09 /* NativeTool.swift in Sources */,
 				A10 /* YourTools.swift in Sources */,
 				A11 /* AppServices.swift in Sources */,
 				A12 /* CalendarView.swift in Sources */,
@@ -402,6 +382,20 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		PKG01 /* XCLocalSwiftPackageReference "../.." */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = "../..";
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		P01 /* RipulAgent */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = RipulAgent;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = G01 /* Project object */;
 }

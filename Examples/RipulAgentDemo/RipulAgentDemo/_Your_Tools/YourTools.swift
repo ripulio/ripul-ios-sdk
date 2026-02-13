@@ -1,4 +1,5 @@
 import Foundation
+import RipulAgent
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Tool Registration — this is the only new code you write

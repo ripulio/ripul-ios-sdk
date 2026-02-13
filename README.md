@@ -15,34 +15,54 @@ What this delivers:
 
 This reference app demonstrates the pattern with a **calendar assistant**: a native week-view calendar backed by EventKit, with a floating Ripul AI Agent that can list, create, delete, and search calendar events on the user's behalf. The same pattern applies to any native capability you want to expose.
 
+## Installation
+
+Add the RipulAgent SDK to your Xcode project via Swift Package Manager:
+
+```
+https://github.com/anthropics/ios-AgentDemo
+```
+
+Or add it to your `Package.swift`:
+
+```swift
+dependencies: [
+    .package(url: "https://github.com/anthropics/ios-AgentDemo", from: "1.0.0"),
+]
+```
+
+Then `import RipulAgent` in any file that uses the SDK.
+
 ## Project Structure
 
 ```
-RipulAgentDemo/
-├── AgentFramework/           ← Ripul SDK (do not modify)
-│   ├── AgentBridge.swift         Message bridge between native and web agent
-│   ├── AgentWebView.swift        WKWebView wrapper with JS bridge injection
-│   ├── AgentView.swift           Drop-in SwiftUI view for presenting the agent
-│   ├── AgentConfiguration.swift  URL/theme/auth configuration for the agent
-│   └── NativeTool.swift          Protocol for registering native tools
+├── Package.swift                        ← SPM package manifest
+├── Sources/
+│   └── RipulAgent/                      ← Ripul SDK (Swift Package)
+│       ├── AgentBridge.swift                Message bridge between native and web agent
+│       ├── AgentWebView.swift               WKWebView wrapper with JS bridge injection
+│       ├── AgentView.swift                  Drop-in SwiftUI view for presenting the agent
+│       ├── AgentConfiguration.swift         URL/theme/auth configuration for the agent
+│       └── NativeTool.swift                 Protocol for registering native tools
 │
-├── _Your_Tools/              ← The only new code you write for agent integration
-│   └── YourTools.swift           Thin wrappers that register your APIs as tools
-│
-├── AppServices.swift         ← Your app's existing APIs (e.g. CalendarService)
-├── CalendarView.swift        ← Your app's UI
-├── GuideView.swift           ← In-app integration guide
-├── SettingsView.swift        ← Agent configuration (site key, base URL)
-├── ContentView.swift         ← App entry point with tab navigation
-├── RipulAgentDemoApp.swift   ← @main App struct
-└── Info.plist                ← Permissions + display name
+└── Examples/
+    └── RipulAgentDemo/                  ← Demo app (calendar assistant)
+        └── RipulAgentDemo/
+            ├── _Your_Tools/
+            │   └── YourTools.swift          Thin wrappers that register your APIs as tools
+            ├── AppServices.swift            Your app's existing APIs (e.g. CalendarService)
+            ├── CalendarView.swift           Native weekly calendar UI
+            ├── ContentView.swift            App entry point with tab navigation
+            ├── GuideView.swift              In-app integration guide
+            ├── SettingsView.swift           Agent configuration (site key, base URL)
+            └── RipulAgentDemoApp.swift      @main App struct
 ```
 
 ### What's what
 
 | Folder / File | Who writes it | Purpose |
 |---------------|--------------|---------|
-| `AgentFramework/` | **Ripul** (the SDK) | Handles embedding, communication protocol, tool discovery/invocation. Include these files as-is. |
+| `Sources/RipulAgent/` | **Ripul** (the SDK) | Handles embedding, communication protocol, tool discovery/invocation. Add via SPM. |
 | `_Your_Tools/` | **You** (new code) | The *only* new code you write. Thin wrappers that register your existing APIs as agent-callable tools. |
 | Everything else | **You** (existing code) | Your normal app — views, models, services. Nothing agent-specific here. |
 
@@ -105,6 +125,7 @@ A complete wrapper looks like this:
 
 ```swift
 // _Your_Tools/YourTools.swift — the only new code you write
+import RipulAgent
 
 struct CreateEventTool: NativeTool {
     let name = "create_event"
@@ -150,6 +171,8 @@ enum YourTools {
 In your view, create a bridge, register your tools, and add the `AgentWebView`:
 
 ```swift
+import RipulAgent
+
 struct ContentView: View {
     @StateObject private var bridge = AgentBridge()
 
@@ -297,7 +320,7 @@ await MainActor.run {
 
 ## Running the Demo
 
-1. Open `RipulAgentDemo.xcodeproj` in Xcode
+1. Open `Examples/RipulAgentDemo/RipulAgentDemo.xcodeproj` in Xcode
 2. Select an iOS Simulator target
 3. Build and run
 4. Grant calendar access when prompted

@@ -1,14 +1,19 @@
 import SwiftUI
 
-struct AgentView: View {
-    let configuration: AgentConfiguration
-    var tools: [NativeTool] = []
+public struct AgentView: View {
+    public let configuration: AgentConfiguration
+    public var tools: [NativeTool] = []
     @StateObject private var bridge = AgentBridge()
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.dismiss) private var dismiss
     @State private var showContent = false
 
-    var body: some View {
+    public init(configuration: AgentConfiguration, tools: [NativeTool] = []) {
+        self.configuration = configuration
+        self.tools = tools
+    }
+
+    public var body: some View {
         ZStack {
             AgentWebView(configuration: configuration, bridge: bridge)
 

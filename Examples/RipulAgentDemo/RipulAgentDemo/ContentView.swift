@@ -1,4 +1,5 @@
 import SwiftUI
+import RipulAgent
 
 struct ContentView: View {
     @StateObject private var calendarService = CalendarService.shared
