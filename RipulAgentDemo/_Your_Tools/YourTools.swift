@@ -45,7 +45,9 @@ struct ListEventsTool: NativeTool {
         let start = try optionalDate("startDate", from: args) ?? Date()
         let end = try optionalDate("endDate", from: args) ?? Calendar.current.date(byAdding: .day, value: 7, to: start)!
 
+        // ⬇ Call your existing API (AppServices.swift)
         let events = CalendarService.shared.fetchEvents(from: start, to: end)
+
         return [
             "success": true,
             "count": events.count,
@@ -74,6 +76,7 @@ struct CreateEventTool: NativeTool {
         let end = try date("endDate", from: args)
 
         do {
+            // ⬇ Call your existing API (AppServices.swift)
             let event = try CalendarService.shared.createEvent(
                 title: title,
                 startDate: start,
@@ -107,6 +110,8 @@ struct DeleteEventTool: NativeTool {
 
     func execute(args: [String: Any]) async throws -> Any {
         let id = try string("id", from: args)
+
+        // ⬇ Call your existing API (AppServices.swift)
         let deleted = try CalendarService.shared.deleteEvent(identifier: id)
         return [
             "success": deleted,
@@ -131,7 +136,9 @@ struct SearchEventsTool: NativeTool {
         let start = try optionalDate("startDate", from: args) ?? Date()
         let end = try optionalDate("endDate", from: args) ?? Calendar.current.date(byAdding: .day, value: 30, to: start)!
 
+        // ⬇ Call your existing API (AppServices.swift)
         let events = CalendarService.shared.searchEvents(query: query, from: start, to: end)
+
         return [
             "success": true,
             "query": query,
