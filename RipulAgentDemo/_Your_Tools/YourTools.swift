@@ -22,7 +22,7 @@ import Foundation
 //   bool("isAllDay", from: args)
 //
 
-enum ExampleTools {
+enum YourTools {
     static let all: [NativeTool] = [
         ListEventsTool(),
         CreateEventTool(),

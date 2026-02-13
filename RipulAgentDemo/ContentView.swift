@@ -71,7 +71,7 @@ struct ContentView: View {
                 .animation(.spring(response: 0.35, dampingFraction: 0.86), value: showAgent)
         }
         .task {
-            bridge.register(ExampleTools.all)
+            bridge.register(YourTools.all)
             let granted = await calendarService.requestAccess()
             if !granted { permissionDenied = true }
         }

@@ -16,7 +16,7 @@
 		A07 /* AgentWebView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B08 /* AgentWebView.swift */; };
 		A08 /* AgentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B09 /* AgentView.swift */; };
 		A09 /* NativeTool.swift in Sources */ = {isa = PBXBuildFile; fileRef = B11 /* NativeTool.swift */; };
-		A10 /* ExampleTools.swift in Sources */ = {isa = PBXBuildFile; fileRef = B12 /* ExampleTools.swift */; };
+		A10 /* YourTools.swift in Sources */ = {isa = PBXBuildFile; fileRef = B12 /* YourTools.swift */; };
 		A11 /* AppServices.swift in Sources */ = {isa = PBXBuildFile; fileRef = B13 /* AppServices.swift */; };
 		A12 /* CalendarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B14 /* CalendarView.swift */; };
 		A13 /* GuideView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B15 /* GuideView.swift */; };
@@ -35,7 +35,7 @@
 		B09 /* AgentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentView.swift; sourceTree = "<group>"; };
 		B10 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		B11 /* NativeTool.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeTool.swift; sourceTree = "<group>"; };
-		B12 /* ExampleTools.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExampleTools.swift; sourceTree = "<group>"; };
+		B12 /* YourTools.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = YourTools.swift; sourceTree = "<group>"; };
 		B13 /* AppServices.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppServices.swift; sourceTree = "<group>"; };
 		B14 /* CalendarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarView.swift; sourceTree = "<group>"; };
 		B15 /* GuideView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuideView.swift; sourceTree = "<group>"; };
@@ -65,7 +65,7 @@
 			isa = PBXGroup;
 			children = (
 				D05 /* AgentFramework */,
-				D06 /* ExampleTools */,
+				D06 /* _Your_Tools */,
 				B01 /* RipulAgentDemoApp.swift */,
 				B02 /* ContentView.swift */,
 				B14 /* CalendarView.swift */,
@@ -107,12 +107,12 @@
 			path = AgentFramework;
 			sourceTree = "<group>";
 		};
-		D06 /* ExampleTools */ = {
+		D06 /* _Your_Tools */ = {
 			isa = PBXGroup;
 			children = (
-				B12 /* ExampleTools.swift */,
+				B12 /* YourTools.swift */,
 			);
-			path = ExampleTools;
+			path = _Your_Tools;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -192,7 +192,7 @@
 				A07 /* AgentWebView.swift in Sources */,
 				A08 /* AgentView.swift in Sources */,
 				A09 /* NativeTool.swift in Sources */,
-				A10 /* ExampleTools.swift in Sources */,
+				A10 /* YourTools.swift in Sources */,
 				A11 /* AppServices.swift in Sources */,
 				A12 /* CalendarView.swift in Sources */,
 				A13 /* GuideView.swift in Sources */,

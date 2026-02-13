@@ -26,8 +26,8 @@ RipulAgentDemo/
 │   ├── AgentConfiguration.swift  URL/theme/auth configuration for the agent
 │   └── NativeTool.swift          Protocol for registering native tools
 │
-├── ExampleTools/             ← The only new code you write for agent integration
-│   └── ExampleTools.swift        Thin wrappers that register your APIs as tools
+├── _Your_Tools/              ← The only new code you write for agent integration
+│   └── YourTools.swift           Thin wrappers that register your APIs as tools
 │
 ├── AppServices.swift         ← Your app's existing APIs (e.g. CalendarService)
 ├── CalendarView.swift        ← Your app's UI
@@ -43,7 +43,7 @@ RipulAgentDemo/
 | Folder / File | Who writes it | Purpose |
 |---------------|--------------|---------|
 | `AgentFramework/` | **Ripul** (the SDK) | Handles embedding, communication protocol, tool discovery/invocation. Include these files as-is. |
-| `ExampleTools/` | **You** (new code) | The *only* new code you write. Thin wrappers that register your existing APIs as agent-callable tools. |
+| `_Your_Tools/` | **You** (new code) | The *only* new code you write. Thin wrappers that register your existing APIs as agent-callable tools. |
 | Everything else | **You** (existing code) | Your normal app — views, models, services. Nothing agent-specific here. |
 
 ## How It Works
@@ -53,7 +53,7 @@ RipulAgentDemo/
 Your app has internal services — in this example, `CalendarService` wraps EventKit:
 
 ```swift
-// ExampleTools/AppServices.swift — your existing code, nothing agent-specific
+// AppServices.swift — your existing code, nothing agent-specific
 
 final class CalendarService: ObservableObject {
     static let shared = CalendarService()
@@ -104,7 +104,7 @@ bool("isAllDay", from: args)                 // bool with default false
 A complete wrapper looks like this:
 
 ```swift
-// ExampleTools/ExampleTools.swift — the only new code you write
+// _Your_Tools/YourTools.swift — the only new code you write
 
 struct CreateEventTool: NativeTool {
     let name = "create_event"
@@ -135,7 +135,7 @@ struct CreateEventTool: NativeTool {
 Collect all tools in a registry:
 
 ```swift
-enum ExampleTools {
+enum YourTools {
     static let all: [NativeTool] = [
         ListEventsTool(),
         CreateEventTool(),
@@ -156,7 +156,7 @@ struct ContentView: View {
     var body: some View {
         AgentWebView(configuration: agentConfiguration, bridge: bridge)
             .task {
-                bridge.register(ExampleTools.all)  // ← one line to register
+                bridge.register(YourTools.all)  // ← one line to register
             }
     }
 }
@@ -165,7 +165,7 @@ struct ContentView: View {
 Or use the convenience `AgentView` which handles loading states and theme sync:
 
 ```swift
-AgentView(configuration: config, tools: ExampleTools.all)
+AgentView(configuration: config, tools: YourTools.all)
 ```
 
 That's it. The Ripul AI Agent framework handles:
@@ -229,7 +229,7 @@ The demo app ships with a pre-configured site key for testing. Replace it with y
 
 1. **Keep your existing APIs as they are** — no changes needed to your service layer.
 
-2. **Create a new file** (or add to `ExampleTools.swift`) with a struct conforming to `NativeTool`:
+2. **Create a new file** (or add to `YourTools.swift`) with a struct conforming to `NativeTool`:
    - `name`: a snake_case identifier the agent will use
    - `description`: natural language explanation of what the tool does
    - `inputSchema`: a JSON Schema object describing expected parameters

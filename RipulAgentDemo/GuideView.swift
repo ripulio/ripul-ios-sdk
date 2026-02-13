@@ -88,7 +88,7 @@ struct GuideView: View {
                 stepRow(number: 3, title: "Register and embed", detail: "One line registers your tools. The framework handles discovery, invocation, and result delivery.")
 
                 codeBlock("""
-                bridge.register(ExampleTools.all)
+                bridge.register(YourTools.all)
                 """)
             }
 
@@ -173,7 +173,7 @@ struct GuideView: View {
 
             Section("Project structure") {
                 structureRow("AgentFramework/", detail: "Ripul SDK — do not modify", icon: "shippingbox")
-                structureRow("ExampleTools/", detail: "Your tool wrappers — the only new code", icon: "wrench")
+                structureRow("_Your_Tools/", detail: "Your tool wrappers — the only new code", icon: "wrench")
                 structureRow("AppServices.swift", detail: "Your existing APIs (e.g. CalendarService)", icon: "gearshape.2")
                 structureRow("ContentView.swift", detail: "App entry point with agent embedding", icon: "rectangle.on.rectangle")
             }
