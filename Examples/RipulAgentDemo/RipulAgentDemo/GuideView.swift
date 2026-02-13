@@ -177,6 +177,133 @@ struct GuideView: View {
                 structureRow("AppServices.swift", detail: "Your existing APIs (e.g. CalendarService)", icon: "gearshape.2")
                 structureRow("ContentView.swift", detail: "App entry point with agent embedding", icon: "rectangle.on.rectangle")
             }
+
+            // MARK: - Advanced Topics
+
+            Section {
+                Label("Advanced Topics", systemImage: "wand.and.stars")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.purple)
+
+                Text("Once you have the basics working, these patterns help you build a polished integration.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("Hiding the agent after a tool action") {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("When a tool changes the visible UI — filling a form, navigating to a screen — the agent panel gets in the way. Minimize it so the user sees the result.")
+                        .font(.subheadline)
+
+                    Text("Give your tool a reference to the bridge and set wantsMinimize when the work is done:")
+                        .font(.subheadline)
+                }
+
+                codeBlock("""
+                struct FillProfileTool: NativeTool {
+                    let bridge: AgentBridge
+
+                    func execute(args: [String: Any])
+                        async throws -> Any
+                    {
+                        ProfileService.shared.update(
+                            name: try string("name",
+                                             from: args)
+                        )
+
+                        // Minimize the agent
+                        bridge.wantsMinimize = true
+                        return ["success": true]
+                    }
+                }
+                """)
+
+                benefitRow(
+                    icon: "checkmark.circle",
+                    title: "When to minimize",
+                    detail: "Fills a form, navigates screens, triggers camera/media, or completes a workflow the user should review."
+                )
+
+                benefitRow(
+                    icon: "xmark.circle",
+                    title: "When NOT to minimize",
+                    detail: "Reads data (agent presents results), background actions, or failures (agent should explain the error)."
+                )
+            }
+
+            Section("Passing the bridge to tools") {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Tools that minimize the agent need a bridge reference. Change your registry from a static array to a function:")
+                        .font(.subheadline)
+                }
+
+                codeBlock("""
+                enum YourTools {
+                    static func all(
+                        bridge: AgentBridge
+                    ) -> [NativeTool] {
+                        [
+                            FillProfileTool(bridge: bridge),
+                            SearchTool(),
+                        ]
+                    }
+                }
+
+                bridge.register(
+                    YourTools.all(bridge: bridge)
+                )
+                """)
+            }
+
+            Section("Custom presentation") {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("AgentView auto-dismisses on minimize. For custom animations — slide-up panel, drawer, floating card — use AgentWebView and observe the bridge:")
+                        .font(.subheadline)
+                }
+
+                codeBlock("""
+                .onChange(of: bridge.wantsMinimize) {
+                    _, minimize in
+                    if minimize {
+                        withAnimation(.spring(
+                            response: 0.35,
+                            dampingFraction: 0.86
+                        )) {
+                            showAgent = false
+                        }
+                    }
+                }
+                """)
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("This demo uses this pattern — the agent slides up from the bottom and stays preloaded for instant re-opening.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Section("Pre-filling prompts") {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Pass a prompt in the configuration to pre-fill the agent's input with context — great for contextual actions like long-pressing an event or a \"Help with this\" button:")
+                        .font(.subheadline)
+                }
+
+                codeBlock("""
+                AgentConfiguration(
+                    baseURL: agentURL,
+                    siteKey: siteKey,
+                    prompt: "I'm looking at "
+                        + "'\\(event.title)' on "
+                        + "\\(event.startDate.formatted())"
+                )
+                """)
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Try the interactive demo in the Advanced tab.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+            }
         }
     }
 

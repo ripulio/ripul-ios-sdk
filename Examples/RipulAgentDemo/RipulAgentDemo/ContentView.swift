@@ -48,12 +48,20 @@ struct ContentView: View {
                 .tag(2)
                 .tabItem { Label("Guide", systemImage: "book") }
 
+                // Advanced tab
+                NavigationStack {
+                    AdvancedView()
+                        .navigationTitle("Advanced")
+                }
+                .tag(3)
+                .tabItem { Label("Advanced", systemImage: "wand.and.stars") }
+
                 // Settings tab
                 NavigationStack {
                     SettingsView()
                         .navigationTitle("Settings")
                 }
-                .tag(3)
+                .tag(4)
                 .tabItem { Label("Settings", systemImage: "gear") }
             }
             .onChange(of: selectedTab) { _, newTab in

@@ -54,6 +54,7 @@ Then `import RipulAgent` in any file that uses the SDK.
             ├── CalendarView.swift           Native weekly calendar UI
             ├── ContentView.swift            App entry point with tab navigation
             ├── GuideView.swift              In-app integration guide
+            ├── AdvancedView.swift           Advanced topics demo (minimize, prompts)
             ├── SettingsView.swift           Agent configuration (site key, base URL)
             └── RipulAgentDemoApp.swift      @main App struct
 ```
@@ -312,9 +313,128 @@ await MainActor.run {
 }
 ```
 
+## Advanced Topics
+
+### Hiding the agent after a tool action
+
+When a tool performs an action that changes the visible app UI — filling in a form, navigating to a new screen, opening a media player — the agent panel is in the way. The user needs to see the result, not the chat. In these cases, your tool should minimize the agent after it finishes.
+
+The bridge exposes a published `wantsMinimize` property. Give your tool a reference to the bridge and set it when the work is done:
+
+```swift
+struct FillProfileTool: NativeTool {
+    let bridge: AgentBridge
+
+    let name = "fill_profile"
+    let description = "Fills in the user profile form with the given details."
+    let inputSchema = ToolSchema.object(
+        .string("name", "Full name", required: true),
+        .string("email", "Email address", required: true),
+        .string("bio", "Short bio")
+    )
+
+    func execute(args: [String: Any]) async throws -> Any {
+        let name = try string("name", from: args)
+        let email = try string("email", from: args)
+
+        // Update your app's form state
+        ProfileService.shared.update(
+            name: name,
+            email: email,
+            bio: optionalString("bio", from: args)
+        )
+
+        // Minimize the agent so the user sees the filled form
+        bridge.wantsMinimize = true
+
+        return ["success": true]
+    }
+}
+```
+
+Since the tool now needs a bridge reference, pass it during registration:
+
+```swift
+enum YourTools {
+    static func all(bridge: AgentBridge) -> [NativeTool] {
+        [
+            FillProfileTool(bridge: bridge),
+            // Tools that don't need to minimize stay as plain structs
+            SearchTool(),
+        ]
+    }
+}
+
+// At registration time:
+bridge.register(YourTools.all(bridge: bridge))
+```
+
+**When to minimize:**
+
+- The tool fills in a form or edits visible content
+- The tool navigates the user to a different screen
+- The tool triggers a camera, media player, or full-screen modal
+- The tool completes a multi-step workflow and the user should review the result
+
+**When NOT to minimize:**
+
+- The tool reads data (listing events, searching) — the agent is about to present the results in chat
+- The tool performs a background action (sending a notification, toggling a setting) that doesn't change what's on screen
+- The tool fails — keep the agent open so it can explain the error and retry
+
+The agent panel slides back in when the user taps the agent button again. The bridge automatically resets `wantsMinimize` when it receives a `widget:restore` message from the agent.
+
+### Custom presentation and animation
+
+The convenience `AgentView` dismisses itself automatically when the agent requests minimize. For custom presentation — a slide-up panel, a side drawer, a floating card — use `AgentWebView` directly and observe `bridge.wantsMinimize`:
+
+```swift
+struct ContentView: View {
+    @StateObject private var bridge = AgentBridge()
+    @State private var showAgent = false
+
+    var body: some View {
+        ZStack {
+            // Your app content
+            MyMainView()
+
+            // Agent panel with custom animation
+            AgentWebView(configuration: config, bridge: bridge)
+                .clipShape(RoundedRectangle(cornerRadius: 20))
+                .offset(y: showAgent ? 0 : UIScreen.main.bounds.height)
+                .animation(.spring(response: 0.35, dampingFraction: 0.86), value: showAgent)
+        }
+        .task { bridge.register(YourTools.all) }
+        .onChange(of: bridge.wantsMinimize) { _, minimize in
+            if minimize {
+                withAnimation(.spring(response: 0.35, dampingFraction: 0.86)) {
+                    showAgent = false
+                }
+            }
+        }
+    }
+}
+```
+
+This gives you full control over how and when the agent appears. The `AgentWebView` stays in the view hierarchy (preloaded), so re-opening is instant — no reload.
+
+### Pre-filling prompts with context
+
+Pass a `prompt` in the configuration to pre-fill the agent's input field with context about what the user is looking at:
+
+```swift
+AgentConfiguration(
+    baseURL: agentURL,
+    siteKey: siteKey,
+    prompt: "I'm looking at the event '\(event.title)' on \(event.startDate.formatted())"
+)
+```
+
+This is useful when launching the agent from a contextual action — a long-press on a calendar event, a "Help with this" button on a form, or a deep link. The user sees the prompt pre-filled and can send it immediately or edit it first.
+
 ## Requirements
 
-- iOS 16.4+ (for `WKWebView.isInspectable`)
+- iOS 17+
 - Xcode 15+
 - EventKit entitlement (for the calendar demo)
 

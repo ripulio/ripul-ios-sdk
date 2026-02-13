@@ -17,6 +17,7 @@
 		A13 /* GuideView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B15 /* GuideView.swift */; };
 		A14 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B16 /* SettingsView.swift */; };
 		A15 /* RipulAgent in Frameworks */ = {isa = PBXBuildFile; productRef = P01 /* RipulAgent */; };
+		A16 /* AdvancedView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B17 /* AdvancedView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -31,6 +32,7 @@
 		B14 /* CalendarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarView.swift; sourceTree = "<group>"; };
 		B15 /* GuideView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuideView.swift; sourceTree = "<group>"; };
 		B16 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		B17 /* AdvancedView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AdvancedView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -61,6 +63,7 @@
 				B02 /* ContentView.swift */,
 				B14 /* CalendarView.swift */,
 				B15 /* GuideView.swift */,
+				B17 /* AdvancedView.swift */,
 				B16 /* SettingsView.swift */,
 				B13 /* AppServices.swift */,
 				B10 /* Info.plist */,
@@ -177,6 +180,7 @@
 				A12 /* CalendarView.swift in Sources */,
 				A13 /* GuideView.swift in Sources */,
 				A14 /* SettingsView.swift in Sources */,
+				A16 /* AdvancedView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
