@@ -20,14 +20,14 @@ This reference app demonstrates the pattern with a **calendar assistant**: a nat
 Add the RipulAgent SDK to your Xcode project via Swift Package Manager:
 
 ```
-https://github.com/anthropics/ios-AgentDemo
+https://github.com/ripulio/ripul-ios-sdk
 ```
 
 Or add it to your `Package.swift`:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/anthropics/ios-AgentDemo", from: "1.0.0"),
+    .package(url: "https://github.com/ripulio/ripul-ios-sdk", from: "1.0.0"),
 ]
 ```
 
