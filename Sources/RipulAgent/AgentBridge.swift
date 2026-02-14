@@ -4,6 +4,28 @@ import WebKit
 private let protocolVersion = "1.0.0"
 private let messagePrefix = "agent-framework:"
 
+/// Metadata about a search result the user clicked in the universal search.
+public struct SearchClickContext {
+    /// The type of result (e.g. "page", "chat", "action", "tool").
+    public let resultType: String
+    /// A unique identifier for the clicked item, if available.
+    public let resultId: String?
+    /// The display title shown in the search result.
+    public let title: String?
+    /// A URL associated with the result, if any.
+    public let url: String?
+    /// Any additional payload the web app attached to the click event.
+    public let metadata: [String: Any]
+}
+
+/// Implement this protocol to respond when the user clicks a result in the
+/// universal search (ctrl-k). Return `true` if you handled the click natively;
+/// return `false` to let the web app handle it.
+@MainActor
+public protocol SearchClickDelegate: AnyObject {
+    func agentBridge(_ bridge: AgentBridge, didClickSearchResult context: SearchClickContext) -> Bool
+}
+
 @MainActor
 public final class AgentBridge: NSObject, ObservableObject {
     @Published public var isConnected = false
@@ -13,6 +35,9 @@ public final class AgentBridge: NSObject, ObservableObject {
     private weak var webView: WKWebView?
     private var registeredTools: [NativeTool] = []
     private var llmProvider: LLMProvider?
+
+    /// Set this delegate to handle search result clicks from the universal search.
+    public weak var searchClickDelegate: SearchClickDelegate?
 
     public override init() {
         super.init()
@@ -77,6 +102,8 @@ public final class AgentBridge: NSObject, ObservableObject {
         case "theme:ready":
             NSLog("[AgentBridge] Theme ready received")
             isThemeReady = true
+        case "search:click":
+            handleSearchClick(dict)
         case "widget:minimize":
             wantsMinimize = true
         case "widget:restore":
@@ -144,6 +171,7 @@ public final class AgentBridge: NSObject, ObservableObject {
                 "dom": false,
                 "storage": false,
                 "llm": llmProvider != nil,
+                "searchClick": searchClickDelegate != nil,
             ],
             "hostOrigin": "ripul-native://app",
         ])
@@ -290,6 +318,36 @@ public final class AgentBridge: NSObject, ObservableObject {
                 ])
             }
         }
+    }
+
+    private func handleSearchClick(_ message: [String: Any]) {
+        let requestId = message["requestId"] as? String ?? UUID().uuidString
+        let resultType = message["resultType"] as? String ?? "unknown"
+        let resultId = message["resultId"] as? String
+        let title = message["title"] as? String
+        let url = message["url"] as? String
+        let metadata = message["metadata"] as? [String: Any] ?? [:]
+
+        NSLog("[AgentBridge] Search click — type: %@, id: %@, title: %@",
+              resultType, resultId ?? "nil", title ?? "nil")
+
+        let context = SearchClickContext(
+            resultType: resultType,
+            resultId: resultId,
+            title: title,
+            url: url,
+            metadata: metadata
+        )
+
+        let handled = searchClickDelegate?.agentBridge(self, didClickSearchResult: context) ?? false
+
+        send([
+            "type": "\(messagePrefix)search:click:ack",
+            "version": protocolVersion,
+            "timestamp": currentTimestamp(),
+            "requestId": requestId,
+            "handled": handled,
+        ])
     }
 
     // MARK: - Transport
