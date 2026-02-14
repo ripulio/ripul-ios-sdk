@@ -13,6 +13,8 @@ struct LocalModelTestView: View {
     @State private var generationMode: AppleFMGenerationMode = .dynamic
     @State private var promptHistory: [String] = []
     @State private var historyIndex: Int? = nil
+    @State private var enabledTools: Set<String> = Set(Self.allToolNames)
+    @State private var showToolToggles = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -20,6 +22,7 @@ struct LocalModelTestView: View {
                 unavailableView
             } else {
                 modeSelector
+                toolTogglesSection
                 messageList
                 inputBar
             }
@@ -100,6 +103,97 @@ struct LocalModelTestView: View {
         }
     }
 
+    // MARK: - Tool Toggles
+
+    /// All tool names in display order: real tools first, then interactWithUser.
+    private static let allToolNames: [String] =
+        YourTools.all.map(\.name) + ["interactWithUser"]
+
+    private var toolTogglesSection: some View {
+        VStack(spacing: 0) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    showToolToggles.toggle()
+                }
+            } label: {
+                HStack {
+                    Image(systemName: showToolToggles ? "wrench.and.screwdriver.fill" : "wrench.and.screwdriver")
+                        .font(.caption)
+                    Text("Tools (\(enabledTools.count)/\(Self.allToolNames.count))")
+                        .font(.caption.weight(.medium))
+                    Spacer()
+                    Image(systemName: showToolToggles ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 10, weight: .semibold))
+                }
+                .foregroundStyle(.secondary)
+                .padding(.horizontal)
+                .padding(.vertical, 8)
+            }
+            .buttonStyle(.plain)
+
+            if showToolToggles {
+                VStack(spacing: 0) {
+                    ForEach(Self.allToolNames, id: \.self) { name in
+                        toolToggleRow(name: name)
+                    }
+
+                    HStack(spacing: 12) {
+                        Button("All") {
+                            enabledTools = Set(Self.allToolNames)
+                        }
+                        .disabled(enabledTools.count == Self.allToolNames.count)
+
+                        Button("None") {
+                            enabledTools.removeAll()
+                        }
+                        .disabled(enabledTools.isEmpty)
+                    }
+                    .font(.caption)
+                    .padding(.vertical, 6)
+                }
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+
+            Divider()
+        }
+        .background(Color(.systemGray6).opacity(0.5))
+    }
+
+    private func toolToggleRow(name: String) -> some View {
+        let isOn = Binding<Bool>(
+            get: { enabledTools.contains(name) },
+            set: { enabled in
+                if enabled { enabledTools.insert(name) }
+                else { enabledTools.remove(name) }
+            }
+        )
+
+        return Toggle(isOn: isOn) {
+            HStack(spacing: 6) {
+                Image(systemName: toolIcon(for: name))
+                    .font(.caption)
+                    .frame(width: 16)
+                Text(name)
+                    .font(.system(.caption, design: .monospaced))
+            }
+        }
+        .toggleStyle(.switch)
+        .controlSize(.mini)
+        .padding(.horizontal)
+        .padding(.vertical, 4)
+    }
+
+    private func toolIcon(for name: String) -> String {
+        switch name {
+        case "list_events": return "list.bullet"
+        case "create_event": return "plus.circle"
+        case "delete_event": return "trash"
+        case "search_events": return "magnifyingglass"
+        case "interactWithUser": return "bubble.left"
+        default: return "wrench"
+        }
+    }
+
     // MARK: - Input Bar
 
     private var inputBar: some View {
@@ -120,7 +214,7 @@ struct LocalModelTestView: View {
                 Image(systemName: "arrow.up.circle.fill")
                     .font(.title2)
             }
-            .disabled(inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isGenerating)
+            .disabled(inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isGenerating || enabledTools.isEmpty)
         }
         .padding(.horizontal)
         .padding(.vertical, 8)
@@ -226,10 +320,14 @@ struct LocalModelTestView: View {
         ]
     ]
 
-    /// All tool definitions: real app tools first, interactWithUser last.
+    /// All tool definitions filtered by the enabled toggles.
     /// Ordering matters — LLMs have positional bias toward earlier tools.
     private var toolDefs: [[String: Any]] {
-        YourTools.all.map { $0.definition } + [Self.interactWithUserDef]
+        let appTools = YourTools.all
+            .filter { enabledTools.contains($0.name) }
+            .map { $0.definition }
+        let conversationTool = enabledTools.contains("interactWithUser") ? [Self.interactWithUserDef] : []
+        return appTools + conversationTool
     }
 
     // MARK: - Generate
@@ -288,8 +386,8 @@ struct LocalModelTestView: View {
             let toolCallText = "**\(result.toolName)**\n\n" + Self.formatArgs(result.toolArgs)
             messages.append(ChatMessage(role: .assistant, content: toolCallText, rawInputJSON: rawInputJSON, rawOutputJSON: rawOutputJSON, mode: generationMode.rawValue))
 
-            // Execute the tool if it's a real NativeTool
-            if let nativeTool = YourTools.all.first(where: { $0.name == result.toolName }) {
+            // Execute the tool if it's a real NativeTool and currently enabled
+            if let nativeTool = YourTools.all.first(where: { $0.name == result.toolName && enabledTools.contains($0.name) }) {
                 do {
                     let toolResult = try await nativeTool.execute(args: result.toolArgs)
                     let resultJSON = Self.toJSON(toolResult) ?? "\(toolResult)"
