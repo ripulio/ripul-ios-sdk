@@ -1,6 +1,7 @@
 import SwiftUI
 import WebKit
 
+@MainActor
 public struct AgentWebView: UIViewRepresentable {
     public let configuration: AgentConfiguration
     public let bridge: AgentBridge
@@ -25,7 +26,6 @@ public struct AgentWebView: UIViewRepresentable {
         )
         config.userContentController.addUserScript(bridgeScript)
 
-        // Register native message handlers
         config.userContentController.add(context.coordinator, name: "agentBridge")
         config.userContentController.add(context.coordinator, name: "agentLog")
 

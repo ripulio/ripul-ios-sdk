@@ -33,7 +33,7 @@ public struct AgentConfiguration {
         self.prompt = prompt
     }
 
-    var embeddedURL: URL {
+    public var embeddedURL: URL {
         var components = URLComponents(url: baseURL.appendingPathComponent(path), resolvingAgainstBaseURL: false)!
 
         var hashParams: [String] = ["embedded=true"]
@@ -59,8 +59,10 @@ public struct AgentConfiguration {
         }
 
         // Match EmbedManager format: #/?param1=val&param2=val
-        // The web app's hash parsers expect a '?' separator
-        components.fragment = "/?" + hashParams.joined(separator: "&")
+        // The web app's hash parsers expect a '?' separator.
+        // Use percentEncodedFragment to avoid double-encoding values
+        // that were already percent-encoded (e.g. prompt text).
+        components.percentEncodedFragment = "/?" + hashParams.joined(separator: "&")
         return components.url!
     }
 }

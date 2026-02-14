@@ -18,6 +18,14 @@ struct SettingsView: View {
                     .autocorrectionDisabled()
             }
 
+            Section("Local Model") {
+                NavigationLink {
+                    LocalModelTestView()
+                } label: {
+                    Label("Test Apple Foundation Models", systemImage: "apple.intelligence")
+                }
+            }
+
             Section {
                 Link(destination: URL(string: "https://ripul.io")!) {
                     HStack {

@@ -50,8 +50,10 @@ struct ContentView: View {
 
                 // Advanced tab
                 NavigationStack {
-                    AdvancedView()
-                        .navigationTitle("Advanced")
+                    AdvancedView(onLaunchPrompt: { prompt in
+                        launchAgentWithPrompt(prompt)
+                    })
+                    .navigationTitle("Advanced")
                 }
                 .tag(3)
                 .tabItem { Label("Advanced", systemImage: "wand.and.stars") }
@@ -81,6 +83,9 @@ struct ContentView: View {
         }
         .task {
             bridge.register(YourTools.all)
+            if #available(iOS 26, *) {
+                bridge.setLLMProvider(AppleFoundationModelProvider())
+            }
             let granted = await calendarService.requestAccess()
             if !granted { permissionDenied = true }
         }
@@ -93,6 +98,15 @@ struct ContentView: View {
                     showAgent = false
                 }
             }
+        }
+    }
+
+    // MARK: - Prompt Launch
+
+    private func launchAgentWithPrompt(_ prompt: String) {
+        bridge.startNewChat(prompt: prompt)
+        withAnimation(.spring(response: 0.35, dampingFraction: 0.86)) {
+            showAgent = true
         }
     }
 

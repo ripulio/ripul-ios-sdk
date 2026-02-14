@@ -2,19 +2,8 @@ import SwiftUI
 import RipulAgent
 
 struct AdvancedView: View {
-    @AppStorage("agentBaseURL") private var baseURLString = AgentConfiguration.defaultBaseURL.absoluteString
-    @AppStorage("agentSiteKey") private var siteKey = "pk_live_2pakky4z3s9674wu9zvvgzze"
+    var onLaunchPrompt: ((String) -> Void)?
     @State private var promptText = "What events do I have this week? Summarize them briefly."
-    @State private var showPromptAgent = false
-
-    private var promptConfiguration: AgentConfiguration {
-        AgentConfiguration(
-            baseURL: URL(string: baseURLString) ?? AgentConfiguration.defaultBaseURL,
-            siteKey: siteKey.isEmpty ? nil : siteKey,
-            newChat: true,
-            prompt: promptText
-        )
-    }
 
     var body: some View {
         List {
@@ -154,7 +143,7 @@ struct AdvancedView: View {
                         .lineLimit(2...4)
 
                     Button {
-                        showPromptAgent = true
+                        onLaunchPrompt?(promptText)
                     } label: {
                         Label("Launch Agent with Prompt", systemImage: "sparkles")
                             .frame(maxWidth: .infinity)
@@ -163,12 +152,6 @@ struct AdvancedView: View {
                     .tint(.purple)
                 }
             }
-        }
-        .sheet(isPresented: $showPromptAgent) {
-            AgentView(
-                configuration: promptConfiguration,
-                tools: YourTools.all
-            )
         }
     }
 

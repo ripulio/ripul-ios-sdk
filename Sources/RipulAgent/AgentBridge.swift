@@ -12,6 +12,7 @@ public final class AgentBridge: NSObject, ObservableObject {
 
     private weak var webView: WKWebView?
     private var registeredTools: [NativeTool] = []
+    private var llmProvider: LLMProvider?
 
     public override init() {
         super.init()
@@ -24,9 +25,29 @@ public final class AgentBridge: NSObject, ObservableObject {
         registeredTools.append(contentsOf: tools)
     }
 
+    /// Configure a native LLM provider for on-device inference.
+    /// When set, the handshake will advertise `llm: true` capability.
+    public func setLLMProvider(_ provider: LLMProvider) {
+        self.llmProvider = provider
+        NSLog("[AgentBridge] LLM provider configured")
+    }
+
     public func attach(to webView: WKWebView) {
         self.webView = webView
         NSLog("[AgentBridge] Attached to WKWebView")
+    }
+
+    /// Navigate the attached web view to a new URL (e.g. to start a new chat with a prompt).
+    public func navigate(to url: URL) {
+        guard let webView else {
+            NSLog("[AgentBridge] Cannot navigate — webView is nil")
+            return
+        }
+        isConnected = false
+        isThemeReady = false
+        wantsMinimize = false
+        NSLog("[AgentBridge] Navigating to: %@", url.absoluteString)
+        webView.load(URLRequest(url: url))
     }
 
     // MARK: - Receive messages from web app
@@ -51,6 +72,8 @@ public final class AgentBridge: NSObject, ObservableObject {
             handleMCPDiscover(dict)
         case "mcp:invoke":
             handleMCPInvoke(dict)
+        case "llm:generate":
+            handleLLMGenerate(dict)
         case "theme:ready":
             NSLog("[AgentBridge] Theme ready received")
             isThemeReady = true
@@ -67,6 +90,22 @@ public final class AgentBridge: NSObject, ObservableObject {
 
     public func handleConsoleLog(_ message: String) {
         NSLog("[JS] %@", message)
+    }
+
+    /// Start a new chat with an optional prompt via the bridge protocol.
+    /// The web app handles chat creation and prompt auto-execution.
+    public func startNewChat(prompt: String? = nil) {
+        var message: [String: Any] = [
+            "type": "\(messagePrefix)chat:new",
+            "version": protocolVersion,
+            "timestamp": currentTimestamp(),
+            "requestId": UUID().uuidString,
+        ]
+        if let prompt {
+            message["prompt"] = prompt
+        }
+        NSLog("[AgentBridge] → Sending chat:new (prompt: %@)", prompt != nil ? "yes" : "no")
+        send(message)
     }
 
     // MARK: - Send messages to web app
@@ -104,6 +143,7 @@ public final class AgentBridge: NSObject, ObservableObject {
                 "mcp": !registeredTools.isEmpty,
                 "dom": false,
                 "storage": false,
+                "llm": llmProvider != nil,
             ],
             "hostOrigin": "ripul-native://app",
         ])
@@ -191,6 +231,62 @@ public final class AgentBridge: NSObject, ObservableObject {
                     "timestamp": self.currentTimestamp(),
                     "requestId": requestId,
                     "error": error.localizedDescription,
+                ])
+            }
+        }
+    }
+
+    private func handleLLMGenerate(_ message: [String: Any]) {
+        let requestId = message["requestId"] as? String ?? UUID().uuidString
+        let threadId = message["threadId"] as? String ?? ""
+        let systemPrompt = message["systemPrompt"] as? String ?? ""
+        let timeline = message["timeline"] as? [[String: Any]] ?? []
+        let tools = message["tools"] as? [[String: Any]] ?? []
+
+        NSLog("[AgentBridge] LLM generate request — thread: %@, messages: %d, tools: %d",
+              threadId, timeline.count, tools.count)
+
+        guard let llmProvider else {
+            NSLog("[AgentBridge] No LLM provider configured")
+            send([
+                "type": "\(messagePrefix)llm:generate:error",
+                "version": protocolVersion,
+                "timestamp": currentTimestamp(),
+                "requestId": requestId,
+                "error": "No LLM provider configured on native side",
+                "code": "model_unavailable",
+            ])
+            return
+        }
+
+        Task { @MainActor in
+            do {
+                let result = try await llmProvider.generate(
+                    threadId: threadId,
+                    systemPrompt: systemPrompt,
+                    timeline: timeline,
+                    tools: tools
+                )
+                NSLog("[AgentBridge] LLM generated tool call: %@", result.toolName)
+                self.send([
+                    "type": "\(messagePrefix)llm:generate:response",
+                    "version": protocolVersion,
+                    "timestamp": self.currentTimestamp(),
+                    "requestId": requestId,
+                    "toolName": result.toolName,
+                    "toolArgs": result.toolArgs,
+                    "inputTokens": result.inputTokens,
+                    "outputTokens": result.outputTokens,
+                ])
+            } catch {
+                NSLog("[AgentBridge] LLM generate failed: %@", error.localizedDescription)
+                self.send([
+                    "type": "\(messagePrefix)llm:generate:error",
+                    "version": protocolVersion,
+                    "timestamp": self.currentTimestamp(),
+                    "requestId": requestId,
+                    "error": error.localizedDescription,
+                    "code": "unknown",
                 ])
             }
         }

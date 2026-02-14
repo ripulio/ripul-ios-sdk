@@ -18,6 +18,7 @@
 		A14 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B16 /* SettingsView.swift */; };
 		A15 /* RipulAgent in Frameworks */ = {isa = PBXBuildFile; productRef = P01 /* RipulAgent */; };
 		A16 /* AdvancedView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B17 /* AdvancedView.swift */; };
+		A17 /* LocalModelTestView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B18 /* LocalModelTestView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -33,6 +34,7 @@
 		B15 /* GuideView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuideView.swift; sourceTree = "<group>"; };
 		B16 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		B17 /* AdvancedView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AdvancedView.swift; sourceTree = "<group>"; };
+		B18 /* LocalModelTestView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalModelTestView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -65,6 +67,7 @@
 				B15 /* GuideView.swift */,
 				B17 /* AdvancedView.swift */,
 				B16 /* SettingsView.swift */,
+				B18 /* LocalModelTestView.swift */,
 				B13 /* AppServices.swift */,
 				B10 /* Info.plist */,
 				B03 /* Assets.xcassets */,
@@ -181,6 +184,7 @@
 				A13 /* GuideView.swift in Sources */,
 				A14 /* SettingsView.swift in Sources */,
 				A16 /* AdvancedView.swift in Sources */,
+				A17 /* LocalModelTestView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

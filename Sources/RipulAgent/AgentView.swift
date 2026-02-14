@@ -1,5 +1,6 @@
 import SwiftUI
 
+@MainActor
 public struct AgentView: View {
     public let configuration: AgentConfiguration
     public var tools: [NativeTool] = []
