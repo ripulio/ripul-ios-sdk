@@ -40,6 +40,7 @@ public struct AgentWebView: UIViewRepresentable {
         webView.backgroundColor = .clear
         webView.scrollView.backgroundColor = .clear
         webView.navigationDelegate = context.coordinator
+        context.coordinator.attachWebView(webView)
 
         #if DEBUG
         if #available(iOS 16.4, *) {
@@ -198,22 +199,30 @@ public struct AgentWebView: UIViewRepresentable {
 
         // Disable iOS autofill suggestions bar (passwords, contacts, etc.)
         // without affecting keyboard autocorrect.
+        // iOS ignores autocomplete="off", so we use multiple strategies:
+        // 1. Set autocomplete to a value iOS doesn't map to a content type
+        // 2. Remove name/id patterns that trigger autofill heuristics
+        // 3. Mark as non-form with role and aria attributes
         function disableAutofill(el) {
             el.setAttribute('autocomplete', 'off');
             el.setAttribute('autocorrect', 'on');
+            el.setAttribute('autocapitalize', 'sentences');
+            el.setAttribute('spellcheck', 'true');
+            el.setAttribute('role', 'textbox');
+            el.setAttribute('aria-autocomplete', 'none');
+            el.setAttribute('data-form-type', 'other');
+            el.setAttribute('data-lpignore', 'true');
+            el.setAttribute('data-1p-ignore', 'true');
         }
-        // Apply to any existing and future input/textarea elements
-        document.addEventListener('DOMContentLoaded', function() {
+        // Apply to any existing and future input/textarea elements.
+        // Uses both DOMContentLoaded + polling to handle React re-renders.
+        function scanAndPatch() {
             document.querySelectorAll('input, textarea').forEach(disableAutofill);
-            new MutationObserver(function(mutations) {
-                mutations.forEach(function(m) {
-                    m.addedNodes.forEach(function(node) {
-                        if (node.nodeType !== 1) return;
-                        if (node.matches && node.matches('input, textarea')) disableAutofill(node);
-                        if (node.querySelectorAll) node.querySelectorAll('input, textarea').forEach(disableAutofill);
-                    });
-                });
-            }).observe(document.body, { childList: true, subtree: true });
+        }
+        document.addEventListener('DOMContentLoaded', function() {
+            scanAndPatch();
+            new MutationObserver(function() { scanAndPatch(); })
+                .observe(document.body, { childList: true, subtree: true });
         });
 
         nativeLog('LOG', ['[NativeBridge] Bridge script initialized']);
@@ -224,9 +233,35 @@ public struct AgentWebView: UIViewRepresentable {
 
     public final class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         let bridge: AgentBridge
+        private weak var observedWebView: WKWebView?
 
         init(bridge: AgentBridge) {
             self.bridge = bridge
+            super.init()
+            // iOS re-adds input assistant bar button groups each time the
+            // keyboard appears, so we must clear them on every show.
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(keyboardWillShow),
+                name: UIResponder.keyboardWillShowNotification,
+                object: nil
+            )
+        }
+
+        deinit {
+            NotificationCenter.default.removeObserver(self)
+        }
+
+        func attachWebView(_ webView: WKWebView) {
+            observedWebView = webView
+        }
+
+        @objc private func keyboardWillShow() {
+            guard let webView = observedWebView else { return }
+            // Small delay so WKContentView is first responder before we clear
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                Self.disableInputAssistant(in: webView)
+            }
         }
 
         public func userContentController(
@@ -254,6 +289,21 @@ public struct AgentWebView: UIViewRepresentable {
 
         public func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             NSLog("[AgentWebView] Page finished loading: %@", webView.url?.absoluteString ?? "nil")
+            // Disable autofill input assistant on the WKContentView
+            Self.disableInputAssistant(in: webView)
+        }
+
+        /// Walk the WKWebView's scroll view to find the WKContentView and
+        /// clear its inputAssistantItem bar button groups so iOS doesn't
+        /// present autofill suggestions above the keyboard.
+        static func disableInputAssistant(in webView: WKWebView) {
+            for subview in webView.scrollView.subviews {
+                let name = String(describing: type(of: subview))
+                if name.contains("Content") {
+                    subview.inputAssistantItem.leadingBarButtonGroups = []
+                    subview.inputAssistantItem.trailingBarButtonGroups = []
+                }
+            }
         }
 
         public func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
