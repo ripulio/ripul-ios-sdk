@@ -1,5 +1,6 @@
 import SwiftUI
 import WebKit
+import ObjectiveC
 
 @MainActor
 public struct AgentWebView: UIViewRepresentable {
@@ -260,7 +261,7 @@ public struct AgentWebView: UIViewRepresentable {
             guard let webView = observedWebView else { return }
             // Small delay so WKContentView is first responder before we clear
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                Self.disableInputAssistant(in: webView)
+                Self.removeInputAccessoryView(from: webView)
             }
         }
 
@@ -289,21 +290,35 @@ public struct AgentWebView: UIViewRepresentable {
 
         public func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             NSLog("[AgentWebView] Page finished loading: %@", webView.url?.absoluteString ?? "nil")
-            // Disable autofill input assistant on the WKContentView
-            Self.disableInputAssistant(in: webView)
+            Self.removeInputAccessoryView(from: webView)
         }
 
-        /// Walk the WKWebView's scroll view to find the WKContentView and
-        /// clear its inputAssistantItem bar button groups so iOS doesn't
-        /// present autofill suggestions above the keyboard.
-        static func disableInputAssistant(in webView: WKWebView) {
-            for subview in webView.scrollView.subviews {
-                let name = String(describing: type(of: subview))
-                if name.contains("Content") {
-                    subview.inputAssistantItem.leadingBarButtonGroups = []
-                    subview.inputAssistantItem.trailingBarButtonGroups = []
-                }
+        /// Remove the form-filling input accessory view (< > arrows + Done bar)
+        /// by creating a runtime subclass of WKContentView that overrides
+        /// `inputAccessoryView` to return nil. This is the same technique used
+        /// in ripul-browser's RipulAgentSheetViewController.
+        static func removeInputAccessoryView(from webView: WKWebView) {
+            guard let contentView = webView.scrollView.subviews.first(where: {
+                String(describing: type(of: $0)).hasPrefix("WKContent")
+            }) else { return }
+
+            let subclassName = "NoAccessory_WKContentView"
+            var subclass: AnyClass? = objc_getClass(subclassName) as? AnyClass
+
+            if subclass == nil {
+                guard let baseClass: AnyClass = object_getClass(contentView) else { return }
+                subclass = objc_allocateClassPair(baseClass, subclassName, 0)
+                guard let subclass = subclass else { return }
+
+                let selector = #selector(getter: UIResponder.inputAccessoryView)
+                guard let method = class_getInstanceMethod(UIView.self, selector) else { return }
+                let nilIMP = imp_implementationWithBlock({ (_: AnyObject) -> AnyObject? in nil }
+                    as @convention(block) (AnyObject) -> AnyObject?)
+                class_addMethod(subclass, selector, nilIMP, method_getTypeEncoding(method))
+                objc_registerClassPair(subclass)
             }
+
+            object_setClass(contentView, subclass!)
         }
 
         public func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
