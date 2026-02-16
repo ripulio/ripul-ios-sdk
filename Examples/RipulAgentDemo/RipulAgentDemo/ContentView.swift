@@ -4,6 +4,7 @@ import RipulAgent
 struct ContentView: View {
     @StateObject private var calendarService = CalendarService.shared
     @StateObject private var bridge = AgentBridge()
+    @StateObject private var searchHandler = SearchClickHandler()
     @State private var showAgent = false
     @State private var selectedTab = 0
     @State private var agentReady = false
@@ -83,6 +84,13 @@ struct ContentView: View {
         }
         .task {
             bridge.register(YourTools.all)
+            bridge.searchClickDelegate = searchHandler
+            searchHandler.onNavigate = { resultType, resultId in
+                // Minimize the agent panel so the user sees the native content
+                withAnimation(.spring(response: 0.35, dampingFraction: 0.86)) {
+                    showAgent = false
+                }
+            }
             if #available(iOS 26, *) {
                 bridge.setLLMProvider(AppleFoundationModelProvider())
             }
@@ -174,6 +182,20 @@ struct ContentView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+// MARK: - Search Click Handler
+
+@MainActor
+final class SearchClickHandler: ObservableObject, SearchClickDelegate {
+    var onNavigate: ((_ resultType: String, _ resultId: String?) -> Void)?
+
+    func agentBridge(_ bridge: AgentBridge, didClickSearchResult context: SearchClickContext) -> Bool {
+        NSLog("[SearchClickHandler] Clicked: type=%@, id=%@, title=%@",
+              context.resultType, context.resultId ?? "nil", context.title ?? "nil")
+        onNavigate?(context.resultType, context.resultId)
+        return true
     }
 }
 

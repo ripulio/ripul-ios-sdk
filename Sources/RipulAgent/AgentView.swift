@@ -4,14 +4,20 @@ import SwiftUI
 public struct AgentView: View {
     public let configuration: AgentConfiguration
     public var tools: [NativeTool] = []
+    public weak var searchClickDelegate: SearchClickDelegate?
     @StateObject private var bridge = AgentBridge()
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.dismiss) private var dismiss
     @State private var showContent = false
 
-    public init(configuration: AgentConfiguration, tools: [NativeTool] = []) {
+    public init(
+        configuration: AgentConfiguration,
+        tools: [NativeTool] = [],
+        searchClickDelegate: SearchClickDelegate? = nil
+    ) {
         self.configuration = configuration
         self.tools = tools
+        self.searchClickDelegate = searchClickDelegate
     }
 
     public var body: some View {
@@ -38,6 +44,7 @@ public struct AgentView: View {
         }
         .task {
             bridge.register(tools)
+            bridge.searchClickDelegate = searchClickDelegate
             // Fallback: show content after 3s even if theme:ready never arrives
             try? await Task.sleep(for: .seconds(3))
             showContent = true
