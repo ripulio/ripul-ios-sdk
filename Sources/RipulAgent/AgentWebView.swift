@@ -196,6 +196,26 @@ public struct AgentWebView: UIViewRepresentable {
             }));
         };
 
+        // Disable iOS autofill suggestions bar (passwords, contacts, etc.)
+        // without affecting keyboard autocorrect.
+        function disableAutofill(el) {
+            el.setAttribute('autocomplete', 'off');
+            el.setAttribute('autocorrect', 'on');
+        }
+        // Apply to any existing and future input/textarea elements
+        document.addEventListener('DOMContentLoaded', function() {
+            document.querySelectorAll('input, textarea').forEach(disableAutofill);
+            new MutationObserver(function(mutations) {
+                mutations.forEach(function(m) {
+                    m.addedNodes.forEach(function(node) {
+                        if (node.nodeType !== 1) return;
+                        if (node.matches && node.matches('input, textarea')) disableAutofill(node);
+                        if (node.querySelectorAll) node.querySelectorAll('input, textarea').forEach(disableAutofill);
+                    });
+                });
+            }).observe(document.body, { childList: true, subtree: true });
+        });
+
         nativeLog('LOG', ['[NativeBridge] Bridge script initialized']);
     })();
     """
