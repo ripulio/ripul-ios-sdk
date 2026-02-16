@@ -74,6 +74,22 @@ final class CalendarService: ObservableObject {
         NotificationCenter.default.post(name: .calendarDidChange, object: nil)
         return true
     }
+
+    /// Delete all events from all calendars. Returns the number deleted.
+    func deleteAllEvents() throws -> Int {
+        let cal = Calendar.current
+        let start = cal.date(byAdding: .year, value: -5, to: Date())!
+        let end = cal.date(byAdding: .year, value: 5, to: Date())!
+        let predicate = store.predicateForEvents(withStart: start, end: end, calendars: nil)
+        let events = store.events(matching: predicate)
+        for event in events {
+            try store.remove(event, span: .thisEvent)
+        }
+        if !events.isEmpty {
+            NotificationCenter.default.post(name: .calendarDidChange, object: nil)
+        }
+        return events.count
+    }
 }
 
 // MARK: - Notification

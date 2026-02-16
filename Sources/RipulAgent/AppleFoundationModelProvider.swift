@@ -95,15 +95,17 @@ public final class AppleFoundationModelProvider: LLMProvider {
         case .static:
             parts.append("""
             Set toolName to the chosen tool. \
-            Fill in only the fields relevant to that tool. Leave other fields empty. \
+            Fill in the fields listed below for that tool. Leave all other fields empty. \
+            Ignore the "Parameters" line above — use ONLY these field names. \
             All dates must be ISO 8601 format like 2025-03-15T09:00:00Z.
 
             Field mapping:
-            - list_events uses: startDate, endDate
-            - create_event uses: title, startDate, endDate, notes, location, isAllDay
-            - delete_event uses: eventId
-            - search_events uses: query, startDate, endDate
-            - interactWithUser uses: message, expectResponse
+            - list_events: set startDate, endDate
+            - create_event: set title, startDate, endDate, notes, location, isAllDay
+            - delete_event: set eventId
+            - search_events: set query, startDate, endDate
+            - interactWithUser: set message (your text), expectResponse (true/false). \
+            For multiple choice, also set optionsJSON to a JSON array like [{"label":"Yes","value":"yes"},{"label":"No","value":"no"}]
             """)
         }
 

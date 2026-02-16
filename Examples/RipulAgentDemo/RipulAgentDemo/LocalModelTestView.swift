@@ -15,6 +15,7 @@ struct LocalModelTestView: View {
     @State private var historyIndex: Int? = nil
     @State private var enabledTools: Set<String> = Set(Self.allToolNames)
     @State private var showToolToggles = false
+    @FocusState private var isInputFocused: Bool
 
     var body: some View {
         VStack(spacing: 0) {
@@ -66,17 +67,44 @@ struct LocalModelTestView: View {
         }
     }
 
+    private static let samplePrompts = [
+        "What's on my calendar this week?",
+        "Search for lunch meetings",
+        "Hello, what can you do?",
+        "Setup a lunch meeting with Bob at The Whitehall Restaurant next monday at 1pm for 2hrs",
+        "Ask me a multiple choice quiz question",
+    ]
+
     private var emptyState: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: 16) {
             Image(systemName: "apple.intelligence")
                 .font(.system(size: 40))
                 .foregroundStyle(.secondary)
             Text("Apple Foundation Models")
                 .font(.headline)
-            Text("Test on-device inference with the app's real tools.\nTry: \"what's on my calendar?\", \"search for lunch\", or just say hello.")
+            Text("Test on-device inference with the app's real tools.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
+
+            VStack(spacing: 8) {
+                ForEach(Self.samplePrompts, id: \.self) { prompt in
+                    Button {
+                        inputText = prompt
+                        isInputFocused = true
+                    } label: {
+                        Text(prompt)
+                            .font(.subheadline)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 10)
+                            .background(Color(.systemGray6))
+                            .clipShape(RoundedRectangle(cornerRadius: 12))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 20)
         }
         .frame(maxWidth: .infinity)
         .padding(.top, 60)
@@ -197,14 +225,16 @@ struct LocalModelTestView: View {
     // MARK: - Input Bar
 
     private var inputBar: some View {
-        HStack(spacing: 10) {
-            TextField("Message…", text: $inputText)
+        HStack(alignment: .bottom, spacing: 10) {
+            TextField("Message…", text: $inputText, axis: .vertical)
                 .textFieldStyle(.plain)
+                .lineLimit(1...6)
+                .focused($isInputFocused)
+                .onSubmit { sendMessage() }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
                 .background(Color(.systemGray6))
                 .clipShape(RoundedRectangle(cornerRadius: 20))
-                .onSubmit { sendMessage() }
                 .onKeyPress(.upArrow) { cycleHistory(direction: .up); return .handled }
                 .onKeyPress(.downArrow) { cycleHistory(direction: .down); return .handled }
 
@@ -302,21 +332,52 @@ struct LocalModelTestView: View {
     /// handled by the web agent, but we need it here for the model to talk back.
     private static let interactWithUserDef: [String: Any] = [
         "name": "interactWithUser",
-        "description": "Send a message to the user. Use this for greetings, answers, and general conversation.",
+        "description": "Communicate with the user through messages, questions, or multiple-choice prompts. Prefer to ask the user multiple choice questions where-ever possible, as they can choose to ignore the multiple choices and reply by text.",
         "inputSchema": [
             "type": "object",
             "properties": [
                 "interactions": [
                     "type": "array",
+                    "description": "Array of interaction objects to process sequentially",
                     "items": [
                         "type": "object",
                         "properties": [
-                            "message": ["type": "string", "description": "The message to display"],
-                            "expectResponse": ["type": "boolean", "description": "Whether to wait for user input"],
-                        ]
+                            "message": [
+                                "type": "string",
+                                "description": "The content to display. Supports markdown formatting."
+                            ],
+                            "expectResponse": [
+                                "type": "boolean",
+                                "description": "If true, this interaction pauses for user input. False to notify."
+                            ],
+                            "options": [
+                                "type": "array",
+                                "description": "Choices to present as buttons. If provided, the tool will wait for user selection regardless of expectResponse.",
+                                "items": [
+                                    "type": "object",
+                                    "properties": [
+                                        "label": ["type": "string", "description": "Text shown on the button"],
+                                        "value": ["description": "Value returned when this option is selected"],
+                                        "description": ["type": "string", "description": "Additional context shown as a tooltip"]
+                                    ],
+                                    "required": ["label", "value"]
+                                ]
+                            ],
+                            "multiSelect": [
+                                "type": "boolean",
+                                "description": "When true, allows multiple options to be selected. Only applies when options are provided. Defaults to false."
+                            ],
+                            "severity": [
+                                "type": "string",
+                                "enum": ["info", "warning", "error"],
+                                "description": "Visual styling to indicate message importance."
+                            ]
+                        ],
+                        "required": ["message", "expectResponse"]
                     ]
                 ]
-            ]
+            ],
+            "required": ["interactions"]
         ]
     ]
 
@@ -348,17 +409,30 @@ struct LocalModelTestView: View {
 
             let tools = toolDefs
 
+            let toolNames = tools.compactMap { $0["name"] as? String }
+            let now = Date()
+            let dateFmt = DateFormatter()
+            dateFmt.dateFormat = "EEEE, MMMM d, yyyy 'at' h:mm a"
+            let nowString = dateFmt.string(from: now)
+
             let systemPrompt = """
-            You are a calendar assistant. You MUST use the calendar tools for any request \
-            about events, schedules, meetings, appointments, or time. \
-            Only use interactWithUser when the user is just saying hello or greeting you.
+            You are a calendar assistant. Today is \(nowString). \
+            You MUST set toolName to one of these exact values: \(toolNames.joined(separator: ", ")). \
+            Use calendar tools for anything about events, schedules, meetings, or time. \
+            Use interactWithUser for greetings, general conversation, questions, and answers. \
+            Use multiple choice options when it makes sense.
+
+            IMPORTANT: delete_event requires an event ID. If the user asks to delete an event \
+            by name or description, use search_events FIRST to find the ID, then delete_event.
 
             Examples:
-            - "what's on my calendar" → list_events
-            - "find lunch meetings" → search_events
-            - "create a meeting tomorrow" → create_event
-            - "delete that event" → delete_event
-            - "hello" → interactWithUser
+            - "what's on my calendar" → toolName: list_events
+            - "find lunch meetings" → toolName: search_events
+            - "create a meeting tomorrow" → toolName: create_event
+            - "delete the lunch meeting" → toolName: search_events (find ID first, then delete)
+            - "delete event ID abc123" → toolName: delete_event (only when you have the ID)
+            - "hello" → toolName: interactWithUser
+            - "ask me something" → toolName: interactWithUser (with options)
             """
 
             // Serialize the input payload for debugging
@@ -383,8 +457,9 @@ struct LocalModelTestView: View {
             ])
 
             // Show the tool call decision
+            let toolArgsJSON = Self.toJSON(result.toolArgs)
             let toolCallText = "**\(result.toolName)**\n\n" + Self.formatArgs(result.toolArgs)
-            messages.append(ChatMessage(role: .assistant, content: toolCallText, rawInputJSON: rawInputJSON, rawOutputJSON: rawOutputJSON, mode: generationMode.rawValue))
+            messages.append(ChatMessage(role: .assistant, content: toolCallText, toolName: result.toolName, toolCallJSON: toolArgsJSON, rawInputJSON: rawInputJSON, rawOutputJSON: rawOutputJSON, mode: generationMode.rawValue))
 
             // Execute the tool if it's a real NativeTool and currently enabled
             if let nativeTool = YourTools.all.first(where: { $0.name == result.toolName && enabledTools.contains($0.name) }) {
@@ -413,10 +488,29 @@ struct LocalModelTestView: View {
     }
 
     private static func formatArgs(_ args: [String: Any]) -> String {
-        // For interactWithUser, extract the message text
+        // For interactWithUser, extract message + options
         if let interactions = args["interactions"] as? [[String: Any]] {
-            let text = interactions.compactMap { $0["message"] as? String }.joined(separator: "\n\n")
-            if !text.isEmpty { return text }
+            var parts: [String] = []
+            for interaction in interactions {
+                if let msg = interaction["message"] as? String {
+                    parts.append(msg)
+                }
+                if let severity = interaction["severity"] as? String {
+                    parts.append("*\(severity.uppercased())*")
+                }
+                if let options = interaction["options"] as? [[String: Any]] {
+                    let multi = interaction["multiSelect"] as? Bool ?? false
+                    let prefix = multi ? "Select multiple:" : "Choose one:"
+                    parts.append(prefix)
+                    for opt in options {
+                        let label = opt["label"] as? String ?? "?"
+                        let desc = opt["description"] as? String
+                        if let desc { parts.append("- \(label) — \(desc)") }
+                        else { parts.append("- \(label)") }
+                    }
+                }
+            }
+            if !parts.isEmpty { return parts.joined(separator: "\n") }
         }
         // For everything else, show pretty JSON
         return toJSON(args) ?? "(empty)"
@@ -429,14 +523,18 @@ struct ChatMessage: Identifiable {
     let id = UUID()
     let role: ChatRole
     let content: String
+    let toolName: String?
+    let toolCallJSON: String?
     let rawInputJSON: String?
     let rawOutputJSON: String?
     let mode: String?
     let timestamp = Date()
 
-    init(role: ChatRole, content: String, rawInputJSON: String? = nil, rawOutputJSON: String? = nil, mode: String? = nil) {
+    init(role: ChatRole, content: String, toolName: String? = nil, toolCallJSON: String? = nil, rawInputJSON: String? = nil, rawOutputJSON: String? = nil, mode: String? = nil) {
         self.role = role
         self.content = content
+        self.toolName = toolName
+        self.toolCallJSON = toolCallJSON
         self.rawInputJSON = rawInputJSON
         self.rawOutputJSON = rawOutputJSON
         self.mode = mode
@@ -456,13 +554,17 @@ struct MessageBubble: View {
     let message: ChatMessage
     @State private var showInput = false
     @State private var showOutput = false
-
+    @State private var showRawJSON = false
     private var hasDebugInfo: Bool {
         message.rawInputJSON != nil || message.rawOutputJSON != nil
     }
+    /// Whether this bubble has structured data to render as a form.
+    private var hasStructuredContent: Bool {
+        message.role == .toolResult || (message.role == .assistant && message.toolCallJSON != nil)
+    }
 
     var body: some View {
-        HStack {
+        HStack(alignment: .top) {
             if message.role == .user { Spacer(minLength: 60) }
 
             VStack(alignment: message.role == .user ? .trailing : .leading, spacing: 4) {
@@ -470,40 +572,97 @@ struct MessageBubble: View {
                     .font(.caption2)
                     .foregroundStyle(.secondary)
 
-                VStack(alignment: .leading, spacing: 0) {
-                    Text(LocalizedStringKey(message.content))
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 10)
-
-                    if hasDebugInfo {
-                        Divider().padding(.horizontal, 8)
-
-                        HStack(spacing: 12) {
-                            if message.rawInputJSON != nil {
-                                debugToggle(label: "Input", isOn: $showInput)
-                            }
-                            if message.rawOutputJSON != nil {
-                                debugToggle(label: "Output", isOn: $showOutput)
-                            }
+                HStack(alignment: .top, spacing: 6) {
+                    VStack(alignment: .leading, spacing: 0) {
+                        if hasStructuredContent {
+                            structuredContent
+                        } else {
+                            Text(LocalizedStringKey(message.content))
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 10)
                         }
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 8)
-                    }
 
-                    if showInput, let json = message.rawInputJSON {
-                        jsonSection(title: "Request", json: json)
-                    }
+                        if hasDebugInfo {
+                            Divider().padding(.horizontal, 8)
 
-                    if showOutput, let json = message.rawOutputJSON {
-                        jsonSection(title: "Response", json: json)
+                            HStack(spacing: 12) {
+                                if message.rawInputJSON != nil {
+                                    debugToggle(label: "Input", isOn: $showInput)
+                                }
+                                if message.rawOutputJSON != nil {
+                                    debugToggle(label: "Output", isOn: $showOutput)
+                                }
+                            }
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 8)
+                        }
+
+                        if showInput, let json = message.rawInputJSON {
+                            jsonSection(title: "Request", json: json)
+                        }
+
+                        if showOutput, let json = message.rawOutputJSON {
+                            jsonSection(title: "Response", json: json)
+                        }
+                    }
+                    .background(bubbleColor)
+                    .foregroundStyle(message.role == .user ? .white : .primary)
+                    .clipShape(RoundedRectangle(cornerRadius: 16))
+
+                    if message.role != .user {
+                        CopyButton(text: message.content)
+                            .padding(.top, 8)
                     }
                 }
-                .background(bubbleColor)
-                .foregroundStyle(message.role == .user ? .white : .primary)
-                .clipShape(RoundedRectangle(cornerRadius: 16))
             }
 
-            if message.role != .user { Spacer(minLength: 60) }
+            if message.role != .user { Spacer(minLength: 40) }
+        }
+    }
+
+    // MARK: - Structured Content (tool call + tool result)
+
+    private var structuredContent: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Header row: tool name (for tool calls) + JSON toggle
+            HStack(spacing: 6) {
+                if let name = message.toolName {
+                    Text(name)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.primary)
+                }
+                Spacer()
+                Button {
+                    withAnimation(.easeInOut(duration: 0.15)) {
+                        showRawJSON.toggle()
+                    }
+                } label: {
+                    Image(systemName: showRawJSON ? "list.bullet.rectangle" : "curlybraces")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 14)
+            .padding(.top, 10)
+            .padding(.bottom, 6)
+
+            let jsonContent = message.toolCallJSON ?? message.content
+
+            if showRawJSON {
+                Divider().padding(.horizontal, 10)
+                ScrollView(.horizontal, showsIndicators: false) {
+                    Text(jsonContent)
+                        .font(.system(.caption2, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                }
+            } else {
+                FieldValueView(json: jsonContent)
+                    .padding(.horizontal, 14)
+                    .padding(.bottom, 10)
+            }
         }
     }
 
@@ -527,12 +686,16 @@ struct MessageBubble: View {
     private func jsonSection(title: String, json: String) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             Divider().padding(.horizontal, 8)
-            Text(title)
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 14)
-                .padding(.top, 8)
-                .padding(.bottom, 4)
+            HStack {
+                Text(title)
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                CopyButton(text: json)
+            }
+            .padding(.horizontal, 14)
+            .padding(.top, 8)
+            .padding(.bottom, 4)
             ScrollView(.horizontal, showsIndicators: false) {
                 Text(json)
                     .font(.system(.caption2, design: .monospaced))
@@ -564,6 +727,233 @@ struct MessageBubble: View {
         case .toolResult: .green.opacity(0.15)
         case .error: .red.opacity(0.15)
         }
+    }
+}
+
+// MARK: - Field-Value Renderer
+
+/// Renders a JSON string as a clean field-value form with aligned columns,
+/// dividers between rows, and indented nested sections.
+private struct FieldValueView: View {
+    let json: String
+
+    var body: some View {
+        if let parsed = Self.parse(json) {
+            VStack(alignment: .leading, spacing: 0) {
+                Self.renderValue(parsed, depth: 0, isRoot: true)
+            }
+        } else {
+            Text(json)
+                .font(.system(.caption2, design: .monospaced))
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private static func parse(_ json: String) -> Any? {
+        guard let data = json.data(using: .utf8) else { return nil }
+        return try? JSONSerialization.jsonObject(with: data)
+    }
+
+    // MARK: - Recursive renderers (AnyView to break opaque type recursion)
+
+    private static func renderValue(_ value: Any, depth: Int, isRoot: Bool = false) -> AnyView {
+        if let dict = value as? [String: Any] {
+            return renderDict(dict, depth: depth, isRoot: isRoot)
+        } else if let arr = value as? [Any] {
+            return renderArray(arr, depth: depth)
+        } else {
+            return AnyView(
+                Text(scalarString(value))
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(.primary)
+            )
+        }
+    }
+
+    private static func renderDict(_ dict: [String: Any], depth: Int, isRoot: Bool = false) -> AnyView {
+        let keys = dict.keys.sorted().filter { !isIDField($0) }
+        return AnyView(
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(Array(keys.enumerated()), id: \.element) { idx, key in
+                    let val = dict[key]!
+
+                    if isScalar(val) {
+                        fieldRow(key: key, depth: depth) {
+                            AnyView(
+                                Text(scalarString(val))
+                                    .font(.system(.caption, design: .monospaced))
+                                    .foregroundStyle(.primary)
+                            )
+                        }
+                    } else if val is [String: Any] {
+                        VStack(alignment: .leading, spacing: 0) {
+                            sectionHeader(key: key, depth: depth)
+                            renderValue(val, depth: depth + 1)
+                        }
+                    } else if let arr = val as? [Any] {
+                        if arr.allSatisfy({ isScalar($0) }) {
+                            fieldRow(key: key, depth: depth) {
+                                AnyView(
+                                    Text(arr.map { scalarString($0) }.joined(separator: ", "))
+                                        .font(.system(.caption, design: .monospaced))
+                                        .foregroundStyle(.primary)
+                                )
+                            }
+                        } else {
+                            VStack(alignment: .leading, spacing: 0) {
+                                sectionHeader(key: "\(key) (\(arr.count))", depth: depth)
+                                renderValue(val, depth: depth + 1)
+                            }
+                        }
+                    }
+
+                    // Divider between rows at root level
+                    if isRoot && idx < keys.count - 1 {
+                        Divider()
+                            .padding(.leading, CGFloat(depth) * 14)
+                            .padding(.vertical, 1)
+                    }
+                }
+            }
+        )
+    }
+
+    private static func renderArray(_ arr: [Any], depth: Int) -> AnyView {
+        AnyView(
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(Array(arr.enumerated()), id: \.offset) { idx, item in
+                    if item is [String: Any] {
+                        VStack(alignment: .leading, spacing: 0) {
+                            if arr.count > 1 {
+                                sectionHeader(key: "[\(idx)]", depth: depth)
+                            }
+                            renderValue(item, depth: arr.count > 1 ? depth + 1 : depth)
+                        }
+                    } else {
+                        fieldRow(key: "[\(idx)]", depth: depth) {
+                            AnyView(
+                                Text(scalarString(item))
+                                    .font(.system(.caption, design: .monospaced))
+                                    .foregroundStyle(.primary)
+                            )
+                        }
+                    }
+
+                    if idx < arr.count - 1 {
+                        Divider()
+                            .padding(.leading, CGFloat(depth) * 14)
+                            .padding(.vertical, 1)
+                    }
+                }
+            }
+        )
+    }
+
+    // MARK: - Row components
+
+    private static func fieldRow<V: View>(key: String, depth: Int, @ViewBuilder value: () -> V) -> some View {
+        HStack(alignment: .top, spacing: 0) {
+            Text(displayName(key))
+                .font(.caption2.weight(.medium))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: true, vertical: false)
+                .frame(minWidth: 60, alignment: .trailing)
+                .padding(.trailing, 8)
+
+            value()
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.leading, CGFloat(depth) * 14)
+        .padding(.vertical, 4)
+    }
+
+    private static func sectionHeader(key: String, depth: Int) -> some View {
+        Text(displayName(key))
+            .font(.caption2.weight(.bold))
+            .foregroundStyle(.secondary)
+            .textCase(.uppercase)
+            .padding(.leading, CGFloat(depth) * 14)
+            .padding(.top, 6)
+            .padding(.bottom, 2)
+    }
+
+    // MARK: - Helpers
+
+    /// Convert a camelCase or snake_case key into a capitalised display name.
+    /// e.g. "endDate" → "End Date", "isAllDay" → "Is All Day", "start_date" → "Start Date"
+    private static func displayName(_ key: String) -> String {
+        // Handle snake_case first
+        let base = key.replacingOccurrences(of: "_", with: " ")
+        // Split on camelCase boundaries
+        var result = ""
+        for char in base {
+            if char.isUppercase && !result.isEmpty && result.last != " " {
+                result += " "
+            }
+            result.append(char)
+        }
+        // Capitalise each word
+        return result.split(separator: " ").map { $0.prefix(1).uppercased() + $0.dropFirst().lowercased() }.joined(separator: " ")
+    }
+
+    /// Hide internal identifier fields from the form view.
+    private static func isIDField(_ key: String) -> Bool {
+        let lower = key.lowercased()
+        return lower == "id" || lower.hasSuffix("id") || lower.hasSuffix("identifier")
+    }
+
+    private static func isScalar(_ value: Any) -> Bool {
+        value is String || value is Bool || value is NSNumber
+    }
+
+    private static func scalarString(_ value: Any) -> String {
+        if let b = value as? Bool { return b ? "true" : "false" }
+        if let s = value as? String { return formatIfDate(s) ?? s }
+        if let n = value as? NSNumber { return n.stringValue }
+        return "\(value)"
+    }
+
+    /// Try to parse an ISO 8601 date string and return a human-friendly format.
+    private static func formatIfDate(_ string: String) -> String? {
+        guard string.count >= 10, string.count <= 30 else { return nil }
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = iso.date(from: string) ?? {
+            iso.formatOptions = [.withInternetDateTime]
+            return iso.date(from: string)
+        }() {
+            let fmt = DateFormatter()
+            let cal = Calendar.current
+            if cal.component(.hour, from: date) == 0 && cal.component(.minute, from: date) == 0 {
+                fmt.dateFormat = "EEE, MMM d, yyyy"
+            } else {
+                fmt.dateFormat = "EEE, MMM d, yyyy 'at' h:mm a"
+            }
+            return fmt.string(from: date)
+        }
+        return nil
+    }
+}
+
+// MARK: - Copy Button
+
+private struct CopyButton: View {
+    let text: String
+    @State private var copied = false
+
+    var body: some View {
+        Button {
+            UIPasteboard.general.string = text
+            copied = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                copied = false
+            }
+        } label: {
+            Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                .font(.system(size: 10))
+                .foregroundStyle(.secondary)
+        }
+        .buttonStyle(.plain)
     }
 }
 

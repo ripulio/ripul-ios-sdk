@@ -79,6 +79,15 @@ struct StaticToolCallDecision {
 
     @Guide(description: "Whether to wait for a response.")
     var expectResponse: Bool?
+
+    @Guide(description: "JSON array of option objects, e.g. [{\"label\":\"Yes\",\"value\":\"yes\"},{\"label\":\"No\",\"value\":\"no\"}]. Each object needs label and value.")
+    var optionsJSON: String?
+
+    @Guide(description: "Allow selecting multiple options. Only used with options.")
+    var multiSelect: Bool?
+
+    @Guide(description: "Visual importance: info, warning, or error.")
+    var severity: String?
 }
 
 @available(iOS 26, *)
@@ -118,6 +127,14 @@ extension StaticToolCallDecision {
             var interaction: [String: Any] = [:]
             if let v = message { interaction["message"] = v }
             if let v = expectResponse { interaction["expectResponse"] = v }
+            if let v = multiSelect { interaction["multiSelect"] = v }
+            if let v = severity { interaction["severity"] = v }
+            // Parse optionsJSON into an array of dictionaries
+            if let jsonStr = optionsJSON,
+               let data = jsonStr.data(using: .utf8),
+               let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
+                interaction["options"] = arr
+            }
             return ["interactions": [interaction]]
 
         default:

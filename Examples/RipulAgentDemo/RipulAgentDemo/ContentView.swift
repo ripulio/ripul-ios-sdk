@@ -25,7 +25,7 @@ struct ContentView: View {
                 NavigationStack {
                     Group {
                         if calendarService.hasAccess {
-                            WeekCalendarView(calendarService: calendarService)
+                            CalendarContainerView(calendarService: calendarService)
                         } else {
                             permissionView
                         }
