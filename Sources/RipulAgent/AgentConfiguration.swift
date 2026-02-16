@@ -12,6 +12,9 @@ public struct AgentConfiguration {
     public var theme: AgentTheme = .system
     public var newChat: Bool = false
     public var prompt: String? = nil
+    /// JSON string of site key config returned from validation.
+    /// Set automatically by SiteKeyValidator; not typically set by consumers.
+    var siteKeyConfig: String? = nil
 
     public static let defaultBaseURL = URL(string: "https://demo.ripul.io")!
 
@@ -45,6 +48,11 @@ public struct AgentConfiguration {
 
         if let sessionToken {
             hashParams.append("sessionToken=\(sessionToken)")
+        }
+
+        if let siteKeyConfig,
+           let encoded = siteKeyConfig.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) {
+            hashParams.append("siteKeyConfig=\(encoded)")
         }
 
         if newChat {
