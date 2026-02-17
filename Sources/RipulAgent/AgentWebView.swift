@@ -55,26 +55,13 @@ public struct AgentWebView: UIViewRepresentable {
 
         bridge.attach(to: webView)
 
-        // Validate site key before loading if sessionToken is missing.
-        // This mirrors the EmbedManager.validateSiteKey() flow in the browser.
-        if configuration.siteKey != nil && configuration.sessionToken == nil {
-            Task { @MainActor in
-                let result = await SiteKeyValidator.validate(
-                    siteKey: configuration.siteKey!,
-                    baseURL: configuration.baseURL
-                )
-                var resolved = configuration
-                resolved.sessionToken = result.sessionToken
-                resolved.siteKeyConfig = result.configJSON
-                let url = resolved.embeddedURL
-                NSLog("[AgentWebView] Loading URL (after validation): %@", url.absoluteString)
-                webView.load(URLRequest(url: url))
-            }
-        } else {
-            let url = configuration.embeddedURL
-            NSLog("[AgentWebView] Loading URL: %@", url.absoluteString)
-            webView.load(URLRequest(url: url))
-        }
+        // Load immediately with just the siteKey in the hash.
+        // The web app validates the site key itself (same path as the
+        // browser embed flow), avoiding a blocking network round-trip
+        // before the page even starts downloading.
+        let url = configuration.embeddedURL
+        NSLog("[AgentWebView] Loading URL: %@", url.absoluteString)
+        webView.load(URLRequest(url: url))
 
         return webView
     }
