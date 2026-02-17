@@ -29,6 +29,7 @@ enum YourTools {
         CreateEventTool(),
         DeleteEventTool(),
         SearchEventsTool(),
+        StoreReceiptTool(),
     ]
 }
 
@@ -118,6 +119,82 @@ struct DeleteEventTool: NativeTool {
             "success": deleted,
             "id": id,
         ] as [String: Any]
+    }
+}
+
+// MARK: - store_receipt
+
+struct StoreReceiptTool: NativeTool {
+    let name = "store_receipt"
+    let description = "Stores a receipt as a calendar event. Captures formal receipt fields and saves them to the calendar with formatted notes. Use this when a user wants to log or save a purchase receipt."
+    let inputSchema = ToolSchema.object(
+        .string("storeName", "Name of the store or merchant", required: true),
+        .string("date", "Purchase date in ISO 8601 format (e.g. 2025-03-15T00:00:00Z)", required: true),
+        .string("total", "Total amount including currency symbol (e.g. $42.50)", required: true),
+        .string("items", "Line items, one per line (e.g. Coffee $4.50\\nSandwich $8.00)"),
+        .string("paymentMethod", "Payment method (e.g. Visa ending 1234, Cash, Apple Pay)"),
+        .string("receiptNumber", "Transaction or receipt reference number"),
+        .string("tax", "Tax amount including currency symbol (e.g. $3.50)"),
+        .string("currency", "Currency code (e.g. USD, EUR). Defaults to local currency.")
+    )
+
+    func execute(args: [String: Any]) async throws -> Any {
+        let storeName = try string("storeName", from: args)
+        let purchaseDate = try date("date", from: args)
+        let total = try string("total", from: args)
+        let items = optionalString("items", from: args)
+        let paymentMethod = optionalString("paymentMethod", from: args)
+        let receiptNumber = optionalString("receiptNumber", from: args)
+        let tax = optionalString("tax", from: args)
+        let currency = optionalString("currency", from: args)
+
+        // Build formatted notes
+        let formatter = DateFormatter()
+        formatter.dateStyle = .long
+        formatter.timeStyle = .short
+
+        var lines: [String] = []
+        lines.append("🧾 Receipt")
+        lines.append("Store: \(storeName)")
+        lines.append("Date: \(formatter.string(from: purchaseDate))")
+        if let receiptNumber { lines.append("Receipt #: \(receiptNumber)") }
+        if let currency { lines.append("Currency: \(currency)") }
+        lines.append("")
+        if let items {
+            lines.append("Items:")
+            lines.append(items)
+            lines.append("")
+        }
+        if let tax { lines.append("Tax: \(tax)") }
+        lines.append("Total: \(total)")
+        if let paymentMethod { lines.append("Payment: \(paymentMethod)") }
+
+        let notes = lines.joined(separator: "\n")
+
+        // Create an all-day event on the purchase date
+        let calendar = Calendar.current
+        let startOfDay = calendar.startOfDay(for: purchaseDate)
+        let endOfDay = calendar.date(byAdding: .day, value: 1, to: startOfDay)!
+
+        do {
+            let event = try CalendarService.shared.createEvent(
+                title: "Receipt: \(storeName)",
+                startDate: startOfDay,
+                endDate: endOfDay,
+                notes: notes,
+                location: storeName,
+                isAllDay: true
+            )
+            return [
+                "success": true,
+                "event": event.asDictionary,
+            ] as [String: Any]
+        } catch {
+            throw ToolError.invalidArgs(
+                "Failed to store receipt for '\(storeName)': \(error.localizedDescription). "
+                + "Check that the device has a calendar configured."
+            )
+        }
     }
 }
 
