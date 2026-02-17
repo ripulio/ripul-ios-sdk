@@ -33,8 +33,12 @@ public struct AgentWebView: UIViewRepresentable {
         // Allow inline media playback
         config.allowsInlineMediaPlayback = true
 
-        // Use separate data store so cookies/storage persist across sessions
-        config.websiteDataStore = .default()
+        // Clear all cached web content on each launch to avoid stale
+        // assets causing black screens or broken UI.
+        let dataStore = WKWebsiteDataStore.default()
+        let allTypes = WKWebsiteDataStore.allWebsiteDataTypes()
+        dataStore.removeData(ofTypes: allTypes, modifiedSince: .distantPast) { }
+        config.websiteDataStore = dataStore
 
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.isOpaque = false
