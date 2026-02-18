@@ -2,6 +2,7 @@ import SwiftUI
 import WebKit
 import ObjectiveC
 
+@available(iOS 15.0, *)
 @MainActor
 public struct AgentWebView: UIViewRepresentable {
     public let configuration: AgentConfiguration

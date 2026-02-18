@@ -1,5 +1,6 @@
 import SwiftUI
 
+@available(iOS 15.0, *)
 @MainActor
 public struct AgentView: View {
     public let configuration: AgentConfiguration
@@ -30,11 +31,11 @@ public struct AgentView: View {
                     .ignoresSafeArea(.container, edges: .bottom)
             }
         }
-        .onChange(of: colorScheme) { _, newScheme in
+        .onChange(of: colorScheme) { newScheme in
             let theme: AgentTheme = newScheme == .dark ? .dark : .light
             bridge.setTheme(theme)
         }
-        .onChange(of: bridge.wantsMinimize) { _, wantsMinimize in
+        .onChange(of: bridge.wantsMinimize) { wantsMinimize in
             if wantsMinimize {
                 dismiss()
             }

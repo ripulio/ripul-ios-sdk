@@ -2,6 +2,7 @@ import Foundation
 
 /// Validates a site key against the LLM proxy and returns a session token.
 /// Mirrors the browser-side validation done by EmbedManager.validateSiteKey().
+@available(iOS 15.0, *)
 enum SiteKeyValidator {
     struct ValidationResult {
         let sessionToken: String?
