@@ -3,15 +3,15 @@ import Foundation
 /// Validates a site key against the LLM proxy and returns a session token.
 /// Mirrors the browser-side validation done by EmbedManager.validateSiteKey().
 @available(iOS 15.0, *)
-enum SiteKeyValidator {
-    struct ValidationResult {
-        let sessionToken: String?
-        let configJSON: String?
+public enum SiteKeyValidator {
+    public struct ValidationResult {
+        public let sessionToken: String?
+        public let configJSON: String?
     }
 
     private static let validationEndpoint = "https://llm-proxy.ripul.io/v1/site-key/validate"
 
-    static func validate(siteKey: String, baseURL: URL) async -> ValidationResult {
+    public static func validate(siteKey: String, baseURL: URL) async -> ValidationResult {
         guard let url = URL(string: validationEndpoint) else {
             NSLog("[SiteKeyValidator] Invalid validation endpoint")
             return ValidationResult(sessionToken: nil, configJSON: nil)

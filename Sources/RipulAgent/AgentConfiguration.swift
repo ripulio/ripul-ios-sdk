@@ -14,7 +14,7 @@ public struct AgentConfiguration {
     public var prompt: String? = nil
     /// JSON string of site key config returned from validation.
     /// Set automatically by SiteKeyValidator; not typically set by consumers.
-    var siteKeyConfig: String? = nil
+    public var siteKeyConfig: String? = nil
 
     public static let defaultBaseURL = URL(string: "https://demo.ripul.io")!
 
