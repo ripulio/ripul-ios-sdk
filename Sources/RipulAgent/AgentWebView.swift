@@ -55,10 +55,10 @@ public struct AgentWebView: UIViewRepresentable {
 
         bridge.attach(to: webView)
 
-        // Load immediately with just the siteKey in the hash.
-        // The web app validates the site key itself (same path as the
-        // browser embed flow), avoiding a blocking network round-trip
-        // before the page even starts downloading.
+        // Load the URL with the full site key config in the hash.
+        // AgentView validates the site key natively before creating this
+        // view, so the config (including theme) is available synchronously
+        // on the web side — matching the browser EmbedManager flow.
         let url = configuration.embeddedURL
         NSLog("[AgentWebView] Loading URL: %@", url.absoluteString)
         webView.load(URLRequest(url: url))

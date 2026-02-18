@@ -55,6 +55,11 @@ public struct AgentConfiguration {
             hashParams.append("siteKeyConfig=\(encoded)")
         }
 
+        // Pass theme so the page can set the correct background before React loads.
+        // The bridge also sends theme changes at runtime, but this ensures the
+        // very first paint matches (avoiding a dark flash for light themes).
+        hashParams.append("theme=\(theme.rawValue)")
+
         if newChat {
             hashParams.append("newChat=true")
         }
