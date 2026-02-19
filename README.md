@@ -88,13 +88,14 @@ final class CalendarService: ObservableObject {
 
 ### 2. You write thin tool wrappers
 
-Each tool conforms to `NativeTool` — a protocol with four properties:
+Each tool conforms to `NativeTool` — a protocol with a few properties:
 
 ```swift
 protocol NativeTool {
     var name: String { get }             // Tool name the agent sees
     var description: String { get }      // What the tool does (natural language)
     var inputSchema: [String: Any] { get } // JSON Schema for the input
+    var isBlocking: Bool { get }         // true = waits for user interaction (default: false)
     func execute(args: [String: Any]) async throws -> Any  // Call your API
 }
 ```
@@ -432,9 +433,45 @@ AgentConfiguration(
 
 This is useful when launching the agent from a contextual action — a long-press on a calendar event, a "Help with this" button on a form, or a deep link. The user sees the prompt pre-filled and can send it immediately or edit it first.
 
+### Blocking tools (user interaction)
+
+Some tools need to wait for user interaction before returning a result — for example, presenting a native picker, a confirmation dialog, or a camera. By default the agent framework has a short request timeout, so these tools would fail before the user has a chance to respond.
+
+Mark these tools as **blocking** and the framework will wait indefinitely for the result:
+
+```swift
+struct PickIndustryTool: NativeTool {
+    let name = "pick_industry"
+    let description = "Shows the industry picker for the user to select."
+    let isBlocking = true  // ← no timeout — waits for user interaction
+    let inputSchema = ToolSchema.object()
+
+    func execute(args: [String: Any]) async throws -> Any {
+        // Present a native picker, await user selection
+        let selection = try await showNativePicker()
+        return ["id": selection.id, "name": selection.name]
+    }
+}
+```
+
+The `isBlocking` flag is sent to the agent as `"blocking": true` in the MCP tool definition. The framework disables its request timeout for that tool invocation.
+
+**When to use `isBlocking`:**
+
+- Native pickers or selection screens
+- Camera or photo library access
+- Confirmation dialogs ("Are you sure?")
+- Any tool that presents UI and waits for user input
+
+**When NOT to use it:**
+
+- API calls (even slow ones — they should have their own timeout)
+- Background processing
+- Tools that return immediately
+
 ## Requirements
 
-- iOS 17+
+- iOS 14+ (agent UI requires iOS 15+)
 - Xcode 15+
 - EventKit entitlement (for the calendar demo)
 

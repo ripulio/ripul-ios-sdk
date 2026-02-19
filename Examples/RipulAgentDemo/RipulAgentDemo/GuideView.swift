@@ -282,6 +282,43 @@ struct GuideView: View {
                 }
             }
 
+            Section("Blocking tools (user interaction)") {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Some tools need to wait for user interaction — a native picker, confirmation dialog, or camera. Mark them as blocking so the framework waits indefinitely:")
+                        .font(.subheadline)
+                }
+
+                codeBlock("""
+                struct PickIndustryTool: NativeTool {
+                    let name = "pick_industry"
+                    let description = "Shows the picker."
+                    let isBlocking = true
+                    let inputSchema = ToolSchema.object()
+
+                    func execute(args: [String: Any])
+                        async throws -> Any
+                    {
+                        let selection = try await
+                            showNativePicker()
+                        return ["id": selection.id,
+                                "name": selection.name]
+                    }
+                }
+                """)
+
+                benefitRow(
+                    icon: "checkmark.circle",
+                    title: "When to use isBlocking",
+                    detail: "Native pickers, camera, photo library, confirmation dialogs — anything that presents UI and waits."
+                )
+
+                benefitRow(
+                    icon: "xmark.circle",
+                    title: "When NOT to use it",
+                    detail: "API calls, background processing, or tools that return immediately."
+                )
+            }
+
             Section("Pre-filling prompts") {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Pass a prompt in the configuration to pre-fill the agent's input with context — great for contextual actions like long-pressing an event or a \"Help with this\" button:")
