@@ -282,40 +282,51 @@ struct GuideView: View {
                 }
             }
 
-            Section("Blocking tools (user interaction)") {
+            Section("Tool timeouts") {
                 VStack(alignment: .leading, spacing: 12) {
-                    Text("Some tools need to wait for user interaction — a native picker, confirmation dialog, or camera. Mark them as blocking so the framework waits indefinitely:")
+                    Text("Every tool has a timeout (in seconds) that controls how long the framework waits. Default is 30s. Override per-tool. Set 0 for no timeout (e.g. native pickers).")
                         .font(.subheadline)
                 }
 
                 codeBlock("""
+                // Custom timeout for a slow API call
+                struct SlowSearchTool: NativeTool {
+                    let name = "slow_search"
+                    let description = "Searches a large dataset."
+                    let timeout: TimeInterval = 60
+                    let inputSchema = ToolSchema.object(
+                        .string("query", "Search query",
+                                required: true)
+                    )
+                    ...
+                }
+
+                // No timeout for a native picker
                 struct PickIndustryTool: NativeTool {
                     let name = "pick_industry"
                     let description = "Shows the picker."
-                    let isBlocking = true
+                    let timeout: TimeInterval = 0
                     let inputSchema = ToolSchema.object()
-
-                    func execute(args: [String: Any])
-                        async throws -> Any
-                    {
-                        let selection = try await
-                            showNativePicker()
-                        return ["id": selection.id,
-                                "name": selection.name]
-                    }
+                    ...
                 }
                 """)
 
                 benefitRow(
-                    icon: "checkmark.circle",
-                    title: "When to use isBlocking",
-                    detail: "Native pickers, camera, photo library, confirmation dialogs — anything that presents UI and waits."
+                    icon: "clock",
+                    title: "Default (30s)",
+                    detail: "Most tools — API calls, background processing."
                 )
 
                 benefitRow(
-                    icon: "xmark.circle",
-                    title: "When NOT to use it",
-                    detail: "API calls, background processing, or tools that return immediately."
+                    icon: "clock.arrow.circlepath",
+                    title: "Custom (e.g. 60s)",
+                    detail: "Slow API calls, external services with unpredictable latency."
+                )
+
+                benefitRow(
+                    icon: "infinity",
+                    title: "No timeout (0)",
+                    detail: "Native pickers, camera, confirmation dialogs — anything that waits for user interaction."
                 )
             }
 

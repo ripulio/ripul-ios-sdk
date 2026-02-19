@@ -8,14 +8,14 @@ public protocol NativeTool {
     var name: String { get }
     var description: String { get }
     var inputSchema: [String: Any] { get }
-    /// When `true` the agent will wait indefinitely for this tool to return
-    /// (e.g. a native picker that requires user interaction).
-    var isBlocking: Bool { get }
+    /// Timeout in seconds for this tool. `0` means no timeout (wait indefinitely).
+    /// Default is `30`. Override per-tool for slower operations.
+    var timeout: TimeInterval { get }
     func execute(args: [String: Any]) async throws -> Any
 }
 
 public extension NativeTool {
-    var isBlocking: Bool { false }
+    var timeout: TimeInterval { 30 }
 
     /// MCP-formatted definition sent to the agent during discovery.
     var definition: [String: Any] {
@@ -24,7 +24,7 @@ public extension NativeTool {
             "description": description,
             "inputSchema": inputSchema,
         ]
-        if isBlocking { def["blocking"] = true }
+        def["timeout"] = Int(timeout * 1000) // milliseconds for JS
         return def
     }
 

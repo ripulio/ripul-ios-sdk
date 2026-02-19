@@ -95,7 +95,7 @@ protocol NativeTool {
     var name: String { get }             // Tool name the agent sees
     var description: String { get }      // What the tool does (natural language)
     var inputSchema: [String: Any] { get } // JSON Schema for the input
-    var isBlocking: Bool { get }         // true = waits for user interaction (default: false)
+    var timeout: TimeInterval { get }    // seconds — 0 = no timeout (default: 30)
     func execute(args: [String: Any]) async throws -> Any  // Call your API
 }
 ```
@@ -433,41 +433,48 @@ AgentConfiguration(
 
 This is useful when launching the agent from a contextual action — a long-press on a calendar event, a "Help with this" button on a form, or a deep link. The user sees the prompt pre-filled and can send it immediately or edit it first.
 
-### Blocking tools (user interaction)
+### Tool timeouts
 
-Some tools need to wait for user interaction before returning a result — for example, presenting a native picker, a confirmation dialog, or a camera. By default the agent framework has a short request timeout, so these tools would fail before the user has a chance to respond.
+Every tool has a `timeout` (in seconds) that controls how long the framework waits before timing out. The default is **30 seconds**. Override per-tool:
 
-Mark these tools as **blocking** and the framework will wait indefinitely for the result:
+```swift
+struct SlowSearchTool: NativeTool {
+    let name = "slow_search"
+    let description = "Searches a large dataset."
+    let timeout: TimeInterval = 60  // ← 60-second timeout
+    let inputSchema = ToolSchema.object(
+        .string("query", "Search query", required: true)
+    )
+
+    func execute(args: [String: Any]) async throws -> Any {
+        // ... slow API call
+    }
+}
+```
+
+Set `timeout = 0` for tools that should wait indefinitely (e.g. native pickers that need user interaction):
 
 ```swift
 struct PickIndustryTool: NativeTool {
     let name = "pick_industry"
-    let description = "Shows the industry picker for the user to select."
-    let isBlocking = true  // ← no timeout — waits for user interaction
+    let description = "Shows the industry picker."
+    let timeout: TimeInterval = 0  // ← no timeout
     let inputSchema = ToolSchema.object()
 
     func execute(args: [String: Any]) async throws -> Any {
-        // Present a native picker, await user selection
         let selection = try await showNativePicker()
         return ["id": selection.id, "name": selection.name]
     }
 }
 ```
 
-The `isBlocking` flag is sent to the agent as `"blocking": true` in the MCP tool definition. The framework disables its request timeout for that tool invocation.
+The timeout value is sent as milliseconds in the MCP tool definition and the framework uses it per-invocation.
 
-**When to use `isBlocking`:**
-
-- Native pickers or selection screens
-- Camera or photo library access
-- Confirmation dialogs ("Are you sure?")
-- Any tool that presents UI and waits for user input
-
-**When NOT to use it:**
-
-- API calls (even slow ones — they should have their own timeout)
-- Background processing
-- Tools that return immediately
+| Timeout | Use case |
+|---------|----------|
+| **Default (30s)** | Most tools — API calls, background processing |
+| **Custom (e.g. 60s)** | Slow API calls, external services |
+| **0 (no timeout)** | Native pickers, camera, confirmation dialogs |
 
 ## Requirements
 
