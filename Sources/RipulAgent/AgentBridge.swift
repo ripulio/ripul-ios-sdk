@@ -244,12 +244,25 @@ public final class AgentBridge: NSObject, ObservableObject {
             do {
                 let result = try await tool.execute(args: args)
                 NSLog("[AgentBridge] Tool %@ succeeded", toolName)
+
+                // Validate that the result is JSON-serializable before sending.
+                // If the tool returns a dict with non-JSON types (Date, Decimal, etc.)
+                // JSONSerialization will fail silently in send(), losing the result.
+                let safeResult: Any
+                if let dict = result as? [String: Any],
+                   !JSONSerialization.isValidJSONObject(["test": dict]) {
+                    NSLog("[AgentBridge] Tool %@ result is not JSON-serializable, converting to description", toolName)
+                    safeResult = ["_raw": String(describing: dict)]
+                } else {
+                    safeResult = result
+                }
+
                 self.send([
                     "type": "\(messagePrefix)mcp:result",
                     "version": protocolVersion,
                     "timestamp": self.currentTimestamp(),
                     "requestId": requestId,
-                    "result": result,
+                    "result": safeResult,
                 ])
             } catch {
                 NSLog("[AgentBridge] Tool %@ failed: %@", toolName, error.localizedDescription)
@@ -360,7 +373,8 @@ public final class AgentBridge: NSObject, ObservableObject {
 
         guard let data = try? JSONSerialization.data(withJSONObject: message),
               let json = String(data: data, encoding: .utf8) else {
-            NSLog("[AgentBridge] Failed to serialize message")
+            NSLog("[AgentBridge] Failed to serialize message — sending fallback error")
+            sendSerializationFallback(message: message, webView: webView)
             return
         }
 
@@ -368,6 +382,29 @@ public final class AgentBridge: NSObject, ObservableObject {
         webView.evaluateJavaScript(js) { _, error in
             if let error {
                 NSLog("[AgentBridge] JS eval error: %@", error.localizedDescription)
+            }
+        }
+    }
+
+    /// Last-resort fallback when `send()` can't serialize a message.
+    /// Constructs a minimal mcp:error JSON string by hand so the LLM
+    /// always sees *something* instead of a silent drop.
+    private func sendSerializationFallback(message: [String: Any], webView: WKWebView) {
+        let requestId = (message["requestId"] as? String ?? "unknown")
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+        let messageType = message["type"] as? String ?? "unknown"
+
+        let fallback = """
+        {"type":"\(messagePrefix)mcp:error","version":"\(protocolVersion)",\
+        "timestamp":\(currentTimestamp()),"requestId":"\(requestId)",\
+        "error":"Native bridge failed to serialize the response for \(messageType). \
+        The tool may have succeeded but returned non-JSON-safe data."}
+        """
+        let js = "window.__agentBridgeReceive(\(fallback))"
+        webView.evaluateJavaScript(js) { _, error in
+            if let error {
+                NSLog("[AgentBridge] Fallback JS eval error: %@", error.localizedDescription)
             }
         }
     }
