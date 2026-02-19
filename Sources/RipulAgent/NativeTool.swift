@@ -8,13 +8,24 @@ public protocol NativeTool {
     var name: String { get }
     var description: String { get }
     var inputSchema: [String: Any] { get }
+    /// When `true` the agent will wait indefinitely for this tool to return
+    /// (e.g. a native picker that requires user interaction).
+    var isBlocking: Bool { get }
     func execute(args: [String: Any]) async throws -> Any
 }
 
 public extension NativeTool {
+    var isBlocking: Bool { false }
+
     /// MCP-formatted definition sent to the agent during discovery.
     var definition: [String: Any] {
-        ["name": name, "description": description, "inputSchema": inputSchema]
+        var def: [String: Any] = [
+            "name": name,
+            "description": description,
+            "inputSchema": inputSchema,
+        ]
+        if isBlocking { def["blocking"] = true }
+        return def
     }
 
     // MARK: - Arg Extraction Helpers
