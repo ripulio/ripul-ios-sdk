@@ -31,6 +31,29 @@ public struct AgentWebView: UIViewRepresentable {
         config.userContentController.add(context.coordinator, name: "agentBridge")
         config.userContentController.add(context.coordinator, name: "agentLog")
 
+        // Inject font-face declarations for any requested font families
+        if let families = configuration.fontFamilies, !families.isEmpty {
+            let css = Self.buildFontCSS(families: families, bundle: .main)
+            if !css.isEmpty {
+                let escaped = css
+                    .replacingOccurrences(of: "\\", with: "\\\\")
+                    .replacingOccurrences(of: "`", with: "\\`")
+                let source = """
+                (function() {
+                    var s = document.createElement('style');
+                    s.textContent = `\(escaped)`;
+                    (document.head || document.documentElement).appendChild(s);
+                })();
+                """
+                let fontScript = WKUserScript(
+                    source: source,
+                    injectionTime: .atDocumentEnd,
+                    forMainFrameOnly: true
+                )
+                config.userContentController.addUserScript(fontScript)
+            }
+        }
+
         // Allow inline media playback
         config.allowsInlineMediaPlayback = true
 
@@ -221,6 +244,75 @@ public struct AgentWebView: UIViewRepresentable {
         nativeLog('LOG', ['[NativeBridge] Bridge script initialized']);
     })();
     """
+
+    // MARK: - Font CSS Builder
+
+    /// Scans `bundle` for font files whose names start with any of `families`,
+    /// infers CSS weight and style from the filename suffix, and returns
+    /// `@font-face` declarations that base64-embed each file.
+    static func buildFontCSS(families: [String], bundle: Bundle) -> String {
+        // Tuples ordered longest-suffix-first so specific names match before
+        // shorter ones (e.g. "BoldItalic" before "Bold" before "Italic").
+        let weightMap: [(suffix: String, weight: Int, italic: Bool)] = [
+            ("UltraLightItalic", 200, true),  ("UltraLight-Italic", 200, true),
+            ("UltraLight",       200, false),
+            ("ThinItalic",       100, true),  ("Thin-Italic",       100, true),
+            ("Thin",             100, false),
+            ("LightItalic",      300, true),  ("Light-Italic",      300, true),
+            ("Light",            300, false),
+            ("MediumItalic",     500, true),  ("Medium-Italic",     500, true),
+            ("Medium",           500, false),
+            ("DemiBoldItalic",   600, true),  ("DemiBold-Italic",   600, true),
+            ("DemiBold",         600, false),
+            ("SemiBoldItalic",   600, true),  ("SemiBold-Italic",   600, true),
+            ("SemiBold",         600, false),
+            ("BoldItalic",       700, true),  ("Bold-Italic",       700, true),
+            ("Bold",             700, false),
+            ("HeavyItalic",      800, true),  ("Heavy-Italic",      800, true),
+            ("Heavy",            800, false),
+            ("ExtraBoldItalic",  800, true),  ("ExtraBold-Italic",  800, true),
+            ("ExtraBold",        800, false),
+            ("BlackItalic",      900, true),  ("Black-Italic",      900, true),
+            ("Black",            900, false),
+            ("Italic",           400, true),
+            ("Regular",          400, false),
+            ("",                 400, false),  // bare family name with no suffix
+        ]
+
+        var declarations: [String] = []
+
+        for family in families {
+            for ext in ["ttf", "otf"] {
+                guard let urls = bundle.urls(forResourcesWithExtension: ext, subdirectory: nil) else { continue }
+                for url in urls {
+                    let stem = url.deletingPathExtension().lastPathComponent
+                    guard stem.hasPrefix(family) else { continue }
+
+                    // Strip family prefix and any leading hyphen separator
+                    var suffix = String(stem.dropFirst(family.count))
+                    if suffix.hasPrefix("-") { suffix = String(suffix.dropFirst()) }
+
+                    guard let entry = weightMap.first(where: { $0.suffix == suffix }) else { continue }
+                    guard let data = try? Data(contentsOf: url) else { continue }
+
+                    let b64    = data.base64EncodedString()
+                    let mime   = ext == "otf" ? "font/opentype"  : "font/truetype"
+                    let format = ext == "otf" ? "opentype"       : "truetype"
+
+                    declarations.append("""
+                    @font-face {
+                        font-family: '\(family)';
+                        font-weight: \(entry.weight);
+                        font-style: \(entry.italic ? "italic" : "normal");
+                        src: url('data:\(mime);base64,\(b64)') format('\(format)');
+                    }
+                    """)
+                }
+            }
+        }
+
+        return declarations.joined(separator: "\n")
+    }
 
     // MARK: - Coordinator
 

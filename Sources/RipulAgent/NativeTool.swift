@@ -8,6 +8,11 @@ public protocol NativeTool {
     var name: String { get }
     var description: String { get }
     var inputSchema: [String: Any] { get }
+    /// Optional output schema describing the fields returned by this tool.
+    /// When provided, the agent sees a "Returns:" section in the tool description
+    /// so it can construct correct `$ref` paths in sequential chains.
+    /// Build with `ToolSchema.object(...)` just like `inputSchema`.
+    var outputSchema: [String: Any]? { get }
     /// Timeout in seconds for this tool. `0` means no timeout (wait indefinitely).
     /// Default is `30`. Override per-tool for slower operations.
     var timeout: TimeInterval { get }
@@ -15,6 +20,7 @@ public protocol NativeTool {
 }
 
 public extension NativeTool {
+    var outputSchema: [String: Any]? { nil }
     var timeout: TimeInterval { 30 }
 
     /// MCP-formatted definition sent to the agent during discovery.
@@ -24,6 +30,9 @@ public extension NativeTool {
             "description": description,
             "inputSchema": inputSchema,
         ]
+        if let outputSchema {
+            def["outputSchema"] = outputSchema
+        }
         def["timeout"] = Int(timeout * 1000) // milliseconds for JS
         return def
     }

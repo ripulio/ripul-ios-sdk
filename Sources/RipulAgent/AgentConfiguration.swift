@@ -15,6 +15,12 @@ public struct AgentConfiguration {
     /// JSON string of site key config returned from validation.
     /// Set automatically by SiteKeyValidator; not typically set by consumers.
     public var siteKeyConfig: String? = nil
+    /// Font family name prefixes to inject into the web view.
+    /// The SDK scans `Bundle.main` for `.ttf`/`.otf` files whose filenames
+    /// begin with each family name, base64-encodes them, and injects
+    /// `@font-face` declarations at document load.
+    /// Example: `["AvenirNext"]` injects all AvenirNext-*.ttf variants.
+    public var fontFamilies: [String]? = nil
 
     public static let defaultBaseURL = URL(string: "https://demo.ripul.io")!
 
@@ -25,7 +31,8 @@ public struct AgentConfiguration {
         sessionToken: String? = nil,
         theme: AgentTheme = .system,
         newChat: Bool = false,
-        prompt: String? = nil
+        prompt: String? = nil,
+        fontFamilies: [String]? = nil
     ) {
         self.baseURL = baseURL
         self.path = path
@@ -34,6 +41,7 @@ public struct AgentConfiguration {
         self.theme = theme
         self.newChat = newChat
         self.prompt = prompt
+        self.fontFamilies = fontFamilies
     }
 
     public var embeddedURL: URL {
