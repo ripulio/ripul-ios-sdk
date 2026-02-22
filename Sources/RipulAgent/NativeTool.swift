@@ -117,21 +117,37 @@ public enum ToolSchema {
         let type: String
         let description: String
         let isRequired: Bool
+        /// Extra JSON Schema keys (e.g. "items" for arrays).
+        let extra: [String: Any]?
 
         public static func string(_ name: String, _ description: String, required: Bool = false) -> Property {
-            Property(name: name, type: "string", description: description, isRequired: required)
+            Property(name: name, type: "string", description: description, isRequired: required, extra: nil)
         }
 
         public static func bool(_ name: String, _ description: String, required: Bool = false) -> Property {
-            Property(name: name, type: "boolean", description: description, isRequired: required)
+            Property(name: name, type: "boolean", description: description, isRequired: required, extra: nil)
         }
 
         public static func number(_ name: String, _ description: String, required: Bool = false) -> Property {
-            Property(name: name, type: "number", description: description, isRequired: required)
+            Property(name: name, type: "number", description: description, isRequired: required, extra: nil)
         }
 
         public static func integer(_ name: String, _ description: String, required: Bool = false) -> Property {
-            Property(name: name, type: "integer", description: description, isRequired: required)
+            Property(name: name, type: "integer", description: description, isRequired: required, extra: nil)
+        }
+
+        /// An array property whose items follow a nested schema.
+        /// Use `ToolSchema.object(...)` to build the items schema.
+        ///
+        /// Example:
+        /// ```
+        /// .array("workplaces", "List of workplaces", items: ToolSchema.object(
+        ///     .string("id", "Workplace ID"),
+        ///     .string("name", "Display name")
+        /// ))
+        /// ```
+        public static func array(_ name: String, _ description: String, items: [String: Any], required: Bool = false) -> Property {
+            Property(name: name, type: "array", description: description, isRequired: required, extra: ["items": items])
         }
     }
 
@@ -140,10 +156,16 @@ public enum ToolSchema {
         var required: [String] = []
 
         for prop in properties {
-            props[prop.name] = [
+            var propDict: [String: Any] = [
                 "type": prop.type,
                 "description": prop.description,
             ]
+            if let extra = prop.extra {
+                for (key, value) in extra {
+                    propDict[key] = value
+                }
+            }
+            props[prop.name] = propDict
             if prop.isRequired {
                 required.append(prop.name)
             }
