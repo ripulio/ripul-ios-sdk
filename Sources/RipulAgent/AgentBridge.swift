@@ -207,6 +207,13 @@ public final class AgentBridge: NSObject, ObservableObject {
         let requestId = message["requestId"] as? String ?? UUID().uuidString
         let defs = toolDefinitions
         NSLog("[AgentBridge] → Sending mcp:tools (%d tools)", defs.count)
+        // DEBUG — log each tool's keys to verify outputSchema presence
+        for def in defs {
+            let name = def["name"] as? String ?? "?"
+            let keys = Array(def.keys).sorted()
+            let hasOutput = def["outputSchema"] != nil
+            NSLog("[AgentBridge] Tool '%@' keys: %@ outputSchema: %@", name, keys.description, hasOutput ? "YES" : "NO")
+        }
         send([
             "type": "\(messagePrefix)mcp:tools",
             "version": protocolVersion,
