@@ -314,6 +314,112 @@ await MainActor.run {
 }
 ```
 
+## Tool Naming Conventions
+
+Tool names follow a **prefix convention** that drives behaviour in the agent UI:
+
+| Prefix | Meaning | Agent behaviour |
+|--------|---------|-----------------|
+| `pick_*` | **Interactive picker** — presents native UI and waits for user selection | Result is displayed as a confirmation card in the chat stream |
+| `get_*` / `list_*` | **Read data** — fetches information for the agent | Result is consumed by the agent silently |
+| `create_*` / `setup_*` / `delete_*` | **Write action** — modifies app state | Result is consumed by the agent silently |
+
+### Picker tools (`pick_*`)
+
+Tools prefixed with `pick_` are recognised as interactive pickers. When they succeed, the agent automatically shows a confirmation card in the chat so the user can see what they selected.
+
+**Result protocol** — a picker result must include one of:
+
+| Field | Type | When to use |
+|-------|------|-------------|
+| `name` | `String` | Simple selection — a single display value (e.g. an industry name, a job title) |
+| `value` | `[String: Any]` | Compound selection — multiple display fields (e.g. an address with street, city, country) |
+
+Both cases should also include `success: true` and an `id` for downstream tool chaining.
+
+**Simple picker** (single value):
+
+```swift
+struct PickIndustryTool: NativeTool {
+    let name = "pick_industry"   // ← pick_ prefix
+    let description = "Shows the industry picker."
+    let timeout: TimeInterval = 0
+    let inputSchema = ToolSchema.object()
+
+    func execute(args: [String: Any]) async throws -> Any {
+        let selection = try await showNativePicker()
+        return [
+            "success": true,
+            "id": selection.id,     // for tool chaining ($ref)
+            "name": selection.name, // displayed in chat card
+        ]
+    }
+}
+```
+
+**Compound picker** (multiple display fields):
+
+```swift
+struct PickLocationTool: NativeTool {
+    let name = "pick_location"   // ← pick_ prefix
+    let description = "Opens the location picker."
+    let timeout: TimeInterval = 0
+    let inputSchema = ToolSchema.object()
+
+    func execute(args: [String: Any]) async throws -> Any {
+        let location = try await showLocationPicker()
+        return [
+            "success": true,
+            "lat": location.lat,       // for tool chaining
+            "lng": location.lng,       // for tool chaining
+            "value": [                 // displayed in chat card
+                "address": location.formatted,
+                "city": location.city,
+                "country": location.country,
+            ] as [String: Any],
+        ]
+    }
+}
+```
+
+The chat card is derived entirely from convention — no configuration needed on the web side.
+
+### Output schema for tool composition
+
+When tools are chained together in sequential workflows, the agent needs to know what fields each tool returns so it can wire outputs to inputs using `$ref` expressions (e.g. `$ref:pick_industry.id`).
+
+Add an `outputSchema` to declare your tool's return fields:
+
+```swift
+struct PickIndustryTool: NativeTool {
+    let name = "pick_industry"
+    let description = "Shows the industry picker."
+    let inputSchema = ToolSchema.object()
+    let outputSchema: [String: Any]? = ToolSchema.object(
+        .bool("success", "Whether the selection succeeded"),
+        .string("id", "The selected industry ID"),
+        .string("name", "The selected industry name")
+    )
+    let timeout: TimeInterval = 0
+
+    func execute(args: [String: Any]) async throws -> Any { ... }
+}
+```
+
+For tools that return arrays, use `.array()` with a nested schema:
+
+```swift
+let outputSchema: [String: Any]? = ToolSchema.object(
+    .array("workplaces", "List of workplaces", items: ToolSchema.object(
+        .string("id", "Workplace ID"),
+        .string("name", "Display name"),
+        .string("job", "Job title")
+    ))
+)
+```
+
+When `outputSchema` is defined, the agent sees a "Returns:" section in the tool description and can construct correct `$ref` paths. Without it, the agent guesses field names and may get them wrong.
+
 ## Advanced Topics
 
 ### Hiding the agent after a tool action
@@ -456,14 +562,18 @@ Set `timeout = 0` for tools that should wait indefinitely (e.g. native pickers t
 
 ```swift
 struct PickIndustryTool: NativeTool {
-    let name = "pick_industry"
+    let name = "pick_industry"                  // ← pick_ prefix: shows result in chat
     let description = "Shows the industry picker."
-    let timeout: TimeInterval = 0  // ← no timeout
+    let timeout: TimeInterval = 0               // ← no timeout: waits for user
     let inputSchema = ToolSchema.object()
 
     func execute(args: [String: Any]) async throws -> Any {
         let selection = try await showNativePicker()
-        return ["id": selection.id, "name": selection.name]
+        return [
+            "success": true,
+            "id": selection.id,
+            "name": selection.name,             // ← displayed in chat card
+        ]
     }
 }
 ```

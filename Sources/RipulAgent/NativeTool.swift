@@ -3,8 +3,16 @@ import Foundation
 // MARK: - NativeTool Protocol
 //
 // Conform to this protocol to expose any native API as a tool the agent can call.
+//
+// Naming convention:
+//   pick_*      Interactive picker — presents native UI, waits for user selection.
+//               Result is shown as a confirmation card in the agent chat.
+//               Must return `name` (String) or `value` ([String: Any]) for display.
+//   get_*/list_*  Read data — fetches info for the agent.
+//   create_*/setup_*/delete_*  Write action — modifies app state.
 
 public protocol NativeTool {
+    /// Tool identifier using snake_case. Prefix drives agent behaviour (see above).
     var name: String { get }
     var description: String { get }
     var inputSchema: [String: Any] { get }
@@ -122,6 +130,11 @@ public enum ToolSchema {
 
         public static func string(_ name: String, _ description: String, required: Bool = false) -> Property {
             Property(name: name, type: "string", description: description, isRequired: required, extra: nil)
+        }
+
+        /// A string property constrained to a fixed set of allowed values.
+        public static func stringEnum(_ name: String, _ description: String, values: [String], required: Bool = false) -> Property {
+            Property(name: name, type: "string", description: description, isRequired: required, extra: ["enum": values])
         }
 
         public static func bool(_ name: String, _ description: String, required: Bool = false) -> Property {
