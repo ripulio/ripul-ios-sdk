@@ -57,18 +57,33 @@ public struct AgentWebView: UIViewRepresentable {
         // Allow inline media playback
         config.allowsInlineMediaPlayback = true
 
-        // Clear all cached web content on each launch to avoid stale
-        // assets causing black screens or broken UI.
+        // Append Safari-like tokens to the user agent so OAuth providers
+        // (Google, etc.) don't reject sign-in with "disallowed_useragent".
+        // WKWebView's default UA omits "Safari/..." which triggers the block.
+        // RipulNative lets the web app detect native mode via navigator.userAgent.
+        config.applicationNameForUserAgent = "RipulNative/1.0 Mobile/15E148 Safari/605.1.15"
+
+        // In embedded/site-key mode, clear all cached web content on each
+        // launch to avoid stale assets causing black screens or broken UI.
+        // In native app mode, preserve cookies and localStorage so the
+        // Clerk auth session survives app relaunches.
         let dataStore = WKWebsiteDataStore.default()
-        let allTypes = WKWebsiteDataStore.allWebsiteDataTypes()
-        dataStore.removeData(ofTypes: allTypes, modifiedSince: .distantPast) { }
+        if !configuration.nativeApp {
+            let allTypes = WKWebsiteDataStore.allWebsiteDataTypes()
+            dataStore.removeData(ofTypes: allTypes, modifiedSince: .distantPast) { }
+        }
         config.websiteDataStore = dataStore
 
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.isOpaque = false
         webView.backgroundColor = .clear
         webView.scrollView.backgroundColor = .clear
+        // Prevent the scroll view from adding automatic content insets for
+        // safe areas.  The embedding SwiftUI view already controls the frame
+        // placement, so the web content should fill the provided frame exactly.
+        webView.scrollView.contentInsetAdjustmentBehavior = .never
         webView.navigationDelegate = context.coordinator
+        webView.uiDelegate = context.coordinator
         context.coordinator.attachWebView(webView)
 
         #if DEBUG
@@ -127,83 +142,90 @@ public struct AgentWebView: UIViewRepresentable {
             nativeLog('ERROR', ['Uncaught: ' + e.message + ' at ' + e.filename + ':' + e.lineno]);
         });
 
-        // Create a parent proxy that is !== window
-        // with postMessage routing to native
-        const parentProxy = Object.create(window);
-        parentProxy.postMessage = function(message, targetOrigin) {
-            window.webkit.messageHandlers.agentBridge.postMessage(message);
-        };
+        // Only override window.parent / window.top on the app's own pages.
+        // Third-party pages (Google OAuth, etc.) check top === self as an
+        // anti-phishing measure — our overrides would break their sign-in flow.
+        var hash = window.location.hash || '';
+        var isAppPage = hash.includes('embedded=true') || hash.includes('native=true') || hash.includes('siteKey=');
 
-        // Override window.parent — WKWebView has this as a non-configurable
-        // property, so we need to try multiple strategies
         var parentOverridden = false;
+        var topOverridden = false;
 
-        // Strategy 1: Define on window instance (works if prototype allows it)
-        try {
-            Object.defineProperty(window, 'parent', {
-                get: function() { return parentProxy; },
-                configurable: true
-            });
-            if (window.parent !== window) parentOverridden = true;
-        } catch(e) {}
+        if (isAppPage) {
+            // Create a parent proxy that is !== window
+            // with postMessage routing to native
+            const parentProxy = Object.create(window);
+            parentProxy.postMessage = function(message, targetOrigin) {
+                window.webkit.messageHandlers.agentBridge.postMessage(message);
+            };
 
-        // Strategy 2: Redefine on Window.prototype
-        if (!parentOverridden) {
+            // Override window.parent — WKWebView has this as a non-configurable
+            // property, so we need to try multiple strategies
+
+            // Strategy 1: Define on window instance (works if prototype allows it)
             try {
-                Object.defineProperty(Window.prototype, 'parent', {
-                    get: function() { return parentProxy; },
-                    configurable: true
-                });
-                if (window.parent !== window) parentOverridden = true;
-            } catch(e) {}
-        }
-
-        // Strategy 3: Delete prototype property and set own property
-        if (!parentOverridden) {
-            try {
-                delete Window.prototype.parent;
                 Object.defineProperty(window, 'parent', {
                     get: function() { return parentProxy; },
                     configurable: true
                 });
                 if (window.parent !== window) parentOverridden = true;
             } catch(e) {}
-        }
 
-        nativeLog('LOG', ['[NativeBridge] window.parent override: ' + (parentOverridden ? 'SUCCESS' : 'FAILED') + ', parent===window: ' + (window.parent === window)]);
+            // Strategy 2: Redefine on Window.prototype
+            if (!parentOverridden) {
+                try {
+                    Object.defineProperty(Window.prototype, 'parent', {
+                        get: function() { return parentProxy; },
+                        configurable: true
+                    });
+                    if (window.parent !== window) parentOverridden = true;
+                } catch(e) {}
+            }
 
-        // Override window.top so iframe detection (window.self !== window.top) works
-        var topOverridden = false;
-        try {
-            Object.defineProperty(window, 'top', {
-                get: function() { return parentProxy; },
-                configurable: true
-            });
-            if (window.self !== window.top) topOverridden = true;
-        } catch(e) {}
+            // Strategy 3: Delete prototype property and set own property
+            if (!parentOverridden) {
+                try {
+                    delete Window.prototype.parent;
+                    Object.defineProperty(window, 'parent', {
+                        get: function() { return parentProxy; },
+                        configurable: true
+                    });
+                    if (window.parent !== window) parentOverridden = true;
+                } catch(e) {}
+            }
 
-        if (!topOverridden) {
+            // Override window.top so iframe detection (window.self !== window.top) works
             try {
-                Object.defineProperty(Window.prototype, 'top', {
-                    get: function() { return parentProxy; },
-                    configurable: true
-                });
-                if (window.self !== window.top) topOverridden = true;
-            } catch(e) {}
-        }
-
-        if (!topOverridden) {
-            try {
-                delete Window.prototype.top;
                 Object.defineProperty(window, 'top', {
                     get: function() { return parentProxy; },
                     configurable: true
                 });
                 if (window.self !== window.top) topOverridden = true;
             } catch(e) {}
+
+            if (!topOverridden) {
+                try {
+                    Object.defineProperty(Window.prototype, 'top', {
+                        get: function() { return parentProxy; },
+                        configurable: true
+                    });
+                    if (window.self !== window.top) topOverridden = true;
+                } catch(e) {}
+            }
+
+            if (!topOverridden) {
+                try {
+                    delete Window.prototype.top;
+                    Object.defineProperty(window, 'top', {
+                        get: function() { return parentProxy; },
+                        configurable: true
+                    });
+                    if (window.self !== window.top) topOverridden = true;
+                } catch(e) {}
+            }
         }
 
-        nativeLog('LOG', ['[NativeBridge] window.top override: ' + (topOverridden ? 'SUCCESS' : 'FAILED') + ', self===top: ' + (window.self === window.top)]);
+        nativeLog('LOG', ['[NativeBridge] isAppPage: ' + isAppPage + ', parent override: ' + (parentOverridden ? 'SUCCESS' : 'SKIPPED') + ', top override: ' + (topOverridden ? 'SUCCESS' : 'SKIPPED')]);
 
         // Native → Web: dispatch as MessageEvent on window
         window.__agentBridgeReceive = function(message) {
@@ -319,7 +341,7 @@ public struct AgentWebView: UIViewRepresentable {
 
     // MARK: - Coordinator
 
-    public final class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
+    public final class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate, WKUIDelegate {
         let bridge: AgentBridge
         private weak var observedWebView: WKWebView?
 
@@ -373,6 +395,24 @@ public struct AgentWebView: UIViewRepresentable {
                 NSLog("[AgentWebView] Navigation: %@", url.absoluteString)
             }
             return .allow
+        }
+
+        // MARK: - WKUIDelegate
+
+        /// Handle window.open / target="_blank" by loading in the same web view.
+        /// OAuth flows (Google, GitHub, etc.) often open a popup; without this
+        /// the navigation is silently dropped.
+        public func webView(
+            _ webView: WKWebView,
+            createWebViewWith configuration: WKWebViewConfiguration,
+            for navigationAction: WKNavigationAction,
+            windowFeatures: WKWindowFeatures
+        ) -> WKWebView? {
+            if let url = navigationAction.request.url {
+                NSLog("[AgentWebView] Popup request: %@", url.absoluteString)
+                webView.load(navigationAction.request)
+            }
+            return nil // Don't create a new web view; load in the existing one
         }
 
         public func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
