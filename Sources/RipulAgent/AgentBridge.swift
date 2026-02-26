@@ -29,7 +29,8 @@ public protocol SearchClickDelegate: AnyObject {
 /// A chat session descriptor received from the web app.
 public struct ChatSession: Identifiable, Equatable {
     public let id: String
-    public let displayName: String
+    public let sourceChatId: String
+    public var displayName: String
     public let createdAt: Date
 }
 
@@ -44,6 +45,8 @@ public final class AgentBridge: NSObject, ObservableObject {
     private weak var webView: WKWebView?
     private var registeredTools: [NativeTool] = []
     private var llmProvider: LLMProvider?
+    private var sessionsRetryCount = 0
+    private static let maxSessionsRetries = 5
 
     /// Set this delegate to handle search result clicks from the universal search.
     public weak var searchClickDelegate: SearchClickDelegate?
@@ -203,6 +206,21 @@ public final class AgentBridge: NSObject, ObservableObject {
             "timestamp": currentTimestamp(),
             "sessionId": id,
         ])
+    }
+
+    /// Rename a chat session. Updates both web storage and local state.
+    public func renameSession(id: String, sourceChatId: String, displayName: String) {
+        send([
+            "type": "\(messagePrefix)sessions:rename",
+            "version": protocolVersion,
+            "timestamp": currentTimestamp(),
+            "sourceChatId": sourceChatId,
+            "displayName": displayName,
+        ])
+        // Optimistically update local state
+        if let index = sessions.firstIndex(where: { $0.id == id }) {
+            sessions[index].displayName = displayName
+        }
     }
 
     // MARK: - Send messages to web app
@@ -449,16 +467,30 @@ public final class AgentBridge: NSObject, ObservableObject {
 
         let parsed: [ChatSession] = sessionsArray.compactMap { dict in
             guard let id = dict["id"] as? String,
+                  let sourceChatId = dict["sourceChatId"] as? String,
                   let displayName = dict["displayName"] as? String else { return nil }
             let createdAtMs = dict["createdAt"] as? Double ?? 0
             let createdAt = Date(timeIntervalSince1970: createdAtMs / 1000)
-            return ChatSession(id: id, displayName: displayName, createdAt: createdAt)
+            return ChatSession(id: id, sourceChatId: sourceChatId, displayName: displayName, createdAt: createdAt)
         }
 
         self.sessions = parsed
         self.activeSessionId = activeId
         NSLog("[AgentBridge] Sessions updated: %d sessions, active: %@",
               parsed.count, activeId ?? "nil")
+
+        // If the web app returned empty sessions, it may not have initialized
+        // its chat tab state yet. Retry after a delay.
+        if parsed.isEmpty && sessionsRetryCount < Self.maxSessionsRetries {
+            sessionsRetryCount += 1
+            let attempt = sessionsRetryCount
+            NSLog("[AgentBridge] Empty sessions, retrying (%d/%d)...", attempt, Self.maxSessionsRetries)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+                self?.requestSessions()
+            }
+        } else if !parsed.isEmpty {
+            sessionsRetryCount = 0
+        }
     }
 
     // MARK: - Transport

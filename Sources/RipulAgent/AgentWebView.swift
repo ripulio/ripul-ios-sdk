@@ -82,6 +82,10 @@ public struct AgentWebView: UIViewRepresentable {
         // safe areas.  The embedding SwiftUI view already controls the frame
         // placement, so the web content should fill the provided frame exactly.
         webView.scrollView.contentInsetAdjustmentBehavior = .never
+        // Prevent document-level bounce/overscroll while keeping touch
+        // events enabled (isScrollEnabled must stay true or WKWebView stops
+        // forwarding pan gestures to CSS overflow containers).
+        webView.scrollView.bounces = false
         webView.navigationDelegate = context.coordinator
         webView.uiDelegate = context.coordinator
         context.coordinator.attachWebView(webView)
@@ -263,8 +267,17 @@ public struct AgentWebView: UIViewRepresentable {
                 .observe(document.body, { childList: true, subtree: true });
         });
 
-        // Expose native header height so the web app can pad its content
-        document.documentElement.style.setProperty('--native-header-height', '44px');
+        // Set a default header height. The native side will override this
+        // with the actual safe area inset (in pixels) once the view is laid out.
+        document.documentElement.style.setProperty('--native-header-height', '54px');
+
+        // Prevent document-level scrolling so only inner CSS overflow
+        // containers scroll. This eliminates the dual-scroll problem where
+        // both WKWebView's native scrollView and the web app's containers
+        // compete for touch gestures.
+        var lockStyle = document.createElement('style');
+        lockStyle.textContent = 'html, body { height: 100%; overflow: hidden; }';
+        (document.head || document.documentElement).appendChild(lockStyle);
 
         nativeLog('LOG', ['[NativeBridge] Bridge script initialized']);
     })();
@@ -418,6 +431,27 @@ public struct AgentWebView: UIViewRepresentable {
         public func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             NSLog("[AgentWebView] Page finished loading: %@", webView.url?.absoluteString ?? "nil")
             Self.removeInputAccessoryView(from: webView)
+            Self.injectSafeAreaInset(into: webView)
+        }
+
+        /// Inject the real safe area top inset as a concrete pixel value
+        /// into the CSS variable --native-header-height. This replaces the
+        /// default set in the bridge script with the actual device value.
+        private static func injectSafeAreaInset(into webView: WKWebView) {
+            let insetTop: CGFloat
+            if let windowScene = webView.window?.windowScene {
+                insetTop = windowScene.keyWindow?.safeAreaInsets.top ?? 54
+            } else {
+                insetTop = 54
+            }
+            let js = "document.documentElement.style.setProperty('--native-header-height', '\(Int(insetTop))px')"
+            webView.evaluateJavaScript(js) { _, error in
+                if let error {
+                    NSLog("[AgentWebView] Failed to inject safe area inset: %@", error.localizedDescription)
+                } else {
+                    NSLog("[AgentWebView] Injected --native-header-height: %dpx", Int(insetTop))
+                }
+            }
         }
 
         /// Remove the form-filling input accessory view (< > arrows + Done bar)
