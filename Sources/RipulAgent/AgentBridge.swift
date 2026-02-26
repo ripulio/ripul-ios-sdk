@@ -26,11 +26,20 @@ public protocol SearchClickDelegate: AnyObject {
     func agentBridge(_ bridge: AgentBridge, didClickSearchResult context: SearchClickContext) -> Bool
 }
 
+/// A chat session descriptor received from the web app.
+public struct ChatSession: Identifiable, Equatable {
+    public let id: String
+    public let displayName: String
+    public let createdAt: Date
+}
+
 @MainActor
 public final class AgentBridge: NSObject, ObservableObject {
     @Published public var isConnected = false
     @Published public var isThemeReady = false
     @Published public var wantsMinimize = false
+    @Published public var sessions: [ChatSession] = []
+    @Published public var activeSessionId: String?
 
     private weak var webView: WKWebView?
     private var registeredTools: [NativeTool] = []
@@ -60,6 +69,27 @@ public final class AgentBridge: NSObject, ObservableObject {
     public func attach(to webView: WKWebView) {
         self.webView = webView
         NSLog("[AgentBridge] Attached to WKWebView")
+    }
+
+    /// Clear cached resources (JS, CSS, images) and reload the web view.
+    /// Preserves cookies, localStorage, and session data so the user stays logged in.
+    public func clearCacheAndReload() {
+        let cacheTypes: Set<String> = [
+            WKWebsiteDataTypeDiskCache,
+            WKWebsiteDataTypeMemoryCache,
+            WKWebsiteDataTypeOfflineWebApplicationCache,
+            WKWebsiteDataTypeFetchCache,
+        ]
+        WKWebsiteDataStore.default().removeData(ofTypes: cacheTypes, modifiedSince: .distantPast) { [weak self] in
+            guard let webView = self?.webView else {
+                NSLog("[AgentBridge] Cannot reload — webView is nil")
+                return
+            }
+            NSLog("[AgentBridge] Cache cleared, reloading")
+            self?.isConnected = false
+            self?.isThemeReady = false
+            webView.reload()
+        }
     }
 
     /// Navigate the attached web view to a new URL (e.g. to start a new chat with a prompt).
@@ -128,6 +158,8 @@ public final class AgentBridge: NSObject, ObservableObject {
             wantsMinimize = false
         case "theme:set:ack":
             break
+        case "sessions:list:response":
+            handleSessionsListResponse(dict)
         default:
             NSLog("[AgentBridge] Unhandled message: %@", messageType)
         }
@@ -151,6 +183,26 @@ public final class AgentBridge: NSObject, ObservableObject {
         }
         NSLog("[AgentBridge] → Sending chat:new (prompt: %@)", prompt != nil ? "yes" : "no")
         send(message)
+    }
+
+    /// Request the current list of chat sessions from the web app.
+    public func requestSessions() {
+        send([
+            "type": "\(messagePrefix)sessions:list",
+            "version": protocolVersion,
+            "timestamp": currentTimestamp(),
+            "requestId": UUID().uuidString,
+        ])
+    }
+
+    /// Switch the web app to a specific chat session.
+    public func focusSession(id: String) {
+        send([
+            "type": "\(messagePrefix)sessions:focus",
+            "version": protocolVersion,
+            "timestamp": currentTimestamp(),
+            "sessionId": id,
+        ])
     }
 
     // MARK: - Send messages to web app
@@ -205,6 +257,9 @@ public final class AgentBridge: NSObject, ObservableObject {
                 "tools": defs,
             ])
         }
+
+        // Auto-request sessions for native UI
+        requestSessions()
     }
 
     private func handleHostInfo(_ message: [String: Any]) {
@@ -386,6 +441,24 @@ public final class AgentBridge: NSObject, ObservableObject {
             "requestId": requestId,
             "handled": handled,
         ])
+    }
+
+    private func handleSessionsListResponse(_ message: [String: Any]) {
+        guard let sessionsArray = message["sessions"] as? [[String: Any]] else { return }
+        let activeId = message["activeId"] as? String
+
+        let parsed: [ChatSession] = sessionsArray.compactMap { dict in
+            guard let id = dict["id"] as? String,
+                  let displayName = dict["displayName"] as? String else { return nil }
+            let createdAtMs = dict["createdAt"] as? Double ?? 0
+            let createdAt = Date(timeIntervalSince1970: createdAtMs / 1000)
+            return ChatSession(id: id, displayName: displayName, createdAt: createdAt)
+        }
+
+        self.sessions = parsed
+        self.activeSessionId = activeId
+        NSLog("[AgentBridge] Sessions updated: %d sessions, active: %@",
+              parsed.count, activeId ?? "nil")
     }
 
     // MARK: - Transport
