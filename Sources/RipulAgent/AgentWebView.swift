@@ -241,6 +241,9 @@ public struct AgentWebView: UIViewRepresentable {
                 .observe(document.body, { childList: true, subtree: true });
         });
 
+        // Expose native header height so the web app can pad its content
+        document.documentElement.style.setProperty('--native-header-height', '44px');
+
         nativeLog('LOG', ['[NativeBridge] Bridge script initialized']);
     })();
     """

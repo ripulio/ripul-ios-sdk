@@ -15,6 +15,10 @@ public struct AgentConfiguration {
     /// JSON string of site key config returned from validation.
     /// Set automatically by SiteKeyValidator; not typically set by consumers.
     public var siteKeyConfig: String? = nil
+    /// When true, the URL uses `native=true` instead of `embedded=true`.
+    /// Native mode enables the bridge but lets the web app use its own
+    /// Clerk authentication, giving a full web experience with native tools.
+    public var nativeApp: Bool = false
     /// Font family name prefixes to inject into the web view.
     /// The SDK scans `Bundle.main` for `.ttf`/`.otf` files whose filenames
     /// begin with each family name, base64-encodes them, and injects
@@ -32,6 +36,7 @@ public struct AgentConfiguration {
         theme: AgentTheme = .system,
         newChat: Bool = false,
         prompt: String? = nil,
+        nativeApp: Bool = false,
         fontFamilies: [String]? = nil
     ) {
         self.baseURL = baseURL
@@ -41,13 +46,14 @@ public struct AgentConfiguration {
         self.theme = theme
         self.newChat = newChat
         self.prompt = prompt
+        self.nativeApp = nativeApp
         self.fontFamilies = fontFamilies
     }
 
     public var embeddedURL: URL {
         var components = URLComponents(url: baseURL.appendingPathComponent(path), resolvingAgainstBaseURL: false)!
 
-        var hashParams: [String] = ["embedded=true"]
+        var hashParams: [String] = [nativeApp ? "native=true" : "embedded=true"]
 
         if let siteKey {
             hashParams.append("siteKey=\(siteKey)")

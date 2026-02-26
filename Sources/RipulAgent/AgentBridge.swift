@@ -75,6 +75,24 @@ public final class AgentBridge: NSObject, ObservableObject {
         webView.load(URLRequest(url: url))
     }
 
+    /// Evaluate arbitrary JavaScript in the attached web view.
+    /// Use for extracting data (e.g. auth tokens) from the web app context.
+    public func evaluateJavaScript(_ script: String, completion: ((Any?) -> Void)? = nil) {
+        guard let webView else {
+            NSLog("[AgentBridge] Cannot evaluate JS — webView is nil")
+            completion?(nil)
+            return
+        }
+        webView.evaluateJavaScript(script) { result, error in
+            if let error {
+                NSLog("[AgentBridge] JS eval error: %@", error.localizedDescription)
+                completion?(nil)
+            } else {
+                completion?(result)
+            }
+        }
+    }
+
     // MARK: - Receive messages from web app
 
     public func handleMessage(_ body: Any) {
