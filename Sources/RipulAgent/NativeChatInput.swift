@@ -89,12 +89,14 @@ public struct NativeChatInput: View {
                 }
                 .padding(.leading, 4)
 
-                TextField("Message...", text: $text, axis: .vertical)
-                    .lineLimit(1...5)
-                    .textFieldStyle(.plain)
-                    .focused($isFocused)
-                    .onSubmit { isFocused = false; onSubmit() }
-                    .padding(.vertical, 10)
+                NoAutofillTextView(
+                    text: $text,
+                    isFocused: $isFocused,
+                    placeholder: "Message...",
+                    onSubmit: { isFocused = false; onSubmit() }
+                )
+                .frame(minHeight: 36, maxHeight: 120)
+                .padding(.vertical, 2)
 
                 let hasContent = !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !imageAttachments.isEmpty
                 if hasContent {
@@ -116,6 +118,104 @@ public struct NativeChatInput: View {
         .animation(.easeInOut(duration: 0.2), value: text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         .animation(.easeInOut(duration: 0.2), value: imageAttachments.count)
         .modifier(GlassChatInputBackground())
+    }
+}
+
+/// UITextView wrapper that completely disables autofill suggestions.
+@available(iOS 15.0, *)
+struct NoAutofillTextView: UIViewRepresentable {
+    @Binding var text: String
+    var isFocused: FocusState<Bool>.Binding
+    var placeholder: String
+    var onSubmit: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(self)
+    }
+
+    func makeUIView(context: Context) -> UITextView {
+        let textView = UITextView()
+        textView.delegate = context.coordinator
+        textView.font = .preferredFont(forTextStyle: .body)
+        textView.backgroundColor = .clear
+        textView.textContainerInset = UIEdgeInsets(top: 8, left: 0, bottom: 8, right: 0)
+        textView.textContainer.lineFragmentPadding = 0
+        textView.isScrollEnabled = true
+        textView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+
+        // Disable all autofill
+        textView.textContentType = .init(rawValue: "")
+        textView.autocorrectionType = .yes
+        textView.autocapitalizationType = .sentences
+        textView.spellCheckingType = .yes
+        textView.inputAssistantItem.leadingBarButtonGroups = []
+        textView.inputAssistantItem.trailingBarButtonGroups = []
+
+        // Placeholder
+        context.coordinator.placeholderLabel = {
+            let label = UILabel()
+            label.text = placeholder
+            label.font = textView.font
+            label.textColor = .placeholderText
+            label.translatesAutoresizingMaskIntoConstraints = false
+            textView.addSubview(label)
+            NSLayoutConstraint.activate([
+                label.leadingAnchor.constraint(equalTo: textView.leadingAnchor, constant: 4),
+                label.topAnchor.constraint(equalTo: textView.topAnchor, constant: 8)
+            ])
+            return label
+        }()
+
+        return textView
+    }
+
+    func updateUIView(_ textView: UITextView, context: Context) {
+        if textView.text != text {
+            textView.text = text
+        }
+        context.coordinator.placeholderLabel?.isHidden = !text.isEmpty
+
+        // Sync focus state
+        if isFocused.wrappedValue && !textView.isFirstResponder {
+            textView.becomeFirstResponder()
+        } else if !isFocused.wrappedValue && textView.isFirstResponder {
+            textView.resignFirstResponder()
+        }
+
+        // Invalidate intrinsic content size so SwiftUI can resize
+        textView.invalidateIntrinsicContentSize()
+    }
+
+    class Coordinator: NSObject, UITextViewDelegate {
+        var parent: NoAutofillTextView
+        var placeholderLabel: UILabel?
+
+        init(_ parent: NoAutofillTextView) {
+            self.parent = parent
+        }
+
+        func textViewDidChange(_ textView: UITextView) {
+            parent.text = textView.text
+            placeholderLabel?.isHidden = !textView.text.isEmpty
+            textView.invalidateIntrinsicContentSize()
+        }
+
+        func textViewDidBeginEditing(_ textView: UITextView) {
+            parent.isFocused.wrappedValue = true
+        }
+
+        func textViewDidEndEditing(_ textView: UITextView) {
+            parent.isFocused.wrappedValue = false
+        }
+
+        func textView(_ textView: UITextView, shouldChangeTextIn range: NSRange, replacementText text: String) -> Bool {
+            // Handle return key as submit (single newline without shift)
+            if text == "\n" {
+                parent.onSubmit()
+                return false
+            }
+            return true
+        }
     }
 }
 
