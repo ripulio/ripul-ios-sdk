@@ -206,14 +206,26 @@ public final class AgentBridge: NSObject, ObservableObject {
 
     /// Submit a message to the active chat session via the web app's
     /// global `__ripulSubmitMessage` callable.
+    /// - Parameters:
+    ///   - text: The message text.
+    ///   - imageAttachments: Optional array of base64-encoded images.
+    ///     Each element must have keys: `id`, `mediaType`, `data`, and optionally `name`.
     @available(iOS 15.0, *)
     @discardableResult
-    public func submitMessage(_ text: String) async -> Bool {
+    public func submitMessage(_ text: String, imageAttachments: [[String: String]]? = nil) async -> Bool {
         guard let webView else { return false }
         do {
+            var args: [String: Any] = ["text": text]
+            let script: String
+            if let images = imageAttachments, !images.isEmpty {
+                args["images"] = images
+                script = "return await window.__ripulSubmitMessage?.(text, images) ?? { success: false }"
+            } else {
+                script = "return await window.__ripulSubmitMessage?.(text) ?? { success: false }"
+            }
             let result = try await webView.callAsyncJavaScript(
-                "return await window.__ripulSubmitMessage?.(text) ?? { success: false }",
-                arguments: ["text": text],
+                script,
+                arguments: args,
                 contentWorld: .page
             )
             if let dict = result as? [String: Any] {
