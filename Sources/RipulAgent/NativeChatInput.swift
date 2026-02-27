@@ -124,10 +124,22 @@ public struct NativeChatInput: View {
     }
 }
 
-/// UITextView subclass that strips autofill from menus and actions.
+/// UITextView subclass that suppresses the iOS autofill toolbar above the keyboard.
 class ChatTextView: UITextView {
     override var textContentType: UITextContentType! {
         get { nil }
+        set { }
+    }
+
+    // Replace the system autofill toolbar with an invisible empty view
+    private let _emptyAccessory: UIView = {
+        let v = UIView(frame: .zero)
+        v.isHidden = true
+        return v
+    }()
+
+    override var inputAccessoryView: UIView? {
+        get { _emptyAccessory }
         set { }
     }
 
@@ -140,7 +152,7 @@ class ChatTextView: UITextView {
 
     override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
         let name = NSStringFromSelector(action)
-        if name.lowercased().contains("autofill") || name.lowercased().contains("autoFill") {
+        if name.lowercased().contains("autofill") {
             return false
         }
         return super.canPerformAction(action, withSender: sender)
