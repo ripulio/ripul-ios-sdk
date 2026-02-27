@@ -124,6 +124,29 @@ public struct NativeChatInput: View {
     }
 }
 
+/// UITextView subclass that strips autofill from menus and actions.
+class ChatTextView: UITextView {
+    override var textContentType: UITextContentType! {
+        get { nil }
+        set { }
+    }
+
+    override func buildMenu(with builder: any UIMenuBuilder) {
+        if #available(iOS 17.0, *) {
+            builder.remove(menu: .autoFill)
+        }
+        super.buildMenu(with: builder)
+    }
+
+    override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
+        let name = NSStringFromSelector(action)
+        if name.lowercased().contains("autofill") || name.lowercased().contains("autoFill") {
+            return false
+        }
+        return super.canPerformAction(action, withSender: sender)
+    }
+}
+
 /// UITextView wrapper that completely disables autofill suggestions.
 /// Uses isScrollEnabled = false so intrinsic content size matches text,
 /// starting at single-line height and growing up to the SwiftUI frame max.
@@ -137,8 +160,8 @@ struct NoAutofillTextView: UIViewRepresentable {
         Coordinator(self)
     }
 
-    func makeUIView(context: Context) -> UITextView {
-        let textView = UITextView()
+    func makeUIView(context: Context) -> ChatTextView {
+        let textView = ChatTextView()
         textView.delegate = context.coordinator
         textView.font = .preferredFont(forTextStyle: .body)
         textView.backgroundColor = .clear
@@ -147,8 +170,6 @@ struct NoAutofillTextView: UIViewRepresentable {
         textView.isScrollEnabled = false
         textView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        // Disable all autofill
-        textView.textContentType = .init(rawValue: "")
         textView.autocorrectionType = .yes
         textView.autocapitalizationType = .sentences
         textView.spellCheckingType = .yes
@@ -171,7 +192,7 @@ struct NoAutofillTextView: UIViewRepresentable {
         return textView
     }
 
-    func updateUIView(_ textView: UITextView, context: Context) {
+    func updateUIView(_ textView: ChatTextView, context: Context) {
         if textView.text != text {
             textView.text = text
             context.coordinator.placeholderLabel?.isHidden = !text.isEmpty
