@@ -32,17 +32,22 @@ public struct NativeChatInput: View {
     @Binding var imageAttachments: [NativeImageAttachment]
     @Binding var selectedPhotos: [PhotosPickerItem]
     let onSubmit: () -> Void
+    let onNewChat: (() -> Void)?
+    @State private var showPhotoPicker = false
+    @State private var showCamera = false
 
     public init(
         text: Binding<String>,
         imageAttachments: Binding<[NativeImageAttachment]>,
         selectedPhotos: Binding<[PhotosPickerItem]>,
-        onSubmit: @escaping () -> Void
+        onSubmit: @escaping () -> Void,
+        onNewChat: (() -> Void)? = nil
     ) {
         self._text = text
         self._imageAttachments = imageAttachments
         self._selectedPhotos = selectedPhotos
         self.onSubmit = onSubmit
+        self.onNewChat = onNewChat
     }
 
     private func dismissKeyboard() {
@@ -50,77 +55,110 @@ public struct NativeChatInput: View {
     }
 
     public var body: some View {
-        VStack(spacing: 0) {
-            // Image thumbnails row
-            if !imageAttachments.isEmpty {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
-                        ForEach(imageAttachments) { attachment in
-                            ZStack(alignment: .topTrailing) {
-                                Image(uiImage: attachment.thumbnail)
-                                    .resizable()
-                                    .scaledToFill()
-                                    .frame(width: 56, height: 56)
-                                    .clipShape(RoundedRectangle(cornerRadius: 8))
+        HStack(alignment: .bottom, spacing: 8) {
+            // + menu button outside the chat bubble (iMessage style)
+            Menu {
+                Button {
+                    showCamera = true
+                } label: {
+                    Label("Camera", systemImage: "camera")
+                }
+                Button {
+                    showPhotoPicker = true
+                } label: {
+                    Label("Photos", systemImage: "photo")
+                }
+                Button {
+                    dismissKeyboard()
+                    onNewChat?()
+                } label: {
+                    Label("New Chat", systemImage: "plus.bubble")
+                }
+            } label: {
+                Image(systemName: "plus")
+                    .font(.system(size: 20, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 36, height: 36)
+            }
+            .modifier(GlassChatInputBackground())
 
-                                Button {
-                                    imageAttachments.removeAll { $0.id == attachment.id }
-                                    selectedPhotos = []
-                                } label: {
-                                    Image(systemName: "xmark.circle.fill")
-                                        .font(.system(size: 18))
-                                        .symbolRenderingMode(.palette)
-                                        .foregroundStyle(.white, .gray)
+            // Chat bubble
+            VStack(spacing: 0) {
+                // Image thumbnails row
+                if !imageAttachments.isEmpty {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            ForEach(imageAttachments) { attachment in
+                                ZStack(alignment: .topTrailing) {
+                                    Image(uiImage: attachment.thumbnail)
+                                        .resizable()
+                                        .scaledToFill()
+                                        .frame(width: 56, height: 56)
+                                        .clipShape(RoundedRectangle(cornerRadius: 8))
+
+                                    Button {
+                                        imageAttachments.removeAll { $0.id == attachment.id }
+                                        selectedPhotos = []
+                                    } label: {
+                                        Image(systemName: "xmark.circle.fill")
+                                            .font(.system(size: 18))
+                                            .symbolRenderingMode(.palette)
+                                            .foregroundStyle(.white, .gray)
+                                    }
+                                    .offset(x: 6, y: -6)
                                 }
-                                .offset(x: 6, y: -6)
                             }
                         }
+                        .padding(.horizontal, 12)
+                        .padding(.top, 8)
+                        .padding(.bottom, 4)
                     }
-                    .padding(.horizontal, 12)
-                    .padding(.top, 8)
-                    .padding(.bottom, 4)
+                }
+
+                // Text field + send button
+                HStack(spacing: 4) {
+                    NoAutofillTextView(
+                        text: $text,
+                        placeholder: "Message...",
+                        onSubmit: { dismissKeyboard(); onSubmit() }
+                    )
+                    .frame(minHeight: 36, maxHeight: 120)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.leading, 8)
+                    .padding(.vertical, 2)
+
+                    let hasContent = !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !imageAttachments.isEmpty
+                    if hasContent {
+                        Button {
+                            dismissKeyboard()
+                            onSubmit()
+                        } label: {
+                            Image(systemName: "arrow.up")
+                                .font(.system(size: 14, weight: .bold))
+                                .foregroundStyle(.white)
+                                .frame(width: 28, height: 28)
+                                .background(Color.accentColor, in: Circle())
+                        }
+                        .transition(.scale.combined(with: .opacity))
+                        .padding(.trailing, 6)
+                    }
                 }
             }
-
-            // Input row
-            HStack(spacing: 4) {
-                PhotosPicker(selection: $selectedPhotos, maxSelectionCount: 4, matching: .images) {
-                    Image(systemName: "plus")
-                        .font(.system(size: 18, weight: .medium))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 32, height: 32)
-                }
-                .padding(.leading, 4)
-
-                NoAutofillTextView(
-                    text: $text,
-                    placeholder: "Message...",
-                    onSubmit: { dismissKeyboard(); onSubmit() }
-                )
-                .frame(minHeight: 36, maxHeight: 120)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.vertical, 2)
-
-                let hasContent = !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !imageAttachments.isEmpty
-                if hasContent {
-                    Button {
-                        dismissKeyboard()
-                        onSubmit()
-                    } label: {
-                        Image(systemName: "arrow.up")
-                            .font(.system(size: 14, weight: .bold))
-                            .foregroundStyle(.white)
-                            .frame(width: 36, height: 28)
-                            .background(Color.accentColor, in: Capsule())
-                    }
-                    .transition(.scale.combined(with: .opacity))
-                    .padding(.trailing, 6)
-                }
-            }
+            .modifier(GlassChatInputBackground())
         }
         .animation(.easeInOut(duration: 0.2), value: text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         .animation(.easeInOut(duration: 0.2), value: imageAttachments.count)
-        .modifier(GlassChatInputBackground())
+        .photosPicker(isPresented: $showPhotoPicker, selection: $selectedPhotos, maxSelectionCount: 4, matching: .images)
+        .fullScreenCover(isPresented: $showCamera) {
+            CameraPicker { uiImage in
+                if let jpeg = uiImage.jpegData(compressionQuality: 0.8) {
+                    let base64 = jpeg.base64EncodedString()
+                    let id = "img_\(Int(Date().timeIntervalSince1970 * 1000))_\(Int.random(in: 0..<100000))"
+                    imageAttachments.append(NativeImageAttachment(id: id, mediaType: "image/jpeg", data: base64, thumbnail: uiImage))
+                }
+            }
+            .ignoresSafeArea()
+        }
     }
 }
 
@@ -230,6 +268,45 @@ struct NoAutofillTextView: UIViewRepresentable {
                 return false
             }
             return true
+        }
+    }
+}
+
+/// Wraps UIImagePickerController for camera capture.
+@available(iOS 15.0, *)
+struct CameraPicker: UIViewControllerRepresentable {
+    @Environment(\.dismiss) private var dismiss
+    var onCapture: (UIImage) -> Void
+
+    func makeUIViewController(context: Context) -> UIImagePickerController {
+        let picker = UIImagePickerController()
+        picker.sourceType = .camera
+        picker.delegate = context.coordinator
+        return picker
+    }
+
+    func updateUIViewController(_ uiViewController: UIImagePickerController, context: Context) {}
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(self)
+    }
+
+    class Coordinator: NSObject, UIImagePickerControllerDelegate, UINavigationControllerDelegate {
+        let parent: CameraPicker
+
+        init(_ parent: CameraPicker) {
+            self.parent = parent
+        }
+
+        func imagePickerController(_ picker: UIImagePickerController, didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]) {
+            if let image = info[.originalImage] as? UIImage {
+                parent.onCapture(image)
+            }
+            parent.dismiss()
+        }
+
+        func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
+            parent.dismiss()
         }
     }
 }
