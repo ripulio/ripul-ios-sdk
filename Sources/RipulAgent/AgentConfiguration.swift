@@ -25,6 +25,12 @@ public struct AgentConfiguration {
     /// When true, the web app's chat tab switcher is hidden so the native
     /// app can provide its own session list. Tab switcher is shown by default.
     public var hideTabSwitcher: Bool = false
+    /// When true, the web app's chat input box is hidden so the native
+    /// app can provide its own input widget. Chat input is shown by default.
+    public var hideChatInput: Bool = false
+    /// Height in CSS pixels to reserve at the bottom of the chat scroll area
+    /// for the native chat input. Only used when `hideChatInput` is true.
+    public var nativeChatInputHeight: Int = 0
     /// Font family name prefixes to inject into the web view.
     /// The SDK scans `Bundle.main` for `.ttf`/`.otf` files whose filenames
     /// begin with each family name, base64-encodes them, and injects
@@ -45,6 +51,8 @@ public struct AgentConfiguration {
         nativeApp: Bool = false,
         hideHeader: Bool = false,
         hideTabSwitcher: Bool = false,
+        hideChatInput: Bool = false,
+        nativeChatInputHeight: Int = 0,
         fontFamilies: [String]? = nil
     ) {
         self.baseURL = baseURL
@@ -57,6 +65,8 @@ public struct AgentConfiguration {
         self.nativeApp = nativeApp
         self.hideHeader = hideHeader
         self.hideTabSwitcher = hideTabSwitcher
+        self.hideChatInput = hideChatInput
+        self.nativeChatInputHeight = nativeChatInputHeight
         self.fontFamilies = fontFamilies
     }
 
@@ -90,6 +100,14 @@ public struct AgentConfiguration {
 
         if hideTabSwitcher {
             hashParams.append("hideTabSwitcher=true")
+        }
+
+        if hideChatInput {
+            hashParams.append("hideChatInput=true")
+        }
+
+        if nativeChatInputHeight > 0 {
+            hashParams.append("nativeChatInputHeight=\(nativeChatInputHeight)")
         }
 
         if newChat {

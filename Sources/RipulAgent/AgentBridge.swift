@@ -32,6 +32,8 @@ public struct ChatSession: Identifiable, Equatable {
     public let sourceChatId: String
     public var displayName: String
     public let createdAt: Date
+    /// Name of the remote machine this session is paired to, or nil for local sessions.
+    public var remoteMachineName: String?
 }
 
 @MainActor
@@ -41,6 +43,7 @@ public final class AgentBridge: NSObject, ObservableObject {
     @Published public var wantsMinimize = false
     @Published public var sessions: [ChatSession] = []
     @Published public var activeSessionId: String?
+    @Published public var lastSessionsError: String?
 
     private weak var webView: WKWebView?
     private var registeredTools: [NativeTool] = []
@@ -126,6 +129,17 @@ public final class AgentBridge: NSObject, ObservableObject {
         }
     }
 
+    /// Evaluate async JavaScript that may contain `await`. Returns the resolved value.
+    /// Unlike `evaluateJavaScript`, this properly awaits Promises.
+    @available(iOS 15.0, *)
+    public func callAsyncJavaScript(_ script: String) async throws -> Any? {
+        guard let webView else {
+            throw NSError(domain: "AgentBridge", code: -1,
+                          userInfo: [NSLocalizedDescriptionKey: "webView is nil"])
+        }
+        return try await webView.callAsyncJavaScript(script, contentWorld: .page)
+    }
+
     // MARK: - Receive messages from web app
 
     public func handleMessage(_ body: Any) {
@@ -163,6 +177,8 @@ public final class AgentBridge: NSObject, ObservableObject {
             break
         case "sessions:list:response":
             handleSessionsListResponse(dict)
+        case "chat:new:ack":
+            handleChatNewAck(dict)
         default:
             NSLog("[AgentBridge] Unhandled message: %@", messageType)
         }
@@ -188,7 +204,89 @@ public final class AgentBridge: NSObject, ObservableObject {
         send(message)
     }
 
-    /// Request the current list of chat sessions from the web app.
+    /// Submit a message to the active chat session via the web app's
+    /// global `__ripulSubmitMessage` callable.
+    @available(iOS 15.0, *)
+    @discardableResult
+    public func submitMessage(_ text: String) async -> Bool {
+        guard let webView else { return false }
+        do {
+            let result = try await webView.callAsyncJavaScript(
+                "return await window.__ripulSubmitMessage?.(text) ?? { success: false }",
+                arguments: ["text": text],
+                contentWorld: .page
+            )
+            if let dict = result as? [String: Any] {
+                return dict["success"] as? Bool ?? false
+            }
+            return false
+        } catch {
+            NSLog("[AgentBridge] submitMessage error: %@", error.localizedDescription)
+            return false
+        }
+    }
+
+    /// Fetch the current list of chat sessions by calling the web app's
+    /// global function directly. Updates `sessions` and `activeSessionId`.
+    @available(iOS 15.0, *)
+    public func fetchSessions() async {
+        guard let webView else {
+            lastSessionsError = "webView is nil"
+            return
+        }
+
+        do {
+            // callAsyncJavaScript awaits the Promise — evaluateJavaScript does not.
+            let result = try await webView.callAsyncJavaScript(
+                """
+                if (!window.__ripulGetSessions) return {sessions:[], activeId:null, error:'__ripulGetSessions not defined'};
+                return await window.__ripulGetSessions();
+                """,
+                contentWorld: .page
+            )
+
+            guard let dict = result as? [String: Any] else {
+                lastSessionsError = "result not [String:Any]: \(String(describing: result))"
+                return
+            }
+
+            // Surface any error from the JS side
+            let jsError = dict["error"] as? String
+
+            guard let sessionsArray = dict["sessions"] as? [[String: Any]] else {
+                lastSessionsError = jsError ?? "no sessions key, dict keys: \(Array(dict.keys))"
+                return
+            }
+
+            let activeId = dict["activeId"] as? String
+            let parsed: [ChatSession] = sessionsArray.compactMap { item in
+                guard let id = item["id"] as? String,
+                      let sourceChatId = item["sourceChatId"] as? String,
+                      let displayName = item["displayName"] as? String else { return nil }
+                let createdAtMs = item["createdAt"] as? Double ?? 0
+                let createdAt = Date(timeIntervalSince1970: createdAtMs / 1000)
+                let remoteMachineName = item["remoteMachineName"] as? String
+                return ChatSession(id: id, sourceChatId: sourceChatId,
+                                   displayName: displayName, createdAt: createdAt,
+                                   remoteMachineName: remoteMachineName)
+            }
+
+            if !parsed.isEmpty {
+                self.sessions = parsed
+                self.activeSessionId = activeId
+                self.lastSessionsError = nil
+                NSLog("[AgentBridge] fetchSessions: %d sessions, active: %@",
+                      parsed.count, activeId ?? "nil")
+            } else {
+                lastSessionsError = jsError ?? "0 sessions parsed from \(sessionsArray.count) items"
+                if let activeId { self.activeSessionId = activeId }
+            }
+        } catch {
+            lastSessionsError = "callAsyncJS: \(error.localizedDescription)"
+        }
+    }
+
+    /// Legacy message-based request (kept for handshake auto-request).
     public func requestSessions() {
         send([
             "type": "\(messagePrefix)sessions:list",
@@ -199,13 +297,110 @@ public final class AgentBridge: NSObject, ObservableObject {
     }
 
     /// Switch the web app to a specific chat session.
-    public func focusSession(id: String) {
-        send([
-            "type": "\(messagePrefix)sessions:focus",
-            "version": protocolVersion,
-            "timestamp": currentTimestamp(),
-            "sessionId": id,
-        ])
+    @available(iOS 15.0, *)
+    public func focusSession(id: String) async {
+        guard let webView else {
+            NSLog("[AgentBridge] focusSession: webView is nil")
+            return
+        }
+        do {
+            _ = try await webView.callAsyncJavaScript(
+                "if (window.__ripulFocusSession) await window.__ripulFocusSession(sessionId);",
+                arguments: ["sessionId": id],
+                contentWorld: .page
+            )
+        } catch {
+            NSLog("[AgentBridge] focusSession error: %@", error.localizedDescription)
+        }
+    }
+
+    /// Close (delete) a chat session tab.
+    @available(iOS 15.0, *)
+    public func closeSession(id: String) async {
+        guard let webView else { return }
+        do {
+            _ = try await webView.callAsyncJavaScript(
+                "if (window.__ripulCloseSession) return await window.__ripulCloseSession(tabId);",
+                arguments: ["tabId": id],
+                contentWorld: .page
+            )
+            // Remove from local state immediately
+            sessions.removeAll { $0.id == id }
+            if activeSessionId == id {
+                activeSessionId = sessions.first?.id
+            }
+        } catch {
+            NSLog("[AgentBridge] closeSession error: %@", error.localizedDescription)
+        }
+    }
+
+    /// Connect to a remote machine: creates a new chat tab and pairs it.
+    /// Returns the tab ID on success, or nil on failure.
+    @available(iOS 15.0, *)
+    public func connectToMachine(machineId: String) async -> (tabId: String?, error: String?) {
+        guard let webView else {
+            return (nil, "webView is nil")
+        }
+        do {
+            let result = try await webView.callAsyncJavaScript(
+                """
+                if (!window.__ripulConnectToMachine) return {success:false, error:'not ready'};
+                return await window.__ripulConnectToMachine(machineId);
+                """,
+                arguments: ["machineId": machineId],
+                contentWorld: .page
+            )
+            guard let dict = result as? [String: Any] else {
+                return (nil, "Unexpected result")
+            }
+            if let success = dict["success"] as? Bool, success {
+                let tabId = dict["tabId"] as? String
+                let machineName = dict["machineName"] as? String ?? machineId
+                NSLog("[AgentBridge] connectToMachine: paired to %@, tab %@", machineName, tabId ?? "?")
+                // Refresh sessions so the new tab appears
+                await fetchSessions()
+                return (tabId, nil)
+            } else {
+                let error = dict["error"] as? String ?? "Unknown error"
+                NSLog("[AgentBridge] connectToMachine failed: %@", error)
+                return (nil, error)
+            }
+        } catch {
+            NSLog("[AgentBridge] connectToMachine error: %@", error.localizedDescription)
+            return (nil, error.localizedDescription)
+        }
+    }
+
+    /// Create a new chat tab via direct JS call.
+    @available(iOS 15.0, *)
+    public func createNewChat() async -> String? {
+        guard let webView else {
+            NSLog("[AgentBridge] createNewChat: webView is nil")
+            return nil
+        }
+
+        do {
+            let result = try await webView.callAsyncJavaScript(
+                """
+                if (!window.__ripulCreateChat) return {success:false, error:'not ready'};
+                return await window.__ripulCreateChat();
+                """,
+                contentWorld: .page
+            )
+
+            guard let dict = result as? [String: Any],
+                  let success = dict["success"] as? Bool, success,
+                  let chatId = dict["chatId"] as? String else {
+                NSLog("[AgentBridge] createNewChat: unexpected result: %@",
+                      String(describing: result))
+                return nil
+            }
+            NSLog("[AgentBridge] createNewChat: created %@", chatId)
+            return chatId
+        } catch {
+            NSLog("[AgentBridge] createNewChat error: %@", error.localizedDescription)
+            return nil
+        }
     }
 
     /// Rename a chat session. Updates both web storage and local state.
@@ -474,22 +669,48 @@ public final class AgentBridge: NSObject, ObservableObject {
             return ChatSession(id: id, sourceChatId: sourceChatId, displayName: displayName, createdAt: createdAt)
         }
 
-        self.sessions = parsed
-        self.activeSessionId = activeId
-        NSLog("[AgentBridge] Sessions updated: %d sessions, active: %@",
-              parsed.count, activeId ?? "nil")
+        // Only update sessions when we get data. Never clear a good cached
+        // list with an empty response (timing race during web app init).
+        if !parsed.isEmpty {
+            self.sessions = parsed
+            self.activeSessionId = activeId
+            sessionsRetryCount = 0
+            NSLog("[AgentBridge] Sessions updated: %d sessions, active: %@",
+                  parsed.count, activeId ?? "nil")
+        } else if sessions.isEmpty {
+            // Only update active ID when we truly have no sessions yet
+            self.activeSessionId = activeId
+            NSLog("[AgentBridge] Empty sessions response (no cache)")
+        } else {
+            // Keep cached sessions, just update active ID
+            if let activeId { self.activeSessionId = activeId }
+            NSLog("[AgentBridge] Empty sessions response, keeping %d cached sessions", sessions.count)
+        }
 
-        // If the web app returned empty sessions, it may not have initialized
-        // its chat tab state yet. Retry after a delay.
-        if parsed.isEmpty && sessionsRetryCount < Self.maxSessionsRetries {
+        // If the web app returned empty sessions and we have no cache,
+        // it may not have initialized its chat tab state yet. Retry.
+        if parsed.isEmpty && sessions.isEmpty && sessionsRetryCount < Self.maxSessionsRetries {
             sessionsRetryCount += 1
             let attempt = sessionsRetryCount
-            NSLog("[AgentBridge] Empty sessions, retrying (%d/%d)...", attempt, Self.maxSessionsRetries)
+            NSLog("[AgentBridge] No sessions, retrying (%d/%d)...", attempt, Self.maxSessionsRetries)
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
                 self?.requestSessions()
             }
-        } else if !parsed.isEmpty {
-            sessionsRetryCount = 0
+        }
+    }
+
+    private func handleChatNewAck(_ message: [String: Any]) {
+        let success = message["success"] as? Bool ?? false
+        let chatId = message["chatId"] as? String
+        NSLog("[AgentBridge] Chat new ack: success=%@, chatId=%@",
+              success ? "true" : "false", chatId ?? "nil")
+
+        if success {
+            // Request updated sessions list so the native UI reflects the new tab.
+            // Small delay to give the web app time to finalize the tab state.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                self?.requestSessions()
+            }
         }
     }
 
