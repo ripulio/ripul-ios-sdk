@@ -32,7 +32,6 @@ public struct NativeChatInput: View {
     @Binding var imageAttachments: [NativeImageAttachment]
     @Binding var selectedPhotos: [PhotosPickerItem]
     let onSubmit: () -> Void
-    @FocusState private var isFocused: Bool
 
     public init(
         text: Binding<String>,
@@ -44,6 +43,10 @@ public struct NativeChatInput: View {
         self._imageAttachments = imageAttachments
         self._selectedPhotos = selectedPhotos
         self.onSubmit = onSubmit
+    }
+
+    private func dismissKeyboard() {
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
     }
 
     public var body: some View {
@@ -91,17 +94,17 @@ public struct NativeChatInput: View {
 
                 NoAutofillTextView(
                     text: $text,
-                    isFocused: $isFocused,
                     placeholder: "Message...",
-                    onSubmit: { isFocused = false; onSubmit() }
+                    onSubmit: { dismissKeyboard(); onSubmit() }
                 )
                 .frame(minHeight: 36, maxHeight: 120)
+                .fixedSize(horizontal: false, vertical: true)
                 .padding(.vertical, 2)
 
                 let hasContent = !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !imageAttachments.isEmpty
                 if hasContent {
                     Button {
-                        isFocused = false
+                        dismissKeyboard()
                         onSubmit()
                     } label: {
                         Image(systemName: "arrow.up")
@@ -122,10 +125,11 @@ public struct NativeChatInput: View {
 }
 
 /// UITextView wrapper that completely disables autofill suggestions.
+/// Uses isScrollEnabled = false so intrinsic content size matches text,
+/// starting at single-line height and growing up to the SwiftUI frame max.
 @available(iOS 15.0, *)
 struct NoAutofillTextView: UIViewRepresentable {
     @Binding var text: String
-    var isFocused: FocusState<Bool>.Binding
     var placeholder: String
     var onSubmit: () -> Void
 
@@ -138,9 +142,9 @@ struct NoAutofillTextView: UIViewRepresentable {
         textView.delegate = context.coordinator
         textView.font = .preferredFont(forTextStyle: .body)
         textView.backgroundColor = .clear
-        textView.textContainerInset = UIEdgeInsets(top: 8, left: 0, bottom: 8, right: 0)
+        textView.textContainerInset = UIEdgeInsets(top: 8, left: 4, bottom: 8, right: 4)
         textView.textContainer.lineFragmentPadding = 0
-        textView.isScrollEnabled = true
+        textView.isScrollEnabled = false
         textView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
         // Disable all autofill
@@ -152,19 +156,17 @@ struct NoAutofillTextView: UIViewRepresentable {
         textView.inputAssistantItem.trailingBarButtonGroups = []
 
         // Placeholder
-        context.coordinator.placeholderLabel = {
-            let label = UILabel()
-            label.text = placeholder
-            label.font = textView.font
-            label.textColor = .placeholderText
-            label.translatesAutoresizingMaskIntoConstraints = false
-            textView.addSubview(label)
-            NSLayoutConstraint.activate([
-                label.leadingAnchor.constraint(equalTo: textView.leadingAnchor, constant: 4),
-                label.topAnchor.constraint(equalTo: textView.topAnchor, constant: 8)
-            ])
-            return label
-        }()
+        let label = UILabel()
+        label.text = placeholder
+        label.font = textView.font
+        label.textColor = .placeholderText
+        label.translatesAutoresizingMaskIntoConstraints = false
+        textView.addSubview(label)
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: textView.leadingAnchor, constant: 4),
+            label.topAnchor.constraint(equalTo: textView.topAnchor, constant: 8)
+        ])
+        context.coordinator.placeholderLabel = label
 
         return textView
     }
@@ -172,18 +174,8 @@ struct NoAutofillTextView: UIViewRepresentable {
     func updateUIView(_ textView: UITextView, context: Context) {
         if textView.text != text {
             textView.text = text
+            context.coordinator.placeholderLabel?.isHidden = !text.isEmpty
         }
-        context.coordinator.placeholderLabel?.isHidden = !text.isEmpty
-
-        // Sync focus state
-        if isFocused.wrappedValue && !textView.isFirstResponder {
-            textView.becomeFirstResponder()
-        } else if !isFocused.wrappedValue && textView.isFirstResponder {
-            textView.resignFirstResponder()
-        }
-
-        // Invalidate intrinsic content size so SwiftUI can resize
-        textView.invalidateIntrinsicContentSize()
     }
 
     class Coordinator: NSObject, UITextViewDelegate {
@@ -197,19 +189,9 @@ struct NoAutofillTextView: UIViewRepresentable {
         func textViewDidChange(_ textView: UITextView) {
             parent.text = textView.text
             placeholderLabel?.isHidden = !textView.text.isEmpty
-            textView.invalidateIntrinsicContentSize()
-        }
-
-        func textViewDidBeginEditing(_ textView: UITextView) {
-            parent.isFocused.wrappedValue = true
-        }
-
-        func textViewDidEndEditing(_ textView: UITextView) {
-            parent.isFocused.wrappedValue = false
         }
 
         func textView(_ textView: UITextView, shouldChangeTextIn range: NSRange, replacementText text: String) -> Bool {
-            // Handle return key as submit (single newline without shift)
             if text == "\n" {
                 parent.onSubmit()
                 return false
