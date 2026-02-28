@@ -315,6 +315,8 @@ public final class AgentBridge: NSObject, ObservableObject {
             NSLog("[AgentBridge] focusSession: webView is nil")
             return
         }
+        // Optimistically update so the UI reflects the switch immediately
+        activeSessionId = id
         do {
             _ = try await webView.callAsyncJavaScript(
                 "if (window.__ripulFocusSession) await window.__ripulFocusSession(sessionId);",
