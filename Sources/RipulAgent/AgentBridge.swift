@@ -36,6 +36,14 @@ public struct ChatSession: Identifiable, Equatable {
     public var remoteMachineName: String?
 }
 
+/// An option for a slash command sub-menu.
+public struct SlashCommandOption: Identifiable {
+    public let value: String
+    public let label: String
+    public let description: String?
+    public var id: String { value }
+}
+
 /// A slash command descriptor received from the web app.
 public struct SlashCommandInfo: Identifiable {
     public let command: String
@@ -43,6 +51,7 @@ public struct SlashCommandInfo: Identifiable {
     public let icon: String?
     public let type: String   // "template" or "action"
     public let hasVariables: Bool
+    public let options: [SlashCommandOption]
     public var id: String { command }
 }
 
@@ -353,12 +362,21 @@ public final class AgentBridge: NSObject, ObservableObject {
             return array.compactMap { dict in
                 guard let command = dict["command"] as? String,
                       let description = dict["description"] as? String else { return nil }
+                var options: [SlashCommandOption] = []
+                if let rawOptions = dict["options"] as? [[String: Any]] {
+                    options = rawOptions.compactMap { o in
+                        guard let value = o["value"] as? String,
+                              let label = o["label"] as? String else { return nil }
+                        return SlashCommandOption(value: value, label: label, description: o["description"] as? String)
+                    }
+                }
                 return SlashCommandInfo(
                     command: command,
                     description: description,
                     icon: dict["icon"] as? String,
                     type: (dict["type"] as? String) ?? "template",
-                    hasVariables: (dict["hasVariables"] as? Bool) ?? false
+                    hasVariables: (dict["hasVariables"] as? Bool) ?? false,
+                    options: options
                 )
             }
         } catch {
