@@ -269,7 +269,7 @@ public struct AgentWebView: UIViewRepresentable {
 
         // Set a default header height. The native side will override this
         // with the actual safe area inset (in pixels) once the view is laid out.
-        document.documentElement.style.setProperty('--native-header-height', '54px');
+        document.documentElement.style.setProperty('--native-header-height', '98px');
 
         // Prevent document-level scrolling so only inner CSS overflow
         // containers scroll. This eliminates the dual-scroll problem where
@@ -434,9 +434,11 @@ public struct AgentWebView: UIViewRepresentable {
             Self.injectSafeAreaInset(into: webView)
         }
 
-        /// Inject the real safe area top inset as a concrete pixel value
+        /// Inject the real safe area top inset plus the native control bar height
         /// into the CSS variable --native-header-height. This replaces the
         /// default set in the bridge script with the actual device value.
+        /// The extra 44px accounts for the floating buttons + session info panel
+        /// that overlay the top of the web view.
         private static func injectSafeAreaInset(into webView: WKWebView) {
             let insetTop: CGFloat
             if let windowScene = webView.window?.windowScene {
@@ -444,12 +446,13 @@ public struct AgentWebView: UIViewRepresentable {
             } else {
                 insetTop = 54
             }
-            let js = "document.documentElement.style.setProperty('--native-header-height', '\(Int(insetTop))px')"
+            let totalHeight = Int(insetTop) + 44 // safe area + floating control bar
+            let js = "document.documentElement.style.setProperty('--native-header-height', '\(totalHeight)px')"
             webView.evaluateJavaScript(js) { _, error in
                 if let error {
                     NSLog("[AgentWebView] Failed to inject safe area inset: %@", error.localizedDescription)
                 } else {
-                    NSLog("[AgentWebView] Injected --native-header-height: %dpx", Int(insetTop))
+                    NSLog("[AgentWebView] Injected --native-header-height: %dpx (safe area: %d + bar: 44)", totalHeight, Int(insetTop))
                 }
             }
         }
