@@ -235,9 +235,9 @@ struct NoAutofillTextView: UIViewRepresentable {
         textView.backgroundColor = .clear
         textView.textContainerInset = UIEdgeInsets(top: 8, left: 4, bottom: 8, right: 4)
         textView.textContainer.lineFragmentPadding = 0
-        textView.isScrollEnabled = false
+        textView.isScrollEnabled = true
+        textView.showsVerticalScrollIndicator = false
         textView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        textView.setContentHuggingPriority(.required, for: .vertical)
 
         textView.autocorrectionType = .yes
         textView.autocapitalizationType = .sentences
@@ -278,13 +278,7 @@ struct NoAutofillTextView: UIViewRepresentable {
         }
 
         func recalcHeight(_ textView: UITextView) {
-            let size = textView.sizeThatFits(CGSize(
-                width: textView.frame.width > 0 ? textView.frame.width : UIScreen.main.bounds.width - 120,
-                height: .greatestFiniteMagnitude
-            ))
-            let clamped = min(max(ceil(size.height), parent.minHeight), parent.maxHeight)
-            // Enable scrolling when text exceeds max height
-            textView.isScrollEnabled = size.height > parent.maxHeight
+            let clamped = min(max(textView.contentSize.height, parent.minHeight), parent.maxHeight)
             if clamped != parent.height {
                 DispatchQueue.main.async {
                     self.parent.height = clamped
