@@ -36,6 +36,16 @@ public struct ChatSession: Identifiable, Equatable {
     public var remoteMachineName: String?
 }
 
+/// A slash command descriptor received from the web app.
+public struct SlashCommandInfo: Identifiable {
+    public let command: String
+    public let description: String
+    public let icon: String?
+    public let type: String   // "template" or "action"
+    public let hasVariables: Bool
+    public var id: String { command }
+}
+
 @MainActor
 public final class AgentBridge: NSObject, ObservableObject {
     @Published public var isConnected = false
@@ -325,6 +335,33 @@ public final class AgentBridge: NSObject, ObservableObject {
             )
         } catch {
             NSLog("[AgentBridge] focusSession error: %@", error.localizedDescription)
+        }
+    }
+
+    /// Fetch the list of available slash commands from the web app.
+    @available(iOS 15.0, *)
+    public func getSlashCommands() async -> [SlashCommandInfo] {
+        guard let webView else { return [] }
+        do {
+            let result = try await webView.callAsyncJavaScript(
+                "return await window.__ripulGetSlashCommands?.() ?? [];",
+                contentWorld: .page
+            )
+            guard let array = result as? [[String: Any]] else { return [] }
+            return array.compactMap { dict in
+                guard let command = dict["command"] as? String,
+                      let description = dict["description"] as? String else { return nil }
+                return SlashCommandInfo(
+                    command: command,
+                    description: description,
+                    icon: dict["icon"] as? String,
+                    type: (dict["type"] as? String) ?? "template",
+                    hasVariables: (dict["hasVariables"] as? Bool) ?? false
+                )
+            }
+        } catch {
+            NSLog("[AgentBridge] getSlashCommands error: %@", error.localizedDescription)
+            return []
         }
     }
 

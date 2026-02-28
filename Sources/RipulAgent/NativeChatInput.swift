@@ -33,6 +33,7 @@ public struct NativeChatInput: View {
     @Binding var selectedPhotos: [PhotosPickerItem]
     let onSubmit: () -> Void
     let onNewChat: (() -> Void)?
+    let onQuickCommands: (() -> Void)?
     @State private var showPhotoPicker = false
     @State private var showCamera = false
 
@@ -41,13 +42,15 @@ public struct NativeChatInput: View {
         imageAttachments: Binding<[NativeImageAttachment]>,
         selectedPhotos: Binding<[PhotosPickerItem]>,
         onSubmit: @escaping () -> Void,
-        onNewChat: (() -> Void)? = nil
+        onNewChat: (() -> Void)? = nil,
+        onQuickCommands: (() -> Void)? = nil
     ) {
         self._text = text
         self._imageAttachments = imageAttachments
         self._selectedPhotos = selectedPhotos
         self.onSubmit = onSubmit
         self.onNewChat = onNewChat
+        self.onQuickCommands = onQuickCommands
     }
 
     private func dismissKeyboard() {
@@ -67,6 +70,14 @@ public struct NativeChatInput: View {
                     showPhotoPicker = true
                 } label: {
                     Label("Photos", systemImage: "photo")
+                }
+                if onQuickCommands != nil {
+                    Button {
+                        dismissKeyboard()
+                        onQuickCommands?()
+                    } label: {
+                        Label("Quick Commands", systemImage: "bolt.fill")
+                    }
                 }
                 Button {
                     dismissKeyboard()
