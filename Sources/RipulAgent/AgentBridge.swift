@@ -416,17 +416,40 @@ public final class AgentBridge: NSObject, ObservableObject {
     }
 
     /// Rename a chat session. Updates both web storage and local state.
+    /// Rename a session via a direct JS round-trip call.
+    /// Updates local state only after the web app confirms persistence.
     public func renameSession(id: String, sourceChatId: String, displayName: String) {
-        send([
-            "type": "\(messagePrefix)sessions:rename",
-            "version": protocolVersion,
-            "timestamp": currentTimestamp(),
-            "sourceChatId": sourceChatId,
-            "displayName": displayName,
-        ])
-        // Optimistically update local state
+        guard let webView else { return }
+        // Optimistically update local state immediately for UI responsiveness
         if let index = sessions.firstIndex(where: { $0.id == id }) {
             sessions[index].displayName = displayName
+        }
+        let escaped = displayName
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "`", with: "\\`")
+        let escapedChatId = sourceChatId
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "`", with: "\\`")
+        Task { @MainActor in
+            guard #available(iOS 15.0, *) else { return }
+            do {
+                let result = try await webView.callAsyncJavaScript(
+                    "return await window.__ripulRenameSession?.(`\(escapedChatId)`, `\(escaped)`) ?? { success: false }",
+                    contentWorld: .page
+                )
+                if let dict = result as? [String: Any],
+                   let success = dict["success"] as? Bool, success,
+                   let confirmedName = dict["displayName"] as? String {
+                    if let index = sessions.firstIndex(where: { $0.id == id }) {
+                        sessions[index].displayName = confirmedName
+                    }
+                    NSLog("[AgentBridge] renameSession confirmed: %@", confirmedName)
+                } else {
+                    NSLog("[AgentBridge] renameSession: web did not confirm, result: %@", String(describing: result))
+                }
+            } catch {
+                NSLog("[AgentBridge] renameSession error: %@", error.localizedDescription)
+            }
         }
     }
 
