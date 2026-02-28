@@ -282,7 +282,7 @@ struct NoAutofillTextView: UIViewRepresentable {
                 width: textView.frame.width > 0 ? textView.frame.width : UIScreen.main.bounds.width - 120,
                 height: .greatestFiniteMagnitude
             ))
-            let clamped = min(max(size.height, parent.minHeight), parent.maxHeight)
+            let clamped = min(max(ceil(size.height), parent.minHeight), parent.maxHeight)
             // Enable scrolling when text exceeds max height
             textView.isScrollEnabled = size.height > parent.maxHeight
             if clamped != parent.height {
