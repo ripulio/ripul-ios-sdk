@@ -339,12 +339,14 @@ public final class AgentBridge: NSObject, ObservableObject {
     }
 
     /// Fetch the list of available slash commands from the web app.
+    /// Pass `showHidden: true` to get hidden debug commands (the /rr. menu).
     @available(iOS 15.0, *)
-    public func getSlashCommands() async -> [SlashCommandInfo] {
+    public func getSlashCommands(showHidden: Bool = false) async -> [SlashCommandInfo] {
         guard let webView else { return [] }
         do {
             let result = try await webView.callAsyncJavaScript(
-                "return await window.__ripulGetSlashCommands?.() ?? [];",
+                "return await window.__ripulGetSlashCommands?.(showHidden) ?? [];",
+                arguments: ["showHidden": showHidden],
                 contentWorld: .page
             )
             guard let array = result as? [[String: Any]] else { return [] }
