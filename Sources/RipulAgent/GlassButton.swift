@@ -14,9 +14,9 @@ public struct GlassButton: View {
     public var body: some View {
         Button(action: action) {
             Image(systemName: icon)
-                .font(.system(size: 16, weight: .semibold))
+                .font(.system(size: 18, weight: .semibold))
                 .foregroundStyle(.primary)
-                .padding(10)
+                .frame(width: 44, height: 44)
                 .modifier(GlassCircleModifier())
         }
     }
