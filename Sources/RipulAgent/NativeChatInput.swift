@@ -260,6 +260,7 @@ struct NoAutofillTextView: UIViewRepresentable {
         func textViewDidChange(_ textView: UITextView) {
             parent.text = textView.text
             placeholderLabel?.isHidden = !textView.text.isEmpty
+            textView.invalidateIntrinsicContentSize()
         }
 
         func textView(_ textView: UITextView, shouldChangeTextIn range: NSRange, replacementText text: String) -> Bool {
