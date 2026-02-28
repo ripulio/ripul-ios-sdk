@@ -36,6 +36,7 @@ public struct NativeChatInput: View {
     let onQuickCommands: (() -> Void)?
     @State private var showPhotoPicker = false
     @State private var showCamera = false
+    @State private var textHeight: CGFloat = 36
 
     public init(
         text: Binding<String>,
@@ -89,7 +90,7 @@ public struct NativeChatInput: View {
                 Image(systemName: "plus")
                     .font(.system(size: 20, weight: .medium))
                     .foregroundStyle(.secondary)
-                    .frame(width: 36, height: 36)
+                    .frame(width: 40, height: 40)
             }
             .modifier(GlassChatInputBackground())
 
@@ -130,11 +131,11 @@ public struct NativeChatInput: View {
                 HStack(spacing: 4) {
                     NoAutofillTextView(
                         text: $text,
+                        height: $textHeight,
                         placeholder: "Message...",
                         onSubmit: { dismissKeyboard(); onSubmit() }
                     )
-                    .frame(minHeight: 36, maxHeight: 120)
-                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(height: textHeight)
                     .padding(.leading, 8)
                     .padding(.vertical, 2)
 
@@ -157,6 +158,7 @@ public struct NativeChatInput: View {
             }
             .modifier(GlassChatInputBackground())
         }
+        .animation(.easeInOut(duration: 0.15), value: textHeight)
         .animation(.easeInOut(duration: 0.2), value: text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         .animation(.easeInOut(duration: 0.2), value: imageAttachments.count)
         .photosPicker(isPresented: $showPhotoPicker, selection: $selectedPhotos, maxSelectionCount: 4, matching: .images)
@@ -211,11 +213,16 @@ class ChatTextView: UITextView {
 /// UITextView wrapper that completely disables autofill suggestions.
 /// Uses isScrollEnabled = false so intrinsic content size matches text,
 /// starting at single-line height and growing up to the SwiftUI frame max.
+/// Reports its height via a binding so SwiftUI re-layouts on text wrap.
 @available(iOS 15.0, *)
 struct NoAutofillTextView: UIViewRepresentable {
     @Binding var text: String
+    @Binding var height: CGFloat
     var placeholder: String
     var onSubmit: () -> Void
+
+    private let minHeight: CGFloat = 36
+    private let maxHeight: CGFloat = 120
 
     func makeCoordinator() -> Coordinator {
         Coordinator(self)
@@ -230,6 +237,7 @@ struct NoAutofillTextView: UIViewRepresentable {
         textView.textContainer.lineFragmentPadding = 0
         textView.isScrollEnabled = false
         textView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        textView.setContentHuggingPriority(.required, for: .vertical)
 
         textView.autocorrectionType = .yes
         textView.autocapitalizationType = .sentences
@@ -257,6 +265,7 @@ struct NoAutofillTextView: UIViewRepresentable {
         if textView.text != text {
             textView.text = text
             context.coordinator.placeholderLabel?.isHidden = !text.isEmpty
+            context.coordinator.recalcHeight(textView)
         }
     }
 
@@ -268,10 +277,25 @@ struct NoAutofillTextView: UIViewRepresentable {
             self.parent = parent
         }
 
+        func recalcHeight(_ textView: UITextView) {
+            let size = textView.sizeThatFits(CGSize(
+                width: textView.frame.width > 0 ? textView.frame.width : UIScreen.main.bounds.width - 120,
+                height: .greatestFiniteMagnitude
+            ))
+            let clamped = min(max(size.height, parent.minHeight), parent.maxHeight)
+            // Enable scrolling when text exceeds max height
+            textView.isScrollEnabled = size.height > parent.maxHeight
+            if clamped != parent.height {
+                DispatchQueue.main.async {
+                    self.parent.height = clamped
+                }
+            }
+        }
+
         func textViewDidChange(_ textView: UITextView) {
             parent.text = textView.text
             placeholderLabel?.isHidden = !textView.text.isEmpty
-            textView.invalidateIntrinsicContentSize()
+            recalcHeight(textView)
         }
 
         func textView(_ textView: UITextView, shouldChangeTextIn range: NSRange, replacementText text: String) -> Bool {
