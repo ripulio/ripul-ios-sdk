@@ -63,6 +63,7 @@ public final class AgentBridge: NSObject, ObservableObject {
     @Published public var sessions: [ChatSession] = []
     @Published public var activeSessionId: String?
     @Published public var lastSessionsError: String?
+    @Published public var showScrollToBottom = false
 
     private weak var webView: WKWebView?
     private var registeredTools: [NativeTool] = []
@@ -194,6 +195,8 @@ public final class AgentBridge: NSObject, ObservableObject {
             wantsMinimize = false
         case "theme:set:ack":
             break
+        case "scroll:state":
+            handleScrollState(dict)
         case "sessions:list:response":
             handleSessionsListResponse(dict)
         case "chat:new:ack":
@@ -748,6 +751,18 @@ public final class AgentBridge: NSObject, ObservableObject {
             "requestId": requestId,
             "handled": handled,
         ])
+    }
+
+    private func handleScrollState(_ message: [String: Any]) {
+        let show = message["showButton"] as? Bool ?? false
+        if showScrollToBottom != show {
+            showScrollToBottom = show
+        }
+    }
+
+    /// Tell the web view to scroll the chat to the bottom.
+    public func scrollToBottom() {
+        evaluateJavaScript("window.__ripulScrollToBottom?.()")
     }
 
     private func handleSessionsListResponse(_ message: [String: Any]) {
