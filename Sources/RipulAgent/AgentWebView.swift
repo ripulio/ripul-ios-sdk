@@ -177,6 +177,17 @@ public struct AgentWebView: NSViewRepresentable {
 
 #elseif os(iOS)
 
+/// WKWebView subclass that zeroes-out bottom safe area insets so web content
+/// (100vh, 100%) fills the entire frame including the home indicator region.
+/// The native chat input overlay handles bottom spacing instead.
+private class FullBleedWebView: WKWebView {
+    override var safeAreaInsets: UIEdgeInsets {
+        var insets = super.safeAreaInsets
+        insets.bottom = 0
+        return insets
+    }
+}
+
 @available(iOS 15.0, *)
 @MainActor
 public struct AgentWebView: UIViewRepresentable {
@@ -249,7 +260,7 @@ public struct AgentWebView: UIViewRepresentable {
         }
         config.websiteDataStore = dataStore
 
-        let webView = WKWebView(frame: .zero, configuration: config)
+        let webView = FullBleedWebView(frame: .zero, configuration: config)
         webView.isOpaque = false
         webView.backgroundColor = .clear
         webView.scrollView.backgroundColor = .clear
@@ -284,7 +295,9 @@ public struct AgentWebView: UIViewRepresentable {
         return webView
     }
 
-    public func updateUIView(_ webView: WKWebView, context: Context) {}
+    public func updateUIView(_ webView: WKWebView, context: Context) {
+        // FullBleedWebView already zeroes bottom safe area insets.
+    }
 
     public static func dismantleUIView(_ webView: WKWebView, coordinator: Coordinator) {
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "agentBridge")
@@ -363,7 +376,6 @@ public struct AgentWebView: UIViewRepresentable {
         }
 
         public func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-            NSLog("[AgentWebView] Page finished loading: %@", webView.url?.absoluteString ?? "nil")
             Self.removeInputAccessoryView(from: webView)
             Self.injectSafeAreaInset(into: webView)
             Task { @MainActor in
@@ -621,12 +633,26 @@ extension AgentWebView {
         // with the actual safe area inset (in pixels) once the view is laid out.
         document.documentElement.style.setProperty('--native-header-height', '98px');
 
+        // Ensure viewport-fit=cover so web content extends into safe areas.
+        var existingVP = document.querySelector('meta[name="viewport"]');
+        if (existingVP) {
+            var c = existingVP.getAttribute('content') || '';
+            if (c.indexOf('viewport-fit') === -1) {
+                existingVP.setAttribute('content', c + ', viewport-fit=cover');
+            }
+        } else {
+            var vpMeta = document.createElement('meta');
+            vpMeta.name = 'viewport';
+            vpMeta.content = 'width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover';
+            document.head.appendChild(vpMeta);
+        }
+
         // Prevent document-level scrolling so only inner CSS overflow
         // containers scroll. This eliminates the dual-scroll problem where
         // both WKWebView's native scrollView and the web app's containers
         // compete for touch gestures.
         var lockStyle = document.createElement('style');
-        lockStyle.textContent = 'html, body { height: 100%; overflow: hidden; }';
+        lockStyle.textContent = 'html, body { height: 100% !important; overflow: hidden; }';
         (document.head || document.documentElement).appendChild(lockStyle);
 
         nativeLog('LOG', ['[NativeBridge] Bridge script initialized']);
