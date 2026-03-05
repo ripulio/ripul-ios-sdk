@@ -96,6 +96,10 @@ public final class AgentBridge: NSObject, ObservableObject {
     @Published public var selectedModelId: String?
     @Published public var modelSelectionEnabled: Bool = true
     @Published public var lastModelsError: String?
+    /// Whether the agent is currently running (processing) for the active session.
+    @Published public var isAgentRunning = false
+    /// Whether the agent is paused (awaiting user input) for the active session.
+    @Published public var isAgentPaused = false
     /// Set when the web view fails to load. Cleared on successful connection.
     @Published public var loadError: String?
 
@@ -311,6 +315,13 @@ public final class AgentBridge: NSObject, ObservableObject {
             handleCapabilityRequest(dict)
         case "capability:ping":
             handleCapabilityPing(dict)
+        case "agent:status":
+            if let running = dict["isRunning"] as? Bool {
+                isAgentRunning = running
+            }
+            if let paused = dict["isPaused"] as? Bool {
+                isAgentPaused = paused
+            }
         case "chat:prefill":
             pendingInputText = dict["text"] as? String
         default:
@@ -445,11 +456,83 @@ public final class AgentBridge: NSObject, ObservableObject {
                 contentWorld: .page
             )
             if let dict = result as? [String: Any] {
-                return dict["success"] as? Bool ?? false
+                let success = dict["success"] as? Bool ?? false
+                if success {
+                    // Optimistically mark agent as running — the web app will
+                    // push the real status via agent:status messages.
+                    isAgentRunning = true
+                    isAgentPaused = false
+                }
+                return success
             }
             return false
         } catch {
             NSLog("[AgentBridge] submitMessage error: %@", error.localizedDescription)
+            return false
+        }
+    }
+
+    /// Interrupt (pause) the currently running agent for the active session.
+    @available(iOS 15.0, macOS 13.0, *)
+    @discardableResult
+    public func interruptAgent() async -> Bool {
+        guard let webView else { return false }
+        do {
+            let result = try await webView.callAsyncJavaScript(
+                "return await window.__ripulInterruptAgent?.() ?? { success: false }",
+                contentWorld: .page
+            )
+            if let dict = result as? [String: Any] {
+                let success = dict["success"] as? Bool ?? false
+                if success {
+                    isAgentRunning = false
+                    isAgentPaused = true
+                }
+                return success
+            }
+            return false
+        } catch {
+            NSLog("[AgentBridge] interruptAgent error: %@", error.localizedDescription)
+            return false
+        }
+    }
+
+    /// Resume a paused agent, optionally with additional context.
+    @available(iOS 15.0, macOS 13.0, *)
+    @discardableResult
+    public func resumeAgent(context: String? = nil) async -> Bool {
+        guard let webView else { return false }
+        // Always clear paused state so the user isn't permanently stuck
+        // if the resume call fails. The agent:status push will correct
+        // the state if needed.
+        isAgentPaused = false
+        do {
+            let script: String
+            var args: [String: Any] = [:]
+            if let ctx = context, !ctx.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                args["ctx"] = ctx
+                script = "return await window.__ripulResumeAgent?.(ctx) ?? { success: false }"
+            } else {
+                script = "return await window.__ripulResumeAgent?.() ?? { success: false }"
+            }
+            let result = try await webView.callAsyncJavaScript(
+                script,
+                arguments: args,
+                contentWorld: .page
+            )
+            if let dict = result as? [String: Any] {
+                let success = dict["success"] as? Bool ?? false
+                if success {
+                    isAgentRunning = true
+                } else {
+                    let error = dict["error"] as? String ?? "unknown"
+                    NSLog("[AgentBridge] resumeAgent returned failure: %@", error)
+                }
+                return success
+            }
+            return false
+        } catch {
+            NSLog("[AgentBridge] resumeAgent error: %@", error.localizedDescription)
             return false
         }
     }

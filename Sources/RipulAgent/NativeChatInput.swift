@@ -50,7 +50,10 @@ public struct NativeChatInput: View {
     @Binding var text: String
     @Binding var imageAttachments: [NativeImageAttachment]
     @Binding var selectedPhotos: [PhotosPickerItem]
+    let isAgentRunning: Bool
+    let isAgentPaused: Bool
     let onSubmit: () -> Void
+    let onPause: (() -> Void)?
     let onNewChat: (() -> Void)?
     let onQuickCommands: (() -> Void)?
     @State private var showPhotoPicker = false
@@ -61,14 +64,20 @@ public struct NativeChatInput: View {
         text: Binding<String>,
         imageAttachments: Binding<[NativeImageAttachment]>,
         selectedPhotos: Binding<[PhotosPickerItem]>,
+        isAgentRunning: Bool = false,
+        isAgentPaused: Bool = false,
         onSubmit: @escaping () -> Void,
+        onPause: (() -> Void)? = nil,
         onNewChat: (() -> Void)? = nil,
         onQuickCommands: (() -> Void)? = nil
     ) {
         self._text = text
         self._imageAttachments = imageAttachments
         self._selectedPhotos = selectedPhotos
+        self.isAgentRunning = isAgentRunning
+        self.isAgentPaused = isAgentPaused
         self.onSubmit = onSubmit
+        self.onPause = onPause
         self.onNewChat = onNewChat
         self.onQuickCommands = onQuickCommands
     }
@@ -133,7 +142,36 @@ public struct NativeChatInput: View {
                     .padding(.vertical, 2)
 
                     let hasContent = !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !imageAttachments.isEmpty
-                    if hasContent {
+                    if isAgentRunning && !isAgentPaused {
+                        // Pause button — agent is actively running
+                        Button {
+                            dismissKeyboard()
+                            onPause?()
+                        } label: {
+                            Image(systemName: "pause.fill")
+                                .font(.system(size: 14, weight: .bold))
+                                .foregroundStyle(.white)
+                                .frame(width: 34, height: 28)
+                                .background(Color.orange, in: Capsule())
+                        }
+                        .transition(.scale.combined(with: .opacity))
+                        .padding(.trailing, 6)
+                    } else if isAgentPaused {
+                        // Resume button — agent is paused, tap to resume
+                        Button {
+                            dismissKeyboard()
+                            onSubmit()
+                        } label: {
+                            Image(systemName: "play.fill")
+                                .font(.system(size: 14, weight: .bold))
+                                .foregroundStyle(.white)
+                                .frame(width: 34, height: 28)
+                                .background(Color.green, in: Capsule())
+                        }
+                        .transition(.scale.combined(with: .opacity))
+                        .padding(.trailing, 6)
+                    } else if hasContent {
+                        // Send button — idle
                         Button {
                             dismissKeyboard()
                             onSubmit()
@@ -141,8 +179,8 @@ public struct NativeChatInput: View {
                             Image(systemName: "arrow.up")
                                 .font(.system(size: 14, weight: .bold))
                                 .foregroundStyle(.white)
-                                .frame(width: 28, height: 28)
-                                .background(Color.accentColor, in: Circle())
+                                .frame(width: 34, height: 28)
+                                .background(Color.accentColor, in: Capsule())
                         }
                         .transition(.scale.combined(with: .opacity))
                         .padding(.trailing, 6)
@@ -154,6 +192,7 @@ public struct NativeChatInput: View {
         .animation(.easeInOut(duration: 0.15), value: textHeight)
         .animation(.easeInOut(duration: 0.2), value: text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         .animation(.easeInOut(duration: 0.2), value: imageAttachments.count)
+        .animation(.easeInOut(duration: 0.2), value: isAgentRunning)
         .photosPicker(isPresented: $showPhotoPicker, selection: $selectedPhotos, maxSelectionCount: 4, matching: .images)
         .fullScreenCover(isPresented: $showCamera) {
             CameraPicker { uiImage in
@@ -205,7 +244,10 @@ public struct NativeChatInput: View {
     @Binding var text: String
     @Binding var imageAttachments: [NativeImageAttachment]
     @Binding var selectedPhotos: [PhotosPickerItem]
+    let isAgentRunning: Bool
+    let isAgentPaused: Bool
     let onSubmit: () -> Void
+    let onPause: (() -> Void)?
     let onNewChat: (() -> Void)?
     let onQuickCommands: (() -> Void)?
     @State private var showPhotoPicker = false
@@ -215,14 +257,20 @@ public struct NativeChatInput: View {
         text: Binding<String>,
         imageAttachments: Binding<[NativeImageAttachment]>,
         selectedPhotos: Binding<[PhotosPickerItem]>,
+        isAgentRunning: Bool = false,
+        isAgentPaused: Bool = false,
         onSubmit: @escaping () -> Void,
+        onPause: (() -> Void)? = nil,
         onNewChat: (() -> Void)? = nil,
         onQuickCommands: (() -> Void)? = nil
     ) {
         self._text = text
         self._imageAttachments = imageAttachments
         self._selectedPhotos = selectedPhotos
+        self.isAgentRunning = isAgentRunning
+        self.isAgentPaused = isAgentPaused
         self.onSubmit = onSubmit
+        self.onPause = onPause
         self.onNewChat = onNewChat
         self.onQuickCommands = onQuickCommands
     }
@@ -280,15 +328,44 @@ public struct NativeChatInput: View {
                         }
 
                     let hasContent = !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !imageAttachments.isEmpty
-                    if hasContent {
+                    if isAgentRunning && !isAgentPaused {
+                        // Pause button — agent is actively running
+                        Button {
+                            onPause?()
+                        } label: {
+                            Image(systemName: "pause.fill")
+                                .font(.system(size: 14, weight: .bold))
+                                .foregroundStyle(.white)
+                                .frame(width: 34, height: 28)
+                                .background(Color.orange, in: Capsule())
+                        }
+                        .buttonStyle(.plain)
+                        .transition(.scale.combined(with: .opacity))
+                        .padding(.trailing, 6)
+                    } else if isAgentPaused {
+                        // Resume button — agent is paused, tap to resume
+                        Button {
+                            onSubmit()
+                        } label: {
+                            Image(systemName: "play.fill")
+                                .font(.system(size: 14, weight: .bold))
+                                .foregroundStyle(.white)
+                                .frame(width: 34, height: 28)
+                                .background(Color.green, in: Capsule())
+                        }
+                        .buttonStyle(.plain)
+                        .transition(.scale.combined(with: .opacity))
+                        .padding(.trailing, 6)
+                    } else if hasContent {
+                        // Send button — idle
                         Button {
                             onSubmit()
                         } label: {
                             Image(systemName: "arrow.up")
                                 .font(.system(size: 14, weight: .bold))
                                 .foregroundStyle(.white)
-                                .frame(width: 28, height: 28)
-                                .background(Color.accentColor, in: Circle())
+                                .frame(width: 34, height: 28)
+                                .background(Color.accentColor, in: Capsule())
                         }
                         .buttonStyle(.plain)
                         .transition(.scale.combined(with: .opacity))
@@ -301,9 +378,17 @@ public struct NativeChatInput: View {
         }
         .animation(.easeInOut(duration: 0.2), value: text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         .animation(.easeInOut(duration: 0.2), value: imageAttachments.count)
+        .animation(.easeInOut(duration: 0.2), value: isAgentRunning)
         .photosPicker(isPresented: $showPhotoPicker, selection: $selectedPhotos, maxSelectionCount: 4, matching: .images)
         .onAppear {
             isFocused = true
+        }
+        .onKeyPress(.escape) {
+            if isAgentRunning && !isAgentPaused {
+                onPause?()
+                return .handled
+            }
+            return .ignored
         }
     }
 
