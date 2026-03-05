@@ -4,7 +4,10 @@ import Combine
 
 /// Observes keyboard show/hide and publishes the height above the safe area.
 public final class KeyboardObserver: ObservableObject {
+    /// Keyboard height adjusted for bottom safe area (use for overlay padding).
     @Published public var height: CGFloat = 0
+    /// Raw keyboard frame height from screen bottom (use for view frame calculations in views that ignore safe areas).
+    @Published public var rawHeight: CGFloat = 0
 
     public init() {
         NotificationCenter.default.addObserver(
@@ -28,12 +31,18 @@ public final class KeyboardObserver: ObservableObject {
         if let frame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect {
             // Subtract bottom safe area since the overlay is already positioned above it
             let adjusted = max(0, frame.height - bottomSafeArea)
-            DispatchQueue.main.async { self.height = adjusted }
+            DispatchQueue.main.async {
+                self.height = adjusted
+                self.rawHeight = frame.height
+            }
         }
     }
 
     @objc private func keyboardWillHide(_ notification: Notification) {
-        DispatchQueue.main.async { self.height = 0 }
+        DispatchQueue.main.async {
+            self.height = 0
+            self.rawHeight = 0
+        }
     }
 }
 #endif // os(iOS)
