@@ -211,6 +211,19 @@ public final class AgentBridge: NSObject, ObservableObject {
         }
     }
 
+    /// Clear ALL website data (cache, cookies, localStorage, IndexedDB, etc.) and reload.
+    /// This is a full reset — the user will need to log in again.
+    public func clearAllDataAndReload() {
+        let allTypes = WKWebsiteDataStore.allWebsiteDataTypes()
+        WKWebsiteDataStore.default().removeData(ofTypes: allTypes, modifiedSince: .distantPast) { [weak self] in
+            guard let webView = self?.webView else { return }
+            NSLog("[AgentBridge] All website data cleared, reloading")
+            self?.isConnected = false
+            self?.isThemeReady = false
+            webView.reload()
+        }
+    }
+
     /// Navigate the attached web view to a new URL (e.g. to start a new chat with a prompt).
     public func navigate(to url: URL) {
         guard let webView else {
