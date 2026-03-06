@@ -1,0 +1,212 @@
+import SwiftUI
+
+// MARK: - Quick Commands Sheet
+
+/// A sheet presenting available slash commands from the web app.
+/// Pass `debugMode: true` to show hidden debug commands (triggered by `/rr.`).
+@available(iOS 16.0, macOS 13.0, *)
+public struct QuickCommandsSheet: View {
+    @ObservedObject var bridge: AgentBridge
+    var debugMode: Bool = false
+    @Environment(\.dismiss) private var dismiss
+    @State private var commands: [SlashCommandInfo] = []
+    @State private var isLoading = true
+    @State private var searchText = ""
+
+    public init(bridge: AgentBridge, debugMode: Bool = false) {
+        self.bridge = bridge
+        self.debugMode = debugMode
+    }
+
+    private var filteredCommands: [SlashCommandInfo] {
+        if searchText.isEmpty { return commands }
+        let query = searchText.lowercased()
+        return commands.filter {
+            $0.command.lowercased().contains(query) ||
+            $0.description.lowercased().contains(query)
+        }
+    }
+
+    public var body: some View {
+        NavigationStack {
+            Group {
+                if isLoading {
+                    ProgressView()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if commands.isEmpty {
+                    if #available(iOS 17.0, macOS 14.0, *) {
+                        ContentUnavailableView {
+                            Label("No Commands", systemImage: "bolt.slash")
+                        } description: {
+                            Text("No slash commands available.")
+                        }
+                    } else {
+                        VStack(spacing: 8) {
+                            Image(systemName: "bolt.slash")
+                                .font(.largeTitle)
+                                .foregroundStyle(.secondary)
+                            Text("No slash commands available.")
+                                .foregroundStyle(.secondary)
+                        }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
+                } else {
+                    List(filteredCommands) { cmd in
+                        if cmd.options.isEmpty {
+                            CommandRow(command: cmd)
+                                .contentShape(Rectangle())
+                                .onTapGesture {
+                                    Task { await bridge.submitMessage("/\(cmd.command)") }
+                                    dismiss()
+                                }
+                        } else {
+                            NavigationLink {
+                                CommandOptionsView(
+                                    command: cmd,
+                                    onSelect: { value in
+                                        Task { await bridge.submitMessage("/\(cmd.command) \(value)") }
+                                        dismiss()
+                                    }
+                                )
+                            } label: {
+                                CommandRow(command: cmd)
+                            }
+                        }
+                    }
+                    #if os(iOS)
+                    .listStyle(.insetGrouped)
+                    #else
+                    .listStyle(.plain)
+                    #endif
+                }
+            }
+            .searchable(text: $searchText, prompt: "Search commands")
+            .navigationTitle(debugMode ? "Debug Commands" : "Quick Commands")
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            #endif
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+        #if os(iOS)
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+        #else
+        .frame(width: 360, height: 450)
+        #endif
+        .task {
+            commands = await bridge.getSlashCommands(showHidden: debugMode)
+            isLoading = false
+        }
+    }
+}
+
+// MARK: - Debug Command Trigger
+
+/// The prefix that triggers the debug commands sheet.
+/// Type "/rr." into the chat input to activate.
+public let debugCommandTrigger = "/rr."
+
+// MARK: - Command Options View
+
+@available(iOS 16.0, macOS 13.0, *)
+private struct CommandOptionsView: View {
+    let command: SlashCommandInfo
+    let onSelect: (String) -> Void
+
+    var body: some View {
+        List(command.options) { option in
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(option.label)
+                        .font(.body)
+                    if let desc = option.description {
+                        Text(desc)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                Spacer()
+            }
+            .contentShape(Rectangle())
+            .onTapGesture { onSelect(option.value) }
+            .padding(.vertical, 2)
+        }
+        #if os(iOS)
+        .listStyle(.insetGrouped)
+        .navigationBarTitleDisplayMode(.inline)
+        #else
+        .listStyle(.plain)
+        #endif
+        .navigationTitle(command.command.prefix(1).uppercased() + command.command.dropFirst())
+    }
+}
+
+// MARK: - Command Row
+
+@available(iOS 16.0, macOS 13.0, *)
+private struct CommandRow: View {
+    let command: SlashCommandInfo
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: sfSymbol(for: command.icon))
+                .font(.system(size: 16))
+                .foregroundStyle(.tint)
+                .frame(width: 28)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(command.command.prefix(1).uppercased() + command.command.dropFirst())
+                    .font(.body)
+                    .fontWeight(.medium)
+
+                Text(command.description)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+
+            Spacer()
+
+            if !command.options.isEmpty {
+                Image(systemName: "chevron.right")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private func sfSymbol(for faIcon: String?) -> String {
+        guard let fa = faIcon else { return "terminal" }
+        switch fa {
+        case "fa-magnifying-glass-chart": return "magnifyingglass"
+        case "fa-sitemap": return "map"
+        case "fa-book": return "book"
+        case "fa-asterisk": return "asterisk"
+        case "fa-code": return "chevron.left.forwardslash.chevron.right"
+        case "fa-camera": return "camera"
+        case "fa-cloud-arrow-up": return "icloud.and.arrow.up"
+        case "fa-wrench": return "wrench"
+        case "fa-circle-question": return "questionmark.circle"
+        case "fa-palette": return "paintpalette"
+        case "fa-trash-can": return "trash"
+        case "fa-layer-group": return "square.3.layers.3d"
+        case "fa-rotate-right": return "arrow.clockwise"
+        case "fa-flask": return "flask"
+        case "fa-plug": return "link"
+        case "fa-file-lines": return "doc.text"
+        case "fa-bug": return "ant"
+        case "fa-globe": return "globe"
+        case "fa-gear": return "gear"
+        case "fa-timeline": return "timeline.selection"
+        case "fa-window-restore": return "macwindow"
+        case "fa-database": return "cylinder"
+        case "fa-arrows-rotate": return "arrow.triangle.2.circlepath"
+        default: return "terminal"
+        }
+    }
+}
