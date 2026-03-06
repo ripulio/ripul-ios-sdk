@@ -6,6 +6,7 @@ public struct AgentView: View {
     public let configuration: AgentConfiguration
     public var tools: [NativeTool] = []
     public weak var searchClickDelegate: SearchClickDelegate?
+    public weak var linkOpenDelegate: LinkOpenDelegate?
     @StateObject private var bridge = AgentBridge()
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.dismiss) private var dismiss
@@ -17,11 +18,13 @@ public struct AgentView: View {
     public init(
         configuration: AgentConfiguration,
         tools: [NativeTool] = [],
-        searchClickDelegate: SearchClickDelegate? = nil
+        searchClickDelegate: SearchClickDelegate? = nil,
+        linkOpenDelegate: LinkOpenDelegate? = nil
     ) {
         self.configuration = configuration
         self.tools = tools
         self.searchClickDelegate = searchClickDelegate
+        self.linkOpenDelegate = linkOpenDelegate
     }
 
     public var body: some View {
@@ -43,6 +46,7 @@ public struct AgentView: View {
         .task {
             bridge.register(tools)
             bridge.searchClickDelegate = searchClickDelegate
+            bridge.linkOpenDelegate = linkOpenDelegate
 
             // Validate the site key natively before loading the web view.
             // This mirrors the browser EmbedManager flow: the host validates

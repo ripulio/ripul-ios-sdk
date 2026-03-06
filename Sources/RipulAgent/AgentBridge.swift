@@ -26,6 +26,13 @@ public protocol SearchClickDelegate: AnyObject {
     func agentBridge(_ bridge: AgentBridge, didClickSearchResult context: SearchClickContext) -> Bool
 }
 
+/// Implement this protocol to handle link navigation requests from the web app.
+/// Fired when a user clicks an interactWithUser option that carries a `link` URI.
+@MainActor
+public protocol LinkOpenDelegate: AnyObject {
+    func agentBridge(_ bridge: AgentBridge, didRequestOpenLink url: URL)
+}
+
 /// A chat session descriptor received from the web app.
 public struct ChatSession: Identifiable, Equatable {
     public let id: String
@@ -113,6 +120,9 @@ public final class AgentBridge: NSObject, ObservableObject {
 
     /// Set this delegate to handle search result clicks from the universal search.
     public weak var searchClickDelegate: SearchClickDelegate?
+
+    /// Set this delegate to handle link navigation requests from interactWithUser options.
+    public weak var linkOpenDelegate: LinkOpenDelegate?
 
     /// Additional capabilities to merge into the handshake response.
     /// These override auto-detected values (e.g., set `"dom": true`).
@@ -324,6 +334,11 @@ public final class AgentBridge: NSObject, ObservableObject {
             }
         case "chat:prefill":
             pendingInputText = dict["text"] as? String
+        case "link:open":
+            if let urlString = dict["url"] as? String, let url = URL(string: urlString) {
+                NSLog("[AgentBridge] Link open — url: %@", urlString)
+                linkOpenDelegate?.agentBridge(self, didRequestOpenLink: url)
+            }
         default:
             NSLog("[AgentBridge] Unhandled message: %@", messageType)
         }
