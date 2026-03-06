@@ -296,7 +296,7 @@ public struct AgentWebView: UIViewRepresentable {
     }
 
     public func updateUIView(_ webView: WKWebView, context: Context) {
-        // FullBleedWebView already zeroes bottom safe area insets.
+        // FullBleedWebView zeroes bottom safe area so web content fills the frame.
     }
 
     public static func dismantleUIView(_ webView: WKWebView, coordinator: Coordinator) {
@@ -652,7 +652,7 @@ extension AgentWebView {
         // both WKWebView's native scrollView and the web app's containers
         // compete for touch gestures.
         var lockStyle = document.createElement('style');
-        lockStyle.textContent = 'html, body { height: 100% !important; overflow: hidden; }';
+        lockStyle.textContent = 'html, body { height: 100vh !important; overflow: hidden; }';
         (document.head || document.documentElement).appendChild(lockStyle);
 
         nativeLog('LOG', ['[NativeBridge] Bridge script initialized']);
