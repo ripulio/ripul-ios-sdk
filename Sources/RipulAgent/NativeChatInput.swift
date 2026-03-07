@@ -120,7 +120,7 @@ public struct NativeChatInput: View {
                     .foregroundStyle(.secondary)
                     .frame(width: 40, height: 40)
             }
-            .modifier(GlassChatInputBackground())
+            .modifier(GlassCircleModifier())
 
             // Chat bubble
             VStack(spacing: 0) {
@@ -306,7 +306,7 @@ public struct NativeChatInput: View {
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
             .frame(width: 40, height: 40)
-            .modifier(GlassChatInputBackground())
+            .modifier(GlassCircleModifier())
 
             // Chat bubble
             VStack(spacing: 0) {
