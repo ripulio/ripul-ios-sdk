@@ -33,7 +33,7 @@ public struct GlassMastheadView: View {
                         image
                             .resizable()
                             .aspectRatio(contentMode: .fit)
-                            .frame(maxWidth: imgWidth, maxHeight: imgHeight)
+                            .frame(width: imgWidth, height: imgHeight)
                     case .failure(let error):
                         let _ = NSLog("[GlassMastheadView] Image load failed for %@: %@",
                                       imageUrl, error.localizedDescription)
@@ -60,6 +60,7 @@ public struct GlassMastheadView: View {
         .padding(.horizontal, 20)
         .padding(.vertical, 10)
         .frame(minHeight: resolvedHeight)
+        .clipShape(Capsule())
         .modifier(GlassCapsuleModifier(tintColor: Color(cssHex: config.backgroundColor)))
     }
 }
