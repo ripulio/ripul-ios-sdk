@@ -25,26 +25,39 @@ public struct GlassMastheadView: View {
     public var body: some View {
         HStack(spacing: 10) {
             if let imageUrl = config.imageUrl, let url = URL(string: imageUrl) {
-                let imgHeight = resolvedHeight - 12
-                let imgWidth = resolvedImageWidth ?? imgHeight * 3 // default: 3:1 aspect ratio
+                // When user sets explicit width, honour it and let height flex.
+                // Otherwise default to fitting within the pill height.
+                let explicitWidth = resolvedImageWidth
+                let fallbackHeight = resolvedHeight - 12
                 AsyncImage(url: url) { phase in
                     switch phase {
                     case .success(let image):
-                        image
-                            .resizable()
-                            .aspectRatio(contentMode: .fit)
+                        if let w = explicitWidth {
+                            // Explicit width: scale image to fill that width, height flexes
+                            image
+                                .resizable()
+                                .aspectRatio(contentMode: .fit)
+                                .frame(width: w)
+                        } else {
+                            // No explicit width: fit within pill height
+                            image
+                                .resizable()
+                                .aspectRatio(contentMode: .fit)
+                                .frame(height: fallbackHeight)
+                        }
                     case .failure(let error):
                         let _ = NSLog("[GlassMastheadView] Image load failed for %@: %@",
                                       imageUrl, error.localizedDescription)
                         Image(systemName: "photo")
                             .foregroundStyle(.secondary)
+                            .frame(width: explicitWidth ?? fallbackHeight, height: fallbackHeight)
                     case .empty:
                         ProgressView()
+                            .frame(width: explicitWidth ?? fallbackHeight, height: fallbackHeight)
                     @unknown default:
                         EmptyView()
                     }
                 }
-                .frame(width: imgWidth, height: imgHeight)
             }
 
             if let text = config.text {
