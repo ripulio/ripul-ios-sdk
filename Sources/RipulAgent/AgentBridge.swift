@@ -88,6 +88,16 @@ public struct ConsoleLogEntry: Identifiable {
     }
 }
 
+/// Masthead configuration received from the web app's ViewContext features.
+public struct MastheadConfig: Equatable {
+    public var text: String?
+    public var imageUrl: String?
+    public var backgroundColor: String?  // CSS color string (e.g. "#FF6600")
+    public var textColor: String?        // CSS color string
+    public var height: CGFloat?
+    public var imageWidth: String?       // CSS value (e.g. "120px", "50%")
+}
+
 @MainActor
 public final class AgentBridge: NSObject, ObservableObject {
     @Published public var isConnected = false
@@ -109,6 +119,8 @@ public final class AgentBridge: NSObject, ObservableObject {
     @Published public var isAgentPaused = false
     /// Set when the web view fails to load. Cleared on successful connection.
     @Published public var loadError: String?
+    /// Masthead configuration from the web app (text, image, colors for native glass lozenge).
+    @Published public var mastheadConfig: MastheadConfig?
 
     private weak var webView: WKWebView?
     private var registeredTools: [NativeTool] = []
@@ -317,6 +329,8 @@ public final class AgentBridge: NSObject, ObservableObject {
             break
         case "scroll:state":
             handleScrollState(dict)
+        case "masthead:config":
+            handleMastheadConfig(dict)
         case "sessions:list:response":
             handleSessionsListResponse(dict)
         case "chat:new:ack":
@@ -1209,6 +1223,25 @@ public final class AgentBridge: NSObject, ObservableObject {
         if showScrollToBottom != show {
             showScrollToBottom = show
         }
+    }
+
+    private func handleMastheadConfig(_ message: [String: Any]) {
+        let text = message["text"] as? String
+        let imageUrl = message["imageUrl"] as? String
+
+        guard text != nil || imageUrl != nil else {
+            mastheadConfig = nil
+            return
+        }
+
+        mastheadConfig = MastheadConfig(
+            text: text,
+            imageUrl: imageUrl,
+            backgroundColor: message["backgroundColor"] as? String,
+            textColor: message["textColor"] as? String,
+            height: (message["height"] as? NSNumber).map { CGFloat($0.doubleValue) },
+            imageWidth: message["imageWidth"] as? String
+        )
     }
 
     /// Tell the web view to scroll the chat to the bottom.
