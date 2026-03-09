@@ -1,0 +1,62 @@
+import Foundation
+
+/// Tracks sent message history and supports terminal-style up/down arrow cycling.
+/// Messages are de-duplicated — only the most recent occurrence of each message is kept.
+@available(iOS 16.0, macOS 14.0, *)
+public class MessageHistory: ObservableObject {
+    private var messages: [String] = []
+    /// Current position when browsing. `messages.count` means "not browsing" (at the draft).
+    private var cursor: Int = 0
+    /// The text the user was typing before they started browsing history.
+    private var draft: String = ""
+    private let maxEntries: Int
+
+    public init(maxEntries: Int = 100) {
+        self.maxEntries = maxEntries
+        self.cursor = 0
+    }
+
+    /// Record a sent message. De-duplicates by removing any earlier occurrence.
+    public func record(_ message: String) {
+        let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        messages.removeAll { $0 == trimmed }
+        messages.append(trimmed)
+        if messages.count > maxEntries {
+            messages.removeFirst(messages.count - maxEntries)
+        }
+        resetCursor()
+    }
+
+    /// Call when up arrow is pressed. Returns the text to display, or nil if no history.
+    public func navigateUp(currentText: String) -> String? {
+        guard !messages.isEmpty else { return nil }
+        if cursor == messages.count {
+            // Starting to browse — save the draft
+            draft = currentText
+        }
+        if cursor > 0 {
+            cursor -= 1
+            return messages[cursor]
+        }
+        // Already at oldest — stay there
+        return messages[cursor]
+    }
+
+    /// Call when down arrow is pressed. Returns the text to display, or nil if already at draft.
+    public func navigateDown() -> String? {
+        guard cursor < messages.count else { return nil }
+        cursor += 1
+        if cursor == messages.count {
+            // Back to draft
+            return draft
+        }
+        return messages[cursor]
+    }
+
+    /// Reset browsing position (e.g. after sending a message).
+    public func resetCursor() {
+        cursor = messages.count
+        draft = ""
+    }
+}
