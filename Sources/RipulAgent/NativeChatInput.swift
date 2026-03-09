@@ -56,6 +56,7 @@ public struct NativeChatInput: View {
     let onPause: (() -> Void)?
     let onNewChat: (() -> Void)?
     let onQuickCommands: (() -> Void)?
+    var chatInputGlassStyle: String?
     @State private var showPhotoPicker = false
     @State private var showCamera = false
     @State private var textHeight: CGFloat = 36
@@ -69,7 +70,8 @@ public struct NativeChatInput: View {
         onSubmit: @escaping () -> Void,
         onPause: (() -> Void)? = nil,
         onNewChat: (() -> Void)? = nil,
-        onQuickCommands: (() -> Void)? = nil
+        onQuickCommands: (() -> Void)? = nil,
+        chatInputGlassStyle: String? = nil
     ) {
         self._text = text
         self._imageAttachments = imageAttachments
@@ -80,6 +82,7 @@ public struct NativeChatInput: View {
         self.onPause = onPause
         self.onNewChat = onNewChat
         self.onQuickCommands = onQuickCommands
+        self.chatInputGlassStyle = chatInputGlassStyle
     }
 
     private func dismissKeyboard() {
@@ -187,7 +190,7 @@ public struct NativeChatInput: View {
                     }
                 }
             }
-            .modifier(GlassChatInputBackground())
+            .modifier(GlassChatInputBackground(glassStyle: chatInputGlassStyle))
         }
         .animation(.easeInOut(duration: 0.15), value: textHeight)
         .animation(.easeInOut(duration: 0.2), value: text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
@@ -250,6 +253,8 @@ public struct NativeChatInput: View {
     let onPause: (() -> Void)?
     let onNewChat: (() -> Void)?
     let onQuickCommands: (() -> Void)?
+    var messageHistory: MessageHistory?
+    var chatInputGlassStyle: String?
     @State private var showPhotoPicker = false
     @FocusState private var isFocused: Bool
 
@@ -262,7 +267,9 @@ public struct NativeChatInput: View {
         onSubmit: @escaping () -> Void,
         onPause: (() -> Void)? = nil,
         onNewChat: (() -> Void)? = nil,
-        onQuickCommands: (() -> Void)? = nil
+        onQuickCommands: (() -> Void)? = nil,
+        messageHistory: MessageHistory? = nil,
+        chatInputGlassStyle: String? = nil
     ) {
         self._text = text
         self._imageAttachments = imageAttachments
@@ -273,6 +280,8 @@ public struct NativeChatInput: View {
         self.onPause = onPause
         self.onNewChat = onNewChat
         self.onQuickCommands = onQuickCommands
+        self.messageHistory = messageHistory
+        self.chatInputGlassStyle = chatInputGlassStyle
     }
 
     public var body: some View {
@@ -374,7 +383,7 @@ public struct NativeChatInput: View {
                 }
             }
             .frame(minHeight: 40)
-            .modifier(GlassChatInputBackground())
+            .modifier(GlassChatInputBackground(glassStyle: chatInputGlassStyle))
         }
         .animation(.easeInOut(duration: 0.2), value: text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         .animation(.easeInOut(duration: 0.2), value: imageAttachments.count)
@@ -386,6 +395,22 @@ public struct NativeChatInput: View {
         .onKeyPress(.escape) {
             if isAgentRunning && !isAgentPaused {
                 onPause?()
+                return .handled
+            }
+            return .ignored
+        }
+        .onKeyPress(.upArrow) {
+            if let history = messageHistory,
+               let previous = history.navigateUp(currentText: text) {
+                text = previous
+                return .handled
+            }
+            return .ignored
+        }
+        .onKeyPress(.downArrow) {
+            if let history = messageHistory,
+               let next = history.navigateDown() {
+                text = next
                 return .handled
             }
             return .ignored
@@ -430,14 +455,23 @@ public struct NativeChatInput: View {
 
 @available(iOS 15.0, macOS 14.0, *)
 public struct GlassChatInputBackground: ViewModifier {
-    public init() {}
+    public var glassStyle: String? // "regular", "clear", or "identity"
+
+    public init(glassStyle: String? = nil) {
+        self.glassStyle = glassStyle
+    }
 
     public func body(content: Content) -> some View {
         #if os(iOS)
         if #available(iOS 26.0, *) {
-            content
-                .background(.clear)
-                .glassEffect(.regular, in: .rect(cornerRadius: 22))
+            if glassStyle == "identity" {
+                content
+            } else {
+                let style: Glass = glassStyle == "clear" ? .clear : .regular
+                content
+                    .background(.clear)
+                    .glassEffect(style, in: .rect(cornerRadius: 22))
+            }
         } else {
             content
                 .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22))

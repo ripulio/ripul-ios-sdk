@@ -124,6 +124,8 @@ public final class AgentBridge: NSObject, ObservableObject {
     @Published public var loadError: String?
     /// Masthead configuration from the web app (text, image, colors for native glass lozenge).
     @Published public var mastheadConfig: MastheadConfig?
+    /// Glass style for the native chat input: "regular", "clear", or "identity".
+    @Published public var chatInputGlassStyle: String?
 
     private weak var webView: WKWebView?
     private var registeredTools: [NativeTool] = []
@@ -334,6 +336,8 @@ public final class AgentBridge: NSObject, ObservableObject {
             handleScrollState(dict)
         case "masthead:config":
             handleMastheadConfig(dict)
+        case "chatInput:config":
+            chatInputGlassStyle = dict["glassStyle"] as? String
         case "sessions:list:response":
             handleSessionsListResponse(dict)
         case "chat:new:ack":
