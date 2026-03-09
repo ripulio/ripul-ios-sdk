@@ -98,6 +98,7 @@ public struct MastheadConfig: Equatable {
     public var imageWidth: String?       // CSS value (e.g. "120px", "50%")
     public var fontSize: CGFloat?        // Default: 17 (body size)
     public var topOffset: CGFloat?       // Extra top offset in points
+    public var glassStyle: String?       // "regular", "clear", or "identity" (iOS 26+ only)
 }
 
 @MainActor
@@ -1248,7 +1249,8 @@ public final class AgentBridge: NSObject, ObservableObject {
             height: (message["height"] as? NSNumber).map { CGFloat($0.doubleValue) },
             imageWidth: message["imageWidth"] as? String,
             fontSize: (message["fontSize"] as? NSNumber).map { CGFloat($0.doubleValue) },
-            topOffset: (message["topOffset"] as? NSNumber).map { CGFloat($0.doubleValue) }
+            topOffset: (message["topOffset"] as? NSNumber).map { CGFloat($0.doubleValue) },
+            glassStyle: message["glassStyle"] as? String
         )
         updateNativeHeaderHeight()
     }

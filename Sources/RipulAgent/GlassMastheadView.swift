@@ -70,7 +70,7 @@ public struct GlassMastheadView: View {
         .padding(.horizontal, 20)
         .padding(.vertical, 10)
         .frame(minHeight: resolvedHeight)
-        .modifier(GlassCapsuleModifier(tintColor: Color(cssHex: config.backgroundColor)))
+        .modifier(GlassCapsuleModifier(tintColor: Color(cssHex: config.backgroundColor), glassStyle: config.glassStyle))
     }
 }
 
@@ -79,16 +79,27 @@ public struct GlassMastheadView: View {
 @available(iOS 15.0, macOS 13.0, *)
 struct GlassCapsuleModifier: ViewModifier {
     let tintColor: Color?
+    var glassStyle: String? // "regular", "clear", or "identity"
 
     func body(content: Content) -> some View {
         #if os(iOS)
         if #available(iOS 26.0, *) {
-            if let tintColor {
-                content
-                    .glassEffect(.regular.tint(tintColor.opacity(0.3)), in: .capsule)
+            if glassStyle == "identity" {
+                // No glass effect — just tint background in capsule if set
+                if let tintColor {
+                    content.background(tintColor.opacity(0.2), in: Capsule())
+                } else {
+                    content
+                }
             } else {
-                content
-                    .glassEffect(.regular, in: .capsule)
+                let style: Glass = glassStyle == "clear" ? .clear : .regular
+                if let tintColor {
+                    content
+                        .glassEffect(style.tint(tintColor.opacity(0.3)), in: .capsule)
+                } else {
+                    content
+                        .glassEffect(style, in: .capsule)
+                }
             }
         } else {
             content
