@@ -1237,6 +1237,9 @@ public final class AgentBridge: NSObject, ObservableObject {
             return
         }
 
+        NSLog("[AgentBridge] Masthead config — text: %@, imageUrl: %@, imageWidth: %@",
+              text ?? "(nil)", imageUrl ?? "(nil)", message["imageWidth"] as? String ?? "(nil)")
+
         mastheadConfig = MastheadConfig(
             text: text,
             imageUrl: imageUrl,

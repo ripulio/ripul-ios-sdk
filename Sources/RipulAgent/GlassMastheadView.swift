@@ -34,9 +34,11 @@ public struct GlassMastheadView: View {
                             .resizable()
                             .aspectRatio(contentMode: .fit)
                             .frame(maxWidth: imgWidth, maxHeight: imgHeight)
-                    case .failure:
-                        // Reserve space so the capsule doesn't collapse
-                        Color.clear
+                    case .failure(let error):
+                        let _ = NSLog("[GlassMastheadView] Image load failed for %@: %@",
+                                      imageUrl, error.localizedDescription)
+                        Image(systemName: "photo")
+                            .foregroundStyle(.secondary)
                             .frame(width: imgWidth, height: imgHeight)
                     case .empty:
                         ProgressView()
