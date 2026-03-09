@@ -33,16 +33,13 @@ public struct GlassMastheadView: View {
                         image
                             .resizable()
                             .aspectRatio(contentMode: .fit)
-                            .frame(width: imgWidth, height: imgHeight)
                     case .failure(let error):
                         let _ = NSLog("[GlassMastheadView] Image load failed for %@: %@",
                                       imageUrl, error.localizedDescription)
                         Image(systemName: "photo")
                             .foregroundStyle(.secondary)
-                            .frame(width: imgWidth, height: imgHeight)
                     case .empty:
                         ProgressView()
-                            .frame(width: imgWidth, height: imgHeight)
                     @unknown default:
                         EmptyView()
                     }
@@ -60,7 +57,6 @@ public struct GlassMastheadView: View {
         .padding(.horizontal, 20)
         .padding(.vertical, 10)
         .frame(minHeight: resolvedHeight)
-        .clipShape(Capsule())
         .modifier(GlassCapsuleModifier(tintColor: Color(cssHex: config.backgroundColor)))
     }
 }
@@ -74,9 +70,13 @@ struct GlassCapsuleModifier: ViewModifier {
     func body(content: Content) -> some View {
         #if os(iOS)
         if #available(iOS 26.0, *) {
-            content
-                .background(tintColor?.opacity(0.3) ?? .clear)
-                .glassEffect(.regular, in: .capsule)
+            if let tintColor {
+                content
+                    .glassEffect(.regular.tint(tintColor.opacity(0.3)), in: .capsule)
+            } else {
+                content
+                    .glassEffect(.regular, in: .capsule)
+            }
         } else {
             content
                 .background(
