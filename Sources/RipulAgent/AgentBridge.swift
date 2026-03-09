@@ -94,8 +94,10 @@ public struct MastheadConfig: Equatable {
     public var imageUrl: String?
     public var backgroundColor: String?  // CSS color string (e.g. "#FF6600")
     public var textColor: String?        // CSS color string
-    public var height: CGFloat?
+    public var height: CGFloat?          // Default: 48
     public var imageWidth: String?       // CSS value (e.g. "120px", "50%")
+    public var fontSize: CGFloat?        // Default: 17 (body size)
+    public var topOffset: CGFloat?       // Extra top offset in points
 }
 
 @MainActor
@@ -1241,7 +1243,9 @@ public final class AgentBridge: NSObject, ObservableObject {
             backgroundColor: message["backgroundColor"] as? String,
             textColor: message["textColor"] as? String,
             height: (message["height"] as? NSNumber).map { CGFloat($0.doubleValue) },
-            imageWidth: message["imageWidth"] as? String
+            imageWidth: message["imageWidth"] as? String,
+            fontSize: (message["fontSize"] as? NSNumber).map { CGFloat($0.doubleValue) },
+            topOffset: (message["topOffset"] as? NSNumber).map { CGFloat($0.doubleValue) }
         )
         updateNativeHeaderHeight()
     }
@@ -1259,7 +1263,7 @@ public final class AgentBridge: NSObject, ObservableObject {
         #else
         insetTop = 0
         #endif
-        let mastheadExtra = mastheadConfig != nil ? Int(mastheadConfig?.height ?? 44) + 12 : 0
+        let mastheadExtra = mastheadConfig != nil ? Int(mastheadConfig?.height ?? 48) + 12 : 0
         let totalHeight = Int(insetTop) + 44 + mastheadExtra
         let js = "document.documentElement.style.setProperty('--native-header-height', '\(totalHeight)px')"
         webView.evaluateJavaScript(js) { _, error in

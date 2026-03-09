@@ -199,13 +199,19 @@ public struct AgentWebView: View {
         self.bridge = bridge
     }
 
+    private var safeAreaTop: CGFloat {
+        UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .first?.keyWindow?.safeAreaInsets.top ?? 54
+    }
+
     public var body: some View {
         AgentWebViewRepresentable(configuration: configuration, bridge: bridge)
             .overlay(alignment: .top) {
                 if let config = bridge.mastheadConfig {
                     GlassMastheadView(config: config)
                         .padding(.horizontal, 12)
-                        .padding(.top, 4)
+                        .padding(.top, safeAreaTop + (config.topOffset ?? 4))
                         .transition(.opacity.combined(with: .move(edge: .top)))
                 }
             }

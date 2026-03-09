@@ -10,8 +10,11 @@ public struct GlassMastheadView: View {
         self.config = config
     }
 
+    private var resolvedHeight: CGFloat { config.height ?? 48 }
+    private var resolvedFontSize: CGFloat { config.fontSize ?? 17 }
+
     public var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 10) {
             if let imageUrl = config.imageUrl, let url = URL(string: imageUrl) {
                 AsyncImage(url: url) { phase in
                     switch phase {
@@ -19,7 +22,7 @@ public struct GlassMastheadView: View {
                         image
                             .resizable()
                             .aspectRatio(contentMode: .fit)
-                            .frame(maxHeight: (config.height ?? 40) - 12)
+                            .frame(maxHeight: resolvedHeight - 12)
                     case .failure:
                         EmptyView()
                     case .empty:
@@ -33,15 +36,14 @@ public struct GlassMastheadView: View {
 
             if let text = config.text {
                 Text(text)
-                    .font(.subheadline)
-                    .fontWeight(.semibold)
+                    .font(.system(size: resolvedFontSize, weight: .semibold))
                     .foregroundStyle(Color(cssHex: config.textColor) ?? .primary)
                     .lineLimit(1)
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 8)
-        .frame(height: config.height ?? 44)
+        .padding(.horizontal, 20)
+        .padding(.vertical, 10)
+        .frame(height: resolvedHeight)
         .modifier(GlassCapsuleModifier(tintColor: Color(cssHex: config.backgroundColor)))
     }
 }
