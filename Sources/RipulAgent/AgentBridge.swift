@@ -1231,6 +1231,7 @@ public final class AgentBridge: NSObject, ObservableObject {
 
         guard text != nil || imageUrl != nil else {
             mastheadConfig = nil
+            updateNativeHeaderHeight()
             return
         }
 
@@ -1242,6 +1243,32 @@ public final class AgentBridge: NSObject, ObservableObject {
             height: (message["height"] as? NSNumber).map { CGFloat($0.doubleValue) },
             imageWidth: message["imageWidth"] as? String
         )
+        updateNativeHeaderHeight()
+    }
+
+    /// Re-inject `--native-header-height` CSS variable to account for the masthead.
+    private func updateNativeHeaderHeight() {
+        guard let webView else { return }
+        let insetTop: CGFloat
+        #if os(iOS)
+        if let windowScene = webView.window?.windowScene {
+            insetTop = windowScene.keyWindow?.safeAreaInsets.top ?? 54
+        } else {
+            insetTop = 54
+        }
+        #else
+        insetTop = 0
+        #endif
+        let mastheadExtra = mastheadConfig != nil ? Int(mastheadConfig?.height ?? 44) + 12 : 0
+        let totalHeight = Int(insetTop) + 44 + mastheadExtra
+        let js = "document.documentElement.style.setProperty('--native-header-height', '\(totalHeight)px')"
+        webView.evaluateJavaScript(js) { _, error in
+            if let error {
+                NSLog("[AgentBridge] Failed to update native header height: %@", error.localizedDescription)
+            } else {
+                NSLog("[AgentBridge] Updated --native-header-height: %dpx (masthead: %d)", totalHeight, mastheadExtra)
+            }
+        }
     }
 
     /// Tell the web view to scroll the chat to the bottom.

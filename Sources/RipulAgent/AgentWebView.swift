@@ -190,25 +190,45 @@ private class FullBleedWebView: WKWebView {
 
 @available(iOS 15.0, *)
 @MainActor
-public struct AgentWebView: UIViewRepresentable {
+public struct AgentWebView: View {
     public let configuration: AgentConfiguration
-    public let bridge: AgentBridge
+    @ObservedObject public var bridge: AgentBridge
 
     public init(configuration: AgentConfiguration, bridge: AgentBridge) {
         self.configuration = configuration
         self.bridge = bridge
     }
 
-    public func makeCoordinator() -> Coordinator {
-        Coordinator(bridge: bridge)
+    public var body: some View {
+        AgentWebViewRepresentable(configuration: configuration, bridge: bridge)
+            .overlay(alignment: .top) {
+                if let config = bridge.mastheadConfig {
+                    GlassMastheadView(config: config)
+                        .padding(.horizontal, 12)
+                        .padding(.top, 4)
+                        .transition(.opacity.combined(with: .move(edge: .top)))
+                }
+            }
+            .animation(.spring(duration: 0.3), value: bridge.mastheadConfig != nil)
+    }
+}
+
+@available(iOS 15.0, *)
+@MainActor
+private struct AgentWebViewRepresentable: UIViewRepresentable {
+    let configuration: AgentConfiguration
+    let bridge: AgentBridge
+
+    func makeCoordinator() -> AgentWebView.Coordinator {
+        AgentWebView.Coordinator(bridge: bridge)
     }
 
-    public func makeUIView(context: Context) -> WKWebView {
+    func makeUIView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
 
         // Inject the bridge script before any page JS runs
         let bridgeScript = WKUserScript(
-            source: Self.bridgeJavaScript,
+            source: AgentWebView.bridgeJavaScript,
             injectionTime: .atDocumentStart,
             forMainFrameOnly: true
         )
@@ -219,7 +239,7 @@ public struct AgentWebView: UIViewRepresentable {
 
         // Inject font-face declarations for any requested font families
         if let families = configuration.fontFamilies, !families.isEmpty {
-            let css = Self.buildFontCSS(families: families, bundle: .main)
+            let css = AgentWebView.buildFontCSS(families: families, bundle: .main)
             if !css.isEmpty {
                 let escaped = css
                     .replacingOccurrences(of: "\\", with: "\\\\")
@@ -295,18 +315,20 @@ public struct AgentWebView: UIViewRepresentable {
         return webView
     }
 
-    public func updateUIView(_ webView: WKWebView, context: Context) {
+    func updateUIView(_ webView: WKWebView, context: Context) {
         // FullBleedWebView zeroes bottom safe area so web content fills the frame.
     }
 
-    public static func dismantleUIView(_ webView: WKWebView, coordinator: Coordinator) {
+    static func dismantleUIView(_ webView: WKWebView, coordinator: AgentWebView.Coordinator) {
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "agentBridge")
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "agentLog")
         webView.configuration.userContentController.removeAllUserScripts()
     }
+}
 
-    // MARK: - Coordinator
+// MARK: - Coordinator (iOS)
 
+extension AgentWebView {
     public final class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate, WKUIDelegate {
         let bridge: AgentBridge
         private weak var observedWebView: WKWebView?
