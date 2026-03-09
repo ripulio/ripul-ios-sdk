@@ -13,25 +13,39 @@ public struct GlassMastheadView: View {
     private var resolvedHeight: CGFloat { config.height ?? 48 }
     private var resolvedFontSize: CGFloat { config.fontSize ?? 17 }
 
+    /// Parse imageWidth CSS value (e.g. "120px", "80") into a CGFloat.
+    private var resolvedImageWidth: CGFloat? {
+        guard let raw = config.imageWidth else { return nil }
+        let numeric = raw.replacingOccurrences(of: "px", with: "")
+            .replacingOccurrences(of: "%", with: "")
+            .trimmingCharacters(in: .whitespaces)
+        return Double(numeric).map { CGFloat($0) }
+    }
+
     public var body: some View {
         HStack(spacing: 10) {
             if let imageUrl = config.imageUrl, let url = URL(string: imageUrl) {
+                let imgHeight = resolvedHeight - 12
+                let imgWidth = resolvedImageWidth ?? imgHeight * 3 // default: 3:1 aspect ratio
                 AsyncImage(url: url) { phase in
                     switch phase {
                     case .success(let image):
                         image
                             .resizable()
                             .aspectRatio(contentMode: .fit)
-                            .frame(maxHeight: resolvedHeight - 12)
+                            .frame(maxWidth: imgWidth, maxHeight: imgHeight)
                     case .failure:
-                        EmptyView()
+                        // Reserve space so the capsule doesn't collapse
+                        Color.clear
+                            .frame(width: imgWidth, height: imgHeight)
                     case .empty:
                         ProgressView()
-                            .controlSize(.mini)
+                            .frame(width: imgWidth, height: imgHeight)
                     @unknown default:
                         EmptyView()
                     }
                 }
+                .frame(width: imgWidth, height: imgHeight)
             }
 
             if let text = config.text {
@@ -43,7 +57,7 @@ public struct GlassMastheadView: View {
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 10)
-        .frame(height: resolvedHeight)
+        .frame(minHeight: resolvedHeight)
         .modifier(GlassCapsuleModifier(tintColor: Color(cssHex: config.backgroundColor)))
     }
 }
