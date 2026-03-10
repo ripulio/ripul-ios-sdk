@@ -23,10 +23,14 @@ public struct GlassButton: View {
 }
 
 @available(iOS 15.0, macOS 13.0, *)
-struct GlassCircleModifier: ViewModifier {
-    var glassStyle: String?
+public struct GlassCircleModifier: ViewModifier {
+    public var glassStyle: String?
 
-    func body(content: Content) -> some View {
+    public init(glassStyle: String? = nil) {
+        self.glassStyle = glassStyle
+    }
+
+    public func body(content: Content) -> some View {
         #if os(iOS)
         if #available(iOS 26.0, *) {
             if glassStyle == "identity" {
@@ -40,9 +44,47 @@ struct GlassCircleModifier: ViewModifier {
             content
                 .background(.ultraThinMaterial, in: Circle())
         }
-        #else
-        content
-            .background(.ultraThinMaterial, in: Circle())
+        #elseif os(macOS)
+        if #available(macOS 26.0, *) {
+            if glassStyle == "identity" {
+                content
+            } else {
+                let style: Glass = glassStyle == "clear" ? .clear : .regular
+                content
+                    .glassEffect(style.interactive(), in: .circle)
+            }
+        } else {
+            content
+                .background(.ultraThinMaterial, in: Circle())
+        }
+        #endif
+    }
+}
+
+/// A capsule-shaped glass background modifier.
+@available(iOS 15.0, macOS 13.0, *)
+public struct GlassPillModifier: ViewModifier {
+    public init() {}
+
+    public func body(content: Content) -> some View {
+        #if os(iOS)
+        if #available(iOS 26.0, *) {
+            content
+                .background(.clear)
+                .glassEffect(.regular, in: .capsule)
+        } else {
+            content
+                .background(.ultraThinMaterial, in: Capsule())
+        }
+        #elseif os(macOS)
+        if #available(macOS 26.0, *) {
+            content
+                .background(.clear)
+                .glassEffect(.regular, in: .capsule)
+        } else {
+            content
+                .background(.ultraThinMaterial, in: Capsule())
+        }
         #endif
     }
 }
