@@ -70,4 +70,9 @@ public class MessageHistory: ObservableObject {
         cursor = messages.count
         draft = ""
     }
+
+    /// Returns recent messages in reverse chronological order (most recent first).
+    public var recentMessages: [String] {
+        Array(messages.reversed())
+    }
 }

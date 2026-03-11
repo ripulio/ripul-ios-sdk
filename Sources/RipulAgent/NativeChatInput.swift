@@ -56,6 +56,7 @@ public struct NativeChatInput: View {
     let onPause: (() -> Void)?
     let onNewChat: (() -> Void)?
     let onQuickCommands: (() -> Void)?
+    var messageHistory: MessageHistory?
     var chatInputGlassStyle: String?
     @State private var showPhotoPicker = false
     @State private var showCamera = false
@@ -71,6 +72,7 @@ public struct NativeChatInput: View {
         onPause: (() -> Void)? = nil,
         onNewChat: (() -> Void)? = nil,
         onQuickCommands: (() -> Void)? = nil,
+        messageHistory: MessageHistory? = nil,
         chatInputGlassStyle: String? = nil
     ) {
         self._text = text
@@ -82,6 +84,7 @@ public struct NativeChatInput: View {
         self.onPause = onPause
         self.onNewChat = onNewChat
         self.onQuickCommands = onQuickCommands
+        self.messageHistory = messageHistory
         self.chatInputGlassStyle = chatInputGlassStyle
     }
 
@@ -174,19 +177,15 @@ public struct NativeChatInput: View {
                         .transition(.scale.combined(with: .opacity))
                         .padding(.trailing, 6)
                     } else if hasContent {
-                        // Send button — idle
-                        Button {
-                            dismissKeyboard()
-                            onSubmit()
-                        } label: {
-                            Image(systemName: "arrow.up")
-                                .font(.system(size: 14, weight: .bold))
-                                .foregroundStyle(.white)
-                                .frame(width: 34, height: 28)
-                                .background(Color.accentColor, in: Capsule())
-                        }
-                        .transition(.scale.combined(with: .opacity))
-                        .padding(.trailing, 6)
+                        // Send button — idle, long-press for history
+                        sendButton
+                            .transition(.scale.combined(with: .opacity))
+                            .padding(.trailing, 6)
+                    } else if messageHistory != nil && !(messageHistory?.recentMessages.isEmpty ?? true) {
+                        // No content — show history button
+                        historyOnlyButton
+                            .transition(.scale.combined(with: .opacity))
+                            .padding(.trailing, 6)
                     }
                 }
             }
@@ -206,6 +205,57 @@ public struct NativeChatInput: View {
                 }
             }
             .ignoresSafeArea()
+        }
+    }
+
+    private var sendButton: some View {
+        Button {
+            dismissKeyboard()
+            onSubmit()
+        } label: {
+            Image(systemName: "arrow.up")
+                .font(.system(size: 14, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: 34, height: 28)
+                .background(Color.accentColor, in: Capsule())
+        }
+        .contextMenu {
+            if let history = messageHistory {
+                let recent = Array(history.recentMessages.prefix(15))
+                if !recent.isEmpty {
+                    Section("Recent Messages") {
+                        ForEach(recent, id: \.self) { msg in
+                            Button {
+                                text = msg
+                            } label: {
+                                Text(msg.prefix(80) + (msg.count > 80 ? "..." : ""))
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private var historyOnlyButton: some View {
+        Menu {
+            if let history = messageHistory {
+                let recent = Array(history.recentMessages.prefix(15))
+                Section("Recent Messages") {
+                    ForEach(recent, id: \.self) { msg in
+                        Button {
+                            text = msg
+                        } label: {
+                            Text(msg.prefix(80) + (msg.count > 80 ? "..." : ""))
+                        }
+                    }
+                }
+            }
+        } label: {
+            Image(systemName: "clock.arrow.circlepath")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(.secondary)
+                .frame(width: 34, height: 28)
         }
     }
 
@@ -366,19 +416,15 @@ public struct NativeChatInput: View {
                         .transition(.scale.combined(with: .opacity))
                         .padding(.trailing, 6)
                     } else if hasContent {
-                        // Send button — idle
-                        Button {
-                            onSubmit()
-                        } label: {
-                            Image(systemName: "arrow.up")
-                                .font(.system(size: 14, weight: .bold))
-                                .foregroundStyle(.white)
-                                .frame(width: 34, height: 28)
-                                .background(Color.accentColor, in: Capsule())
-                        }
-                        .buttonStyle(.plain)
-                        .transition(.scale.combined(with: .opacity))
-                        .padding(.trailing, 6)
+                        // Send button — idle, long-press for history
+                        macSendButton
+                            .transition(.scale.combined(with: .opacity))
+                            .padding(.trailing, 6)
+                    } else if messageHistory != nil && !(messageHistory?.recentMessages.isEmpty ?? true) {
+                        // No content — show history button
+                        macHistoryOnlyButton
+                            .transition(.scale.combined(with: .opacity))
+                            .padding(.trailing, 6)
                     }
                 }
             }
@@ -415,6 +461,60 @@ public struct NativeChatInput: View {
             }
             return .ignored
         }
+    }
+
+    private var macSendButton: some View {
+        Button {
+            onSubmit()
+        } label: {
+            Image(systemName: "arrow.up")
+                .font(.system(size: 14, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: 34, height: 28)
+                .background(Color.accentColor, in: Capsule())
+        }
+        .buttonStyle(.plain)
+        .contextMenu {
+            if let history = messageHistory {
+                let recent = Array(history.recentMessages.prefix(15))
+                if !recent.isEmpty {
+                    Section("Recent Messages") {
+                        ForEach(recent, id: \.self) { msg in
+                            Button {
+                                text = msg
+                            } label: {
+                                Text(msg.prefix(80) + (msg.count > 80 ? "..." : ""))
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private var macHistoryOnlyButton: some View {
+        Menu {
+            if let history = messageHistory {
+                let recent = Array(history.recentMessages.prefix(15))
+                Section("Recent Messages") {
+                    ForEach(recent, id: \.self) { msg in
+                        Button {
+                            text = msg
+                        } label: {
+                            Text(msg.prefix(80) + (msg.count > 80 ? "..." : ""))
+                        }
+                    }
+                }
+            }
+        } label: {
+            Image(systemName: "clock.arrow.circlepath")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(.secondary)
+                .frame(width: 34, height: 28)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .frame(width: 34, height: 28)
     }
 
     private var imageThumbsRow: some View {

@@ -30,12 +30,10 @@ public struct AgentView<TopBar: View>: View {
     @State private var showingQuickCommands = false
     @State private var showingDebugCommands = false
 
+    @StateObject private var messageHistory = MessageHistory()
+
     #if os(iOS)
     @StateObject private var keyboard = KeyboardObserver()
-    #endif
-
-    #if os(macOS)
-    @StateObject private var messageHistory = MessageHistory()
     #endif
 
     /// Creates an AgentView that manages its own bridge internally.
@@ -226,9 +224,7 @@ public struct AgentView<TopBar: View>: View {
     }
 
     private func recordHistory(_ message: String) {
-        #if os(macOS)
         messageHistory.record(message)
-        #endif
     }
 
     #if os(iOS)
@@ -243,6 +239,7 @@ public struct AgentView<TopBar: View>: View {
             onPause: { Task { await bridge.interruptAgent() } },
             onNewChat: handleNewChat,
             onQuickCommands: { showingQuickCommands = true },
+            messageHistory: messageHistory,
             chatInputGlassStyle: bridge.chatInputGlassStyle
         )
     }
