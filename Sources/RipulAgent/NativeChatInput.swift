@@ -125,8 +125,9 @@ public struct NativeChatInput: View {
                     .font(.system(size: 20, weight: .medium))
                     .foregroundStyle(.white)
                     .frame(width: 40, height: 40)
+                    .contentShape(Circle())
+                    .modifier(GlassCircleModifier(glassStyle: chatInputGlassStyle))
             }
-            .modifier(GlassCircleModifier(glassStyle: chatInputGlassStyle))
 
             // Chat bubble
             VStack(spacing: 0) {
@@ -210,8 +211,9 @@ public struct NativeChatInput: View {
                         .font(.system(size: 18, weight: .medium))
                         .foregroundStyle(.white)
                         .frame(width: 40, height: 40)
+                        .contentShape(Circle())
+                        .modifier(GlassCircleModifier(glassStyle: chatInputGlassStyle))
                 }
-                .modifier(GlassCircleModifier(glassStyle: chatInputGlassStyle))
             }
         }
         .animation(.easeInOut(duration: 0.15), value: textHeight)
