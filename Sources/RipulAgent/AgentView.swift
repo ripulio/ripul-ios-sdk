@@ -118,6 +118,23 @@ public struct AgentView<TopBar: View>: View {
             .padding(.bottom, 8)
             #endif
             .animation(.spring(duration: 0.3), value: bridge.showScrollToBottom)
+            #if os(iOS)
+            .background(alignment: .bottom) {
+                if #available(iOS 26.0, *) {
+                    LinearGradient(
+                        stops: [
+                            .init(color: .black.opacity(0.5), location: 0),
+                            .init(color: .black.opacity(0.2), location: 0.6),
+                            .init(color: .clear, location: 1),
+                        ],
+                        startPoint: .bottom,
+                        endPoint: .top
+                    )
+                    .frame(height: 120)
+                    .allowsHitTesting(false)
+                }
+            }
+            #endif
         }
         #if os(iOS)
         .ignoresSafeArea(.keyboard)
