@@ -176,15 +176,43 @@ public struct NativeChatInput: View {
                         }
                         .transition(.scale.combined(with: .opacity))
                         .padding(.trailing, 6)
-                    } else {
-                        // Send / history button
-                        sendOrHistoryButton(hasContent: hasContent)
-                            .transition(.scale.combined(with: .opacity))
-                            .padding(.trailing, 6)
+                    } else if hasContent {
+                        // Send button
+                        Button {
+                            dismissKeyboard()
+                            onSubmit()
+                        } label: {
+                            Image(systemName: "arrow.up")
+                                .font(.system(size: 14, weight: .bold))
+                                .foregroundStyle(.white)
+                                .frame(width: 34, height: 28)
+                                .background(Color.accentColor, in: Capsule())
+                        }
+                        .transition(.scale.combined(with: .opacity))
+                        .padding(.trailing, 6)
                     }
                 }
             }
             .modifier(GlassChatInputBackground(glassStyle: chatInputGlassStyle))
+
+            // History menu button outside the chat bubble (mirrors + button pattern)
+            if let history = messageHistory, !history.recentMessages.isEmpty {
+                Menu {
+                    ForEach(history.recentMessages.prefix(15), id: \.self) { msg in
+                        Button {
+                            text = msg
+                        } label: {
+                            Text(msg.prefix(80) + (msg.count > 80 ? "..." : ""))
+                        }
+                    }
+                } label: {
+                    Image(systemName: "clock.arrow.circlepath")
+                        .font(.system(size: 18, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 40, height: 40)
+                }
+                .modifier(GlassCircleModifier(glassStyle: chatInputGlassStyle))
+            }
         }
         .animation(.easeInOut(duration: 0.15), value: textHeight)
         .animation(.easeInOut(duration: 0.2), value: imageAttachments.count)
@@ -199,49 +227,6 @@ public struct NativeChatInput: View {
                 }
             }
             .ignoresSafeArea()
-        }
-    }
-
-    private var historyMenuItems: some View {
-        Group {
-            if let history = messageHistory {
-                let recent = Array(history.recentMessages.prefix(15))
-                if !recent.isEmpty {
-                    ForEach(recent, id: \.self) { msg in
-                        Button {
-                            text = msg
-                        } label: {
-                            Text(msg.prefix(80) + (msg.count > 80 ? "..." : ""))
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func sendOrHistoryButton(hasContent: Bool) -> some View {
-        let hasHistory = messageHistory != nil && !(messageHistory?.recentMessages.isEmpty ?? true)
-        if hasContent {
-            Button {
-                dismissKeyboard()
-                onSubmit()
-            } label: {
-                Image(systemName: "arrow.up")
-                    .font(.system(size: 14, weight: .bold))
-                    .foregroundStyle(.white)
-                    .frame(width: 34, height: 28)
-                    .background(Color.accentColor, in: Capsule())
-            }
-        } else if hasHistory {
-            Menu {
-                historyMenuItems
-            } label: {
-                Image(systemName: "clock.arrow.circlepath")
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 34, height: 28)
-            }
         }
     }
 
@@ -401,16 +386,48 @@ public struct NativeChatInput: View {
                         .buttonStyle(.plain)
                         .transition(.scale.combined(with: .opacity))
                         .padding(.trailing, 6)
-                    } else {
-                        // Send / history button
-                        macSendOrHistoryButton(hasContent: hasContent)
-                            .transition(.scale.combined(with: .opacity))
-                            .padding(.trailing, 6)
+                    } else if hasContent {
+                        // Send button
+                        Button {
+                            onSubmit()
+                        } label: {
+                            Image(systemName: "arrow.up")
+                                .font(.system(size: 14, weight: .bold))
+                                .foregroundStyle(.white)
+                                .frame(width: 34, height: 28)
+                                .background(Color.accentColor, in: Capsule())
+                        }
+                        .buttonStyle(.plain)
+                        .transition(.scale.combined(with: .opacity))
+                        .padding(.trailing, 6)
                     }
                 }
             }
             .frame(minHeight: 40)
             .modifier(GlassChatInputBackground(glassStyle: chatInputGlassStyle))
+
+            // History menu button outside the chat bubble (mirrors + button pattern)
+            if let history = messageHistory, !history.recentMessages.isEmpty {
+                Menu {
+                    ForEach(history.recentMessages.prefix(15), id: \.self) { msg in
+                        Button {
+                            text = msg
+                        } label: {
+                            Text(msg.prefix(80) + (msg.count > 80 ? "..." : ""))
+                        }
+                    }
+                } label: {
+                    Image(systemName: "clock.arrow.circlepath")
+                        .font(.system(size: 18, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 40, height: 40)
+                        .contentShape(Rectangle())
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .frame(width: 40, height: 40)
+                .modifier(GlassCircleModifier(glassStyle: chatInputGlassStyle))
+            }
         }
         .animation(.easeInOut(duration: 0.2), value: imageAttachments.count)
         .animation(.easeInOut(duration: 0.2), value: isAgentRunning)
@@ -440,52 +457,6 @@ public struct NativeChatInput: View {
                 return .handled
             }
             return .ignored
-        }
-    }
-
-    @ViewBuilder
-    private func macSendOrHistoryButton(hasContent: Bool) -> some View {
-        let hasHistory = messageHistory != nil && !(messageHistory?.recentMessages.isEmpty ?? true)
-        if hasContent {
-            Button {
-                onSubmit()
-            } label: {
-                Image(systemName: "arrow.up")
-                    .font(.system(size: 14, weight: .bold))
-                    .foregroundStyle(.white)
-                    .frame(width: 34, height: 28)
-                    .background(Color.accentColor, in: Capsule())
-            }
-            .buttonStyle(.plain)
-        } else if hasHistory {
-            Menu {
-                historyMenuItems
-            } label: {
-                Image(systemName: "clock.arrow.circlepath")
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 34, height: 28)
-            }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .frame(width: 34, height: 28)
-        }
-    }
-
-    private var historyMenuItems: some View {
-        Group {
-            if let history = messageHistory {
-                let recent = Array(history.recentMessages.prefix(15))
-                if !recent.isEmpty {
-                    ForEach(recent, id: \.self) { msg in
-                        Button {
-                            text = msg
-                        } label: {
-                            Text(msg.prefix(80) + (msg.count > 80 ? "..." : ""))
-                        }
-                    }
-                }
-            }
         }
     }
 
