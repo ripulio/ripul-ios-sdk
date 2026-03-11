@@ -137,7 +137,7 @@ private struct GlassCardModifier: ViewModifier {
         if #available(iOS 26.0, *) {
             content
                 .background(.clear)
-                .glassEffect(.regular, in: .rect(cornerRadius: 14))
+                .glassEffect(.clear, in: .rect(cornerRadius: 14))
         } else {
             content
                 .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14))
@@ -146,7 +146,7 @@ private struct GlassCardModifier: ViewModifier {
         if #available(macOS 26.0, *) {
             content
                 .background(.clear)
-                .glassEffect(.regular, in: .rect(cornerRadius: 14))
+                .glassEffect(.clear, in: .rect(cornerRadius: 14))
         } else {
             content
                 .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14))
