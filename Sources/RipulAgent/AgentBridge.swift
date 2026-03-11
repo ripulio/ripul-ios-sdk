@@ -112,7 +112,23 @@ public struct UserInteractionQuestion: Identifiable {
         public let label: String
         public let value: Any
         public let description: String?
+        public let link: String?
     }
+}
+
+/// A free-text input question from the web app, presented natively as a sheet.
+public struct UserTextQuestion: Identifiable {
+    public let id: String  // responseKey
+    public let question: String
+}
+
+/// A date picker question from the web app, presented natively as a sheet.
+public struct UserDateQuestion: Identifiable {
+    public let id: String  // responseKey
+    public let question: String
+    public let minDate: Date?
+    public let maxDate: Date?
+    public let defaultDate: Date?
 }
 
 @MainActor
@@ -142,6 +158,10 @@ public final class AgentBridge: NSObject, ObservableObject {
     @Published public var chatInputGlassStyle: String?
     /// A multichoice question awaiting native UI presentation.
     @Published public var pendingUserInteraction: UserInteractionQuestion?
+    /// A free-text question awaiting native UI presentation.
+    @Published public var pendingTextQuestion: UserTextQuestion?
+    /// A date picker question awaiting native UI presentation.
+    @Published public var pendingDateQuestion: UserDateQuestion?
 
     private weak var webView: WKWebView?
     private var registeredTools: [NativeTool] = []
@@ -383,6 +403,10 @@ public final class AgentBridge: NSObject, ObservableObject {
             }
         case "userInteraction:multiChoice":
             handleUserInteractionMultiChoice(dict)
+        case "userInteraction:text":
+            handleUserInteractionText(dict)
+        case "userInteraction:date":
+            handleUserInteractionDate(dict)
         default:
             if onUnhandledMessage?(messageType, dict) != true {
                 NSLog("[AgentBridge] Unhandled message: %@", messageType)
@@ -1522,7 +1546,8 @@ public final class AgentBridge: NSObject, ObservableObject {
             UserInteractionQuestion.Option(
                 label: raw["label"] as? String ?? "",
                 value: raw["value"] ?? raw["label"] ?? "",
-                description: raw["description"] as? String
+                description: raw["description"] as? String,
+                link: raw["link"] as? String
             )
         }
 
@@ -1545,6 +1570,64 @@ public final class AgentBridge: NSObject, ObservableObject {
             "answer": answer,
         ])
         pendingUserInteraction = nil
+    }
+
+    /// Send the user's text response back to the web app and clear the pending question.
+    public func respondToTextQuestion(answer: String) {
+        guard let question = pendingTextQuestion else { return }
+        send([
+            "type": "\(messagePrefix)userInteraction:response",
+            "version": protocolVersion,
+            "timestamp": currentTimestamp(),
+            "responseKey": question.id,
+            "answer": answer,
+        ])
+        pendingTextQuestion = nil
+    }
+
+    /// Send the user's date selection back to the web app and clear the pending question.
+    public func respondToDateQuestion(answer: String) {
+        guard let question = pendingDateQuestion else { return }
+        send([
+            "type": "\(messagePrefix)userInteraction:response",
+            "version": protocolVersion,
+            "timestamp": currentTimestamp(),
+            "responseKey": question.id,
+            "answer": answer,
+        ])
+        pendingDateQuestion = nil
+    }
+
+    private func handleUserInteractionText(_ dict: [String: Any]) {
+        guard let responseKey = dict["responseKey"] as? String,
+              let question = dict["question"] as? String else {
+            NSLog("[AgentBridge] Invalid userInteraction:text payload")
+            return
+        }
+        pendingTextQuestion = UserTextQuestion(id: responseKey, question: question)
+    }
+
+    private func handleUserInteractionDate(_ dict: [String: Any]) {
+        guard let responseKey = dict["responseKey"] as? String,
+              let question = dict["question"] as? String else {
+            NSLog("[AgentBridge] Invalid userInteraction:date payload")
+            return
+        }
+
+        let dateFormatter = ISO8601DateFormatter()
+        dateFormatter.formatOptions = [.withFullDate]
+
+        let minDate = (dict["minDate"] as? String).flatMap { dateFormatter.date(from: $0) }
+        let maxDate = (dict["maxDate"] as? String).flatMap { dateFormatter.date(from: $0) }
+        let defaultDate = (dict["defaultDate"] as? String).flatMap { dateFormatter.date(from: $0) }
+
+        pendingDateQuestion = UserDateQuestion(
+            id: responseKey,
+            question: question,
+            minDate: minDate,
+            maxDate: maxDate,
+            defaultDate: defaultDate
+        )
     }
 
     private func currentTimestamp() -> Int {

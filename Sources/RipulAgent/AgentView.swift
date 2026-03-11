@@ -164,6 +164,16 @@ public struct AgentView<TopBar: View>: View {
                 bridge.respondToUserInteraction(answer: answer)
             }
         }
+        .sheet(item: $bridge.pendingTextQuestion) { question in
+            UserTextInputSheet(question: question) { answer in
+                bridge.respondToTextQuestion(answer: answer)
+            }
+        }
+        .sheet(item: $bridge.pendingDateQuestion) { question in
+            UserDatePickerSheet(question: question) { answer in
+                bridge.respondToDateQuestion(answer: answer)
+            }
+        }
         .task {
             if !skipBridgeSetup {
                 bridge.register(tools)
@@ -233,7 +243,7 @@ public struct AgentView<TopBar: View>: View {
             text: $chatMessage,
             imageAttachments: $imageAttachments,
             selectedPhotos: $selectedPhotos,
-            isAgentRunning: bridge.isAgentRunning && bridge.pendingUserInteraction == nil,
+            isAgentRunning: bridge.isAgentRunning && bridge.pendingUserInteraction == nil && bridge.pendingTextQuestion == nil && bridge.pendingDateQuestion == nil,
             isAgentPaused: bridge.isAgentPaused,
             onSubmit: handleSubmit,
             onPause: { Task { await bridge.interruptAgent() } },
@@ -249,7 +259,7 @@ public struct AgentView<TopBar: View>: View {
             text: $chatMessage,
             imageAttachments: $imageAttachments,
             selectedPhotos: $selectedPhotos,
-            isAgentRunning: bridge.isAgentRunning && bridge.pendingUserInteraction == nil,
+            isAgentRunning: bridge.isAgentRunning && bridge.pendingUserInteraction == nil && bridge.pendingTextQuestion == nil && bridge.pendingDateQuestion == nil,
             isAgentPaused: bridge.isAgentPaused,
             onSubmit: handleSubmit,
             onPause: { Task { await bridge.interruptAgent() } },

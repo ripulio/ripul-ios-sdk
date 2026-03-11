@@ -11,6 +11,7 @@ struct UserInteractionSheet: View {
     @State private var alternativeText = ""
     @FocusState private var isTextFieldFocused: Bool
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.openURL) private var openURL
 
     var body: some View {
         VStack(spacing: 0) {
@@ -74,6 +75,9 @@ struct UserInteractionSheet: View {
                             if question.multiSelect {
                                 toggleSelection(index)
                             } else {
+                                if let link = option.link, let url = URL(string: link) {
+                                    openURL(url)
+                                }
                                 onRespond(option.value)
                                 dismiss()
                             }
@@ -93,6 +97,10 @@ struct UserInteractionSheet: View {
                                     Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
                                         .font(.title3)
                                         .foregroundStyle(isSelected ? .blue : .secondary)
+                                } else if option.link != nil {
+                                    Image(systemName: "arrow.up.right")
+                                        .font(.caption.weight(.semibold))
+                                        .foregroundStyle(.blue)
                                 } else {
                                     Image(systemName: "chevron.right")
                                         .font(.caption.weight(.semibold))
@@ -131,11 +139,10 @@ struct UserInteractionSheet: View {
                 .padding(12)
             }
         }
-        .modifier(GlassSheetBackground())
         #if os(iOS)
         .presentationDetents([.large])
         .presentationDragIndicator(.visible)
-        .modifier(ClearSheetModifier())
+        .modifier(SheetBackgroundModifier())
         #else
         .frame(minWidth: 360, minHeight: 300)
         #endif
@@ -157,34 +164,207 @@ struct UserInteractionSheet: View {
     }
 }
 
-/// Puts a full-bleed glass rectangle behind the sheet content on iOS 26+.
-@available(iOS 15.0, macOS 13.0, *)
-private struct GlassSheetBackground: ViewModifier {
-    func body(content: Content) -> some View {
-        #if os(iOS)
-        if #available(iOS 26.0, *) {
-            content
-                .background {
-                    Color.clear
-                        .ignoresSafeArea()
-                        .glassEffect(.clear, in: .rect)
+// MARK: - Text Input Sheet
+
+/// Native sheet for presenting a free-text input question with markdown support.
+@available(iOS 16.0, macOS 14.0, *)
+struct UserTextInputSheet: View {
+    let question: UserTextQuestion
+    let onRespond: (String) -> Void
+
+    @State private var text = ""
+    @FocusState private var isTextFieldFocused: Bool
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Header bar
+            HStack {
+                Button {
+                    dismiss()
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 32, height: 32)
+                        .modifier(InteractiveGlassCircleModifier())
                 }
-        } else {
-            content
+
+                Spacer()
+
+                Text("Provide input")
+                    .font(.subheadline.weight(.semibold))
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 6)
+                    .modifier(GlassCardModifier())
+
+                Spacer()
+
+                // Submit button
+                Button {
+                    submitText()
+                } label: {
+                    Image(systemName: "arrow.up.circle.fill")
+                        .font(.system(size: 28))
+                        .foregroundStyle(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? Color.secondary : Color.blue)
+                }
+                .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 14)
+            .padding(.bottom, 4)
+
+            ScrollView {
+                VStack(spacing: 12) {
+                    // Question (supports markdown)
+                    Markdown(question.question)
+                        .markdownTextStyle {
+                            FontSize(.em(0.95))
+                            ForegroundColor(.secondary)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 4)
+                        .padding(.top, 8)
+
+                    // Text input
+                    TextField("Type your response...", text: $text, axis: .vertical)
+                        .lineLimit(3...10)
+                        .focused($isTextFieldFocused)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 12)
+                        .modifier(GlassCardModifier())
+                        .onSubmit { submitText() }
+                }
+                .padding(12)
+            }
         }
+        #if os(iOS)
+        .presentationDetents([.large])
+        .presentationDragIndicator(.visible)
+        .modifier(SheetBackgroundModifier())
         #else
-        content
+        .frame(minWidth: 360, minHeight: 250)
         #endif
+        .onAppear {
+            isTextFieldFocused = true
+        }
+    }
+
+    private func submitText() {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        onRespond(trimmed)
+        dismiss()
     }
 }
 
-/// Clears the system sheet background on iOS 26+ so our glass shows through.
+// MARK: - Date Picker Sheet
+
+/// Native sheet for presenting a date picker question.
+@available(iOS 16.0, macOS 14.0, *)
+struct UserDatePickerSheet: View {
+    let question: UserDateQuestion
+    let onRespond: (String) -> Void
+
+    @State private var selectedDate = Date()
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Header bar
+            HStack {
+                Button {
+                    dismiss()
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 32, height: 32)
+                        .modifier(InteractiveGlassCircleModifier())
+                }
+
+                Spacer()
+
+                Text("Select a date")
+                    .font(.subheadline.weight(.semibold))
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 6)
+                    .modifier(GlassCardModifier())
+
+                Spacer()
+
+                Button("Done") {
+                    submitDate()
+                }
+                .font(.body.weight(.semibold))
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 14)
+            .padding(.bottom, 4)
+
+            ScrollView {
+                VStack(spacing: 12) {
+                    // Question (supports markdown)
+                    Markdown(question.question)
+                        .markdownTextStyle {
+                            FontSize(.em(0.95))
+                            ForegroundColor(.secondary)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 4)
+                        .padding(.top, 8)
+
+                    // Date picker
+                    DatePicker(
+                        "Date",
+                        selection: $selectedDate,
+                        in: dateRange,
+                        displayedComponents: .date
+                    )
+                    .datePickerStyle(.graphical)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 12)
+                    .modifier(GlassCardModifier())
+                }
+                .padding(12)
+            }
+        }
+        #if os(iOS)
+        .presentationDetents([.large])
+        .presentationDragIndicator(.visible)
+        .modifier(SheetBackgroundModifier())
+        #else
+        .frame(minWidth: 360, minHeight: 400)
+        #endif
+        .onAppear {
+            if let defaultDate = question.defaultDate {
+                selectedDate = defaultDate
+            }
+        }
+    }
+
+    private var dateRange: ClosedRange<Date> {
+        let min = question.minDate ?? Date.distantPast
+        let max = question.maxDate ?? Date.distantFuture
+        return min...max
+    }
+
+    private func submitDate() {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        onRespond(formatter.string(from: selectedDate))
+        dismiss()
+    }
+}
+
+/// Sheet background: on iOS 26+ let the system apply its default glass chrome;
+/// on older iOS use ultraThinMaterial.
 @available(iOS 16.0, *)
-private struct ClearSheetModifier: ViewModifier {
+private struct SheetBackgroundModifier: ViewModifier {
     func body(content: Content) -> some View {
         if #available(iOS 26.0, *) {
+            // Don't override — iOS 26 sheets get liquid glass automatically.
             content
-                .presentationBackground(.clear)
         } else if #available(iOS 16.4, *) {
             content
                 .presentationBackground(.ultraThinMaterial)
