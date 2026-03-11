@@ -101,6 +101,20 @@ public struct MastheadConfig: Equatable {
     public var glassStyle: String?       // "regular", "clear", or "identity" (iOS 26+ only)
 }
 
+/// A multichoice question from the web app, presented natively as a sheet.
+public struct UserInteractionQuestion: Identifiable {
+    public let id: String  // responseKey
+    public let question: String
+    public let options: [Option]
+    public let multiSelect: Bool
+
+    public struct Option {
+        public let label: String
+        public let value: Any
+        public let description: String?
+    }
+}
+
 @MainActor
 public final class AgentBridge: NSObject, ObservableObject {
     @Published public var isConnected = false
@@ -126,6 +140,8 @@ public final class AgentBridge: NSObject, ObservableObject {
     @Published public var mastheadConfig: MastheadConfig?
     /// Glass style for the native chat input: "regular", "clear", or "identity".
     @Published public var chatInputGlassStyle: String?
+    /// A multichoice question awaiting native UI presentation.
+    @Published public var pendingUserInteraction: UserInteractionQuestion?
 
     private weak var webView: WKWebView?
     private var registeredTools: [NativeTool] = []
@@ -149,6 +165,11 @@ public final class AgentBridge: NSObject, ObservableObject {
     /// Register capability handlers (e.g., TabsCapability, ScriptingCapability)
     /// to enable browser control from the native app.
     public let capabilityRouter = CapabilityRouter()
+
+    /// Callback for custom message types not handled by the bridge.
+    /// The message type (with `agent-framework:` prefix stripped) and full dict are passed.
+    /// Return `true` if the message was handled, `false` to log it as unhandled.
+    public var onUnhandledMessage: ((_ messageType: String, _ message: [String: Any]) -> Bool)?
 
     public override init() {
         super.init()
@@ -360,8 +381,12 @@ public final class AgentBridge: NSObject, ObservableObject {
                 NSLog("[AgentBridge] Link open — url: %@", urlString)
                 linkOpenDelegate?.agentBridge(self, didRequestOpenLink: url)
             }
+        case "userInteraction:multiChoice":
+            handleUserInteractionMultiChoice(dict)
         default:
-            NSLog("[AgentBridge] Unhandled message: %@", messageType)
+            if onUnhandledMessage?(messageType, dict) != true {
+                NSLog("[AgentBridge] Unhandled message: %@", messageType)
+            }
         }
     }
 
@@ -1438,7 +1463,7 @@ public final class AgentBridge: NSObject, ObservableObject {
 
     // MARK: - Transport
 
-    private func send(_ message: [String: Any]) {
+    public func send(_ message: [String: Any]) {
         guard let webView else {
             NSLog("[AgentBridge] Cannot send — webView is nil")
             return
@@ -1480,6 +1505,46 @@ public final class AgentBridge: NSObject, ObservableObject {
                 NSLog("[AgentBridge] Fallback JS eval error: %@", error.localizedDescription)
             }
         }
+    }
+
+    // MARK: - User Interaction (native multichoice)
+
+    private func handleUserInteractionMultiChoice(_ dict: [String: Any]) {
+        guard let responseKey = dict["responseKey"] as? String,
+              let question = dict["question"] as? String,
+              let rawOptions = dict["options"] as? [[String: Any]] else {
+            NSLog("[AgentBridge] Invalid userInteraction:multiChoice payload")
+            return
+        }
+
+        let multiSelect = dict["multiSelect"] as? Bool ?? false
+        let options = rawOptions.map { raw in
+            UserInteractionQuestion.Option(
+                label: raw["label"] as? String ?? "",
+                value: raw["value"] ?? raw["label"] ?? "",
+                description: raw["description"] as? String
+            )
+        }
+
+        pendingUserInteraction = UserInteractionQuestion(
+            id: responseKey,
+            question: question,
+            options: options,
+            multiSelect: multiSelect
+        )
+    }
+
+    /// Send the user's selection back to the web app and clear the pending question.
+    public func respondToUserInteraction(answer: Any) {
+        guard let interaction = pendingUserInteraction else { return }
+        send([
+            "type": "\(messagePrefix)userInteraction:response",
+            "version": protocolVersion,
+            "timestamp": currentTimestamp(),
+            "responseKey": interaction.id,
+            "answer": answer,
+        ])
+        pendingUserInteraction = nil
     }
 
     private func currentTimestamp() -> Int {

@@ -161,6 +161,11 @@ public struct AgentView<TopBar: View>: View {
         .sheet(isPresented: $showingDebugCommands) {
             QuickCommandsSheet(bridge: bridge, debugMode: true)
         }
+        .sheet(item: $bridge.pendingUserInteraction) { question in
+            UserInteractionSheet(question: question) { answer in
+                bridge.respondToUserInteraction(answer: answer)
+            }
+        }
         .task {
             if !skipBridgeSetup {
                 bridge.register(tools)
