@@ -187,7 +187,6 @@ public struct NativeChatInput: View {
             .modifier(GlassChatInputBackground(glassStyle: chatInputGlassStyle))
         }
         .animation(.easeInOut(duration: 0.15), value: textHeight)
-        .animation(.easeInOut(duration: 0.2), value: text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         .animation(.easeInOut(duration: 0.2), value: imageAttachments.count)
         .animation(.easeInOut(duration: 0.2), value: isAgentRunning)
         .photosPicker(isPresented: $showPhotoPicker, selection: $selectedPhotos, maxSelectionCount: 4, matching: .images)
@@ -203,36 +202,46 @@ public struct NativeChatInput: View {
         }
     }
 
-    @ViewBuilder
-    private func sendOrHistoryButton(hasContent: Bool) -> some View {
-        let hasHistory = messageHistory != nil && !(messageHistory?.recentMessages.isEmpty ?? true)
-        if hasContent || hasHistory {
-            Menu {
-                if let history = messageHistory {
-                    let recent = Array(history.recentMessages.prefix(15))
-                    if !recent.isEmpty {
-                        ForEach(recent, id: \.self) { msg in
-                            Button {
-                                text = msg
-                            } label: {
-                                Text(msg.prefix(80) + (msg.count > 80 ? "..." : ""))
-                            }
+    private var historyMenuItems: some View {
+        Group {
+            if let history = messageHistory {
+                let recent = Array(history.recentMessages.prefix(15))
+                if !recent.isEmpty {
+                    ForEach(recent, id: \.self) { msg in
+                        Button {
+                            text = msg
+                        } label: {
+                            Text(msg.prefix(80) + (msg.count > 80 ? "..." : ""))
                         }
                     }
                 }
-            } label: {
-                Image(systemName: hasContent ? "arrow.up" : "clock.arrow.circlepath")
-                    .font(.system(size: 14, weight: hasContent ? .bold : .medium))
-                    .foregroundStyle(hasContent ? .white : .secondary)
-                    .frame(width: 34, height: 28)
-                    .background(hasContent ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.clear), in: Capsule())
-            } primaryAction: {
-                if hasContent {
-                    dismissKeyboard()
-                    onSubmit()
-                }
             }
-            .animation(.easeInOut(duration: 0.15), value: hasContent)
+        }
+    }
+
+    @ViewBuilder
+    private func sendOrHistoryButton(hasContent: Bool) -> some View {
+        let hasHistory = messageHistory != nil && !(messageHistory?.recentMessages.isEmpty ?? true)
+        if hasContent {
+            Button {
+                dismissKeyboard()
+                onSubmit()
+            } label: {
+                Image(systemName: "arrow.up")
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 34, height: 28)
+                    .background(Color.accentColor, in: Capsule())
+            }
+        } else if hasHistory {
+            Menu {
+                historyMenuItems
+            } label: {
+                Image(systemName: "clock.arrow.circlepath")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 34, height: 28)
+            }
         }
     }
 
@@ -403,7 +412,6 @@ public struct NativeChatInput: View {
             .frame(minHeight: 40)
             .modifier(GlassChatInputBackground(glassStyle: chatInputGlassStyle))
         }
-        .animation(.easeInOut(duration: 0.2), value: text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         .animation(.easeInOut(duration: 0.2), value: imageAttachments.count)
         .animation(.easeInOut(duration: 0.2), value: isAgentRunning)
         .photosPicker(isPresented: $showPhotoPicker, selection: $selectedPhotos, maxSelectionCount: 4, matching: .images)
@@ -438,35 +446,46 @@ public struct NativeChatInput: View {
     @ViewBuilder
     private func macSendOrHistoryButton(hasContent: Bool) -> some View {
         let hasHistory = messageHistory != nil && !(messageHistory?.recentMessages.isEmpty ?? true)
-        if hasContent || hasHistory {
-            Menu {
-                if let history = messageHistory {
-                    let recent = Array(history.recentMessages.prefix(15))
-                    if !recent.isEmpty {
-                        ForEach(recent, id: \.self) { msg in
-                            Button {
-                                text = msg
-                            } label: {
-                                Text(msg.prefix(80) + (msg.count > 80 ? "..." : ""))
-                            }
-                        }
-                    }
-                }
+        if hasContent {
+            Button {
+                onSubmit()
             } label: {
-                Image(systemName: hasContent ? "arrow.up" : "clock.arrow.circlepath")
-                    .font(.system(size: 14, weight: hasContent ? .bold : .medium))
-                    .foregroundStyle(hasContent ? .white : .secondary)
+                Image(systemName: "arrow.up")
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(.white)
                     .frame(width: 34, height: 28)
-                    .background(hasContent ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.clear), in: Capsule())
-            } primaryAction: {
-                if hasContent {
-                    onSubmit()
-                }
+                    .background(Color.accentColor, in: Capsule())
+            }
+            .buttonStyle(.plain)
+        } else if hasHistory {
+            Menu {
+                historyMenuItems
+            } label: {
+                Image(systemName: "clock.arrow.circlepath")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 34, height: 28)
             }
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
             .frame(width: 34, height: 28)
-            .animation(.easeInOut(duration: 0.15), value: hasContent)
+        }
+    }
+
+    private var historyMenuItems: some View {
+        Group {
+            if let history = messageHistory {
+                let recent = Array(history.recentMessages.prefix(15))
+                if !recent.isEmpty {
+                    ForEach(recent, id: \.self) { msg in
+                        Button {
+                            text = msg
+                        } label: {
+                            Text(msg.prefix(80) + (msg.count > 80 ? "..." : ""))
+                        }
+                    }
+                }
+            }
         }
     }
 
