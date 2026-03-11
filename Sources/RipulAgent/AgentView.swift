@@ -124,6 +124,7 @@ public struct AgentView<TopBar: View>: View {
                                 endPoint: .bottom
                             )
                             .frame(height: 140)
+                            .padding(.horizontal, -12)
                             .allowsHitTesting(false)
                         }
                     }
