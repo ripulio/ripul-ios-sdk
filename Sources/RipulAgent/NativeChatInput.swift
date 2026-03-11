@@ -510,7 +510,7 @@ public struct GlassChatInputBackground: ViewModifier {
             if glassStyle == "identity" {
                 content
             } else {
-                let style: Glass = glassStyle == "clear" ? .clear : .regular
+                let style: Glass = glassStyle == "regular" ? .regular : .clear
                 content
                     .background(.clear)
                     .glassEffect(style, in: .rect(cornerRadius: 22))

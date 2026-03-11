@@ -36,7 +36,7 @@ public struct GlassCircleModifier: ViewModifier {
             if glassStyle == "identity" {
                 content
             } else {
-                let style: Glass = glassStyle == "clear" ? .clear : .regular
+                let style: Glass = glassStyle == "regular" ? .regular : .clear
                 content
                     .glassEffect(style.interactive(), in: .circle)
             }
@@ -49,7 +49,7 @@ public struct GlassCircleModifier: ViewModifier {
             if glassStyle == "identity" {
                 content
             } else {
-                let style: Glass = glassStyle == "clear" ? .clear : .regular
+                let style: Glass = glassStyle == "regular" ? .regular : .clear
                 content
                     .glassEffect(style.interactive(), in: .circle)
             }
