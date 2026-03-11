@@ -107,6 +107,8 @@ public struct UserInteractionQuestion: Identifiable {
     public let question: String
     public let options: [Option]
     public let multiSelect: Bool
+    /// Structured table rows from the tool (array of dictionaries, keys are column headers).
+    public let table: [[String: String]]?
 
     public struct Option {
         public let label: String
@@ -1551,11 +1553,24 @@ public final class AgentBridge: NSObject, ObservableObject {
             )
         }
 
+        // Parse structured table rows if present
+        var table: [[String: String]]?
+        if let rawTable = dict["table"] as? [[String: Any]] {
+            table = rawTable.map { row in
+                var mapped: [String: String] = [:]
+                for (key, value) in row {
+                    mapped[key] = "\(value)"
+                }
+                return mapped
+            }
+        }
+
         pendingUserInteraction = UserInteractionQuestion(
             id: responseKey,
             question: question,
             options: options,
-            multiSelect: multiSelect
+            multiSelect: multiSelect,
+            table: table
         )
     }
 

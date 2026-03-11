@@ -58,7 +58,7 @@ struct UserInteractionSheet: View {
 
             ScrollView {
                 VStack(spacing: 8) {
-                    // Question (with table-to-card rendering)
+                    // Question text
                     MarkdownContentView(
                         markdown: question.question,
                         onOpenLink: onOpenLink
@@ -66,6 +66,15 @@ struct UserInteractionSheet: View {
                     .padding(.horizontal, 4)
                     .padding(.top, 8)
                     .padding(.bottom, 8)
+
+                    // Structured table cards (from tool's `table` parameter)
+                    if let table = question.table, !table.isEmpty {
+                        StructuredTableCards(
+                            rows: table,
+                            options: question.options,
+                            onOpenLink: onOpenLink
+                        )
+                    }
 
                     // Options — each is an interactive glass button
                     ForEach(Array(question.options.enumerated()), id: \.offset) { index, option in
@@ -688,6 +697,96 @@ private struct MarkdownContentView: View {
             return nil
         }
         return ParsedLink(text: String(cell[textRange]), url: String(cell[urlRange]))
+    }
+}
+
+// MARK: - Structured Table Cards
+
+/// Renders structured table rows (from the tool's `table` parameter) as native glass cards.
+/// Each row becomes a card with the first column as title and remaining columns as subtitle.
+/// If a matching option has a link, the card is tappable.
+@available(iOS 16.0, macOS 14.0, *)
+private struct StructuredTableCards: View {
+    let rows: [[String: String]]
+    let options: [UserInteractionQuestion.Option]
+    var onOpenLink: ((URL) -> Void)?
+
+    var body: some View {
+        let headers = stableHeaders
+        ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+            let card = buildCard(row: row, headers: headers)
+            if let url = card.linkURL {
+                Button {
+                    onOpenLink?(url)
+                } label: {
+                    cardLabel(card: card, hasLink: true)
+                }
+                .buttonStyle(.plain)
+                .modifier(InteractiveGlassCardModifier())
+            } else {
+                cardLabel(card: card, hasLink: false)
+                    .modifier(GlassCardModifier())
+            }
+        }
+    }
+
+    /// Stable column ordering: use first row's keys in insertion order.
+    private var stableHeaders: [String] {
+        guard let first = rows.first else { return [] }
+        return Array(first.keys)
+    }
+
+    private struct CardData {
+        let title: String
+        let subtitle: String
+        let linkURL: URL?
+    }
+
+    private func buildCard(row: [String: String], headers: [String]) -> CardData {
+        let values = headers.compactMap { row[$0] }.filter { !$0.isEmpty }
+        let title = values.first ?? ""
+        let subtitle = values.dropFirst().joined(separator: " · ")
+
+        // Try to match this row to an option with a link
+        let linkURL = matchingOptionLink(title: title)
+
+        return CardData(title: title, subtitle: subtitle, linkURL: linkURL)
+    }
+
+    /// Find an option whose label starts with this title and has a link.
+    private func matchingOptionLink(title: String) -> URL? {
+        let lowered = title.lowercased()
+        for option in options {
+            guard let link = option.link, !link.isEmpty else { continue }
+            if option.label.lowercased().hasPrefix(lowered) || lowered.hasPrefix(option.label.lowercased()) {
+                return URL(string: link)
+            }
+        }
+        return nil
+    }
+
+    private func cardLabel(card: CardData, hasLink: Bool) -> some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(card.title)
+                    .foregroundStyle(hasLink ? .blue : .primary)
+                if !card.subtitle.isEmpty {
+                    Text(card.subtitle)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            Spacer()
+            if hasLink {
+                Image(systemName: "arrow.up.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.blue)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
     }
 }
 
