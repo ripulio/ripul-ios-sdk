@@ -14,49 +14,55 @@ struct UserInteractionSheet: View {
 
     var body: some View {
         NavigationStack {
-            List {
-                Section {
+            ScrollView {
+                VStack(spacing: 16) {
+                    // Question
                     Markdown(question.question)
                         .markdownTextStyle {
                             FontSize(.em(0.95))
                             ForegroundColor(.secondary)
                         }
-                        .listRowBackground(Color.clear)
-                        .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
-                }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 16)
+                        .padding(.top, 8)
 
-                Section {
-                    ForEach(Array(question.options.enumerated()), id: \.offset) { index, option in
-                        Button {
-                            if question.multiSelect {
-                                toggleSelection(index)
-                            } else {
-                                onRespond(option.value)
-                                dismiss()
-                            }
-                        } label: {
-                            HStack {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(option.label)
-                                        .foregroundStyle(.primary)
-                                    if let desc = option.description, !desc.isEmpty {
-                                        Text(desc)
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
+                    // Options
+                    VStack(spacing: 2) {
+                        ForEach(Array(question.options.enumerated()), id: \.offset) { index, option in
+                            Button {
+                                if question.multiSelect {
+                                    toggleSelection(index)
+                                } else {
+                                    onRespond(option.value)
+                                    dismiss()
+                                }
+                            } label: {
+                                HStack {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(option.label)
+                                            .foregroundStyle(.primary)
+                                        if let desc = option.description, !desc.isEmpty {
+                                            Text(desc)
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                        }
+                                    }
+                                    Spacer()
+                                    if question.multiSelect {
+                                        Image(systemName: selectedValues.contains(index) ? "checkmark.circle.fill" : "circle")
+                                            .foregroundStyle(selectedValues.contains(index) ? .blue : .secondary)
                                     }
                                 }
-                                Spacer()
-                                if question.multiSelect {
-                                    Image(systemName: selectedValues.contains(index) ? "checkmark.circle.fill" : "circle")
-                                        .foregroundStyle(selectedValues.contains(index) ? .blue : .secondary)
-                                }
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 10)
+                                .contentShape(Rectangle())
                             }
+                            .buttonStyle(.plain)
                         }
-                        .buttonStyle(.plain)
                     }
-                }
+                    .modifier(GlassCardModifier())
 
-                Section {
+                    // Alternative text input
                     HStack {
                         TextField("Type an alternative...", text: $alternativeText)
                             .focused($isTextFieldFocused)
@@ -71,7 +77,11 @@ struct UserInteractionSheet: View {
                             .buttonStyle(.plain)
                         }
                     }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
+                    .modifier(GlassCardModifier())
                 }
+                .padding(12)
             }
             .navigationTitle("Choose an option")
             #if os(iOS)
@@ -116,5 +126,31 @@ struct UserInteractionSheet: View {
         guard !text.isEmpty else { return }
         onRespond(text)
         dismiss()
+    }
+}
+
+/// Rounded-rect glass card background for option groups and input fields.
+@available(iOS 15.0, macOS 13.0, *)
+private struct GlassCardModifier: ViewModifier {
+    func body(content: Content) -> some View {
+        #if os(iOS)
+        if #available(iOS 26.0, *) {
+            content
+                .background(.clear)
+                .glassEffect(.regular, in: .rect(cornerRadius: 14))
+        } else {
+            content
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14))
+        }
+        #elseif os(macOS)
+        if #available(macOS 26.0, *) {
+            content
+                .background(.clear)
+                .glassEffect(.regular, in: .rect(cornerRadius: 14))
+        } else {
+            content
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14))
+        }
+        #endif
     }
 }
