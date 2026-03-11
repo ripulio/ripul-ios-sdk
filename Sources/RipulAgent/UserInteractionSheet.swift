@@ -463,7 +463,8 @@ private struct MarkdownContentView: View {
 
     /// Parse markdown into segments of text and tables.
     static func parse(_ markdown: String) -> [MarkdownSegment] {
-        let lines = markdown.components(separatedBy: "\n")
+        let normalized = normalizeInlineTables(markdown)
+        let lines = normalized.components(separatedBy: "\n")
         var segments: [MarkdownSegment] = []
         var currentText: [String] = []
         var tableLines: [String] = []
@@ -598,6 +599,83 @@ private struct MarkdownContentView: View {
         // Inline code: `text`
         result = result.replacingOccurrences(of: #"`(.+?)`"#, with: "$1", options: .regularExpression)
         return result
+    }
+
+    /// Normalize inline markdown tables where all rows appear on a single line
+    /// (space-separated instead of newline-separated). Detects the separator
+    /// pattern to determine column count, then splits into proper rows.
+    private static func normalizeInlineTables(_ markdown: String) -> String {
+        let lines = markdown.components(separatedBy: "\n")
+        var result: [String] = []
+
+        for line in lines {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+
+            // Quick check: does this line contain a separator-like pattern?
+            guard trimmed.contains("---|") else {
+                result.append(line)
+                continue
+            }
+
+            // Is the whole line just a separator row already?
+            let isSeparatorOnly = trimmed.allSatisfy { "|: -".contains($0) }
+            if isSeparatorOnly && trimmed.hasPrefix("|") {
+                result.append(line)
+                continue
+            }
+
+            // Find the separator to determine column count
+            let sepPattern = #"\|(?:\s*:?-{2,}:?\s*\|)+"#
+            guard let sepRegex = try? NSRegularExpression(pattern: sepPattern),
+                  let sepMatch = sepRegex.firstMatch(in: trimmed, range: NSRange(trimmed.startIndex..., in: trimmed)),
+                  let sepRange = Range(sepMatch.range, in: trimmed) else {
+                result.append(line)
+                continue
+            }
+
+            let separator = String(trimmed[sepRange])
+            let columnCount = separator.components(separatedBy: "|")
+                .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+                .count
+
+            guard columnCount > 0 else {
+                result.append(line)
+                continue
+            }
+
+            // Use regex to find all rows with exactly columnCount columns
+            let rowPattern = "\\|(?:[^|]*\\|){\(columnCount)}"
+            guard let rowRegex = try? NSRegularExpression(pattern: rowPattern) else {
+                result.append(line)
+                continue
+            }
+
+            let matches = rowRegex.matches(in: trimmed, range: NSRange(trimmed.startIndex..., in: trimmed))
+            if matches.count >= 3 {
+                // Collect non-table text before the first match
+                if let firstRange = Range(matches[0].range, in: trimmed) {
+                    let before = String(trimmed[trimmed.startIndex..<firstRange.lowerBound])
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !before.isEmpty { result.append(before) }
+                }
+                // Add each row on its own line
+                for match in matches {
+                    if let range = Range(match.range, in: trimmed) {
+                        result.append(String(trimmed[range]).trimmingCharacters(in: .whitespaces))
+                    }
+                }
+                // Collect non-table text after the last match
+                if let lastRange = Range(matches.last!.range, in: trimmed) {
+                    let after = String(trimmed[lastRange.upperBound...])
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !after.isEmpty { result.append(after) }
+                }
+            } else {
+                result.append(line)
+            }
+        }
+
+        return result.joined(separator: "\n")
     }
 
     /// Extract a markdown link `[text](url)` from a cell string.
