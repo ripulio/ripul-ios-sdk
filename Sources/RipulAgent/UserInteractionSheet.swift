@@ -58,26 +58,14 @@ struct UserInteractionSheet: View {
 
             ScrollView {
                 VStack(spacing: 8) {
-                    // Question
-                    Markdown(question.question)
-                        .markdownTextStyle {
-                            FontSize(.em(0.95))
-                            ForegroundColor(.secondary)
-                        }
-                        .markdownTextStyle(\.link) {
-                            ForegroundColor(.blue)
-                            UnderlineStyle(.single)
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 4)
-                        .padding(.top, 8)
-                        .padding(.bottom, 8)
-                        .environment(\.openURL, OpenURLAction { url in
-                            if let handler = onOpenLink {
-                                handler(url)
-                            }
-                            return .handled
-                        })
+                    // Question (with table-to-card rendering)
+                    MarkdownContentView(
+                        markdown: question.question,
+                        onOpenLink: onOpenLink
+                    )
+                    .padding(.horizontal, 4)
+                    .padding(.top, 8)
+                    .padding(.bottom, 8)
 
                     // Options — each is an interactive glass button
                     ForEach(Array(question.options.enumerated()), id: \.offset) { index, option in
@@ -232,25 +220,13 @@ struct UserTextInputSheet: View {
 
             ScrollView {
                 VStack(spacing: 12) {
-                    // Question (supports markdown)
-                    Markdown(question.question)
-                        .markdownTextStyle {
-                            FontSize(.em(0.95))
-                            ForegroundColor(.secondary)
-                        }
-                        .markdownTextStyle(\.link) {
-                            ForegroundColor(.blue)
-                            UnderlineStyle(.single)
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 4)
-                        .padding(.top, 8)
-                        .environment(\.openURL, OpenURLAction { url in
-                            if let handler = onOpenLink {
-                                handler(url)
-                            }
-                            return .handled
-                        })
+                    // Question (with table-to-card rendering)
+                    MarkdownContentView(
+                        markdown: question.question,
+                        onOpenLink: onOpenLink
+                    )
+                    .padding(.horizontal, 4)
+                    .padding(.top, 8)
 
                     // Text input
                     TextField("Type your response...", text: $text, axis: .vertical)
@@ -331,25 +307,13 @@ struct UserDatePickerSheet: View {
 
             ScrollView {
                 VStack(spacing: 12) {
-                    // Question (supports markdown)
-                    Markdown(question.question)
-                        .markdownTextStyle {
-                            FontSize(.em(0.95))
-                            ForegroundColor(.secondary)
-                        }
-                        .markdownTextStyle(\.link) {
-                            ForegroundColor(.blue)
-                            UnderlineStyle(.single)
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 4)
-                        .padding(.top, 8)
-                        .environment(\.openURL, OpenURLAction { url in
-                            if let handler = onOpenLink {
-                                handler(url)
-                            }
-                            return .handled
-                        })
+                    // Question (with table-to-card rendering)
+                    MarkdownContentView(
+                        markdown: question.question,
+                        onOpenLink: onOpenLink
+                    )
+                    .padding(.horizontal, 4)
+                    .padding(.top, 8)
 
                     // Date picker
                     DatePicker(
@@ -391,6 +355,231 @@ struct UserDatePickerSheet: View {
         formatter.dateFormat = "yyyy-MM-dd"
         onRespond(formatter.string(from: selectedDate))
         dismiss()
+    }
+}
+
+// MARK: - Rich Markdown Content View
+
+/// A parsed markdown link: `[text](url)`.
+private struct ParsedLink {
+    let text: String
+    let url: String
+}
+
+/// A single row extracted from a markdown table, rendered as a card.
+private struct TableCardRow: Identifiable {
+    let id = UUID()
+    let title: String
+    let link: ParsedLink?
+    let subtitle: String  // remaining columns joined with " · "
+}
+
+/// Segments of a markdown document: either freeform text or a table.
+private enum MarkdownSegment: Identifiable {
+    case text(String)
+    case table([TableCardRow])
+
+    var id: String {
+        switch self {
+        case .text(let s): return "text_\(s.hashValue)"
+        case .table(let rows): return "table_\(rows.first?.id.uuidString ?? "empty")"
+        }
+    }
+}
+
+/// Renders markdown with tables extracted as native glass cards.
+/// Non-table content renders via MarkdownUI; tables render as tappable cards.
+@available(iOS 16.0, macOS 14.0, *)
+private struct MarkdownContentView: View {
+    let markdown: String
+    var onOpenLink: ((URL) -> Void)?
+
+    var body: some View {
+        let segments = Self.parse(markdown)
+        ForEach(segments) { segment in
+            switch segment {
+            case .text(let text):
+                Markdown(text)
+                    .markdownTextStyle {
+                        FontSize(.em(0.95))
+                        ForegroundColor(.secondary)
+                    }
+                    .markdownTextStyle(\.link) {
+                        ForegroundColor(.blue)
+                        UnderlineStyle(.single)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .environment(\.openURL, OpenURLAction { url in
+                        if let handler = onOpenLink {
+                            handler(url)
+                        }
+                        return .handled
+                    })
+
+            case .table(let rows):
+                ForEach(rows) { row in
+                    if let link = row.link, let url = URL(string: link.url) {
+                        Button {
+                            onOpenLink?(url)
+                        } label: {
+                            tableCardLabel(row: row, hasLink: true)
+                        }
+                        .buttonStyle(.plain)
+                        .modifier(InteractiveGlassCardModifier())
+                    } else {
+                        tableCardLabel(row: row, hasLink: false)
+                            .modifier(GlassCardModifier())
+                    }
+                }
+            }
+        }
+    }
+
+    private func tableCardLabel(row: TableCardRow, hasLink: Bool) -> some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(row.title)
+                    .foregroundStyle(hasLink ? .blue : .primary)
+                if !row.subtitle.isEmpty {
+                    Text(row.subtitle)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            Spacer()
+            if hasLink {
+                Image(systemName: "arrow.up.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.blue)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
+    }
+
+    // MARK: - Markdown Table Parser
+
+    /// Parse markdown into segments of text and tables.
+    static func parse(_ markdown: String) -> [MarkdownSegment] {
+        let lines = markdown.components(separatedBy: "\n")
+        var segments: [MarkdownSegment] = []
+        var currentText: [String] = []
+        var tableLines: [String] = []
+
+        func flushText() {
+            let text = currentText.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+            if !text.isEmpty {
+                segments.append(.text(text))
+            }
+            currentText = []
+        }
+
+        func flushTable() {
+            if let rows = parseTable(tableLines) {
+                segments.append(.table(rows))
+            } else {
+                // Failed to parse as table — treat as text
+                currentText.append(contentsOf: tableLines)
+            }
+            tableLines = []
+        }
+
+        for line in lines {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("|") && trimmed.hasSuffix("|") {
+                if tableLines.isEmpty {
+                    flushText()
+                }
+                tableLines.append(trimmed)
+            } else {
+                if !tableLines.isEmpty {
+                    flushTable()
+                }
+                currentText.append(line)
+            }
+        }
+
+        if !tableLines.isEmpty { flushTable() }
+        flushText()
+
+        return segments
+    }
+
+    /// Parse table lines into card rows. Returns nil if not a valid table.
+    private static func parseTable(_ lines: [String]) -> [TableCardRow]? {
+        // Need at least header + separator + 1 data row
+        guard lines.count >= 3 else { return nil }
+
+        let headers = parseCells(lines[0])
+        guard !headers.isEmpty else { return nil }
+
+        // Line 1 should be the separator (|---|---|)
+        let sep = lines[1]
+        guard sep.contains("-") else { return nil }
+
+        var rows: [TableCardRow] = []
+        for i in 2..<lines.count {
+            let cells = parseCells(lines[i])
+            guard !cells.isEmpty else { continue }
+
+            // Find the first cell with a link — that becomes the title
+            var titleText: String?
+            var titleLink: ParsedLink?
+            var otherCells: [String] = []
+
+            for (index, cell) in cells.enumerated() {
+                if titleText == nil, let link = extractLink(cell) {
+                    titleText = link.text
+                    titleLink = link
+                } else if titleText == nil && index == 0 {
+                    // First column with no link — still use as title
+                    titleText = cell
+                } else {
+                    // Skip cells that are just duplicates of the link (e.g., "Open" link columns)
+                    if let link = extractLink(cell), link.url == titleLink?.url {
+                        continue
+                    }
+                    let cleaned = cell.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !cleaned.isEmpty {
+                        otherCells.append(cleaned)
+                    }
+                }
+            }
+
+            guard let title = titleText else { continue }
+
+            rows.append(TableCardRow(
+                title: title,
+                link: titleLink,
+                subtitle: otherCells.joined(separator: " · ")
+            ))
+        }
+
+        return rows.isEmpty ? nil : rows
+    }
+
+    /// Split a table row line into cell strings.
+    private static func parseCells(_ line: String) -> [String] {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        // Remove leading and trailing |
+        let inner = trimmed.dropFirst().dropLast()
+        return inner.components(separatedBy: "|").map {
+            $0.trimmingCharacters(in: .whitespaces)
+        }
+    }
+
+    /// Extract a markdown link `[text](url)` from a cell string.
+    private static func extractLink(_ cell: String) -> ParsedLink? {
+        let pattern = #"\[([^\]]+)\]\(([^)]+)\)"#
+        guard let regex = try? NSRegularExpression(pattern: pattern),
+              let match = regex.firstMatch(in: cell, range: NSRange(cell.startIndex..., in: cell)),
+              let textRange = Range(match.range(at: 1), in: cell),
+              let urlRange = Range(match.range(at: 2), in: cell) else {
+            return nil
+        }
+        return ParsedLink(text: String(cell[textRange]), url: String(cell[urlRange]))
     }
 }
 
