@@ -160,19 +160,25 @@ public struct AgentView<TopBar: View>: View {
             QuickCommandsSheet(bridge: bridge, debugMode: true)
         }
         .sheet(item: $bridge.pendingUserInteraction) { question in
-            UserInteractionSheet(question: question) { answer in
+            UserInteractionSheet(question: question, onRespond: { answer in
                 bridge.respondToUserInteraction(answer: answer)
-            }
+            }, onOpenLink: { url in
+                bridge.linkOpenDelegate?.agentBridge(bridge, didRequestOpenLink: url)
+            })
         }
         .sheet(item: $bridge.pendingTextQuestion) { question in
-            UserTextInputSheet(question: question) { answer in
+            UserTextInputSheet(question: question, onRespond: { answer in
                 bridge.respondToTextQuestion(answer: answer)
-            }
+            }, onOpenLink: { url in
+                bridge.linkOpenDelegate?.agentBridge(bridge, didRequestOpenLink: url)
+            })
         }
         .sheet(item: $bridge.pendingDateQuestion) { question in
-            UserDatePickerSheet(question: question) { answer in
+            UserDatePickerSheet(question: question, onRespond: { answer in
                 bridge.respondToDateQuestion(answer: answer)
-            }
+            }, onOpenLink: { url in
+                bridge.linkOpenDelegate?.agentBridge(bridge, didRequestOpenLink: url)
+            })
         }
         .task {
             if !skipBridgeSetup {

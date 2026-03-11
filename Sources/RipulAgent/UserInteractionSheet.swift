@@ -6,6 +6,7 @@ import SwiftUI
 struct UserInteractionSheet: View {
     let question: UserInteractionQuestion
     let onRespond: (Any) -> Void
+    var onOpenLink: ((URL) -> Void)?
 
     @State private var selectedValues: Set<Int> = []
     @State private var alternativeText = ""
@@ -67,6 +68,13 @@ struct UserInteractionSheet: View {
                         .padding(.horizontal, 4)
                         .padding(.top, 8)
                         .padding(.bottom, 8)
+                        .environment(\.openURL, OpenURLAction { url in
+                            if let handler = onOpenLink {
+                                handler(url)
+                                return .handled
+                            }
+                            return .systemAction
+                        })
 
                     // Options — each is an interactive glass button
                     ForEach(Array(question.options.enumerated()), id: \.offset) { index, option in
@@ -76,7 +84,11 @@ struct UserInteractionSheet: View {
                                 toggleSelection(index)
                             } else {
                                 if let link = option.link, let url = URL(string: link) {
-                                    openURL(url)
+                                    if let handler = onOpenLink {
+                                        handler(url)
+                                    } else {
+                                        openURL(url)
+                                    }
                                 }
                                 onRespond(option.value)
                                 dismiss()
@@ -171,6 +183,7 @@ struct UserInteractionSheet: View {
 struct UserTextInputSheet: View {
     let question: UserTextQuestion
     let onRespond: (String) -> Void
+    var onOpenLink: ((URL) -> Void)?
 
     @State private var text = ""
     @FocusState private var isTextFieldFocused: Bool
@@ -225,6 +238,13 @@ struct UserTextInputSheet: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 4)
                         .padding(.top, 8)
+                        .environment(\.openURL, OpenURLAction { url in
+                            if let handler = onOpenLink {
+                                handler(url)
+                                return .handled
+                            }
+                            return .systemAction
+                        })
 
                     // Text input
                     TextField("Type your response...", text: $text, axis: .vertical)
@@ -265,6 +285,7 @@ struct UserTextInputSheet: View {
 struct UserDatePickerSheet: View {
     let question: UserDateQuestion
     let onRespond: (String) -> Void
+    var onOpenLink: ((URL) -> Void)?
 
     @State private var selectedDate = Date()
     @Environment(\.dismiss) private var dismiss
@@ -313,6 +334,13 @@ struct UserDatePickerSheet: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 4)
                         .padding(.top, 8)
+                        .environment(\.openURL, OpenURLAction { url in
+                            if let handler = onOpenLink {
+                                handler(url)
+                                return .handled
+                            }
+                            return .systemAction
+                        })
 
                     // Date picker
                     DatePicker(
