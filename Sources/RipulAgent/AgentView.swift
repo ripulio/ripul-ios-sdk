@@ -164,6 +164,7 @@ public struct AgentView<TopBar: View>: View {
                 bridge.respondToUserInteraction(answer: answer)
             }, onOpenLink: { url in
                 bridge.linkOpenDelegate?.agentBridge(bridge, didRequestOpenLink: url)
+                bridge.pendingUserInteraction = nil
             })
         }
         .sheet(item: $bridge.pendingTextQuestion) { question in
@@ -171,6 +172,7 @@ public struct AgentView<TopBar: View>: View {
                 bridge.respondToTextQuestion(answer: answer)
             }, onOpenLink: { url in
                 bridge.linkOpenDelegate?.agentBridge(bridge, didRequestOpenLink: url)
+                bridge.pendingTextQuestion = nil
             })
         }
         .sheet(item: $bridge.pendingDateQuestion) { question in
@@ -178,6 +180,7 @@ public struct AgentView<TopBar: View>: View {
                 bridge.respondToDateQuestion(answer: answer)
             }, onOpenLink: { url in
                 bridge.linkOpenDelegate?.agentBridge(bridge, didRequestOpenLink: url)
+                bridge.pendingDateQuestion = nil
             })
         }
         .task {
