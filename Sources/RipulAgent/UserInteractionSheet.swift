@@ -543,7 +543,7 @@ private struct MarkdownContentView: View {
             }
 
             guard let ti = titleIndex else { continue }
-            let titleText = titleLink?.text ?? cells[ti]
+            let titleText = stripMarkdown(titleLink?.text ?? cells[ti])
 
             // Pass 2: collect remaining cells as subtitle
             var otherCells: [String] = []
@@ -553,7 +553,7 @@ private struct MarkdownContentView: View {
                 if let tl = titleLink, let link = extractLink(cell), link.url == tl.url {
                     continue
                 }
-                let cleaned = cell.trimmingCharacters(in: .whitespacesAndNewlines)
+                let cleaned = stripMarkdown(cell.trimmingCharacters(in: .whitespacesAndNewlines))
                 if !cleaned.isEmpty {
                     otherCells.append(cleaned)
                 }
@@ -579,6 +579,25 @@ private struct MarkdownContentView: View {
         return inner.components(separatedBy: "|").map {
             $0.trimmingCharacters(in: .whitespaces)
         }
+    }
+
+    /// Strip inline markdown formatting (bold, italic, strikethrough, code) from a string.
+    private static func stripMarkdown(_ text: String) -> String {
+        var result = text
+        // Bold+italic: ***text*** or ___text___
+        result = result.replacingOccurrences(of: #"\*{3}(.+?)\*{3}"#, with: "$1", options: .regularExpression)
+        result = result.replacingOccurrences(of: #"_{3}(.+?)_{3}"#, with: "$1", options: .regularExpression)
+        // Bold: **text** or __text__
+        result = result.replacingOccurrences(of: #"\*{2}(.+?)\*{2}"#, with: "$1", options: .regularExpression)
+        result = result.replacingOccurrences(of: #"_{2}(.+?)_{2}"#, with: "$1", options: .regularExpression)
+        // Italic: *text* or _text_
+        result = result.replacingOccurrences(of: #"\*(.+?)\*"#, with: "$1", options: .regularExpression)
+        result = result.replacingOccurrences(of: #"\b_(.+?)_\b"#, with: "$1", options: .regularExpression)
+        // Strikethrough: ~~text~~
+        result = result.replacingOccurrences(of: #"~~(.+?)~~"#, with: "$1", options: .regularExpression)
+        // Inline code: `text`
+        result = result.replacingOccurrences(of: #"`(.+?)`"#, with: "$1", options: .regularExpression)
+        return result
     }
 
     /// Extract a markdown link `[text](url)` from a cell string.
