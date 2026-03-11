@@ -132,13 +132,16 @@ struct UserInteractionSheet: View {
 }
 
 /// Makes the sheet background transparent on iOS 26+ so glass effects show through.
-@available(iOS 16.4, macOS 14.0, *)
+@available(iOS 16.0, macOS 14.0, *)
 private struct GlassSheetBackgroundModifier: ViewModifier {
     func body(content: Content) -> some View {
         #if os(iOS)
         if #available(iOS 26.0, *) {
             content
                 .presentationBackground(.clear)
+        } else if #available(iOS 16.4, *) {
+            content
+                .presentationBackground(.ultraThinMaterial)
         } else {
             content
         }
