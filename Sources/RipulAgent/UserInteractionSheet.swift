@@ -83,6 +83,7 @@ struct UserInteractionSheet: View {
                 }
                 .padding(12)
             }
+            .scrollContentBackground(.hidden)
             .navigationTitle("Choose an option")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
@@ -108,6 +109,7 @@ struct UserInteractionSheet: View {
         #if os(iOS)
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
+        .modifier(GlassSheetBackgroundModifier())
         #else
         .frame(minWidth: 360, minHeight: 300)
         #endif
@@ -126,6 +128,23 @@ struct UserInteractionSheet: View {
         guard !text.isEmpty else { return }
         onRespond(text)
         dismiss()
+    }
+}
+
+/// Makes the sheet background transparent on iOS 26+ so glass effects show through.
+@available(iOS 16.4, macOS 14.0, *)
+private struct GlassSheetBackgroundModifier: ViewModifier {
+    func body(content: Content) -> some View {
+        #if os(iOS)
+        if #available(iOS 26.0, *) {
+            content
+                .presentationBackground(.clear)
+        } else {
+            content
+        }
+        #else
+        content
+        #endif
     }
 }
 
