@@ -7,6 +7,8 @@ struct UserInteractionSheet: View {
     let onRespond: (Any) -> Void
 
     @State private var selectedValues: Set<Int> = []
+    @State private var alternativeText = ""
+    @FocusState private var isTextFieldFocused: Bool
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -50,6 +52,23 @@ struct UserInteractionSheet: View {
                         .buttonStyle(.plain)
                     }
                 }
+
+                Section {
+                    HStack {
+                        TextField("Type an alternative...", text: $alternativeText)
+                            .focused($isTextFieldFocused)
+                            .onSubmit { submitAlternative() }
+                        if !alternativeText.isEmpty {
+                            Button {
+                                submitAlternative()
+                            } label: {
+                                Image(systemName: "arrow.up.circle.fill")
+                                    .foregroundStyle(.blue)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
             }
             .navigationTitle("Choose an option")
             #if os(iOS)
@@ -87,5 +106,12 @@ struct UserInteractionSheet: View {
         } else {
             selectedValues.insert(index)
         }
+    }
+
+    private func submitAlternative() {
+        let text = alternativeText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        onRespond(text)
+        dismiss()
     }
 }
