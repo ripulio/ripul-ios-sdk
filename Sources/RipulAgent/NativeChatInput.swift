@@ -206,55 +206,33 @@ public struct NativeChatInput: View {
     @ViewBuilder
     private func sendOrHistoryButton(hasContent: Bool) -> some View {
         let hasHistory = messageHistory != nil && !(messageHistory?.recentMessages.isEmpty ?? true)
-        if hasContent {
-            Button {
-                dismissKeyboard()
-                onSubmit()
-            } label: {
-                Image(systemName: "arrow.up")
-                    .font(.system(size: 14, weight: .bold))
-                    .foregroundStyle(.white)
-                    .frame(width: 34, height: 28)
-                    .background(Color.accentColor, in: Capsule())
-            }
-            .contextMenu {
+        if hasContent || hasHistory {
+            Menu {
                 if let history = messageHistory {
                     let recent = Array(history.recentMessages.prefix(15))
                     if !recent.isEmpty {
-                        Section("Recent Messages") {
-                            ForEach(recent, id: \.self) { msg in
-                                Button {
-                                    text = msg
-                                } label: {
-                                    Text(msg.prefix(80) + (msg.count > 80 ? "..." : ""))
-                                }
+                        ForEach(recent, id: \.self) { msg in
+                            Button {
+                                text = msg
+                            } label: {
+                                Text(msg.prefix(80) + (msg.count > 80 ? "..." : ""))
                             }
                         }
                     }
                 }
-            }
-        } else if hasHistory {
-            historyMenuButton
-        }
-    }
-
-    private var historyMenuButton: some View {
-        Menu {
-            if let history = messageHistory {
-                let recent = Array(history.recentMessages.prefix(15))
-                ForEach(recent, id: \.self) { msg in
-                    Button {
-                        text = msg
-                    } label: {
-                        Text(msg.prefix(80) + (msg.count > 80 ? "..." : ""))
-                    }
+            } label: {
+                Image(systemName: hasContent ? "arrow.up" : "clock.arrow.circlepath")
+                    .font(.system(size: 14, weight: hasContent ? .bold : .medium))
+                    .foregroundStyle(hasContent ? .white : .secondary)
+                    .frame(width: 34, height: 28)
+                    .background(hasContent ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.clear), in: Capsule())
+            } primaryAction: {
+                if hasContent {
+                    dismissKeyboard()
+                    onSubmit()
                 }
             }
-        } label: {
-            Image(systemName: "clock.arrow.circlepath")
-                .font(.system(size: 14, weight: .medium))
-                .foregroundStyle(.secondary)
-                .frame(width: 34, height: 28)
+            .animation(.easeInOut(duration: 0.15), value: hasContent)
         }
     }
 
@@ -460,59 +438,36 @@ public struct NativeChatInput: View {
     @ViewBuilder
     private func macSendOrHistoryButton(hasContent: Bool) -> some View {
         let hasHistory = messageHistory != nil && !(messageHistory?.recentMessages.isEmpty ?? true)
-        if hasContent {
-            Button {
-                onSubmit()
-            } label: {
-                Image(systemName: "arrow.up")
-                    .font(.system(size: 14, weight: .bold))
-                    .foregroundStyle(.white)
-                    .frame(width: 34, height: 28)
-                    .background(Color.accentColor, in: Capsule())
-            }
-            .buttonStyle(.plain)
-            .contextMenu {
+        if hasContent || hasHistory {
+            Menu {
                 if let history = messageHistory {
                     let recent = Array(history.recentMessages.prefix(15))
                     if !recent.isEmpty {
-                        Section("Recent Messages") {
-                            ForEach(recent, id: \.self) { msg in
-                                Button {
-                                    text = msg
-                                } label: {
-                                    Text(msg.prefix(80) + (msg.count > 80 ? "..." : ""))
-                                }
+                        ForEach(recent, id: \.self) { msg in
+                            Button {
+                                text = msg
+                            } label: {
+                                Text(msg.prefix(80) + (msg.count > 80 ? "..." : ""))
                             }
                         }
                     }
                 }
-            }
-        } else if hasHistory {
-            macHistoryMenuButton
-        }
-    }
-
-    private var macHistoryMenuButton: some View {
-        Menu {
-            if let history = messageHistory {
-                let recent = Array(history.recentMessages.prefix(15))
-                ForEach(recent, id: \.self) { msg in
-                    Button {
-                        text = msg
-                    } label: {
-                        Text(msg.prefix(80) + (msg.count > 80 ? "..." : ""))
-                    }
+            } label: {
+                Image(systemName: hasContent ? "arrow.up" : "clock.arrow.circlepath")
+                    .font(.system(size: 14, weight: hasContent ? .bold : .medium))
+                    .foregroundStyle(hasContent ? .white : .secondary)
+                    .frame(width: 34, height: 28)
+                    .background(hasContent ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.clear), in: Capsule())
+            } primaryAction: {
+                if hasContent {
+                    onSubmit()
                 }
             }
-        } label: {
-            Image(systemName: "clock.arrow.circlepath")
-                .font(.system(size: 14, weight: .medium))
-                .foregroundStyle(.secondary)
-                .frame(width: 34, height: 28)
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .frame(width: 34, height: 28)
+            .animation(.easeInOut(duration: 0.15), value: hasContent)
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .frame(width: 34, height: 28)
     }
 
     private var imageThumbsRow: some View {
