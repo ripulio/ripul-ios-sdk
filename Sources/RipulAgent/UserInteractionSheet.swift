@@ -730,10 +730,10 @@ private struct StructuredTableCards: View {
         }
     }
 
-    /// Stable column ordering: use first row's keys in insertion order.
+    /// Stable column ordering: use first row's keys, excluding the reserved `_link` key.
     private var stableHeaders: [String] {
         guard let first = rows.first else { return [] }
-        return Array(first.keys)
+        return first.keys.filter { $0 != "_link" }
     }
 
     private struct CardData {
@@ -747,13 +747,18 @@ private struct StructuredTableCards: View {
         let title = values.first ?? ""
         let subtitle = values.dropFirst().joined(separator: " · ")
 
-        // Try to match this row to an option with a link
-        let linkURL = matchingOptionLink(title: title)
+        // Use explicit _link field first, fall back to fuzzy option matching
+        let linkURL: URL? = {
+            if let link = row["_link"], let url = URL(string: link) {
+                return url
+            }
+            return matchingOptionLink(title: title)
+        }()
 
         return CardData(title: title, subtitle: subtitle, linkURL: linkURL)
     }
 
-    /// Find an option whose label starts with this title and has a link.
+    /// Fallback: find an option whose label starts with this title and has a link.
     private func matchingOptionLink(title: String) -> URL? {
         let lowered = title.lowercased()
         for option in options {
