@@ -33,7 +33,7 @@ public struct QuickCommandsSheet: View {
                 if isLoading {
                     ProgressView()
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if commands.isEmpty {
+                } else if commands.isEmpty && !debugMode {
                     if #available(iOS 17.0, macOS 14.0, *) {
                         ContentUnavailableView {
                             Label("No Commands", systemImage: "bolt.slash")
@@ -51,25 +51,71 @@ public struct QuickCommandsSheet: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
                 } else {
-                    List(filteredCommands) { cmd in
-                        if cmd.options.isEmpty {
-                            CommandRow(command: cmd)
-                                .contentShape(Rectangle())
-                                .onTapGesture {
-                                    Task { await bridge.submitMessage("/\(cmd.command)") }
-                                    dismiss()
-                                }
-                        } else {
-                            NavigationLink {
-                                CommandOptionsView(
-                                    command: cmd,
-                                    onSelect: { value in
-                                        Task { await bridge.submitMessage("/\(cmd.command) \(value)") }
-                                        dismiss()
+                    List {
+                        // Native debug tools (only in /rr. menu)
+                        if debugMode {
+                            Section("Native") {
+                                NavigationLink {
+                                    ConsoleLogViewer(bridge: bridge)
+                                } label: {
+                                    HStack(spacing: 12) {
+                                        Image(systemName: "terminal")
+                                            .font(.system(size: 16))
+                                            .foregroundStyle(.tint)
+                                            .frame(width: 28)
+
+                                        VStack(alignment: .leading, spacing: 3) {
+                                            Text("Console Logs")
+                                                .font(.body)
+                                                .fontWeight(.medium)
+                                            Text("View JavaScript console output")
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                        }
+
+                                        Spacer()
+
+                                        let errorCount = bridge.consoleLogs.filter { $0.level == "ERROR" }.count
+                                        if errorCount > 0 {
+                                            Text("\(errorCount)")
+                                                .font(.caption2)
+                                                .fontWeight(.bold)
+                                                .foregroundStyle(.white)
+                                                .padding(.horizontal, 6)
+                                                .padding(.vertical, 2)
+                                                .background(.red, in: Capsule())
+                                        }
                                     }
-                                )
-                            } label: {
-                                CommandRow(command: cmd)
+                                    .padding(.vertical, 4)
+                                }
+                            }
+                        }
+
+                        // Web-defined commands
+                        if !filteredCommands.isEmpty {
+                            Section(debugMode ? "Web" : "") {
+                                ForEach(filteredCommands) { cmd in
+                                    if cmd.options.isEmpty {
+                                        CommandRow(command: cmd)
+                                            .contentShape(Rectangle())
+                                            .onTapGesture {
+                                                Task { await bridge.submitMessage("/\(cmd.command)") }
+                                                dismiss()
+                                            }
+                                    } else {
+                                        NavigationLink {
+                                            CommandOptionsView(
+                                                command: cmd,
+                                                onSelect: { value in
+                                                    Task { await bridge.submitMessage("/\(cmd.command) \(value)") }
+                                                    dismiss()
+                                                }
+                                            )
+                                        } label: {
+                                            CommandRow(command: cmd)
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
