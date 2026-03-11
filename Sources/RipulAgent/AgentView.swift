@@ -116,8 +116,11 @@ public struct AgentView<TopBar: View>: View {
                             LinearGradient(
                                 stops: [
                                     .init(color: .clear, location: 0),
-                                    .init(color: .black.opacity(0.25), location: 0.3),
-                                    .init(color: .black.opacity(0.25), location: 0.7),
+                                    .init(color: .black.opacity(0.05), location: 0.15),
+                                    .init(color: .black.opacity(0.15), location: 0.35),
+                                    .init(color: .black.opacity(0.22), location: 0.5),
+                                    .init(color: .black.opacity(0.15), location: 0.65),
+                                    .init(color: .black.opacity(0.05), location: 0.85),
                                     .init(color: .clear, location: 1),
                                 ],
                                 startPoint: .top,
