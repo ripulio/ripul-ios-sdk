@@ -583,7 +583,7 @@ struct NoAutofillTextView: UIViewRepresentable {
         let textView = ChatTextView()
         textView.delegate = context.coordinator
         let bodySize = UIFont.preferredFont(forTextStyle: .body).pointSize
-        textView.font = .systemFont(ofSize: bodySize, weight: .medium)
+        textView.font = .systemFont(ofSize: bodySize + 1, weight: .semibold)
         textView.backgroundColor = .clear
         textView.textContainerInset = UIEdgeInsets(top: 8, left: 4, bottom: 8, right: 4)
         textView.textContainer.lineFragmentPadding = 0
