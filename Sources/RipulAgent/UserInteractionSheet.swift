@@ -64,6 +64,10 @@ struct UserInteractionSheet: View {
                             FontSize(.em(0.95))
                             ForegroundColor(.secondary)
                         }
+                        .markdownTextStyle(\.link) {
+                            ForegroundColor(.blue)
+                            UnderlineStyle(.single)
+                        }
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 4)
                         .padding(.top, 8)
@@ -71,9 +75,8 @@ struct UserInteractionSheet: View {
                         .environment(\.openURL, OpenURLAction { url in
                             if let handler = onOpenLink {
                                 handler(url)
-                                return .handled
                             }
-                            return .systemAction
+                            return .handled
                         })
 
                     // Options — each is an interactive glass button
@@ -235,15 +238,18 @@ struct UserTextInputSheet: View {
                             FontSize(.em(0.95))
                             ForegroundColor(.secondary)
                         }
+                        .markdownTextStyle(\.link) {
+                            ForegroundColor(.blue)
+                            UnderlineStyle(.single)
+                        }
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 4)
                         .padding(.top, 8)
                         .environment(\.openURL, OpenURLAction { url in
                             if let handler = onOpenLink {
                                 handler(url)
-                                return .handled
                             }
-                            return .systemAction
+                            return .handled
                         })
 
                     // Text input
@@ -331,15 +337,18 @@ struct UserDatePickerSheet: View {
                             FontSize(.em(0.95))
                             ForegroundColor(.secondary)
                         }
+                        .markdownTextStyle(\.link) {
+                            ForegroundColor(.blue)
+                            UnderlineStyle(.single)
+                        }
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 4)
                         .padding(.top, 8)
                         .environment(\.openURL, OpenURLAction { url in
                             if let handler = onOpenLink {
                                 handler(url)
-                                return .handled
                             }
-                            return .systemAction
+                            return .handled
                         })
 
                     // Date picker
