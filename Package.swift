@@ -11,11 +11,15 @@ let package = Package(
     products: [
         .library(name: "RipulAgent", targets: ["RipulAgent"]),
     ],
-    dependencies: [],
+    dependencies: [
+        .package(url: "https://github.com/gonzalezreal/swift-markdown-ui.git", from: "2.4.1"),
+    ],
     targets: [
         .target(
             name: "RipulAgent",
-            dependencies: []
+            dependencies: [
+                .product(name: "MarkdownUI", package: "swift-markdown-ui"),
+            ]
         ),
     ]
 )

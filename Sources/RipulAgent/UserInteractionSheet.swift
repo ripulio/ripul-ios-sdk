@@ -1,3 +1,4 @@
+import MarkdownUI
 import SwiftUI
 
 /// Native sheet for presenting multichoice user interaction questions.
@@ -15,9 +16,11 @@ struct UserInteractionSheet: View {
         NavigationStack {
             List {
                 Section {
-                    Text(question.question)
-                        .font(.body)
-                        .foregroundStyle(.secondary)
+                    Markdown(question.question)
+                        .markdownTextStyle {
+                            FontSize(.em(0.95))
+                            ForegroundColor(.secondary)
+                        }
                         .listRowBackground(Color.clear)
                         .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
                 }
