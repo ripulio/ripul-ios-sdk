@@ -27,8 +27,9 @@ struct UserInteractionSheet: View {
                         .padding(.top, 8)
 
                     // Options
-                    VStack(spacing: 2) {
+                    VStack(spacing: 8) {
                         ForEach(Array(question.options.enumerated()), id: \.offset) { index, option in
+                            let isSelected = selectedValues.contains(index)
                             Button {
                                 if question.multiSelect {
                                     toggleSelection(index)
@@ -49,18 +50,23 @@ struct UserInteractionSheet: View {
                                     }
                                     Spacer()
                                     if question.multiSelect {
-                                        Image(systemName: selectedValues.contains(index) ? "checkmark.circle.fill" : "circle")
-                                            .foregroundStyle(selectedValues.contains(index) ? .blue : .secondary)
+                                        Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                                            .foregroundStyle(isSelected ? .blue : .secondary)
+                                    } else {
+                                        Image(systemName: "chevron.right")
+                                            .font(.caption)
+                                            .foregroundStyle(.tertiary)
                                     }
                                 }
                                 .padding(.horizontal, 16)
-                                .padding(.vertical, 10)
+                                .padding(.vertical, 12)
+                                .frame(maxWidth: .infinity, alignment: .leading)
                                 .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
+                            .modifier(GlassCardModifier(isSelected: question.multiSelect && isSelected))
                         }
                     }
-                    .modifier(GlassCardModifier())
 
                     // Alternative text input
                     HStack {
@@ -154,24 +160,34 @@ private struct GlassSheetBackgroundModifier: ViewModifier {
 /// Rounded-rect glass card background for option groups and input fields.
 @available(iOS 15.0, macOS 13.0, *)
 private struct GlassCardModifier: ViewModifier {
+    var isSelected: Bool = false
+
     func body(content: Content) -> some View {
         #if os(iOS)
         if #available(iOS 26.0, *) {
             content
                 .background(.clear)
                 .glassEffect(.clear, in: .rect(cornerRadius: 14))
+                .tint(isSelected ? Color.blue.opacity(0.3) : nil)
         } else {
             content
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14))
+                .background(
+                    isSelected ? AnyShapeStyle(.blue.opacity(0.15)) : AnyShapeStyle(.ultraThinMaterial),
+                    in: RoundedRectangle(cornerRadius: 14)
+                )
         }
         #elseif os(macOS)
         if #available(macOS 26.0, *) {
             content
                 .background(.clear)
                 .glassEffect(.clear, in: .rect(cornerRadius: 14))
+                .tint(isSelected ? Color.blue.opacity(0.3) : nil)
         } else {
             content
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14))
+                .background(
+                    isSelected ? AnyShapeStyle(.blue.opacity(0.15)) : AnyShapeStyle(.ultraThinMaterial),
+                    in: RoundedRectangle(cornerRadius: 14)
+                )
         }
         #endif
     }
