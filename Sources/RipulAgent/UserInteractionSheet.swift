@@ -13,7 +13,41 @@ struct UserInteractionSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        NavigationStack {
+        VStack(spacing: 0) {
+            // Header bar
+            HStack {
+                Button("Cancel") {
+                    dismiss()
+                }
+                .font(.body)
+
+                Spacer()
+
+                Text("Choose an option")
+                    .font(.subheadline.weight(.semibold))
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 6)
+                    .modifier(GlassCardModifier())
+
+                Spacer()
+
+                if question.multiSelect {
+                    Button("Done") {
+                        let values = selectedValues.sorted().map { question.options[$0].value }
+                        onRespond(values)
+                        dismiss()
+                    }
+                    .font(.body.weight(.semibold))
+                    .disabled(selectedValues.isEmpty)
+                } else {
+                    Button("Cancel") {}
+                        .hidden()
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 14)
+            .padding(.bottom, 4)
+
             ScrollView {
                 VStack(spacing: 16) {
                     // Question
@@ -89,33 +123,11 @@ struct UserInteractionSheet: View {
                 }
                 .padding(12)
             }
-            .scrollContentBackground(.hidden)
-            .navigationTitle("Choose an option")
-            #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
-            #endif
-            .toolbar {
-                if question.multiSelect {
-                    ToolbarItem(placement: .confirmationAction) {
-                        Button("Done") {
-                            let values = selectedValues.sorted().map { question.options[$0].value }
-                            onRespond(values)
-                            dismiss()
-                        }
-                        .disabled(selectedValues.isEmpty)
-                    }
-                }
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") {
-                        dismiss()
-                    }
-                }
-            }
         }
         #if os(iOS)
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
-        .modifier(GlassSheetBackgroundModifier())
+        .modifier(TransparentSheetModifier())
         #else
         .frame(minWidth: 360, minHeight: 300)
         #endif
@@ -137,11 +149,10 @@ struct UserInteractionSheet: View {
     }
 }
 
-/// Makes the sheet background transparent on iOS 26+ so glass effects show through.
-@available(iOS 16.0, macOS 14.0, *)
-private struct GlassSheetBackgroundModifier: ViewModifier {
+/// Makes the sheet fully transparent on iOS 26+ so glass cards float directly over the content.
+@available(iOS 16.0, *)
+private struct TransparentSheetModifier: ViewModifier {
     func body(content: Content) -> some View {
-        #if os(iOS)
         if #available(iOS 26.0, *) {
             content
                 .presentationBackground(.clear)
@@ -151,9 +162,6 @@ private struct GlassSheetBackgroundModifier: ViewModifier {
         } else {
             content
         }
-        #else
-        content
-        #endif
     }
 }
 
