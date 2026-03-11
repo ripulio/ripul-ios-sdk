@@ -206,19 +206,16 @@ public struct NativeChatInput: View {
     @ViewBuilder
     private func sendOrHistoryButton(hasContent: Bool) -> some View {
         let hasHistory = messageHistory != nil && !(messageHistory?.recentMessages.isEmpty ?? true)
-        if hasContent || hasHistory {
+        if hasContent {
             Button {
-                if hasContent {
-                    dismissKeyboard()
-                    onSubmit()
-                }
+                dismissKeyboard()
+                onSubmit()
             } label: {
-                Image(systemName: hasContent ? "arrow.up" : "clock.arrow.circlepath")
-                    .font(.system(size: 14, weight: hasContent ? .bold : .medium))
-                    .foregroundStyle(hasContent ? .white : .secondary)
+                Image(systemName: "arrow.up")
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(.white)
                     .frame(width: 34, height: 28)
-                    .background(hasContent ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.clear), in: Capsule())
-                    .animation(.easeInOut(duration: 0.15), value: hasContent)
+                    .background(Color.accentColor, in: Capsule())
             }
             .contextMenu {
                 if let history = messageHistory {
@@ -236,6 +233,28 @@ public struct NativeChatInput: View {
                     }
                 }
             }
+        } else if hasHistory {
+            historyMenuButton
+        }
+    }
+
+    private var historyMenuButton: some View {
+        Menu {
+            if let history = messageHistory {
+                let recent = Array(history.recentMessages.prefix(15))
+                ForEach(recent, id: \.self) { msg in
+                    Button {
+                        text = msg
+                    } label: {
+                        Text(msg.prefix(80) + (msg.count > 80 ? "..." : ""))
+                    }
+                }
+            }
+        } label: {
+            Image(systemName: "clock.arrow.circlepath")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(.secondary)
+                .frame(width: 34, height: 28)
         }
     }
 
@@ -441,18 +460,15 @@ public struct NativeChatInput: View {
     @ViewBuilder
     private func macSendOrHistoryButton(hasContent: Bool) -> some View {
         let hasHistory = messageHistory != nil && !(messageHistory?.recentMessages.isEmpty ?? true)
-        if hasContent || hasHistory {
+        if hasContent {
             Button {
-                if hasContent {
-                    onSubmit()
-                }
+                onSubmit()
             } label: {
-                Image(systemName: hasContent ? "arrow.up" : "clock.arrow.circlepath")
-                    .font(.system(size: 14, weight: hasContent ? .bold : .medium))
-                    .foregroundStyle(hasContent ? .white : .secondary)
+                Image(systemName: "arrow.up")
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(.white)
                     .frame(width: 34, height: 28)
-                    .background(hasContent ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.clear), in: Capsule())
-                    .animation(.easeInOut(duration: 0.15), value: hasContent)
+                    .background(Color.accentColor, in: Capsule())
             }
             .buttonStyle(.plain)
             .contextMenu {
@@ -471,7 +487,32 @@ public struct NativeChatInput: View {
                     }
                 }
             }
+        } else if hasHistory {
+            macHistoryMenuButton
         }
+    }
+
+    private var macHistoryMenuButton: some View {
+        Menu {
+            if let history = messageHistory {
+                let recent = Array(history.recentMessages.prefix(15))
+                ForEach(recent, id: \.self) { msg in
+                    Button {
+                        text = msg
+                    } label: {
+                        Text(msg.prefix(80) + (msg.count > 80 ? "..." : ""))
+                    }
+                }
+            }
+        } label: {
+            Image(systemName: "clock.arrow.circlepath")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(.secondary)
+                .frame(width: 34, height: 28)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .frame(width: 34, height: 28)
     }
 
     private var imageThumbsRow: some View {
