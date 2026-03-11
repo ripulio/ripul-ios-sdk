@@ -2,8 +2,11 @@ import Foundation
 
 /// Tracks sent message history and supports terminal-style up/down arrow cycling.
 /// Messages are de-duplicated — only the most recent occurrence of each message is kept.
+/// History is persisted to UserDefaults across sessions.
 @available(iOS 16.0, macOS 14.0, *)
 public class MessageHistory: ObservableObject {
+    private static let storageKey = "ripul.messageHistory"
+
     private var messages: [String] = []
     /// Current position when browsing. `messages.count` means "not browsing" (at the draft).
     private var cursor: Int = 0
@@ -13,7 +16,10 @@ public class MessageHistory: ObservableObject {
 
     public init(maxEntries: Int = 100) {
         self.maxEntries = maxEntries
-        self.cursor = 0
+        if let saved = UserDefaults.standard.stringArray(forKey: Self.storageKey) {
+            self.messages = Array(saved.suffix(maxEntries))
+        }
+        self.cursor = messages.count
     }
 
     /// Record a sent message. De-duplicates by removing any earlier occurrence.
@@ -26,6 +32,11 @@ public class MessageHistory: ObservableObject {
             messages.removeFirst(messages.count - maxEntries)
         }
         resetCursor()
+        save()
+    }
+
+    private func save() {
+        UserDefaults.standard.set(messages, forKey: Self.storageKey)
     }
 
     /// Call when up arrow is pressed. Returns the text to display, or nil if no history.
