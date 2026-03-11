@@ -524,31 +524,42 @@ private struct MarkdownContentView: View {
             let cells = parseCells(lines[i])
             guard !cells.isEmpty else { continue }
 
-            // Find the first cell with a link — that becomes the title
-            var titleText: String?
+            // Two-pass: first find the best title (prefer a cell with a link)
+            var titleIndex: Int?
             var titleLink: ParsedLink?
-            var otherCells: [String] = []
 
+            // Pass 1: find first cell with a link
             for (index, cell) in cells.enumerated() {
-                if titleText == nil, let link = extractLink(cell) {
-                    titleText = link.text
+                if let link = extractLink(cell) {
+                    titleIndex = index
                     titleLink = link
-                } else if titleText == nil && index == 0 {
-                    // First column with no link — still use as title
-                    titleText = cell
-                } else {
-                    // Skip cells that are just duplicates of the link (e.g., "Open" link columns)
-                    if let link = extractLink(cell), link.url == titleLink?.url {
-                        continue
-                    }
-                    let cleaned = cell.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if !cleaned.isEmpty {
-                        otherCells.append(cleaned)
-                    }
+                    break
                 }
             }
 
-            guard let title = titleText else { continue }
+            // If no linked cell, use first column as title
+            if titleIndex == nil {
+                titleIndex = 0
+            }
+
+            guard let ti = titleIndex else { continue }
+            let titleText = titleLink?.text ?? cells[ti]
+
+            // Pass 2: collect remaining cells as subtitle
+            var otherCells: [String] = []
+            for (index, cell) in cells.enumerated() {
+                if index == ti { continue }
+                // Skip cells that are duplicates of the title link
+                if let tl = titleLink, let link = extractLink(cell), link.url == tl.url {
+                    continue
+                }
+                let cleaned = cell.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !cleaned.isEmpty {
+                    otherCells.append(cleaned)
+                }
+            }
+
+            let title = titleText
 
             rows.append(TableCardRow(
                 title: title,
