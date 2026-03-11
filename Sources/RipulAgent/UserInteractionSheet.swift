@@ -131,10 +131,11 @@ struct UserInteractionSheet: View {
                 .padding(12)
             }
         }
+        .modifier(GlassSheetBackground())
         #if os(iOS)
-        .presentationDetents([.medium, .large])
+        .presentationDetents([.large])
         .presentationDragIndicator(.visible)
-        .modifier(TransparentSheetModifier())
+        .modifier(ClearSheetModifier())
         #else
         .frame(minWidth: 360, minHeight: 300)
         #endif
@@ -156,9 +157,30 @@ struct UserInteractionSheet: View {
     }
 }
 
-/// Makes the sheet fully transparent on iOS 26+ so glass cards float directly over the content.
+/// Puts a full-bleed glass rectangle behind the sheet content on iOS 26+.
+@available(iOS 15.0, macOS 13.0, *)
+private struct GlassSheetBackground: ViewModifier {
+    func body(content: Content) -> some View {
+        #if os(iOS)
+        if #available(iOS 26.0, *) {
+            content
+                .background {
+                    Color.clear
+                        .ignoresSafeArea()
+                        .glassEffect(.clear, in: .rect)
+                }
+        } else {
+            content
+        }
+        #else
+        content
+        #endif
+    }
+}
+
+/// Clears the system sheet background on iOS 26+ so our glass shows through.
 @available(iOS 16.0, *)
-private struct TransparentSheetModifier: ViewModifier {
+private struct ClearSheetModifier: ViewModifier {
     func body(content: Content) -> some View {
         if #available(iOS 26.0, *) {
             content
