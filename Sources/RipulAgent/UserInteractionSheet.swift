@@ -68,11 +68,16 @@ struct UserInteractionSheet: View {
                     .padding(.bottom, 8)
 
                     // Structured table cards (from tool's `table` parameter)
+                    // When a card matches an option, tapping it also submits the selection.
                     if let table = question.table, !table.isEmpty {
                         StructuredTableCards(
                             rows: table,
                             options: question.options,
-                            onOpenLink: onOpenLink
+                            onOpenLink: onOpenLink,
+                            onSelectOption: { value in
+                                onRespond(value)
+                                dismiss()
+                            }
                         )
                     }
 
@@ -729,26 +734,37 @@ private struct MarkdownContentView: View {
 /// Renders structured table rows (from the tool's `table` parameter) as native glass cards.
 /// Each row becomes a card with the first column as title and remaining columns as subtitle.
 /// If a matching option has a link, the card is tappable.
+/// When `onSelectOption` is provided and a row matches an option, tapping also submits the selection.
 @available(iOS 16.0, macOS 14.0, *)
 private struct StructuredTableCards: View {
     let rows: [[String: String]]
     let options: [UserInteractionQuestion.Option]
     var onOpenLink: ((URL) -> Void)?
+    var onSelectOption: ((Any) -> Void)?
 
     var body: some View {
         let headers = stableHeaders
         ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
             let card = buildCard(row: row, headers: headers)
-            if let url = card.linkURL {
+            let matchedOption = findMatchingOption(title: card.title)
+            let isInteractive = card.linkURL != nil || matchedOption != nil
+            if isInteractive {
                 Button {
-                    onOpenLink?(url)
+                    // Submit the matched option selection first
+                    if let option = matchedOption, let handler = onSelectOption {
+                        handler(option.value)
+                    }
+                    // Also navigate if there's a link
+                    if let url = card.linkURL {
+                        onOpenLink?(url)
+                    }
                 } label: {
-                    cardLabel(card: card, hasLink: true)
+                    cardLabel(card: card, hasLink: card.linkURL != nil, hasSelection: matchedOption != nil)
                 }
                 .buttonStyle(.plain)
                 .modifier(InteractiveGlassCardModifier())
             } else {
-                cardLabel(card: card, hasLink: false)
+                cardLabel(card: card, hasLink: false, hasSelection: false)
                     .modifier(GlassCardModifier())
             }
         }
@@ -771,34 +787,37 @@ private struct StructuredTableCards: View {
         let title = values.first ?? ""
         let subtitle = values.dropFirst().joined(separator: " · ")
 
-        // Use explicit _link field first, fall back to fuzzy option matching
+        // Use explicit _link field first, fall back to fuzzy option link matching
         let linkURL: URL? = {
             if let link = row["_link"], let url = URL(string: link) {
                 return url
             }
-            return matchingOptionLink(title: title)
+            if let option = findMatchingOption(title: title),
+               let link = option.link,
+               let url = URL(string: link) {
+                return url
+            }
+            return nil
         }()
 
         return CardData(title: title, subtitle: subtitle, linkURL: linkURL)
     }
 
-    /// Fallback: find an option whose label starts with this title and has a link.
-    private func matchingOptionLink(title: String) -> URL? {
+    /// Find an option whose label fuzzy-matches this title (case-insensitive prefix match).
+    private func findMatchingOption(title: String) -> UserInteractionQuestion.Option? {
         let lowered = title.lowercased()
-        for option in options {
-            guard let link = option.link, !link.isEmpty else { continue }
-            if option.label.lowercased().hasPrefix(lowered) || lowered.hasPrefix(option.label.lowercased()) {
-                return URL(string: link)
-            }
+        guard !lowered.isEmpty else { return nil }
+        return options.first { option in
+            let label = option.label.lowercased()
+            return label == lowered || label.hasPrefix(lowered) || lowered.hasPrefix(label)
         }
-        return nil
     }
 
-    private func cardLabel(card: CardData, hasLink: Bool) -> some View {
+    private func cardLabel(card: CardData, hasLink: Bool, hasSelection: Bool) -> some View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(card.title)
-                    .foregroundStyle(hasLink ? .blue : .primary)
+                    .foregroundStyle((hasLink || hasSelection) ? .blue : .primary)
                 if !card.subtitle.isEmpty {
                     Text(card.subtitle)
                         .font(.caption)
@@ -810,6 +829,10 @@ private struct StructuredTableCards: View {
                 Image(systemName: "arrow.up.right")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.blue)
+            } else if hasSelection {
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.tertiary)
             }
         }
         .padding(.horizontal, 16)
