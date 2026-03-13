@@ -125,9 +125,12 @@ public struct UserTextQuestion: Identifiable {
 }
 
 /// A date picker question from the web app, presented natively as a sheet.
+/// When `includeTime` is true, the picker shows both date and time components
+/// and the response is formatted as "YYYY-MM-DDTHH:mm".
 public struct UserDateQuestion: Identifiable {
     public let id: String  // responseKey
     public let question: String
+    public let includeTime: Bool
     public let minDate: Date?
     public let maxDate: Date?
     public let defaultDate: Date?
@@ -1629,20 +1632,34 @@ public final class AgentBridge: NSObject, ObservableObject {
             return
         }
 
-        let dateFormatter = ISO8601DateFormatter()
-        dateFormatter.formatOptions = [.withFullDate]
+        let includeTime = dict["includeTime"] as? Bool ?? false
 
-        let minDate = (dict["minDate"] as? String).flatMap { dateFormatter.date(from: $0) }
-        let maxDate = (dict["maxDate"] as? String).flatMap { dateFormatter.date(from: $0) }
-        let defaultDate = (dict["defaultDate"] as? String).flatMap { dateFormatter.date(from: $0) }
+        let minDate = (dict["minDate"] as? String).flatMap { Self.parseDateString($0) }
+        let maxDate = (dict["maxDate"] as? String).flatMap { Self.parseDateString($0) }
+        let defaultDate = (dict["defaultDate"] as? String).flatMap { Self.parseDateString($0) }
 
         pendingDateQuestion = UserDateQuestion(
             id: responseKey,
             question: question,
+            includeTime: includeTime,
             minDate: minDate,
             maxDate: maxDate,
             defaultDate: defaultDate
         )
+    }
+
+    /// Parse a date string in either "YYYY-MM-DD" or "YYYY-MM-DDTHH:mm" format.
+    private static func parseDateString(_ string: String) -> Date? {
+        // Try datetime format first (YYYY-MM-DDTHH:mm)
+        let dtFormatter = DateFormatter()
+        dtFormatter.dateFormat = "yyyy-MM-dd'T'HH:mm"
+        dtFormatter.locale = Locale(identifier: "en_US_POSIX")
+        if let date = dtFormatter.date(from: string) { return date }
+
+        // Fall back to date-only (YYYY-MM-DD)
+        let dateFormatter = ISO8601DateFormatter()
+        dateFormatter.formatOptions = [.withFullDate]
+        return dateFormatter.date(from: string)
     }
 
     private func currentTimestamp() -> Int {

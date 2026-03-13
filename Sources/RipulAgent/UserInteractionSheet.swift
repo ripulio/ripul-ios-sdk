@@ -272,6 +272,8 @@ struct UserTextInputSheet: View {
 // MARK: - Date Picker Sheet
 
 /// Native sheet for presenting a date picker question.
+/// When `question.includeTime` is true, shows both date and time pickers
+/// and returns the response as "YYYY-MM-DDTHH:mm".
 @available(iOS 16.0, macOS 14.0, *)
 struct UserDatePickerSheet: View {
     let question: UserDateQuestion
@@ -280,6 +282,14 @@ struct UserDatePickerSheet: View {
 
     @State private var selectedDate = Date()
     @Environment(\.dismiss) private var dismiss
+
+    private var displayedComponents: DatePickerComponents {
+        question.includeTime ? [.date, .hourAndMinute] : .date
+    }
+
+    private var headerTitle: String {
+        question.includeTime ? "Select date & time" : "Select a date"
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -297,7 +307,7 @@ struct UserDatePickerSheet: View {
 
                 Spacer()
 
-                Text("Select a date")
+                Text(headerTitle)
                     .font(.subheadline.weight(.semibold))
                     .padding(.horizontal, 14)
                     .padding(.vertical, 6)
@@ -324,17 +334,30 @@ struct UserDatePickerSheet: View {
                     .padding(.horizontal, 4)
                     .padding(.top, 8)
 
-                    // Date picker
-                    DatePicker(
-                        "Date",
-                        selection: $selectedDate,
-                        in: dateRange,
-                        displayedComponents: .date
-                    )
-                    .datePickerStyle(.graphical)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 12)
-                    .modifier(GlassCardModifier())
+                    // Date picker (graphical for date-only, compact when time is included)
+                    if question.includeTime {
+                        DatePicker(
+                            "Date & Time",
+                            selection: $selectedDate,
+                            in: dateRange,
+                            displayedComponents: displayedComponents
+                        )
+                        .datePickerStyle(.compact)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 12)
+                        .modifier(GlassCardModifier())
+                    } else {
+                        DatePicker(
+                            "Date",
+                            selection: $selectedDate,
+                            in: dateRange,
+                            displayedComponents: displayedComponents
+                        )
+                        .datePickerStyle(.graphical)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 12)
+                        .modifier(GlassCardModifier())
+                    }
                 }
                 .padding(12)
             }
@@ -361,7 +384,8 @@ struct UserDatePickerSheet: View {
 
     private func submitDate() {
         let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd"
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = question.includeTime ? "yyyy-MM-dd'T'HH:mm" : "yyyy-MM-dd"
         onRespond(formatter.string(from: selectedDate))
         dismiss()
     }
