@@ -462,18 +462,20 @@ private struct MarkdownContentView: View {
                     })
 
             case .table(let rows):
-                ForEach(rows) { row in
-                    if let link = row.link, let url = URL(string: link.url) {
-                        Button {
-                            onOpenLink?(url)
-                        } label: {
-                            tableCardLabel(row: row, hasLink: true)
+                VStack(spacing: 10) {
+                    ForEach(rows) { row in
+                        if let link = row.link, let url = URL(string: link.url) {
+                            Button {
+                                onOpenLink?(url)
+                            } label: {
+                                tableCardLabel(row: row, hasLink: true)
+                            }
+                            .buttonStyle(.plain)
+                            .modifier(InteractiveGlassCardModifier())
+                        } else {
+                            tableCardLabel(row: row, hasLink: false)
+                                .modifier(GlassCardModifier())
                         }
-                        .buttonStyle(.plain)
-                        .modifier(InteractiveGlassCardModifier())
-                    } else {
-                        tableCardLabel(row: row, hasLink: false)
-                            .modifier(GlassCardModifier())
                     }
                 }
             }
@@ -482,24 +484,25 @@ private struct MarkdownContentView: View {
 
     private func tableCardLabel(row: TableCardRow, hasLink: Bool) -> some View {
         HStack(spacing: 12) {
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 4) {
                 Text(row.title)
+                    .font(.body.weight(.medium))
                     .foregroundStyle(hasLink ? .blue : .primary)
                 if !row.subtitle.isEmpty {
                     Text(row.subtitle)
-                        .font(.caption)
+                        .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
             }
             Spacer()
             if hasLink {
                 Image(systemName: "arrow.up.right")
-                    .font(.caption.weight(.semibold))
+                    .font(.footnote.weight(.semibold))
                     .foregroundStyle(.blue)
             }
         }
         .padding(.horizontal, 16)
-        .padding(.vertical, 14)
+        .padding(.vertical, 16)
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
     }
@@ -751,28 +754,30 @@ private struct StructuredTableCards: View {
 
     var body: some View {
         let headers = stableHeaders
-        ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
-            let card = buildCard(row: row, headers: headers)
-            let matchedOption = findMatchingOption(title: card.title)
-            let isInteractive = card.linkURL != nil || matchedOption != nil
-            if isInteractive {
-                Button {
-                    // Submit the matched option selection first
-                    if let option = matchedOption, let handler = onSelectOption {
-                        handler(option.value)
+        VStack(spacing: 10) {
+            ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                let card = buildCard(row: row, headers: headers)
+                let matchedOption = findMatchingOption(title: card.title)
+                let isInteractive = card.linkURL != nil || matchedOption != nil
+                if isInteractive {
+                    Button {
+                        // Submit the matched option selection first
+                        if let option = matchedOption, let handler = onSelectOption {
+                            handler(option.value)
+                        }
+                        // Also navigate if there's a link
+                        if let url = card.linkURL {
+                            onOpenLink?(url)
+                        }
+                    } label: {
+                        cardLabel(card: card, hasLink: card.linkURL != nil, hasSelection: matchedOption != nil)
                     }
-                    // Also navigate if there's a link
-                    if let url = card.linkURL {
-                        onOpenLink?(url)
-                    }
-                } label: {
-                    cardLabel(card: card, hasLink: card.linkURL != nil, hasSelection: matchedOption != nil)
+                    .buttonStyle(.plain)
+                    .modifier(InteractiveGlassCardModifier())
+                } else {
+                    cardLabel(card: card, hasLink: false, hasSelection: false)
+                        .modifier(GlassCardModifier())
                 }
-                .buttonStyle(.plain)
-                .modifier(InteractiveGlassCardModifier())
-            } else {
-                cardLabel(card: card, hasLink: false, hasSelection: false)
-                    .modifier(GlassCardModifier())
             }
         }
     }
@@ -822,28 +827,29 @@ private struct StructuredTableCards: View {
 
     private func cardLabel(card: CardData, hasLink: Bool, hasSelection: Bool) -> some View {
         HStack(spacing: 12) {
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 4) {
                 Text(card.title)
+                    .font(.body.weight(.medium))
                     .foregroundStyle((hasLink || hasSelection) ? .blue : .primary)
                 if !card.subtitle.isEmpty {
                     Text(card.subtitle)
-                        .font(.caption)
+                        .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
             }
             Spacer()
             if hasLink {
                 Image(systemName: "arrow.up.right")
-                    .font(.caption.weight(.semibold))
+                    .font(.footnote.weight(.semibold))
                     .foregroundStyle(.blue)
             } else if hasSelection {
                 Image(systemName: "chevron.right")
-                    .font(.caption.weight(.semibold))
+                    .font(.footnote.weight(.semibold))
                     .foregroundStyle(.tertiary)
             }
         }
         .padding(.horizontal, 16)
-        .padding(.vertical, 14)
+        .padding(.vertical, 16)
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
     }
