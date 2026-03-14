@@ -872,7 +872,7 @@ private struct SheetBackgroundModifier: ViewModifier {
     }
 }
 
-/// Static glass card (for title pill and text input).
+/// Static glass card — visible card with border and shadow on pre-iOS 26.
 @available(iOS 15.0, macOS 13.0, *)
 private struct GlassCardModifier: ViewModifier {
     var isSelected: Bool = false
@@ -887,9 +887,14 @@ private struct GlassCardModifier: ViewModifier {
         } else {
             content
                 .background(
-                    isSelected ? AnyShapeStyle(.blue.opacity(0.15)) : AnyShapeStyle(.ultraThinMaterial),
+                    isSelected ? AnyShapeStyle(.blue.opacity(0.15)) : AnyShapeStyle(.thinMaterial),
                     in: RoundedRectangle(cornerRadius: 14)
                 )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14)
+                        .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
+                )
+                .shadow(color: .black.opacity(0.06), radius: 4, y: 2)
         }
         #elseif os(macOS)
         if #available(macOS 26.0, *) {
@@ -900,15 +905,20 @@ private struct GlassCardModifier: ViewModifier {
         } else {
             content
                 .background(
-                    isSelected ? AnyShapeStyle(.blue.opacity(0.15)) : AnyShapeStyle(.ultraThinMaterial),
+                    isSelected ? AnyShapeStyle(.blue.opacity(0.15)) : AnyShapeStyle(.thinMaterial),
                     in: RoundedRectangle(cornerRadius: 14)
                 )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14)
+                        .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
+                )
+                .shadow(color: .black.opacity(0.06), radius: 4, y: 2)
         }
         #endif
     }
 }
 
-/// Interactive glass card for option buttons — has press feedback.
+/// Interactive glass card for option buttons — visible card with press feedback.
 @available(iOS 15.0, macOS 13.0, *)
 private struct InteractiveGlassCardModifier: ViewModifier {
     var isSelected: Bool = false
@@ -923,9 +933,14 @@ private struct InteractiveGlassCardModifier: ViewModifier {
         } else {
             content
                 .background(
-                    isSelected ? AnyShapeStyle(.blue.opacity(0.15)) : AnyShapeStyle(.ultraThinMaterial),
+                    isSelected ? AnyShapeStyle(.blue.opacity(0.15)) : AnyShapeStyle(.thinMaterial),
                     in: RoundedRectangle(cornerRadius: 14)
                 )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14)
+                        .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
+                )
+                .shadow(color: .black.opacity(0.06), radius: 4, y: 2)
         }
         #elseif os(macOS)
         if #available(macOS 26.0, *) {
@@ -936,9 +951,14 @@ private struct InteractiveGlassCardModifier: ViewModifier {
         } else {
             content
                 .background(
-                    isSelected ? AnyShapeStyle(.blue.opacity(0.15)) : AnyShapeStyle(.ultraThinMaterial),
+                    isSelected ? AnyShapeStyle(.blue.opacity(0.15)) : AnyShapeStyle(.thinMaterial),
                     in: RoundedRectangle(cornerRadius: 14)
                 )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14)
+                        .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
+                )
+                .shadow(color: .black.opacity(0.06), radius: 4, y: 2)
         }
         #endif
     }
