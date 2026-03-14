@@ -288,10 +288,6 @@ struct UserDatePickerSheet: View {
     @State private var selectedDate = Date()
     @Environment(\.dismiss) private var dismiss
 
-    private var displayedComponents: DatePickerComponents {
-        question.includeTime ? [.date, .hourAndMinute] : .date
-    }
-
     private var headerTitle: String {
         question.includeTime ? "Select date & time" : "Select a date"
     }
@@ -339,29 +335,40 @@ struct UserDatePickerSheet: View {
                     .padding(.horizontal, 4)
                     .padding(.top, 8)
 
-                    // Date picker (graphical for date-only, compact when time is included)
+                    // Date picker — graphical calendar for date-only,
+                    // graphical calendar + separate time wheel when includeTime is true
+                    DatePicker(
+                        "Date",
+                        selection: $selectedDate,
+                        in: dateRange,
+                        displayedComponents: .date
+                    )
+                    .datePickerStyle(.graphical)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 12)
+                    .modifier(GlassCardModifier())
+
                     if question.includeTime {
+                        #if os(iOS)
                         DatePicker(
-                            "Date & Time",
+                            "Time",
                             selection: $selectedDate,
-                            in: dateRange,
-                            displayedComponents: displayedComponents
+                            displayedComponents: .hourAndMinute
                         )
-                        .datePickerStyle(.compact)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 12)
+                        .datePickerStyle(.wheel)
+                        .labelsHidden()
+                        .frame(maxHeight: 120)
+                        .clipped()
                         .modifier(GlassCardModifier())
-                    } else {
+                        #else
                         DatePicker(
-                            "Date",
+                            "Time",
                             selection: $selectedDate,
-                            in: dateRange,
-                            displayedComponents: displayedComponents
+                            displayedComponents: .hourAndMinute
                         )
-                        .datePickerStyle(.graphical)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 12)
+                        .labelsHidden()
                         .modifier(GlassCardModifier())
+                        #endif
                     }
                 }
                 .padding(12)
