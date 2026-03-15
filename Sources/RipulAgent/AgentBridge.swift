@@ -239,15 +239,21 @@ public final class AgentBridge: NSObject, ObservableObject {
     public func pageDidFinishLoading() {
         connectionTimeoutTask?.cancel()
         connectionTimeoutTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 10_000_000_000) // 10s
+            try? await Task.sleep(nanoseconds: 5_000_000_000) // 5s
             guard let self, !Task.isCancelled else { return }
             if !self.isConnected && !self.hasAttemptedCacheReload {
                 self.hasAttemptedCacheReload = true
-                NSLog("[AgentBridge] Bridge did not connect within 10s — clearing cache and reloading (one-time)")
+                NSLog("[AgentBridge] Bridge did not connect within 5s — clearing cache and reloading (one-time)")
                 self.clearCacheAndReload()
             } else if !self.isConnected {
-                NSLog("[AgentBridge] Bridge did not connect after cache reload — giving up. User can retry manually.")
-                self.loadError = "The app failed to connect. Try restarting the app."
+                NSLog("[AgentBridge] Bridge did not connect after cache reload — giving up.")
+                if !self.jsErrorMessages.isEmpty {
+                    self.loadError = "The app failed to load"
+                    self.loadErrorDetails = self.jsErrorMessages.joined(separator: "\n")
+                } else {
+                    self.loadError = "Could not connect"
+                    self.loadErrorDetails = "The page loaded but the app bridge did not respond. This usually means the web app failed to initialize."
+                }
             }
         }
     }

@@ -4,6 +4,33 @@ import WebKit
 import ObjectiveC
 #endif
 
+/// Map NSError codes to user-facing messages that explain what actually went wrong.
+private func userFacingErrorMessage(_ error: NSError) -> String {
+    guard error.domain == NSURLErrorDomain else {
+        return error.localizedDescription
+    }
+    switch error.code {
+    case NSURLErrorNotConnectedToInternet:
+        return "No internet connection"
+    case NSURLErrorTimedOut:
+        return "Connection timed out"
+    case NSURLErrorCannotFindHost:
+        return "Server not found"
+    case NSURLErrorCannotConnectToHost:
+        return "Could not connect to server"
+    case NSURLErrorSecureConnectionFailed, NSURLErrorServerCertificateUntrusted,
+         NSURLErrorServerCertificateHasBadDate, NSURLErrorServerCertificateNotYetValid,
+         NSURLErrorServerCertificateHasUnknownRoot:
+        return "SSL/Security error"
+    case NSURLErrorNetworkConnectionLost:
+        return "Connection lost"
+    case NSURLErrorDNSLookupFailed:
+        return "DNS lookup failed"
+    default:
+        return error.localizedDescription
+    }
+}
+
 #if os(macOS)
 
 @available(macOS 13.0, *)
@@ -158,8 +185,8 @@ public struct AgentWebView: NSViewRepresentable {
             let nsError = error as NSError
             if nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled { return }
             Task { @MainActor in
-                bridge.loadError = "Could not reach the server."
-                bridge.loadErrorDetails = error.localizedDescription
+                bridge.loadError = userFacingErrorMessage(nsError)
+                bridge.loadErrorDetails = "\(nsError.domain) \(nsError.code): \(error.localizedDescription)"
             }
         }
 
@@ -168,8 +195,8 @@ public struct AgentWebView: NSViewRepresentable {
             let nsError = error as NSError
             if nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled { return }
             Task { @MainActor in
-                bridge.loadError = "Could not reach the server."
-                bridge.loadErrorDetails = error.localizedDescription
+                bridge.loadError = userFacingErrorMessage(nsError)
+                bridge.loadErrorDetails = "\(nsError.domain) \(nsError.code): \(error.localizedDescription)"
             }
         }
     }
@@ -458,8 +485,8 @@ extension AgentWebView {
             let nsError = error as NSError
             if nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled { return }
             Task { @MainActor in
-                bridge.loadError = "Could not reach the server."
-                bridge.loadErrorDetails = error.localizedDescription
+                bridge.loadError = userFacingErrorMessage(nsError)
+                bridge.loadErrorDetails = "\(nsError.domain) \(nsError.code): \(error.localizedDescription)"
             }
         }
 
@@ -468,8 +495,8 @@ extension AgentWebView {
             let nsError = error as NSError
             if nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled { return }
             Task { @MainActor in
-                bridge.loadError = "Could not reach the server."
-                bridge.loadErrorDetails = error.localizedDescription
+                bridge.loadError = userFacingErrorMessage(nsError)
+                bridge.loadErrorDetails = "\(nsError.domain) \(nsError.code): \(error.localizedDescription)"
             }
         }
     }
