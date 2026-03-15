@@ -163,8 +163,8 @@ public struct NativeChatInput: View {
                         }
                         .transition(.scale.combined(with: .opacity))
                         .padding(.trailing, 6)
-                    } else if isAgentPaused {
-                        // Resume button — agent is paused, tap to resume
+                    } else if isAgentPaused && isAgentRunning {
+                        // Resume button — agent was interrupted mid-run, tap to resume
                         Button {
                             dismissKeyboard()
                             onSubmit()
@@ -177,7 +177,7 @@ public struct NativeChatInput: View {
                         }
                         .transition(.scale.combined(with: .opacity))
                         .padding(.trailing, 6)
-                    } else if hasContent {
+                    } else if isAgentPaused || hasContent {
                         // Send button
                         Button {
                             dismissKeyboard()
