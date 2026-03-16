@@ -123,7 +123,7 @@ public struct NativeChatInput: View {
             } label: {
                 Image(systemName: "plus")
                     .font(.system(size: 20, weight: .medium))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(.primary)
                     .frame(width: 40, height: 40)
                     .contentShape(Circle())
                     .modifier(GlassCircleModifier(glassStyle: chatInputGlassStyle))
@@ -209,7 +209,7 @@ public struct NativeChatInput: View {
                 } label: {
                     Image(systemName: "clock.arrow.circlepath")
                         .font(.system(size: 18, weight: .medium))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(.primary)
                         .frame(width: 40, height: 40)
                         .contentShape(Circle())
                         .modifier(GlassCircleModifier(glassStyle: chatInputGlassStyle))
@@ -593,9 +593,9 @@ struct NoAutofillTextView: UIViewRepresentable {
         textView.showsVerticalScrollIndicator = false
         textView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        // White text on iOS 26+ for clear glass over gradient scrim
+        // Use semantic label color so text adapts with Liquid Glass vibrancy
         if #available(iOS 26.0, *) {
-            textView.textColor = .white
+            textView.textColor = .label
         }
 
         textView.autocorrectionType = .yes
@@ -608,11 +608,7 @@ struct NoAutofillTextView: UIViewRepresentable {
         let label = UILabel()
         label.text = placeholder
         label.font = textView.font
-        if #available(iOS 26.0, *) {
-            label.textColor = UIColor.white.withAlphaComponent(0.5)
-        } else {
-            label.textColor = .placeholderText
-        }
+        label.textColor = .placeholderText
         label.translatesAutoresizingMaskIntoConstraints = false
         textView.addSubview(label)
         NSLayoutConstraint.activate([
