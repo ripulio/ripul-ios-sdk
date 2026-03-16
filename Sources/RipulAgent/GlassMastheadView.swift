@@ -22,6 +22,16 @@ public struct GlassMastheadView: View {
         return Double(numeric).map { CGFloat($0) }
     }
 
+    /// Whether Liquid Glass is active (iOS 26+ with a glass style other than "identity").
+    private var usesLiquidGlass: Bool {
+        #if os(iOS)
+        if #available(iOS 26.0, *) {
+            return config.glassStyle != "identity"
+        }
+        #endif
+        return false
+    }
+
     public var body: some View {
         HStack(spacing: 10) {
             if let imageUrl = config.imageUrl, let url = URL(string: imageUrl) {
@@ -61,10 +71,19 @@ public struct GlassMastheadView: View {
             }
 
             if let text = config.text {
-                Text(text)
-                    .font(.system(size: resolvedFontSize, weight: .semibold))
-                    .foregroundStyle(Color(cssHex: config.textColor) ?? .primary)
-                    .lineLimit(1)
+                if usesLiquidGlass {
+                    // Let the system's adaptive vibrancy handle foreground contrast
+                    // so text remains readable over both light and dark backgrounds.
+                    Text(text)
+                        .font(.system(size: resolvedFontSize, weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                } else {
+                    Text(text)
+                        .font(.system(size: resolvedFontSize, weight: .semibold))
+                        .foregroundStyle(Color(cssHex: config.textColor) ?? .primary)
+                        .lineLimit(1)
+                }
             }
         }
         .padding(.horizontal, 20)
