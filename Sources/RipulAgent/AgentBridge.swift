@@ -872,6 +872,71 @@ public final class AgentBridge: NSObject, ObservableObject {
         }
     }
 
+    /// Import a Claude CLI session into the web app.
+    /// Creates a new chat tab populated with the session's conversation history.
+    /// - Parameters:
+    ///   - messages: Array of JSONL message dictionaries (user/assistant/custom-title entries)
+    ///   - sessionId: The CLI session UUID (used for --resume)
+    ///   - title: Display title for the chat tab
+    /// - Returns: true if import succeeded
+    @available(iOS 15.0, macOS 13.0, *)
+    @discardableResult
+    public func importCliSession(
+        messages: [[String: Any]],
+        sessionId: String,
+        title: String,
+        subAgentSessions: [(agentId: String, messages: [[String: Any]])] = []
+    ) async -> Bool {
+        guard let webView else { return false }
+        do {
+            let jsonData = try JSONSerialization.data(withJSONObject: messages)
+            let messagesJson = String(data: jsonData, encoding: .utf8) ?? "[]"
+
+            // Build sub-agent sessions JSON array
+            var subAgentsJson = "[]"
+            if !subAgentSessions.isEmpty {
+                let subAgentsArray: [[String: Any]] = subAgentSessions.map { session in
+                    ["agentId": session.agentId, "messages": session.messages]
+                }
+                let subAgentsData = try JSONSerialization.data(withJSONObject: subAgentsArray)
+                subAgentsJson = String(data: subAgentsData, encoding: .utf8) ?? "[]"
+            }
+
+            let result = try await webView.callAsyncJavaScript(
+                """
+                if (!window.__ripulImportCliSession) return { success: false, error: '__ripulImportCliSession not defined' };
+                const messages = JSON.parse(messagesJson);
+                const subAgentSessions = JSON.parse(subAgentsJson);
+                const params = { sessionId, title, messages };
+                if (subAgentSessions.length > 0) params.subAgentSessions = subAgentSessions;
+                return await window.__ripulImportCliSession(params);
+                """,
+                arguments: [
+                    "messagesJson": messagesJson,
+                    "subAgentsJson": subAgentsJson,
+                    "sessionId": sessionId,
+                    "title": title,
+                ],
+                contentWorld: .page
+            )
+
+            if let dict = result as? [String: Any],
+               let success = dict["success"] as? Bool, success {
+                let subCount = subAgentSessions.count
+                NSLog("[AgentBridge] importCliSession: imported %d messages + %d sub-agents for session %@", messages.count, subCount, sessionId)
+                await fetchSessions()
+                return true
+            }
+
+            let error = (result as? [String: Any])?["error"] as? String ?? "unknown"
+            NSLog("[AgentBridge] importCliSession failed: %@", error)
+            return false
+        } catch {
+            NSLog("[AgentBridge] importCliSession error: %@", error.localizedDescription)
+            return false
+        }
+    }
+
     /// Close (delete) a chat session tab.
     @available(iOS 15.0, macOS 13.0, *)
     public func closeSession(id: String) async {
