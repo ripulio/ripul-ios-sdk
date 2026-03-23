@@ -941,6 +941,27 @@ public final class AgentBridge: NSObject, ObservableObject {
         }
     }
 
+    /// Check if a session is in raw mode by reading from the web app's localStorage.
+    @available(iOS 15.0, macOS 13.0, *)
+    public func isRawMode(sessionId: String) async -> Bool {
+        guard let webView else { return false }
+        do {
+            let result = try await webView.callAsyncJavaScript(
+                """
+                try {
+                    var map = JSON.parse(localStorage.getItem('cliRawModeSessions') || '{}');
+                    return !!map[sessionId];
+                } catch(e) { return false; }
+                """,
+                arguments: ["sessionId": sessionId],
+                contentWorld: .page
+            )
+            return result as? Bool ?? false
+        } catch {
+            return false
+        }
+    }
+
     /// Set the working directory for a CLI session via the web app's relay.
     /// Pass nil to reset to the host's default.
     @available(iOS 15.0, macOS 13.0, *)
