@@ -80,6 +80,9 @@ public struct RemoteSessionInfo: Identifiable, Equatable {
     public let displayName: String
     public let createdAt: Date
     public let isRunning: Bool
+    public let projectName: String?
+    public let gitBranch: String?
+    public let messageCount: Int?
 }
 
 public struct ConsoleLogEntry: Identifiable {
@@ -1160,7 +1163,10 @@ public final class AgentBridge: NSObject, ObservableObject {
                     sourceChatId: sourceChatId,
                     displayName: displayName,
                     createdAt: Date(timeIntervalSince1970: createdAt / 1000),
-                    isRunning: isRunning
+                    isRunning: isRunning,
+                    projectName: item["projectName"] as? String,
+                    gitBranch: item["gitBranch"] as? String,
+                    messageCount: item["messageCount"] as? Int
                 )
             }
             NSLog("[AgentBridge] listRemoteSessions: %d sessions on %@", parsed.count, machineId)
