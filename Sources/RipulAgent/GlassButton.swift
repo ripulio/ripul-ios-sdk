@@ -31,30 +31,31 @@ public struct GlassCircleModifier: ViewModifier {
     }
 
     public func body(content: Content) -> some View {
+        let shaped = content.contentShape(Circle())
         #if os(iOS)
         if #available(iOS 26.0, *) {
             if glassStyle == "identity" {
-                content
+                shaped
             } else {
                 let style: Glass = glassStyle == "regular" ? .regular : .clear
-                content
+                shaped
                     .glassEffect(style, in: .circle)
             }
         } else {
-            content
+            shaped
                 .background(.ultraThinMaterial, in: Circle())
         }
         #elseif os(macOS)
         if #available(macOS 26.0, *) {
             if glassStyle == "identity" {
-                content
+                shaped
             } else {
                 let style: Glass = glassStyle == "regular" ? .regular : .clear
-                content
+                shaped
                     .glassEffect(style, in: .circle)
             }
         } else {
-            content
+            shaped
                 .background(.ultraThinMaterial, in: Circle())
         }
         #endif
@@ -67,22 +68,23 @@ public struct GlassPillModifier: ViewModifier {
     public init() {}
 
     public func body(content: Content) -> some View {
+        let shaped = content.contentShape(Capsule())
         #if os(iOS)
         if #available(iOS 26.0, *) {
-            content
+            shaped
                 .background(.clear)
-                .glassEffect(.clear, in: .capsule)
+                .glassEffect(.regular, in: .capsule)
         } else {
-            content
+            shaped
                 .background(.ultraThinMaterial, in: Capsule())
         }
         #elseif os(macOS)
         if #available(macOS 26.0, *) {
-            content
+            shaped
                 .background(.clear)
-                .glassEffect(.clear, in: .capsule)
+                .glassEffect(.regular, in: .capsule)
         } else {
-            content
+            shaped
                 .background(.ultraThinMaterial, in: Capsule())
         }
         #endif

@@ -93,6 +93,9 @@ public struct AgentWebView: NSViewRepresentable {
         }
         config.websiteDataStore = dataStore
 
+        // Allow the host app to customize the configuration (e.g., register URL scheme handlers)
+        configuration.configureWebView?(config)
+
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.navigationDelegate = context.coordinator
         webView.uiDelegate = context.coordinator
@@ -312,6 +315,9 @@ private struct AgentWebViewRepresentable: UIViewRepresentable {
             dataStore.removeData(ofTypes: allTypes, modifiedSince: .distantPast) { }
         }
         config.websiteDataStore = dataStore
+
+        // Allow the host app to customize the configuration (e.g., register URL scheme handlers)
+        configuration.configureWebView?(config)
 
         let webView = FullBleedWebView(frame: .zero, configuration: config)
         webView.isOpaque = false

@@ -1,4 +1,5 @@
 import Foundation
+import WebKit
 
 public enum AgentTheme: String {
     case light, dark, system
@@ -42,6 +43,10 @@ public struct AgentConfiguration {
     /// activate its relay bridge when this parameter is present,
     /// preventing duplicate bridges across multiple web views.
     public var relayHost: Bool = false
+
+    /// Optional hook to customize the WKWebViewConfiguration before the web view is created.
+    /// Use this to register URL scheme handlers, add user scripts, etc.
+    public var configureWebView: ((WKWebViewConfiguration) -> Void)? = nil
 
     public static let defaultBaseURL = URL(string: "https://demo.ripul.io")!
 

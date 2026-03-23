@@ -73,6 +73,15 @@ public struct ModelInfo: Identifiable, Equatable {
     public let supportsThinking: Bool
 }
 
+/// A session descriptor from a remote machine, returned by the remote discovery protocol.
+public struct RemoteSessionInfo: Identifiable, Equatable {
+    public let id: String
+    public let sourceChatId: String
+    public let displayName: String
+    public let createdAt: Date
+    public let isRunning: Bool
+}
+
 public struct ConsoleLogEntry: Identifiable {
     public let id = UUID()
     public let timestamp: Date
@@ -990,6 +999,85 @@ public final class AgentBridge: NSObject, ObservableObject {
             }
         } catch {
             NSLog("[AgentBridge] connectToMachine error: %@", error.localizedDescription)
+            return (nil, error.localizedDescription)
+        }
+    }
+
+    /// List sessions available on a remote machine via the relay discovery protocol.
+    @available(iOS 15.0, macOS 13.0, *)
+    public func listRemoteSessions(machineId: String) async -> [RemoteSessionInfo] {
+        guard let webView else {
+            NSLog("[AgentBridge] listRemoteSessions: webView is nil")
+            return []
+        }
+        do {
+            let result = try await webView.callAsyncJavaScript(
+                """
+                if (!window.__ripulListRemoteSessions) return {sessions:[], error:'not ready'};
+                return await window.__ripulListRemoteSessions(machineId);
+                """,
+                arguments: ["machineId": machineId],
+                contentWorld: .page
+            )
+            guard let dict = result as? [String: Any],
+                  let rawSessions = dict["sessions"] as? [[String: Any]] else {
+                return []
+            }
+            let parsed = rawSessions.compactMap { item -> RemoteSessionInfo? in
+                guard let id = item["id"] as? String,
+                      let sourceChatId = item["sourceChatId"] as? String,
+                      let displayName = item["displayName"] as? String,
+                      let createdAt = item["createdAt"] as? Double else {
+                    return nil
+                }
+                let isRunning = item["isRunning"] as? Bool ?? false
+                return RemoteSessionInfo(
+                    id: id,
+                    sourceChatId: sourceChatId,
+                    displayName: displayName,
+                    createdAt: Date(timeIntervalSince1970: createdAt / 1000),
+                    isRunning: isRunning
+                )
+            }
+            NSLog("[AgentBridge] listRemoteSessions: %d sessions on %@", parsed.count, machineId)
+            return parsed
+        } catch {
+            NSLog("[AgentBridge] listRemoteSessions error: %@", error.localizedDescription)
+            return []
+        }
+    }
+
+    /// Open/reconnect to an existing session on a remote machine.
+    /// Returns the local tab ID on success, or nil + error on failure.
+    @available(iOS 15.0, macOS 13.0, *)
+    public func openRemoteSession(machineId: String, sessionId: String) async -> (tabId: String?, error: String?) {
+        guard let webView else {
+            return (nil, "webView is nil")
+        }
+        do {
+            let result = try await webView.callAsyncJavaScript(
+                """
+                if (!window.__ripulOpenRemoteSession) return {success:false, error:'not ready'};
+                return await window.__ripulOpenRemoteSession(machineId, sessionId);
+                """,
+                arguments: ["machineId": machineId, "sessionId": sessionId],
+                contentWorld: .page
+            )
+            guard let dict = result as? [String: Any] else {
+                return (nil, "Unexpected result")
+            }
+            if let success = dict["success"] as? Bool, success {
+                let tabId = dict["tabId"] as? String
+                NSLog("[AgentBridge] openRemoteSession: opened %@ on %@, tab %@", sessionId, machineId, tabId ?? "?")
+                await fetchSessions()
+                return (tabId, nil)
+            } else {
+                let error = dict["error"] as? String ?? "Unknown error"
+                NSLog("[AgentBridge] openRemoteSession failed: %@", error)
+                return (nil, error)
+            }
+        } catch {
+            NSLog("[AgentBridge] openRemoteSession error: %@", error.localizedDescription)
             return (nil, error.localizedDescription)
         }
     }
