@@ -1148,7 +1148,11 @@ public final class AgentBridge: NSObject, ObservableObject {
             )
             guard let dict = result as? [String: Any],
                   let rawSessions = dict["sessions"] as? [[String: Any]] else {
+                NSLog("[AgentBridge] listRemoteSessions: unexpected result type: %@", String(describing: result))
                 return []
+            }
+            if let error = dict["error"] as? String, !error.isEmpty {
+                NSLog("[AgentBridge] listRemoteSessions error from JS: %@", error)
             }
             let parsed = rawSessions.compactMap { item -> RemoteSessionInfo? in
                 guard let id = item["id"] as? String,
