@@ -296,10 +296,10 @@ public final class AgentBridge: NSObject, ObservableObject {
                 NSLog("[AgentBridge] Cannot reload — webView is nil")
                 return
             }
-            NSLog("[AgentBridge] Cache cleared, reloading")
+            NSLog("[AgentBridge] Cache cleared, reloading from origin")
             self?.isConnected = false
             self?.isThemeReady = false
-            webView.reload()
+            webView.reloadFromOrigin()
         }
     }
 
@@ -938,6 +938,49 @@ public final class AgentBridge: NSObject, ObservableObject {
         } catch {
             NSLog("[AgentBridge] setRawMode error: %@", error.localizedDescription)
             return false
+        }
+    }
+
+    /// Set the working directory for a CLI session via the web app's relay.
+    /// Pass nil to reset to the host's default.
+    @available(iOS 15.0, macOS 13.0, *)
+    @discardableResult
+    public func setWorkingDirectory(sessionId: String, directory: String?) async -> Bool {
+        guard let webView else { return false }
+        do {
+            let result = try await webView.callAsyncJavaScript(
+                "return await window.__ripulSetWorkingDirectory?.(sessionId, directory) ?? {success:false};",
+                arguments: ["sessionId": sessionId, "directory": directory as Any],
+                contentWorld: .page
+            )
+            if let dict = result as? [String: Any],
+               let success = dict["success"] as? Bool, success {
+                return true
+            }
+            return false
+        } catch {
+            NSLog("[AgentBridge] setWorkingDirectory error: %@", error.localizedDescription)
+            return false
+        }
+    }
+
+    /// Fetch favorite directories from the remote host via the relay.
+    @available(iOS 15.0, macOS 13.0, *)
+    public func getFavoriteDirectories() async -> [String] {
+        guard let webView else { return [] }
+        do {
+            let result = try await webView.callAsyncJavaScript(
+                "return await window.__ripulGetFavoriteDirectories?.() ?? {directories:[]};",
+                contentWorld: .page
+            )
+            if let dict = result as? [String: Any],
+               let dirs = dict["directories"] as? [String] {
+                return dirs
+            }
+            return []
+        } catch {
+            NSLog("[AgentBridge] getFavoriteDirectories error: %@", error.localizedDescription)
+            return []
         }
     }
 
