@@ -642,6 +642,37 @@ public final class AgentBridge: NSObject, ObservableObject {
         }
     }
 
+    /// Interrogate the web app for the current agent status of the active session.
+    /// Updates `isAgentRunning` and `isAgentPaused` to match. Call this after
+    /// session transitions (focusSession, createNewChat) to avoid stale button state.
+    @available(iOS 15.0, macOS 13.0, *)
+    @discardableResult
+    public func syncAgentStatus() async -> (isRunning: Bool, isPaused: Bool) {
+        guard let webView else {
+            isAgentRunning = false
+            isAgentPaused = false
+            return (false, false)
+        }
+        do {
+            let result = try await webView.callAsyncJavaScript(
+                "return await window.__ripulGetAgentStatus?.() ?? { isRunning: false, isPaused: false }",
+                contentWorld: .page
+            )
+            if let dict = result as? [String: Any] {
+                let running = dict["isRunning"] as? Bool ?? false
+                let paused = dict["isPaused"] as? Bool ?? false
+                isAgentRunning = running
+                isAgentPaused = paused
+                return (running, paused)
+            }
+        } catch {
+            NSLog("[AgentBridge] syncAgentStatus error: %@", error.localizedDescription)
+        }
+        isAgentRunning = false
+        isAgentPaused = false
+        return (false, false)
+    }
+
     /// Fetch the current list of chat sessions by calling the web app's
     /// global function directly. Updates `sessions` and `activeSessionId`.
     @available(iOS 15.0, macOS 13.0, *)
@@ -724,6 +755,9 @@ public final class AgentBridge: NSObject, ObservableObject {
         }
         // Optimistically update so the UI reflects the switch immediately
         activeSessionId = id
+        // Reset button state immediately so it doesn't flash stale state
+        isAgentRunning = false
+        isAgentPaused = false
         do {
             _ = try await webView.callAsyncJavaScript(
                 "if (window.__ripulFocusSession) await window.__ripulFocusSession(sessionId);",
@@ -733,6 +767,8 @@ public final class AgentBridge: NSObject, ObservableObject {
         } catch {
             NSLog("[AgentBridge] focusSession error: %@", error.localizedDescription)
         }
+        // Sync with the actual agent state of the newly focused session
+        await syncAgentStatus()
     }
 
     /// Fetch the list of available slash commands from the web app.
@@ -877,6 +913,30 @@ public final class AgentBridge: NSObject, ObservableObject {
             return false
         } catch {
             NSLog("[AgentBridge] setModel error: %@", error.localizedDescription)
+            return false
+        }
+    }
+
+    /// Toggle raw mode for a CLI session. In raw mode, prompts are passed verbatim
+    /// to Claude with no system prompt wrapping and all tools available.
+    @available(iOS 15.0, macOS 13.0, *)
+    @discardableResult
+    public func setRawMode(sessionId: String, enabled: Bool) async -> Bool {
+        guard let webView else { return false }
+        do {
+            let result = try await webView.callAsyncJavaScript(
+                "return await window.__ripulSetRawMode?.(sessionId, enabled) ?? {success:false};",
+                arguments: ["sessionId": sessionId, "enabled": enabled],
+                contentWorld: .page
+            )
+            if let dict = result as? [String: Any],
+               let success = dict["success"] as? Bool, success {
+                NSLog("[AgentBridge] setRawMode: session=%@, enabled=%@", sessionId, enabled ? "true" : "false")
+                return true
+            }
+            return false
+        } catch {
+            NSLog("[AgentBridge] setRawMode error: %@", error.localizedDescription)
             return false
         }
     }
@@ -1089,6 +1149,10 @@ public final class AgentBridge: NSObject, ObservableObject {
             NSLog("[AgentBridge] createNewChat: webView is nil")
             return nil
         }
+
+        // A new chat never has an active agent — reset immediately
+        isAgentRunning = false
+        isAgentPaused = false
 
         do {
             let result = try await webView.callAsyncJavaScript(
