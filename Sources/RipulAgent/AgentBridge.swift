@@ -334,6 +334,44 @@ public final class AgentBridge: NSObject, ObservableObject {
         webView.load(URLRequest(url: url))
     }
 
+    /// Update the web app's bottom padding to match the measured native chat input height.
+    /// Retries until the web callable is available (it registers after ChatTabContent mounts).
+    private var lastReportedInputHeight: Int = 0
+    private var pendingInputHeight: Int?
+    public func setNativeChatInputHeight(_ px: Int) {
+        guard px != lastReportedInputHeight else { return }
+        lastReportedInputHeight = px
+        pendingInputHeight = px
+        pushInputHeightToWeb(px)
+    }
+
+    /// Re-push the last measured height after the web view reconnects.
+    public func resendInputHeight() {
+        if let px = pendingInputHeight {
+            pushInputHeightToWeb(px)
+        }
+    }
+
+    private func pushInputHeightToWeb(_ px: Int) {
+        evaluateJavaScript("""
+            window.__ripulNativeChatInputHeight = \(px);
+            if (window.__ripulSetBottomPadding) {
+                window.__ripulSetBottomPadding(\(px));
+            } else {
+                var _attempts = 0;
+                var _iv = setInterval(function() {
+                    _attempts++;
+                    if (window.__ripulSetBottomPadding) {
+                        window.__ripulSetBottomPadding(\(px));
+                        clearInterval(_iv);
+                    } else if (_attempts > 20) {
+                        clearInterval(_iv);
+                    }
+                }, 250);
+            }
+        """)
+    }
+
     /// Dispatch a synthetic `visibilitychange` event into the web view so that
     /// relay connections can immediately detect a stale WebSocket after the app
     /// returns from background (WKWebView does not fire this event natively).
@@ -1191,7 +1229,7 @@ public final class AgentBridge: NSObject, ObservableObject {
                 let tabId = dict["tabId"] as? String
                 NSLog("[AgentBridge] connectToMachineWithCliMode: tab %@", tabId ?? "?")
                 // Update native state to reflect CLI mode + raw mode
-                self.selectedModelId = "claude-cli"
+                self.selectedModelId = "claude-cli-raw"
                 await fetchSessions()
                 return (tabId, nil)
             } else {
@@ -1200,6 +1238,41 @@ public final class AgentBridge: NSObject, ObservableObject {
             }
         } catch {
             NSLog("[AgentBridge] connectToMachineWithCliMode error: %@", error.localizedDescription)
+            return (nil, error.localizedDescription)
+        }
+    }
+
+    /// Connect to a remote machine in Codex mode: creates a session,
+    /// sets the model to codex-cli, and enables raw mode in one step.
+    @available(iOS 15.0, macOS 13.0, *)
+    public func connectToMachineWithCodexMode(machineId: String) async -> (tabId: String?, error: String?) {
+        guard let webView else {
+            return (nil, "webView is nil")
+        }
+        do {
+            let result = try await webView.callAsyncJavaScript(
+                """
+                if (!window.__ripulConnectToMachineWithCodexMode) return {success:false, error:'not ready'};
+                return await window.__ripulConnectToMachineWithCodexMode(machineId);
+                """,
+                arguments: ["machineId": machineId],
+                contentWorld: .page
+            )
+            guard let dict = result as? [String: Any] else {
+                return (nil, "Unexpected result")
+            }
+            if let success = dict["success"] as? Bool, success {
+                let tabId = dict["tabId"] as? String
+                NSLog("[AgentBridge] connectToMachineWithCodexMode: tab %@", tabId ?? "?")
+                self.selectedModelId = "codex-cli-raw"
+                await fetchSessions()
+                return (tabId, nil)
+            } else {
+                let error = dict["error"] as? String ?? "Unknown error"
+                return (nil, error)
+            }
+        } catch {
+            NSLog("[AgentBridge] connectToMachineWithCodexMode error: %@", error.localizedDescription)
             return (nil, error.localizedDescription)
         }
     }
@@ -1461,6 +1534,8 @@ public final class AgentBridge: NSObject, ObservableObject {
         loadErrorDetails = nil
         jsErrorMessages = []
         jsErrorDebounce?.cancel()
+        // Re-push measured chat input height now that the web app is ready
+        resendInputHeight()
 
         if !registeredTools.isEmpty {
             let defs = toolDefinitions
