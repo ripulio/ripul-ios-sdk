@@ -111,7 +111,7 @@ struct GlassCapsuleModifier: ViewModifier {
                     content
                 }
             } else {
-                let style: Glass = glassStyle == "clear" ? .clear : .regular
+                let style: Glass = glassStyle == "regular" ? .regular : .clear
                 if let tintColor {
                     content
                         .glassEffect(style.tint(tintColor.opacity(0.3)), in: .capsule)

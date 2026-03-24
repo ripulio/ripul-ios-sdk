@@ -10,7 +10,6 @@
 		A01 /* RipulAgentDemoApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B01 /* RipulAgentDemoApp.swift */; };
 		A02 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B02 /* ContentView.swift */; };
 		A03 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B03 /* Assets.xcassets */; };
-		A04 /* Preview Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B04 /* Preview Assets.xcassets */; };
 		A10 /* YourTools.swift in Sources */ = {isa = PBXBuildFile; fileRef = B12 /* YourTools.swift */; };
 		A11 /* AppServices.swift in Sources */ = {isa = PBXBuildFile; fileRef = B13 /* AppServices.swift */; };
 		A12 /* CalendarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B14 /* CalendarView.swift */; };
@@ -25,7 +24,6 @@
 		B01 /* RipulAgentDemoApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RipulAgentDemoApp.swift; sourceTree = "<group>"; };
 		B02 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		B03 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
-		B04 /* Preview Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = "Preview Assets.xcassets"; sourceTree = "<group>"; };
 		B05 /* RipulAgentDemo.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = RipulAgentDemo.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		B10 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		B12 /* YourTools.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = YourTools.swift; sourceTree = "<group>"; };
@@ -71,17 +69,8 @@
 				B13 /* AppServices.swift */,
 				B10 /* Info.plist */,
 				B03 /* Assets.xcassets */,
-				D03 /* Preview Content */,
 			);
 			path = RipulAgentDemo;
-			sourceTree = "<group>";
-		};
-		D03 /* Preview Content */ = {
-			isa = PBXGroup;
-			children = (
-				B04 /* Preview Assets.xcassets */,
-			);
-			path = "Preview Content";
 			sourceTree = "<group>";
 		};
 		D04 /* Products */ = {
@@ -107,6 +96,22 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = F03 /* Build configuration list for PBXNativeTarget "RipulAgentDemo" */;
 			buildPhases = (
+				E02 /* Sources */,
+				E03 /* Resources */,
+				C01 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = RipulAgentDemo;
+			packageProductDependencies = (
+				P01 /* RipulAgent */,
+			);
+			productName = RipulAgentDemo;
+			productReference = B05 /* RipulAgentDemo.app */;
+			productType = "com.apple.product-type.application";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -151,7 +156,6 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				A04 /* Preview Assets.xcassets in Resources */,
 				A03 /* Assets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

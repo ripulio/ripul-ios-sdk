@@ -8,6 +8,14 @@ import PhotosUI
 import UIKit
 #endif
 
+/// Preference key to propagate the measured chat input height up the view tree.
+private struct ChatInputHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
+
 @available(iOS 16.0, macOS 14.0, *)
 @MainActor
 public struct AgentView<TopBar: View>: View {
@@ -29,6 +37,7 @@ public struct AgentView<TopBar: View>: View {
     @State private var imageAttachments: [NativeImageAttachment] = []
     @State private var showingQuickCommands = false
     @State private var showingDebugCommands = false
+    @State private var chatInputMeasuredHeight: CGFloat = 0
 
     @StateObject private var messageHistory = MessageHistory()
 
@@ -110,28 +119,11 @@ public struct AgentView<TopBar: View>: View {
                 }
 
                 chatInput
-                    #if os(iOS)
-                    .background {
-                        if #available(iOS 26.0, *) {
-                            LinearGradient(
-                                stops: [
-                                    .init(color: .clear, location: 0),
-                                    .init(color: .black.opacity(0.05), location: 0.15),
-                                    .init(color: .black.opacity(0.15), location: 0.35),
-                                    .init(color: .black.opacity(0.22), location: 0.5),
-                                    .init(color: .black.opacity(0.15), location: 0.65),
-                                    .init(color: .black.opacity(0.05), location: 0.85),
-                                    .init(color: .clear, location: 1),
-                                ],
-                                startPoint: .top,
-                                endPoint: .bottom
-                            )
-                            .frame(height: 140)
-                            .padding(.horizontal, -12)
-                            .allowsHitTesting(false)
+                    .background(
+                        GeometryReader { geo in
+                            Color.clear.preference(key: ChatInputHeightKey.self, value: geo.size.height)
                         }
-                    }
-                    #endif
+                    )
             }
             .padding(.horizontal, 12)
             #if os(iOS)
@@ -141,6 +133,15 @@ public struct AgentView<TopBar: View>: View {
             #endif
             .animation(.spring(duration: 0.3), value: bridge.showScrollToBottom)
         }
+        .onPreferenceChange(ChatInputHeightKey.self) { height in
+            chatInputMeasuredHeight = height
+            updateWebBottomPadding()
+        }
+        #if os(iOS)
+        .onChange(of: keyboard.height) { _ in
+            updateWebBottomPadding()
+        }
+        #endif
         #if os(iOS)
         .ignoresSafeArea(.keyboard)
         .animation(.easeOut(duration: 0.25), value: keyboard.height)
@@ -266,6 +267,21 @@ public struct AgentView<TopBar: View>: View {
 
     private func recordHistory(_ message: String) {
         messageHistory.record(message)
+    }
+
+    private func updateWebBottomPadding() {
+        guard chatInputMeasuredHeight > 0 else { return }
+        let bottomPad: CGFloat
+        #if os(iOS)
+        let safeBottom = UIApplication.shared.connectedScenes
+            .compactMap { ($0 as? UIWindowScene)?.keyWindow?.safeAreaInsets.bottom }
+            .first ?? 0
+        bottomPad = (keyboard.height > 0 ? keyboard.height + 4 : 8) + safeBottom
+        #else
+        bottomPad = 8
+        #endif
+        let totalHeight = Int(chatInputMeasuredHeight + bottomPad + 8)
+        bridge.setNativeChatInputHeight(totalHeight)
     }
 
     #if os(iOS)

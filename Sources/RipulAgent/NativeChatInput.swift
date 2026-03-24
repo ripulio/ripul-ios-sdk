@@ -64,6 +64,7 @@ public struct NativeChatInput: View {
     @State private var textHeight: CGFloat = 36
 
     private var isTwoRow: Bool { chatInputLayout == "twoRow" }
+    private var resolvedChatInputGlassStyle: String { chatInputGlassStyle ?? "regular" }
 
     public init(
         text: Binding<String>,
@@ -130,49 +131,53 @@ public struct NativeChatInput: View {
     // MARK: - Single Row Layout (default)
 
     private var singleRowBody: some View {
-        HStack(alignment: .bottom, spacing: 8) {
-            plusMenuButton
+        ChatInputGlassGroup {
+            HStack(alignment: .bottom, spacing: 8) {
+                plusMenuButton
 
-            // Chat bubble
-            VStack(spacing: 0) {
-                if !imageAttachments.isEmpty {
-                    imageThumbsRow
+                // Group adjacent glass surfaces so they share the same sampling region.
+                VStack(spacing: 0) {
+                    if !imageAttachments.isEmpty {
+                        imageThumbsRow
+                    }
+                    HStack(spacing: 4) {
+                        textInputView
+                        actionButton
+                    }
                 }
-                HStack(spacing: 4) {
-                    textInputView
-                    actionButton
-                }
+                .modifier(GlassChatInputBackground(glassStyle: resolvedChatInputGlassStyle))
+
+                historyMenuButton
             }
-            .modifier(GlassChatInputBackground(glassStyle: chatInputGlassStyle))
-
-            historyMenuButton
         }
     }
 
     // MARK: - Two Row Layout (buttons below text area)
 
     private var twoRowBody: some View {
-        VStack(spacing: 6) {
-            // Full-width text area
-            VStack(spacing: 0) {
-                if !imageAttachments.isEmpty {
-                    imageThumbsRow
+        ChatInputGlassGroup {
+            VStack(spacing: 6) {
+                // Full-width text area
+                VStack(spacing: 0) {
+                    if !imageAttachments.isEmpty {
+                        imageThumbsRow
+                    }
+                    textInputView
+                        .padding(.trailing, 8)
                 }
-                textInputView
-                    .padding(.trailing, 8)
-            }
 
-            // Buttons row below (inside the shared glass bounding box)
-            HStack(spacing: 8) {
-                plusMenuButton
-                historyMenuButton
-                Spacer()
-                twoRowActionButton
+                // Buttons row below (inside the shared glass bounding box)
+                HStack(spacing: 8) {
+                    plusMenuButton
+                    historyMenuButton
+                    Spacer()
+                    twoRowActionButton
+                }
+                .padding(.horizontal, 8)
+                .padding(.bottom, 6)
             }
-            .padding(.horizontal, 8)
-            .padding(.bottom, 6)
+            .modifier(GlassChatInputBackground(glassStyle: resolvedChatInputGlassStyle))
         }
-        .modifier(GlassChatInputBackground(glassStyle: chatInputGlassStyle))
     }
 
     // MARK: - Shared Subviews
@@ -209,7 +214,7 @@ public struct NativeChatInput: View {
                 .foregroundStyle(.primary)
                 .frame(width: 40, height: 40)
                 .contentShape(Circle())
-                .modifier(GlassCircleModifier(glassStyle: isTwoRow ? nil : chatInputGlassStyle))
+                .modifier(GlassCircleModifier(glassStyle: isTwoRow ? nil : resolvedChatInputGlassStyle))
         }
     }
 
@@ -217,12 +222,12 @@ public struct NativeChatInput: View {
         NoAutofillTextView(
             text: $text,
             height: $textHeight,
-            placeholder: "Message...",
-            onSubmit: { dismissKeyboard(); onSubmit() }
-        )
-        .frame(height: textHeight)
-        .padding(.leading, 8)
-        .padding(.vertical, 2)
+            placeholder: "Message..."
+        ) {
+            dismissKeyboard()
+            onSubmit()
+        }
+        .frame(maxWidth: .infinity, minHeight: textHeight, maxHeight: textHeight, alignment: .leading)
     }
 
     @ViewBuilder
@@ -332,7 +337,7 @@ public struct NativeChatInput: View {
                     .foregroundStyle(.primary)
                     .frame(width: 40, height: 40)
                     .contentShape(Circle())
-                    .modifier(GlassCircleModifier(glassStyle: isTwoRow ? nil : chatInputGlassStyle))
+                    .modifier(GlassCircleModifier(glassStyle: isTwoRow ? nil : resolvedChatInputGlassStyle))
             }
         }
     }
@@ -388,6 +393,7 @@ public struct NativeChatInput: View {
     @FocusState private var isFocused: Bool
 
     private var isTwoRow: Bool { chatInputLayout == "twoRow" }
+    private var resolvedChatInputGlassStyle: String { chatInputGlassStyle ?? "regular" }
 
     public init(
         text: Binding<String>,
@@ -460,49 +466,53 @@ public struct NativeChatInput: View {
     // MARK: - Single Row Layout (default)
 
     private var singleRowBody: some View {
-        HStack(alignment: .bottom, spacing: 8) {
-            plusMenuButton
+        ChatInputGlassGroup {
+            HStack(alignment: .bottom, spacing: 8) {
+                plusMenuButton
 
-            VStack(spacing: 0) {
-                if !imageAttachments.isEmpty {
-                    imageThumbsRow
+                VStack(spacing: 0) {
+                    if !imageAttachments.isEmpty {
+                        imageThumbsRow
+                    }
+                    HStack(spacing: 4) {
+                        textInputView
+                        actionButton
+                    }
                 }
-                HStack(spacing: 4) {
-                    textInputView
-                    actionButton
-                }
+                .frame(minHeight: 40)
+                .modifier(GlassChatInputBackground(glassStyle: resolvedChatInputGlassStyle))
+
+                historyMenuButton
             }
-            .frame(minHeight: 40)
-            .modifier(GlassChatInputBackground(glassStyle: chatInputGlassStyle))
-
-            historyMenuButton
         }
     }
 
     // MARK: - Two Row Layout (buttons below text area)
 
     private var twoRowBody: some View {
-        VStack(spacing: 6) {
-            VStack(spacing: 0) {
-                if !imageAttachments.isEmpty {
-                    imageThumbsRow
+        ChatInputGlassGroup {
+            VStack(spacing: 6) {
+                VStack(spacing: 0) {
+                    if !imageAttachments.isEmpty {
+                        imageThumbsRow
+                    }
+                    textInputView
+                        .padding(.trailing, 8)
                 }
-                textInputView
-                    .padding(.trailing, 8)
-            }
-            .frame(minHeight: 40)
+                .frame(minHeight: 40)
 
-            // Buttons row below (inside the shared glass bounding box)
-            HStack(spacing: 8) {
-                plusMenuButton
-                historyMenuButton
-                Spacer()
-                twoRowActionButton
+                // Buttons row below (inside the shared glass bounding box)
+                HStack(spacing: 8) {
+                    plusMenuButton
+                    historyMenuButton
+                    Spacer()
+                    twoRowActionButton
+                }
+                .padding(.horizontal, 8)
+                .padding(.bottom, 6)
             }
-            .padding(.horizontal, 8)
-            .padding(.bottom, 6)
+            .modifier(GlassChatInputBackground(glassStyle: resolvedChatInputGlassStyle))
         }
-        .modifier(GlassChatInputBackground(glassStyle: chatInputGlassStyle))
     }
 
     // MARK: - Shared Subviews
@@ -536,7 +546,7 @@ public struct NativeChatInput: View {
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .frame(width: 40, height: 40)
-        .modifier(GlassCircleModifier(glassStyle: isTwoRow ? nil : chatInputGlassStyle))
+        .modifier(GlassCircleModifier(glassStyle: isTwoRow ? nil : resolvedChatInputGlassStyle))
     }
 
     private var textInputView: some View {
@@ -662,7 +672,7 @@ public struct NativeChatInput: View {
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
             .frame(width: 40, height: 40)
-            .modifier(GlassCircleModifier(glassStyle: isTwoRow ? nil : chatInputGlassStyle))
+            .modifier(GlassCircleModifier(glassStyle: isTwoRow ? nil : resolvedChatInputGlassStyle))
         }
     }
 
@@ -732,6 +742,35 @@ public struct GlassChatInputBackground: ViewModifier {
     }
 }
 
+@available(iOS 15.0, macOS 14.0, *)
+private struct ChatInputGlassGroup<Content: View>: View {
+    private let content: Content
+
+    init(@ViewBuilder content: () -> Content) {
+        self.content = content()
+    }
+
+    var body: some View {
+        #if os(iOS)
+        if #available(iOS 26.0, *) {
+            GlassEffectContainer {
+                content
+            }
+        } else {
+            content
+        }
+        #elseif os(macOS)
+        if #available(macOS 26.0, *) {
+            GlassEffectContainer {
+                content
+            }
+        } else {
+            content
+        }
+        #endif
+    }
+}
+
 // MARK: - iOS-only: UIKit Text Input & Camera
 
 #if os(iOS)
@@ -791,16 +830,16 @@ struct NoAutofillTextView: UIViewRepresentable {
         let bodySize = UIFont.preferredFont(forTextStyle: .body).pointSize
         textView.font = .systemFont(ofSize: bodySize + 1, weight: .semibold)
         textView.backgroundColor = .clear
-        textView.textContainerInset = UIEdgeInsets(top: 8, left: 4, bottom: 8, right: 4)
+        textView.textContainerInset = UIEdgeInsets(top: 8, left: 12, bottom: 8, right: 4)
         textView.textContainer.lineFragmentPadding = 0
         textView.isScrollEnabled = true
         textView.showsVerticalScrollIndicator = false
         textView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        textView.returnKeyType = .send
+        textView.enablesReturnKeyAutomatically = true
 
-        // Use semantic label color so text adapts with Liquid Glass vibrancy
-        if #available(iOS 26.0, *) {
-            textView.textColor = .label
-        }
+        // Let Apple's vibrancy handle text color adaptation
+        textView.textColor = .label
 
         textView.autocorrectionType = .yes
         textView.autocapitalizationType = .sentences
@@ -816,7 +855,7 @@ struct NoAutofillTextView: UIViewRepresentable {
         label.translatesAutoresizingMaskIntoConstraints = false
         textView.addSubview(label)
         NSLayoutConstraint.activate([
-            label.leadingAnchor.constraint(equalTo: textView.leadingAnchor, constant: 4),
+            label.leadingAnchor.constraint(equalTo: textView.leadingAnchor, constant: 12),
             label.topAnchor.constraint(equalTo: textView.topAnchor, constant: 8)
         ])
         context.coordinator.placeholderLabel = label
@@ -825,6 +864,7 @@ struct NoAutofillTextView: UIViewRepresentable {
     }
 
     func updateUIView(_ textView: ChatTextView, context: Context) {
+
         if textView.text != text {
             textView.text = text
             context.coordinator.placeholderLabel?.isHidden = !text.isEmpty

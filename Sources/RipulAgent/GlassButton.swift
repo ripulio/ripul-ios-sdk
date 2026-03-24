@@ -73,7 +73,7 @@ public struct GlassPillModifier: ViewModifier {
         if #available(iOS 26.0, *) {
             shaped
                 .background(.clear)
-                .glassEffect(.regular, in: .capsule)
+                .glassEffect(.clear, in: .capsule)
         } else {
             shaped
                 .background(.ultraThinMaterial, in: Capsule())
@@ -82,7 +82,7 @@ public struct GlassPillModifier: ViewModifier {
         if #available(macOS 26.0, *) {
             shaped
                 .background(.clear)
-                .glassEffect(.regular, in: .capsule)
+                .glassEffect(.clear, in: .capsule)
         } else {
             shaped
                 .background(.ultraThinMaterial, in: Capsule())
