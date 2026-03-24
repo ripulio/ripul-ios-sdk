@@ -58,9 +58,12 @@ public struct NativeChatInput: View {
     let onQuickCommands: (() -> Void)?
     var messageHistory: MessageHistory?
     var chatInputGlassStyle: String?
+    var chatInputLayout: String?
     @State private var showPhotoPicker = false
     @State private var showCamera = false
     @State private var textHeight: CGFloat = 36
+
+    private var isTwoRow: Bool { chatInputLayout == "twoRow" }
 
     public init(
         text: Binding<String>,
@@ -73,7 +76,8 @@ public struct NativeChatInput: View {
         onNewChat: (() -> Void)? = nil,
         onQuickCommands: (() -> Void)? = nil,
         messageHistory: MessageHistory? = nil,
-        chatInputGlassStyle: String? = nil
+        chatInputGlassStyle: String? = nil,
+        chatInputLayout: String? = nil
     ) {
         self._text = text
         self._imageAttachments = imageAttachments
@@ -86,6 +90,7 @@ public struct NativeChatInput: View {
         self.onQuickCommands = onQuickCommands
         self.messageHistory = messageHistory
         self.chatInputGlassStyle = chatInputGlassStyle
+        self.chatInputLayout = chatInputLayout
     }
 
     private func dismissKeyboard() {
@@ -93,132 +98,22 @@ public struct NativeChatInput: View {
     }
 
     public var body: some View {
-        HStack(alignment: .bottom, spacing: 8) {
-            // + menu button outside the chat bubble (iMessage style)
-            Menu {
-                Button {
-                    showCamera = true
-                } label: {
-                    Label("Camera", systemImage: "camera")
-                }
-                Button {
-                    showPhotoPicker = true
-                } label: {
-                    Label("Photos", systemImage: "photo")
-                }
-                if onQuickCommands != nil {
-                    Button {
-                        dismissKeyboard()
-                        onQuickCommands?()
-                    } label: {
-                        Label("Quick Commands", systemImage: "bolt.fill")
-                    }
-                }
-                Button {
-                    dismissKeyboard()
-                    onNewChat?()
-                } label: {
-                    Label("New Chat", systemImage: "plus.bubble")
-                }
-            } label: {
-                Image(systemName: "plus")
-                    .font(.system(size: 20, weight: .medium))
-                    .foregroundStyle(.primary)
-                    .frame(width: 40, height: 40)
-                    .contentShape(Circle())
-                    .modifier(GlassCircleModifier(glassStyle: chatInputGlassStyle))
-            }
-
-            // Chat bubble
-            VStack(spacing: 0) {
-                // Image thumbnails row
-                if !imageAttachments.isEmpty {
-                    imageThumbsRow
-                }
-
-                // Text field + send button
-                HStack(spacing: 4) {
-                    NoAutofillTextView(
-                        text: $text,
-                        height: $textHeight,
-                        placeholder: "Message...",
-                        onSubmit: { dismissKeyboard(); onSubmit() }
-                    )
-                    .frame(height: textHeight)
-                    .padding(.leading, 8)
-                    .padding(.vertical, 2)
-
-                    let hasContent = !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !imageAttachments.isEmpty
-                    if isAgentRunning && !isAgentPaused {
-                        // Pause button — agent is actively running
-                        Button {
-                            dismissKeyboard()
-                            onPause?()
-                        } label: {
-                            Image(systemName: "pause.fill")
-                                .font(.system(size: 14, weight: .bold))
-                                .foregroundStyle(.white)
-                                .frame(width: 34, height: 28)
-                                .background(Color.orange, in: Capsule())
-                        }
-                        .transition(.scale.combined(with: .opacity))
-                        .padding(.trailing, 6)
-                    } else if isAgentPaused && isAgentRunning {
-                        // Resume button — agent was interrupted mid-run, tap to resume
-                        Button {
-                            dismissKeyboard()
-                            onSubmit()
-                        } label: {
-                            Image(systemName: "play.fill")
-                                .font(.system(size: 14, weight: .bold))
-                                .foregroundStyle(.white)
-                                .frame(width: 34, height: 28)
-                                .background(Color.green, in: Capsule())
-                        }
-                        .transition(.scale.combined(with: .opacity))
-                        .padding(.trailing, 6)
-                    } else if isAgentPaused || hasContent {
-                        // Send button
-                        Button {
-                            dismissKeyboard()
-                            onSubmit()
-                        } label: {
-                            Image(systemName: "arrow.up")
-                                .font(.system(size: 14, weight: .bold))
-                                .foregroundStyle(.white)
-                                .frame(width: 34, height: 28)
-                                .background(Color.accentColor, in: Capsule())
-                        }
-                        .transition(.scale.combined(with: .opacity))
-                        .padding(.trailing, 6)
-                    }
-                }
-            }
-            .modifier(GlassChatInputBackground(glassStyle: chatInputGlassStyle))
-
-            // History menu button outside the chat bubble (mirrors + button pattern)
-            if let history = messageHistory, !history.recentMessages.isEmpty {
-                Menu {
-                    ForEach(history.recentMessages.prefix(15), id: \.self) { msg in
-                        Button {
-                            text = msg
-                        } label: {
-                            Text(msg.prefix(80) + (msg.count > 80 ? "..." : ""))
-                        }
-                    }
-                } label: {
-                    Image(systemName: "clock.arrow.circlepath")
-                        .font(.system(size: 18, weight: .medium))
-                        .foregroundStyle(.primary)
-                        .frame(width: 40, height: 40)
-                        .contentShape(Circle())
-                        .modifier(GlassCircleModifier(glassStyle: chatInputGlassStyle))
-                }
+        Group {
+            if isTwoRow {
+                twoRowBody
+            } else {
+                singleRowBody
             }
         }
         .animation(.easeInOut(duration: 0.15), value: textHeight)
         .animation(.easeInOut(duration: 0.2), value: imageAttachments.count)
         .animation(.easeInOut(duration: 0.2), value: isAgentRunning)
+        .animation(.easeInOut(duration: 0.2), value: isTwoRow)
+        .onChange(of: text) { newValue in
+            if newValue.isEmpty {
+                textHeight = 36 // minHeight — snap immediately when text is cleared
+            }
+        }
         .photosPicker(isPresented: $showPhotoPicker, selection: $selectedPhotos, maxSelectionCount: 4, matching: .images)
         .fullScreenCover(isPresented: $showCamera) {
             CameraPicker { uiImage in
@@ -229,6 +124,216 @@ public struct NativeChatInput: View {
                 }
             }
             .ignoresSafeArea()
+        }
+    }
+
+    // MARK: - Single Row Layout (default)
+
+    private var singleRowBody: some View {
+        HStack(alignment: .bottom, spacing: 8) {
+            plusMenuButton
+
+            // Chat bubble
+            VStack(spacing: 0) {
+                if !imageAttachments.isEmpty {
+                    imageThumbsRow
+                }
+                HStack(spacing: 4) {
+                    textInputView
+                    actionButton
+                }
+            }
+            .modifier(GlassChatInputBackground(glassStyle: chatInputGlassStyle))
+
+            historyMenuButton
+        }
+    }
+
+    // MARK: - Two Row Layout (buttons below text area)
+
+    private var twoRowBody: some View {
+        VStack(spacing: 6) {
+            // Full-width text area
+            VStack(spacing: 0) {
+                if !imageAttachments.isEmpty {
+                    imageThumbsRow
+                }
+                textInputView
+                    .padding(.trailing, 8)
+            }
+
+            // Buttons row below (inside the shared glass bounding box)
+            HStack(spacing: 8) {
+                plusMenuButton
+                historyMenuButton
+                Spacer()
+                twoRowActionButton
+            }
+            .padding(.horizontal, 8)
+            .padding(.bottom, 6)
+        }
+        .modifier(GlassChatInputBackground(glassStyle: chatInputGlassStyle))
+    }
+
+    // MARK: - Shared Subviews
+
+    private var plusMenuButton: some View {
+        Menu {
+            Button {
+                showCamera = true
+            } label: {
+                Label("Camera", systemImage: "camera")
+            }
+            Button {
+                showPhotoPicker = true
+            } label: {
+                Label("Photos", systemImage: "photo")
+            }
+            if onQuickCommands != nil {
+                Button {
+                    dismissKeyboard()
+                    onQuickCommands?()
+                } label: {
+                    Label("Quick Commands", systemImage: "bolt.fill")
+                }
+            }
+            Button {
+                dismissKeyboard()
+                onNewChat?()
+            } label: {
+                Label("New Chat", systemImage: "plus.bubble")
+            }
+        } label: {
+            Image(systemName: "plus")
+                .font(.system(size: 20, weight: .medium))
+                .foregroundStyle(.primary)
+                .frame(width: 40, height: 40)
+                .contentShape(Circle())
+                .modifier(GlassCircleModifier(glassStyle: isTwoRow ? nil : chatInputGlassStyle))
+        }
+    }
+
+    private var textInputView: some View {
+        NoAutofillTextView(
+            text: $text,
+            height: $textHeight,
+            placeholder: "Message...",
+            onSubmit: { dismissKeyboard(); onSubmit() }
+        )
+        .frame(height: textHeight)
+        .padding(.leading, 8)
+        .padding(.vertical, 2)
+    }
+
+    @ViewBuilder
+    private var actionButton: some View {
+        let hasContent = !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !imageAttachments.isEmpty
+        if isAgentRunning && !isAgentPaused {
+            Button {
+                dismissKeyboard()
+                onPause?()
+            } label: {
+                Image(systemName: "pause.fill")
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 34, height: 28)
+                    .background(Color.orange, in: Capsule())
+            }
+            .transition(.scale.combined(with: .opacity))
+            .padding(.trailing, 6)
+        } else if isAgentPaused && isAgentRunning {
+            Button {
+                dismissKeyboard()
+                onSubmit()
+            } label: {
+                Image(systemName: "play.fill")
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 34, height: 28)
+                    .background(Color.green, in: Capsule())
+            }
+            .transition(.scale.combined(with: .opacity))
+            .padding(.trailing, 6)
+        } else if isAgentPaused || hasContent {
+            Button {
+                dismissKeyboard()
+                onSubmit()
+            } label: {
+                Image(systemName: "arrow.up")
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 34, height: 28)
+                    .background(Color.accentColor, in: Capsule())
+            }
+            .transition(.scale.combined(with: .opacity))
+            .padding(.trailing, 6)
+        }
+    }
+
+    @ViewBuilder
+    private var twoRowActionButton: some View {
+        let hasContent = !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !imageAttachments.isEmpty
+        if isAgentRunning && !isAgentPaused {
+            Button {
+                dismissKeyboard()
+                onPause?()
+            } label: {
+                Image(systemName: "pause.fill")
+                    .font(.system(size: 18, weight: .bold))
+                    .foregroundStyle(.orange)
+                    .frame(width: 40, height: 40)
+                    .contentShape(Circle())
+                    .modifier(GlassCircleModifier(glassStyle: nil))
+            }
+            .transition(.scale.combined(with: .opacity))
+        } else if isAgentPaused && isAgentRunning {
+            Button {
+                dismissKeyboard()
+                onSubmit()
+            } label: {
+                Image(systemName: "play.fill")
+                    .font(.system(size: 18, weight: .bold))
+                    .foregroundStyle(.green)
+                    .frame(width: 40, height: 40)
+                    .contentShape(Circle())
+                    .modifier(GlassCircleModifier(glassStyle: nil))
+            }
+            .transition(.scale.combined(with: .opacity))
+        } else if isAgentPaused || hasContent {
+            Button {
+                dismissKeyboard()
+                onSubmit()
+            } label: {
+                Image(systemName: "arrow.up")
+                    .font(.system(size: 18, weight: .bold))
+                    .foregroundStyle(Color.accentColor)
+                    .frame(width: 40, height: 40)
+                    .contentShape(Circle())
+                    .modifier(GlassCircleModifier(glassStyle: nil))
+            }
+            .transition(.scale.combined(with: .opacity))
+        }
+    }
+
+    @ViewBuilder
+    private var historyMenuButton: some View {
+        if let history = messageHistory, !history.recentMessages.isEmpty {
+            Menu {
+                ForEach(history.recentMessages.prefix(15), id: \.self) { msg in
+                    Button {
+                        text = msg
+                    } label: {
+                        Text(msg.prefix(80) + (msg.count > 80 ? "..." : ""))
+                    }
+                }
+            } label: {
+                Image(systemName: "clock.arrow.circlepath")
+                    .font(.system(size: 18, weight: .medium))
+                    .foregroundStyle(.primary)
+                    .frame(width: 40, height: 40)
+                    .contentShape(Circle())
+                    .modifier(GlassCircleModifier(glassStyle: isTwoRow ? nil : chatInputGlassStyle))
+            }
         }
     }
 
@@ -278,8 +383,11 @@ public struct NativeChatInput: View {
     let onQuickCommands: (() -> Void)?
     var messageHistory: MessageHistory?
     var chatInputGlassStyle: String?
+    var chatInputLayout: String?
     @State private var showPhotoPicker = false
     @FocusState private var isFocused: Bool
+
+    private var isTwoRow: Bool { chatInputLayout == "twoRow" }
 
     public init(
         text: Binding<String>,
@@ -292,7 +400,8 @@ public struct NativeChatInput: View {
         onNewChat: (() -> Void)? = nil,
         onQuickCommands: (() -> Void)? = nil,
         messageHistory: MessageHistory? = nil,
-        chatInputGlassStyle: String? = nil
+        chatInputGlassStyle: String? = nil,
+        chatInputLayout: String? = nil
     ) {
         self._text = text
         self._imageAttachments = imageAttachments
@@ -305,134 +414,20 @@ public struct NativeChatInput: View {
         self.onQuickCommands = onQuickCommands
         self.messageHistory = messageHistory
         self.chatInputGlassStyle = chatInputGlassStyle
+        self.chatInputLayout = chatInputLayout
     }
 
     public var body: some View {
-        HStack(alignment: .bottom, spacing: 8) {
-            // + menu button outside the chat bubble (iMessage style)
-            Menu {
-                Button {
-                    showPhotoPicker = true
-                } label: {
-                    Label("Photos", systemImage: "photo")
-                }
-                if onQuickCommands != nil {
-                    Button {
-                        onQuickCommands?()
-                    } label: {
-                        Label("Quick Commands", systemImage: "bolt.fill")
-                    }
-                }
-                Button {
-                    onNewChat?()
-                } label: {
-                    Label("New Chat", systemImage: "plus.bubble")
-                }
-            } label: {
-                Image(systemName: "plus")
-                    .font(.system(size: 20, weight: .medium))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 40, height: 40)
-                    .contentShape(Rectangle())
-            }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .frame(width: 40, height: 40)
-            .modifier(GlassCircleModifier(glassStyle: chatInputGlassStyle))
-
-            // Chat bubble
-            VStack(spacing: 0) {
-                // Image thumbnails row
-                if !imageAttachments.isEmpty {
-                    imageThumbsRow
-                }
-
-                // Text field + send button
-                HStack(spacing: 4) {
-                    TextField("Message...", text: $text, axis: .vertical)
-                        .textFieldStyle(.plain)
-                        .lineLimit(1...5)
-                        .focused($isFocused)
-                        .padding(.leading, 12)
-                        .padding(.vertical, 8)
-                        .onSubmit {
-                            onSubmit()
-                        }
-
-                    let hasContent = !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !imageAttachments.isEmpty
-                    if isAgentRunning && !isAgentPaused {
-                        // Pause button — agent is actively running
-                        Button {
-                            onPause?()
-                        } label: {
-                            Image(systemName: "pause.fill")
-                                .font(.system(size: 14, weight: .bold))
-                                .foregroundStyle(.white)
-                                .frame(width: 34, height: 28)
-                                .background(Color.orange, in: Capsule())
-                        }
-                        .buttonStyle(.plain)
-                        .transition(.scale.combined(with: .opacity))
-                        .padding(.trailing, 6)
-                    } else if isAgentPaused {
-                        // Resume button — agent is paused, tap to resume
-                        Button {
-                            onSubmit()
-                        } label: {
-                            Image(systemName: "play.fill")
-                                .font(.system(size: 14, weight: .bold))
-                                .foregroundStyle(.white)
-                                .frame(width: 34, height: 28)
-                                .background(Color.green, in: Capsule())
-                        }
-                        .buttonStyle(.plain)
-                        .transition(.scale.combined(with: .opacity))
-                        .padding(.trailing, 6)
-                    } else if hasContent {
-                        // Send button
-                        Button {
-                            onSubmit()
-                        } label: {
-                            Image(systemName: "arrow.up")
-                                .font(.system(size: 14, weight: .bold))
-                                .foregroundStyle(.white)
-                                .frame(width: 34, height: 28)
-                                .background(Color.accentColor, in: Capsule())
-                        }
-                        .buttonStyle(.plain)
-                        .transition(.scale.combined(with: .opacity))
-                        .padding(.trailing, 6)
-                    }
-                }
-            }
-            .frame(minHeight: 40)
-            .modifier(GlassChatInputBackground(glassStyle: chatInputGlassStyle))
-
-            // History menu button outside the chat bubble (mirrors + button pattern)
-            if let history = messageHistory, !history.recentMessages.isEmpty {
-                Menu {
-                    ForEach(history.recentMessages.prefix(15), id: \.self) { msg in
-                        Button {
-                            text = msg
-                        } label: {
-                            Text(msg.prefix(80) + (msg.count > 80 ? "..." : ""))
-                        }
-                    }
-                } label: {
-                    Image(systemName: "clock.arrow.circlepath")
-                        .font(.system(size: 18, weight: .medium))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 40, height: 40)
-                        .contentShape(Rectangle())
-                }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
-                .frame(width: 40, height: 40)
-                .modifier(GlassCircleModifier(glassStyle: chatInputGlassStyle))
+        Group {
+            if isTwoRow {
+                twoRowBody
+            } else {
+                singleRowBody
             }
         }
         .animation(.easeInOut(duration: 0.2), value: imageAttachments.count)
         .animation(.easeInOut(duration: 0.2), value: isAgentRunning)
+        .animation(.easeInOut(duration: 0.2), value: isTwoRow)
         .photosPicker(isPresented: $showPhotoPicker, selection: $selectedPhotos, maxSelectionCount: 4, matching: .images)
         .onAppear {
             isFocused = true
@@ -459,6 +454,215 @@ public struct NativeChatInput: View {
                 return .handled
             }
             return .ignored
+        }
+    }
+
+    // MARK: - Single Row Layout (default)
+
+    private var singleRowBody: some View {
+        HStack(alignment: .bottom, spacing: 8) {
+            plusMenuButton
+
+            VStack(spacing: 0) {
+                if !imageAttachments.isEmpty {
+                    imageThumbsRow
+                }
+                HStack(spacing: 4) {
+                    textInputView
+                    actionButton
+                }
+            }
+            .frame(minHeight: 40)
+            .modifier(GlassChatInputBackground(glassStyle: chatInputGlassStyle))
+
+            historyMenuButton
+        }
+    }
+
+    // MARK: - Two Row Layout (buttons below text area)
+
+    private var twoRowBody: some View {
+        VStack(spacing: 6) {
+            VStack(spacing: 0) {
+                if !imageAttachments.isEmpty {
+                    imageThumbsRow
+                }
+                textInputView
+                    .padding(.trailing, 8)
+            }
+            .frame(minHeight: 40)
+
+            // Buttons row below (inside the shared glass bounding box)
+            HStack(spacing: 8) {
+                plusMenuButton
+                historyMenuButton
+                Spacer()
+                twoRowActionButton
+            }
+            .padding(.horizontal, 8)
+            .padding(.bottom, 6)
+        }
+        .modifier(GlassChatInputBackground(glassStyle: chatInputGlassStyle))
+    }
+
+    // MARK: - Shared Subviews
+
+    private var plusMenuButton: some View {
+        Menu {
+            Button {
+                showPhotoPicker = true
+            } label: {
+                Label("Photos", systemImage: "photo")
+            }
+            if onQuickCommands != nil {
+                Button {
+                    onQuickCommands?()
+                } label: {
+                    Label("Quick Commands", systemImage: "bolt.fill")
+                }
+            }
+            Button {
+                onNewChat?()
+            } label: {
+                Label("New Chat", systemImage: "plus.bubble")
+            }
+        } label: {
+            Image(systemName: "plus")
+                .font(.system(size: 20, weight: .medium))
+                .foregroundStyle(.secondary)
+                .frame(width: 40, height: 40)
+                .contentShape(Rectangle())
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .frame(width: 40, height: 40)
+        .modifier(GlassCircleModifier(glassStyle: isTwoRow ? nil : chatInputGlassStyle))
+    }
+
+    private var textInputView: some View {
+        TextField("Message...", text: $text, axis: .vertical)
+            .textFieldStyle(.plain)
+            .lineLimit(1...5)
+            .focused($isFocused)
+            .padding(.leading, 12)
+            .padding(.vertical, 8)
+            .onSubmit {
+                onSubmit()
+            }
+    }
+
+    @ViewBuilder
+    private var actionButton: some View {
+        let hasContent = !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !imageAttachments.isEmpty
+        if isAgentRunning && !isAgentPaused {
+            Button {
+                onPause?()
+            } label: {
+                Image(systemName: "pause.fill")
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 34, height: 28)
+                    .background(Color.orange, in: Capsule())
+            }
+            .buttonStyle(.plain)
+            .transition(.scale.combined(with: .opacity))
+            .padding(.trailing, 6)
+        } else if isAgentPaused {
+            Button {
+                onSubmit()
+            } label: {
+                Image(systemName: "play.fill")
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 34, height: 28)
+                    .background(Color.green, in: Capsule())
+            }
+            .buttonStyle(.plain)
+            .transition(.scale.combined(with: .opacity))
+            .padding(.trailing, 6)
+        } else if hasContent {
+            Button {
+                onSubmit()
+            } label: {
+                Image(systemName: "arrow.up")
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 34, height: 28)
+                    .background(Color.accentColor, in: Capsule())
+            }
+            .buttonStyle(.plain)
+            .transition(.scale.combined(with: .opacity))
+            .padding(.trailing, 6)
+        }
+    }
+
+    @ViewBuilder
+    private var twoRowActionButton: some View {
+        let hasContent = !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !imageAttachments.isEmpty
+        if isAgentRunning && !isAgentPaused {
+            Button {
+                onPause?()
+            } label: {
+                Image(systemName: "pause.fill")
+                    .font(.system(size: 18, weight: .bold))
+                    .foregroundStyle(.orange)
+                    .frame(width: 40, height: 40)
+                    .contentShape(Circle())
+                    .modifier(GlassCircleModifier(glassStyle: nil))
+            }
+            .buttonStyle(.plain)
+            .transition(.scale.combined(with: .opacity))
+        } else if isAgentPaused {
+            Button {
+                onSubmit()
+            } label: {
+                Image(systemName: "play.fill")
+                    .font(.system(size: 18, weight: .bold))
+                    .foregroundStyle(.green)
+                    .frame(width: 40, height: 40)
+                    .contentShape(Circle())
+                    .modifier(GlassCircleModifier(glassStyle: nil))
+            }
+            .buttonStyle(.plain)
+            .transition(.scale.combined(with: .opacity))
+        } else if hasContent {
+            Button {
+                onSubmit()
+            } label: {
+                Image(systemName: "arrow.up")
+                    .font(.system(size: 18, weight: .bold))
+                    .foregroundStyle(Color.accentColor)
+                    .frame(width: 40, height: 40)
+                    .contentShape(Circle())
+                    .modifier(GlassCircleModifier(glassStyle: nil))
+            }
+            .buttonStyle(.plain)
+            .transition(.scale.combined(with: .opacity))
+        }
+    }
+
+    @ViewBuilder
+    private var historyMenuButton: some View {
+        if let history = messageHistory, !history.recentMessages.isEmpty {
+            Menu {
+                ForEach(history.recentMessages.prefix(15), id: \.self) { msg in
+                    Button {
+                        text = msg
+                    } label: {
+                        Text(msg.prefix(80) + (msg.count > 80 ? "..." : ""))
+                    }
+                }
+            } label: {
+                Image(systemName: "clock.arrow.circlepath")
+                    .font(.system(size: 18, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 40, height: 40)
+                    .contentShape(Rectangle())
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .frame(width: 40, height: 40)
+            .modifier(GlassCircleModifier(glassStyle: isTwoRow ? nil : chatInputGlassStyle))
         }
     }
 
@@ -624,6 +828,10 @@ struct NoAutofillTextView: UIViewRepresentable {
         if textView.text != text {
             textView.text = text
             context.coordinator.placeholderLabel?.isHidden = !text.isEmpty
+            // Invalidate intrinsic size so contentSize reflects the new text
+            // before we read it. Without this, clearing the text leaves the
+            // old (multi-line) contentSize until the next layout pass.
+            textView.invalidateIntrinsicContentSize()
             textView.layoutIfNeeded()
             context.coordinator.recalcHeight(textView)
         }
@@ -638,10 +846,13 @@ struct NoAutofillTextView: UIViewRepresentable {
         }
 
         func recalcHeight(_ textView: UITextView) {
-            let clamped = min(max(textView.contentSize.height, parent.minHeight), parent.maxHeight)
-            if clamped != parent.height {
+            // When empty, contentSize can lag behind — snap to minimum
+            let target = textView.text.isEmpty
+                ? parent.minHeight
+                : min(max(textView.contentSize.height, parent.minHeight), parent.maxHeight)
+            if target != parent.height {
                 DispatchQueue.main.async {
-                    self.parent.height = clamped
+                    self.parent.height = target
                 }
             }
         }
