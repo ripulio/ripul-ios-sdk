@@ -173,6 +173,8 @@ public final class AgentBridge: NSObject, ObservableObject {
     @Published public var mastheadConfig: MastheadConfig?
     /// Glass style for the native chat input: "regular", "clear", or "identity".
     @Published public var chatInputGlassStyle: String?
+    /// Layout mode for the native chat input: nil/"single" (default) or "twoRow" (buttons below text area).
+    @Published public var chatInputLayout: String?
     /// A multichoice question awaiting native UI presentation.
     @Published public var pendingUserInteraction: UserInteractionQuestion?
     /// A free-text question awaiting native UI presentation.
@@ -402,6 +404,7 @@ public final class AgentBridge: NSObject, ObservableObject {
             handleMastheadConfig(dict)
         case "chatInput:config":
             chatInputGlassStyle = dict["glassStyle"] as? String
+            chatInputLayout = dict["layout"] as? String
         case "sessions:list:response":
             handleSessionsListResponse(dict)
         case "chat:new:ack":
@@ -817,11 +820,25 @@ public final class AgentBridge: NSObject, ObservableObject {
     /// Waits for the JS callable to be registered before calling.
     @available(iOS 15.0, macOS 13.0, *)
     public func fetchModels() async {
+        // Retry up to 3 times with 2s delays if the result is empty.
+        // Models depend on auth readiness and web app initialization,
+        // both of which may not be complete on the first attempt.
+        for attempt in 1...3 {
+            let success = await fetchModelsOnce()
+            if success && !availableModels.isEmpty { return }
+            if attempt < 3 {
+                NSLog("[AgentBridge] fetchModels: empty on attempt %d, retrying in 2s...", attempt)
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+            }
+        }
+    }
+
+    private func fetchModelsOnce() async -> Bool {
         lastModelsError = nil
 
         guard let webView else {
             lastModelsError = "WebView not available"
-            return
+            return false
         }
 
         do {
@@ -851,18 +868,18 @@ public final class AgentBridge: NSObject, ObservableObject {
 
             guard let dict = result as? [String: Any] else {
                 lastModelsError = "Unexpected response format"
-                return
+                return false
             }
 
             if let error = dict["error"] as? String {
                 lastModelsError = error
                 NSLog("[AgentBridge] fetchModels error: %@", error)
-                return
+                return false
             }
 
             guard let modelsArray = dict["models"] as? [[String: Any]] else {
                 lastModelsError = "No models array in response"
-                return
+                return false
             }
 
             let parsed: [ModelInfo] = modelsArray.compactMap { item in
@@ -890,9 +907,11 @@ public final class AgentBridge: NSObject, ObservableObject {
             self.modelSelectionEnabled = (dict["modelSelectionEnabled"] as? Bool) ?? true
             NSLog("[AgentBridge] fetchModels: %d models, selected: %@",
                   parsed.count, self.selectedModelId ?? "nil")
+            return !parsed.isEmpty
         } catch {
             lastModelsError = error.localizedDescription
             NSLog("[AgentBridge] fetchModels error: %@", error.localizedDescription)
+            return false
         }
     }
 
@@ -922,10 +941,12 @@ public final class AgentBridge: NSObject, ObservableObject {
 
     /// Toggle raw mode for a CLI session. In raw mode, prompts are passed verbatim
     /// to Claude with no system prompt wrapping and all tools available.
+    /// Returns `(success, errorMessage)`. When success is false and errorMessage is
+    /// non-nil, the caller should display it to the user.
     @available(iOS 15.0, macOS 13.0, *)
     @discardableResult
-    public func setRawMode(sessionId: String, enabled: Bool) async -> Bool {
-        guard let webView else { return false }
+    public func setRawMode(sessionId: String, enabled: Bool) async -> (Bool, String?) {
+        guard let webView else { return (false, nil) }
         do {
             let result = try await webView.callAsyncJavaScript(
                 "return await window.__ripulSetRawMode?.(sessionId, enabled) ?? {success:false};",
@@ -935,12 +956,14 @@ public final class AgentBridge: NSObject, ObservableObject {
             if let dict = result as? [String: Any],
                let success = dict["success"] as? Bool, success {
                 NSLog("[AgentBridge] setRawMode: session=%@, enabled=%@", sessionId, enabled ? "true" : "false")
-                return true
+                return (true, nil)
             }
-            return false
+            // Extract error message from the web app response
+            let errorMsg = (result as? [String: Any])?["error"] as? String
+            return (false, errorMsg)
         } catch {
             NSLog("[AgentBridge] setRawMode error: %@", error.localizedDescription)
-            return false
+            return (false, error.localizedDescription)
         }
     }
 
@@ -989,23 +1012,29 @@ public final class AgentBridge: NSObject, ObservableObject {
     }
 
     /// Fetch favorite directories from the remote host via the relay.
+    /// Retries up to 3 times with 1s delays if the result is empty,
+    /// since the relay connection may not be established yet.
     @available(iOS 15.0, macOS 13.0, *)
     public func getFavoriteDirectories() async -> [String] {
         guard let webView else { return [] }
-        do {
-            let result = try await webView.callAsyncJavaScript(
-                "return await window.__ripulGetFavoriteDirectories?.() ?? {directories:[]};",
-                contentWorld: .page
-            )
-            if let dict = result as? [String: Any],
-               let dirs = dict["directories"] as? [String] {
-                return dirs
+        for attempt in 1...3 {
+            do {
+                let result = try await webView.callAsyncJavaScript(
+                    "return await window.__ripulGetFavoriteDirectories?.() ?? {directories:[]};",
+                    contentWorld: .page
+                )
+                if let dict = result as? [String: Any],
+                   let dirs = dict["directories"] as? [String], !dirs.isEmpty {
+                    return dirs
+                }
+            } catch {
+                NSLog("[AgentBridge] getFavoriteDirectories error (attempt %d): %@", attempt, error.localizedDescription)
             }
-            return []
-        } catch {
-            NSLog("[AgentBridge] getFavoriteDirectories error: %@", error.localizedDescription)
-            return []
+            if attempt < 3 {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+            }
         }
+        return []
     }
 
     /// Import a Claude CLI session into the web app.
