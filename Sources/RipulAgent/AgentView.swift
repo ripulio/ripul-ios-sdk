@@ -281,7 +281,8 @@ public struct AgentView<TopBar: View>: View {
             onNewChat: handleNewChat,
             onQuickCommands: { showingQuickCommands = true },
             messageHistory: messageHistory,
-            chatInputGlassStyle: bridge.chatInputGlassStyle
+            chatInputGlassStyle: bridge.chatInputGlassStyle,
+            chatInputLayout: bridge.chatInputLayout
         )
     }
     #elseif os(macOS)
@@ -297,7 +298,8 @@ public struct AgentView<TopBar: View>: View {
             onNewChat: handleNewChat,
             onQuickCommands: { showingQuickCommands = true },
             messageHistory: messageHistory,
-            chatInputGlassStyle: bridge.chatInputGlassStyle
+            chatInputGlassStyle: bridge.chatInputGlassStyle,
+            chatInputLayout: bridge.chatInputLayout
         )
     }
     #endif

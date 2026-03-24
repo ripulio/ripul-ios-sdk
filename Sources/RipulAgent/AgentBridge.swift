@@ -334,6 +334,15 @@ public final class AgentBridge: NSObject, ObservableObject {
         webView.load(URLRequest(url: url))
     }
 
+    /// Dispatch a synthetic `visibilitychange` event into the web view so that
+    /// relay connections can immediately detect a stale WebSocket after the app
+    /// returns from background (WKWebView does not fire this event natively).
+    public func notifyWebViewBecameVisible() {
+        evaluateJavaScript("""
+            document.dispatchEvent(new Event('visibilitychange'));
+        """)
+    }
+
     /// Evaluate arbitrary JavaScript in the attached web view.
     /// Use for extracting data (e.g. auth tokens) from the web app context.
     public func evaluateJavaScript(_ script: String, completion: ((Any?) -> Void)? = nil) {
@@ -1155,6 +1164,42 @@ public final class AgentBridge: NSObject, ObservableObject {
             }
         } catch {
             NSLog("[AgentBridge] connectToMachine error: %@", error.localizedDescription)
+            return (nil, error.localizedDescription)
+        }
+    }
+
+    /// Connect to a remote machine in Claude Code mode: creates a session,
+    /// sets the model to claude-cli, and enables raw mode in one step.
+    @available(iOS 15.0, macOS 13.0, *)
+    public func connectToMachineWithCliMode(machineId: String) async -> (tabId: String?, error: String?) {
+        guard let webView else {
+            return (nil, "webView is nil")
+        }
+        do {
+            let result = try await webView.callAsyncJavaScript(
+                """
+                if (!window.__ripulConnectToMachineWithCliMode) return {success:false, error:'not ready'};
+                return await window.__ripulConnectToMachineWithCliMode(machineId);
+                """,
+                arguments: ["machineId": machineId],
+                contentWorld: .page
+            )
+            guard let dict = result as? [String: Any] else {
+                return (nil, "Unexpected result")
+            }
+            if let success = dict["success"] as? Bool, success {
+                let tabId = dict["tabId"] as? String
+                NSLog("[AgentBridge] connectToMachineWithCliMode: tab %@", tabId ?? "?")
+                // Update native state to reflect CLI mode + raw mode
+                self.selectedModelId = "claude-cli"
+                await fetchSessions()
+                return (tabId, nil)
+            } else {
+                let error = dict["error"] as? String ?? "Unknown error"
+                return (nil, error)
+            }
+        } catch {
+            NSLog("[AgentBridge] connectToMachineWithCliMode error: %@", error.localizedDescription)
             return (nil, error.localizedDescription)
         }
     }
