@@ -104,6 +104,20 @@ public struct ConsoleLogEntry: Identifiable {
     }
 }
 
+/// A diagnostic status message from the CLI pipeline, displayed in the native status bar.
+public struct ChatStatusEntry: Identifiable {
+    public let id = UUID()
+    public let timestamp: Date
+    public let chatId: String
+    public let message: String
+
+    public init(timestamp: Date, chatId: String, message: String) {
+        self.timestamp = timestamp
+        self.chatId = chatId
+        self.message = message
+    }
+}
+
 /// Masthead configuration received from the web app's ViewContext features.
 public struct MastheadConfig: Equatable {
     public var text: String?
@@ -471,6 +485,16 @@ public final class AgentBridge: NSObject, ObservableObject {
             if let paused = dict["isPaused"] as? Bool {
                 isAgentPaused = paused
             }
+        case "chat:status":
+            if let message = dict["message"] as? String {
+                let chatId = dict["chatId"] as? String ?? "unknown"
+                let entry = ChatStatusEntry(timestamp: Date(), chatId: chatId, message: message)
+                chatStatusLog.append(entry)
+                if chatStatusLog.count > maxChatStatusEntries {
+                    chatStatusLog.removeFirst(chatStatusLog.count - maxChatStatusEntries)
+                }
+                latestChatStatus = message
+            }
         case "chat:prefill":
             pendingInputText = dict["text"] as? String
         case "link:open":
@@ -500,6 +524,12 @@ public final class AgentBridge: NSObject, ObservableObject {
     /// Rolling buffer of captured JS console messages.
     @Published public var consoleLogs: [ConsoleLogEntry] = []
     private let maxLogEntries = 2000
+
+    /// Rolling buffer of CLI pipeline status messages for native diagnostic display.
+    @Published public var chatStatusLog: [ChatStatusEntry] = []
+    /// The most recent chat status message (convenience for single-line display).
+    @Published public var latestChatStatus: String?
+    private let maxChatStatusEntries = 200
 
     public func handleConsoleLog(_ message: String) {
         NSLog("[JS] %@", message)
@@ -556,6 +586,11 @@ public final class AgentBridge: NSObject, ObservableObject {
 
     public func clearConsoleLogs() {
         consoleLogs.removeAll()
+    }
+
+    public func clearChatStatusLog() {
+        chatStatusLog.removeAll()
+        latestChatStatus = nil
     }
 
     /// Start a new chat with an optional prompt via the bridge protocol.

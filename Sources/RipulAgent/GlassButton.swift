@@ -17,7 +17,7 @@ public struct GlassButton: View {
                 .font(.system(size: 18, weight: .semibold))
                 .foregroundStyle(.primary)
                 .frame(width: 44, height: 44)
-                .modifier(GlassCircleModifier(glassStyle: "clear"))
+                .modifier(GlassCircleModifier(glassStyle: "regular"))
         }
     }
 }
@@ -73,7 +73,7 @@ public struct GlassPillModifier: ViewModifier {
         if #available(iOS 26.0, *) {
             shaped
                 .background(.clear)
-                .glassEffect(.clear, in: .capsule)
+                .glassEffect(.regular, in: .capsule)
         } else {
             shaped
                 .background(.ultraThinMaterial, in: Capsule())
@@ -82,7 +82,7 @@ public struct GlassPillModifier: ViewModifier {
         if #available(macOS 26.0, *) {
             shaped
                 .background(.clear)
-                .glassEffect(.clear, in: .capsule)
+                .glassEffect(.regular, in: .capsule)
         } else {
             shaped
                 .background(.ultraThinMaterial, in: Capsule())

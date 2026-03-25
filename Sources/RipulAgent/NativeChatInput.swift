@@ -64,7 +64,7 @@ public struct NativeChatInput: View {
     @State private var textHeight: CGFloat = 36
 
     private var isTwoRow: Bool { chatInputLayout == "twoRow" }
-    private var resolvedChatInputGlassStyle: String { chatInputGlassStyle ?? "regular" }
+    private var resolvedChatInputGlassStyle: String { chatInputGlassStyle ?? "clear" }
 
     public init(
         text: Binding<String>,
@@ -239,39 +239,42 @@ public struct NativeChatInput: View {
                 onPause?()
             } label: {
                 Image(systemName: "pause.fill")
-                    .font(.system(size: 14, weight: .bold))
-                    .foregroundStyle(.white)
-                    .frame(width: 34, height: 28)
-                    .background(Color.orange, in: Capsule())
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundStyle(.orange)
+                    .frame(width: 36, height: 36)
+                    .contentShape(Circle())
+                    .modifier(GlassCircleModifier(glassStyle: "clear"))
             }
             .transition(.scale.combined(with: .opacity))
-            .padding(.trailing, 6)
+            .padding(.trailing, 4)
         } else if isAgentPaused && isAgentRunning {
             Button {
                 dismissKeyboard()
                 onSubmit()
             } label: {
                 Image(systemName: "play.fill")
-                    .font(.system(size: 14, weight: .bold))
-                    .foregroundStyle(.white)
-                    .frame(width: 34, height: 28)
-                    .background(Color.green, in: Capsule())
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundStyle(.green)
+                    .frame(width: 36, height: 36)
+                    .contentShape(Circle())
+                    .modifier(GlassCircleModifier(glassStyle: "clear"))
             }
             .transition(.scale.combined(with: .opacity))
-            .padding(.trailing, 6)
+            .padding(.trailing, 4)
         } else if isAgentPaused || hasContent {
             Button {
                 dismissKeyboard()
                 onSubmit()
             } label: {
                 Image(systemName: "arrow.up")
-                    .font(.system(size: 14, weight: .bold))
-                    .foregroundStyle(.white)
-                    .frame(width: 34, height: 28)
-                    .background(Color.accentColor, in: Capsule())
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundStyle(Color.accentColor)
+                    .frame(width: 36, height: 36)
+                    .contentShape(Circle())
+                    .modifier(GlassCircleModifier(glassStyle: "clear"))
             }
             .transition(.scale.combined(with: .opacity))
-            .padding(.trailing, 6)
+            .padding(.trailing, 4)
         }
     }
 
@@ -393,7 +396,7 @@ public struct NativeChatInput: View {
     @FocusState private var isFocused: Bool
 
     private var isTwoRow: Bool { chatInputLayout == "twoRow" }
-    private var resolvedChatInputGlassStyle: String { chatInputGlassStyle ?? "regular" }
+    private var resolvedChatInputGlassStyle: String { chatInputGlassStyle ?? "clear" }
 
     public init(
         text: Binding<String>,
