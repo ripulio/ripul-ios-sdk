@@ -41,6 +41,10 @@ public struct ChatSession: Identifiable, Equatable {
     public let createdAt: Date
     /// Name of the remote machine this session is paired to, or nil for local sessions.
     public var remoteMachineName: String?
+    /// CLI provider for this session (e.g. "claude-cli", "codex-cli"), or nil for non-CLI sessions.
+    public var provider: String?
+    /// Human-readable provider label (e.g. "Claude Code", "Codex"), or nil.
+    public var providerLabel: String?
 }
 
 /// An option for a slash command sub-menu.
@@ -766,9 +770,12 @@ public final class AgentBridge: NSObject, ObservableObject {
                 let createdAtMs = item["createdAt"] as? Double ?? 0
                 let createdAt = Date(timeIntervalSince1970: createdAtMs / 1000)
                 let remoteMachineName = item["remoteMachineName"] as? String
+                let provider = item["provider"] as? String
+                let providerLabel = item["providerLabel"] as? String
                 return ChatSession(id: id, sourceChatId: sourceChatId,
                                    displayName: displayName, createdAt: createdAt,
-                                   remoteMachineName: remoteMachineName)
+                                   remoteMachineName: remoteMachineName,
+                                   provider: provider, providerLabel: providerLabel)
             }
 
             if !parsed.isEmpty {
@@ -1799,7 +1806,10 @@ public final class AgentBridge: NSObject, ObservableObject {
                   let displayName = dict["displayName"] as? String else { return nil }
             let createdAtMs = dict["createdAt"] as? Double ?? 0
             let createdAt = Date(timeIntervalSince1970: createdAtMs / 1000)
-            return ChatSession(id: id, sourceChatId: sourceChatId, displayName: displayName, createdAt: createdAt)
+            let provider = dict["provider"] as? String
+            let providerLabel = dict["providerLabel"] as? String
+            return ChatSession(id: id, sourceChatId: sourceChatId, displayName: displayName, createdAt: createdAt,
+                               provider: provider, providerLabel: providerLabel)
         }
 
         // Only update sessions when we get data. Never clear a good cached
