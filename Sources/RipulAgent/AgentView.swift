@@ -298,7 +298,15 @@ public struct AgentView<TopBar: View>: View {
             onQuickCommands: { showingQuickCommands = true },
             messageHistory: messageHistory,
             chatInputGlassStyle: bridge.chatInputGlassStyle,
-            chatInputLayout: bridge.chatInputLayout
+            chatInputLayout: bridge.chatInputLayout,
+            onQueryFiles: { query in
+                let results = await bridge.queryRemoteFiles(query: query)
+                return results.compactMap { dict in
+                    guard let path = dict["path"] as? String else { return nil }
+                    let isDir = dict["isDirectory"] as? Bool ?? false
+                    return FileSuggestion(path: path, isDirectory: isDir)
+                }
+            }
         )
     }
     #elseif os(macOS)

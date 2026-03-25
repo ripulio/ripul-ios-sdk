@@ -403,7 +403,9 @@ public final class AgentBridge: NSObject, ObservableObject {
         isThemeReady = false
         wantsMinimize = false
         NSLog("[AgentBridge] Navigating to: %@", url.absoluteString)
-        webView.load(URLRequest(url: url))
+        var request = URLRequest(url: url)
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        webView.load(request)
     }
 
     /// Update the web app's bottom padding to match the measured native chat input height.
@@ -1181,6 +1183,28 @@ public final class AgentBridge: NSObject, ObservableObject {
             if attempt < 3 {
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
             }
+        }
+        return []
+    }
+
+    /// Query the remote host for file suggestions matching a partial path/name.
+    /// Used by the native @files autocomplete in NativeChatInput.
+    /// Returns an array of dictionaries with `path` (String) and `isDirectory` (Bool).
+    @available(iOS 15.0, macOS 13.0, *)
+    public func queryRemoteFiles(query: String) async -> [[String: Any]] {
+        guard let webView, !query.isEmpty else { return [] }
+        do {
+            let result = try await webView.callAsyncJavaScript(
+                "return await window.__ripulQueryRemoteFiles?.(query) ?? { files: [] };",
+                arguments: ["query": query],
+                contentWorld: .page
+            )
+            if let dict = result as? [String: Any],
+               let files = dict["files"] as? [[String: Any]] {
+                return files
+            }
+        } catch {
+            NSLog("[AgentBridge] queryRemoteFiles error: %@", error.localizedDescription)
         }
         return []
     }

@@ -39,6 +39,25 @@ public struct NativeImageAttachment: Identifiable {
     }
 }
 
+// MARK: - File Suggestion Model
+
+/// A file suggestion returned from the remote host for @files autocomplete.
+public struct FileSuggestion: Identifiable {
+    public let id: String
+    public let path: String
+    public let isDirectory: Bool
+
+    public var fileName: String {
+        (path as NSString).lastPathComponent
+    }
+
+    public init(path: String, isDirectory: Bool) {
+        self.id = path
+        self.path = path
+        self.isDirectory = isDirectory
+    }
+}
+
 // MARK: - Cross-platform Chat Input
 
 /// A floating chat input that uses Liquid Glass on iOS 26+ and ultraThinMaterial elsewhere.
@@ -59,9 +78,17 @@ public struct NativeChatInput: View {
     var messageHistory: MessageHistory?
     var chatInputGlassStyle: String?
     var chatInputLayout: String?
+    /// Optional callback to query remote host for file suggestions.
+    /// When provided, typing `@` followed by text triggers file autocomplete.
+    var onQueryFiles: ((String) async -> [FileSuggestion])?
     @State private var showPhotoPicker = false
     @State private var showCamera = false
     @State private var textHeight: CGFloat = 36
+    @State private var fileSuggestions: [FileSuggestion] = []
+    @State private var showFileSuggestions = false
+    @State private var fileQueryTask: Task<Void, Never>?
+    /// The character index where the `@` trigger was typed
+    @State private var atTriggerIndex: String.Index?
 
     private var isTwoRow: Bool { chatInputLayout == "twoRow" }
     private var resolvedChatInputGlassStyle: String { chatInputGlassStyle ?? "clear" }
@@ -78,7 +105,8 @@ public struct NativeChatInput: View {
         onQuickCommands: (() -> Void)? = nil,
         messageHistory: MessageHistory? = nil,
         chatInputGlassStyle: String? = nil,
-        chatInputLayout: String? = nil
+        chatInputLayout: String? = nil,
+        onQueryFiles: ((String) async -> [FileSuggestion])? = nil
     ) {
         self._text = text
         self._imageAttachments = imageAttachments
@@ -92,6 +120,7 @@ public struct NativeChatInput: View {
         self.messageHistory = messageHistory
         self.chatInputGlassStyle = chatInputGlassStyle
         self.chatInputLayout = chatInputLayout
+        self.onQueryFiles = onQueryFiles
     }
 
     private func dismissKeyboard() {
@@ -99,20 +128,32 @@ public struct NativeChatInput: View {
     }
 
     public var body: some View {
-        Group {
-            if isTwoRow {
-                twoRowBody
-            } else {
-                singleRowBody
+        ZStack(alignment: .bottom) {
+            Group {
+                if isTwoRow {
+                    twoRowBody
+                } else {
+                    singleRowBody
+                }
+            }
+
+            // File suggestions overlay (appears above the input)
+            if showFileSuggestions && !fileSuggestions.isEmpty {
+                fileSuggestionsOverlay
+                    .transition(.opacity.combined(with: .move(edge: .bottom)))
             }
         }
         .animation(.easeInOut(duration: 0.15), value: textHeight)
         .animation(.easeInOut(duration: 0.2), value: imageAttachments.count)
         .animation(.easeInOut(duration: 0.2), value: isAgentRunning)
         .animation(.easeInOut(duration: 0.2), value: isTwoRow)
+        .animation(.easeInOut(duration: 0.15), value: showFileSuggestions)
         .onChange(of: text) { newValue in
             if newValue.isEmpty {
                 textHeight = 36 // minHeight — snap immediately when text is cleared
+                dismissFileSuggestions()
+            } else {
+                handleAtDetection(newValue)
             }
         }
         .photosPicker(isPresented: $showPhotoPicker, selection: $selectedPhotos, maxSelectionCount: 4, matching: .images)
@@ -126,6 +167,124 @@ public struct NativeChatInput: View {
             }
             .ignoresSafeArea()
         }
+    }
+
+    // MARK: - File Suggestions
+
+    /// Detect `@` followed by typing and trigger file query
+    private func handleAtDetection(_ value: String) {
+        guard onQueryFiles != nil else { return }
+
+        // Find the last `@` in the text
+        guard let atRange = value.range(of: "@", options: .backwards) else {
+            dismissFileSuggestions()
+            return
+        }
+
+        // Check that @ is at start of text or preceded by a space
+        if atRange.lowerBound != value.startIndex {
+            let charBefore = value[value.index(before: atRange.lowerBound)]
+            if !charBefore.isWhitespace {
+                dismissFileSuggestions()
+                return
+            }
+        }
+
+        let afterAt = String(value[atRange.upperBound...])
+
+        // If there's a space after the query portion, the mention is "closed" — dismiss
+        if afterAt.contains(" ") {
+            dismissFileSuggestions()
+            return
+        }
+
+        // Need at least 1 char after @ to search
+        guard !afterAt.isEmpty else {
+            dismissFileSuggestions()
+            return
+        }
+
+        atTriggerIndex = atRange.lowerBound
+
+        // Debounced query
+        fileQueryTask?.cancel()
+        fileQueryTask = Task {
+            try? await Task.sleep(nanoseconds: 150_000_000) // 150ms
+            guard !Task.isCancelled else { return }
+            if let queryFiles = onQueryFiles {
+                let results = await queryFiles(afterAt)
+                guard !Task.isCancelled else { return }
+                await MainActor.run {
+                    fileSuggestions = results
+                    showFileSuggestions = !results.isEmpty
+                }
+            }
+        }
+    }
+
+    private func dismissFileSuggestions() {
+        showFileSuggestions = false
+        fileSuggestions = []
+        atTriggerIndex = nil
+        fileQueryTask?.cancel()
+    }
+
+    private func selectFileSuggestion(_ suggestion: FileSuggestion) {
+        // Replace the @query with @path/to/file
+        if let triggerIdx = atTriggerIndex {
+            let before = String(text[text.startIndex..<triggerIdx])
+            text = before + "@" + suggestion.path + " "
+        } else {
+            text += suggestion.path + " "
+        }
+        dismissFileSuggestions()
+    }
+
+    private var fileSuggestionsOverlay: some View {
+        VStack(spacing: 0) {
+            ScrollView {
+                LazyVStack(spacing: 0) {
+                    ForEach(fileSuggestions) { suggestion in
+                        Button {
+                            selectFileSuggestion(suggestion)
+                        } label: {
+                            HStack(spacing: 8) {
+                                Image(systemName: suggestion.isDirectory ? "folder.fill" : "doc.text.fill")
+                                    .foregroundStyle(suggestion.isDirectory ? .blue : .secondary)
+                                    .frame(width: 20)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(suggestion.fileName)
+                                        .font(.system(size: 14, weight: .medium))
+                                        .foregroundStyle(.primary)
+                                        .lineLimit(1)
+                                    if suggestion.path != suggestion.fileName {
+                                        Text(suggestion.path)
+                                            .font(.system(size: 11))
+                                            .foregroundStyle(.secondary)
+                                            .lineLimit(1)
+                                    }
+                                }
+                                Spacer()
+                            }
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+
+                        if suggestion.id != fileSuggestions.last?.id {
+                            Divider().padding(.leading, 40)
+                        }
+                    }
+                }
+            }
+            .frame(maxHeight: 200)
+        }
+        .background(.ultraThinMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .shadow(color: .black.opacity(0.15), radius: 8, y: -2)
+        .padding(.horizontal, 16)
+        .padding(.bottom, textHeight + 16)
     }
 
     // MARK: - Single Row Layout (default)
