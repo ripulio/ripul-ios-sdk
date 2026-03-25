@@ -121,11 +121,23 @@ public struct ChatStatusEntry: Identifiable {
 /// Structured agent activity event for native consumers (Dynamic Island, widgets, etc.).
 public enum AgentActivityEvent: Equatable {
     case thinking
-    case toolStart(toolName: String, toolId: String)
-    case toolEnd(toolName: String, toolId: String, status: String)
+    case toolStart(toolName: String, toolId: String, toolLabel: String?)
+    case toolEnd(toolName: String, toolId: String, status: String, toolLabel: String?)
     case response(preview: String)
     case error(message: String)
     case complete
+
+    /// The human-readable display name for tool events. Prefers toolLabel, falls back to toolName.
+    public var displayName: String? {
+        switch self {
+        case .toolStart(let toolName, _, let toolLabel):
+            return toolLabel ?? toolName
+        case .toolEnd(let toolName, _, _, let toolLabel):
+            return toolLabel ?? toolName
+        default:
+            return nil
+        }
+    }
 
     /// Parse from a JSON dictionary received from the web app.
     public static func from(dict: [String: Any]) -> AgentActivityEvent? {
@@ -136,12 +148,14 @@ public enum AgentActivityEvent: Equatable {
         case "toolStart":
             let toolName = dict["toolName"] as? String ?? ""
             let toolId = dict["toolId"] as? String ?? ""
-            return .toolStart(toolName: toolName, toolId: toolId)
+            let toolLabel = dict["toolLabel"] as? String
+            return .toolStart(toolName: toolName, toolId: toolId, toolLabel: toolLabel)
         case "toolEnd":
             let toolName = dict["toolName"] as? String ?? ""
             let toolId = dict["toolId"] as? String ?? ""
             let status = dict["status"] as? String ?? "success"
-            return .toolEnd(toolName: toolName, toolId: toolId, status: status)
+            let toolLabel = dict["toolLabel"] as? String
+            return .toolEnd(toolName: toolName, toolId: toolId, status: status, toolLabel: toolLabel)
         case "response":
             let preview = dict["preview"] as? String ?? ""
             return .response(preview: preview)
