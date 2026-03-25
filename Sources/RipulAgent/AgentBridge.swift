@@ -118,6 +118,44 @@ public struct ChatStatusEntry: Identifiable {
     }
 }
 
+/// Structured agent activity event for native consumers (Dynamic Island, widgets, etc.).
+public enum AgentActivityEvent: Equatable {
+    case thinking
+    case toolStart(toolName: String, toolId: String)
+    case toolEnd(toolName: String, toolId: String, status: String)
+    case response(preview: String)
+    case error(message: String)
+    case complete
+
+    /// Parse from a JSON dictionary received from the web app.
+    public static func from(dict: [String: Any]) -> AgentActivityEvent? {
+        guard let kind = dict["kind"] as? String else { return nil }
+        switch kind {
+        case "thinking":
+            return .thinking
+        case "toolStart":
+            let toolName = dict["toolName"] as? String ?? ""
+            let toolId = dict["toolId"] as? String ?? ""
+            return .toolStart(toolName: toolName, toolId: toolId)
+        case "toolEnd":
+            let toolName = dict["toolName"] as? String ?? ""
+            let toolId = dict["toolId"] as? String ?? ""
+            let status = dict["status"] as? String ?? "success"
+            return .toolEnd(toolName: toolName, toolId: toolId, status: status)
+        case "response":
+            let preview = dict["preview"] as? String ?? ""
+            return .response(preview: preview)
+        case "error":
+            let message = dict["message"] as? String ?? ""
+            return .error(message: message)
+        case "complete":
+            return .complete
+        default:
+            return nil
+        }
+    }
+}
+
 /// Masthead configuration received from the web app's ViewContext features.
 public struct MastheadConfig: Equatable {
     public var text: String?
@@ -181,6 +219,8 @@ public final class AgentBridge: NSObject, ObservableObject {
     @Published public var selectedModelId: String?
     @Published public var modelSelectionEnabled: Bool = true
     @Published public var lastModelsError: String?
+    /// The most recent structured agent activity event from the web app.
+    @Published public var latestActivity: AgentActivityEvent?
     /// Whether the agent is currently running (processing) for the active session.
     @Published public var isAgentRunning = false
     /// Whether the agent is paused (awaiting user input) for the active session.
@@ -484,6 +524,11 @@ public final class AgentBridge: NSObject, ObservableObject {
             }
             if let paused = dict["isPaused"] as? Bool {
                 isAgentPaused = paused
+            }
+        case "agent:activity":
+            if let eventDict = dict["event"] as? [String: Any],
+               let event = AgentActivityEvent.from(dict: eventDict) {
+                latestActivity = event
             }
         case "chat:status":
             if let message = dict["message"] as? String {
