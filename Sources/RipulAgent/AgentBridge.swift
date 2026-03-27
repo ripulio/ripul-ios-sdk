@@ -587,12 +587,12 @@ public final class AgentBridge: NSObject, ObservableObject {
             handleUserInteractionDate(dict)
         case "kill":
             let reason = dict["reason"] as? String ?? "remote_user"
-            NSLog("[AgentBridge] Kill command received (reason: %@) — exiting process", reason)
+            NSLog("[AgentBridge] Kill command received (reason: %@) — exiting for guardian restart", reason)
             #if os(macOS)
-            // Use exit() instead of NSApplication.terminate() to avoid killing
-            // the guardian child process (which needs to survive to restart us).
+            // _exit() terminates immediately — no cleanup handlers, no quit file.
+            // The guardian (in its own process group) detects the exit and restarts.
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                exit(0)
+                _exit(0)
             }
             #endif
         default:
