@@ -369,14 +369,22 @@ public final class AgentBridge: NSObject, ObservableObject {
             WKWebsiteDataTypeFetchCache,
         ]
         WKWebsiteDataStore.default().removeData(ofTypes: cacheTypes, modifiedSince: .distantPast) { [weak self] in
-            guard let webView = self?.webView else {
+            guard let self, let webView = self.webView else {
                 NSLog("[AgentBridge] Cannot reload — webView is nil")
                 return
             }
-            NSLog("[AgentBridge] Cache cleared, reloading from origin")
-            self?.isConnected = false
-            self?.isThemeReady = false
-            webView.reloadFromOrigin()
+            NSLog("[AgentBridge] Cache cleared, performing fresh load (not reloadFromOrigin)")
+            self.isConnected = false
+            self.isThemeReady = false
+            // Use a fresh URLRequest with reloadIgnoringLocalCacheData instead of
+            // reloadFromOrigin(), which doesn't clear WKWebView's ES module cache.
+            if let url = webView.url {
+                var request = URLRequest(url: url)
+                request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+                webView.load(request)
+            } else {
+                webView.reloadFromOrigin()
+            }
         }
     }
 
@@ -386,10 +394,18 @@ public final class AgentBridge: NSObject, ObservableObject {
         let allTypes = WKWebsiteDataStore.allWebsiteDataTypes()
         WKWebsiteDataStore.default().removeData(ofTypes: allTypes, modifiedSince: .distantPast) { [weak self] in
             guard let webView = self?.webView else { return }
-            NSLog("[AgentBridge] All website data cleared, reloading")
+            NSLog("[AgentBridge] All website data cleared, performing fresh load")
             self?.isConnected = false
             self?.isThemeReady = false
-            webView.reload()
+            self?.hasAttemptedCacheReload = false
+            // Use a fresh URLRequest to bypass WKWebView's ES module cache
+            if let url = webView.url {
+                var request = URLRequest(url: url)
+                request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+                webView.load(request)
+            } else {
+                webView.reloadFromOrigin()
+            }
         }
     }
 
@@ -569,6 +585,16 @@ public final class AgentBridge: NSObject, ObservableObject {
             handleUserInteractionText(dict)
         case "userInteraction:date":
             handleUserInteractionDate(dict)
+        case "kill":
+            let reason = dict["reason"] as? String ?? "remote_user"
+            NSLog("[AgentBridge] Kill command received (reason: %@) — exiting process", reason)
+            #if os(macOS)
+            // Use exit() instead of NSApplication.terminate() to avoid killing
+            // the guardian child process (which needs to survive to restart us).
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                exit(0)
+            }
+            #endif
         default:
             if onUnhandledMessage?(messageType, dict) != true {
                 NSLog("[AgentBridge] Unhandled message: %@", messageType)
@@ -1138,6 +1164,31 @@ public final class AgentBridge: NSObject, ObservableObject {
         }
     }
 
+    /// Fork a CLI session into a new independent conversation.
+    /// Returns the new chatId on success, or nil on failure.
+    @available(iOS 15.0, macOS 13.0, *)
+    public func forkSession(sourceChatId: String, displayName: String?) async -> (success: Bool, newChatId: String?, error: String?) {
+        guard let webView else { return (false, nil, "webView is nil") }
+        do {
+            let result = try await webView.callAsyncJavaScript(
+                "return await window.__ripulForkSession?.(sourceChatId, displayName) ?? {success:false, error:'not ready'};",
+                arguments: ["sourceChatId": sourceChatId, "displayName": displayName as Any],
+                contentWorld: .page
+            )
+            if let dict = result as? [String: Any],
+               let success = dict["success"] as? Bool, success {
+                let newChatId = dict["newChatId"] as? String
+                NSLog("[AgentBridge] forkSession: forked %@ → %@", sourceChatId, newChatId ?? "?")
+                return (true, newChatId, nil)
+            }
+            let errorMsg = (result as? [String: Any])?["error"] as? String
+            return (false, nil, errorMsg)
+        } catch {
+            NSLog("[AgentBridge] forkSession error: %@", error.localizedDescription)
+            return (false, nil, error.localizedDescription)
+        }
+    }
+
     /// Set the working directory for a CLI session via the web app's relay.
     /// Pass nil to reset to the host's default.
     @available(iOS 15.0, macOS 13.0, *)
@@ -1606,6 +1657,30 @@ public final class AgentBridge: NSObject, ObservableObject {
         } catch {
             NSLog("[AgentBridge] getHostStatus error: %@", error.localizedDescription)
             return nil
+        }
+    }
+
+    /// Send a kill command to a remote machine via the relay.
+    /// The controller's web view sends a `machine:kill` command through
+    /// the relay WebSocket; the target machine's guardian process handles it.
+    public func killMachine(machineId: String, reason: String = "remote_user") async -> (success: Bool, error: String?) {
+        guard let webView else { return (false, "WebView not available") }
+        do {
+            let result = try await webView.callAsyncJavaScript(
+                """
+                if (!window.__ripulKillMachine) return {success:false, error:'not ready'};
+                return await window.__ripulKillMachine(machineId, reason);
+                """,
+                arguments: ["machineId": machineId, "reason": reason],
+                contentWorld: .page
+            )
+            if let dict = result as? [String: Any] {
+                return (dict["success"] as? Bool ?? false, dict["error"] as? String)
+            }
+            return (false, "Unexpected response")
+        } catch {
+            NSLog("[AgentBridge] killMachine error: %@", error.localizedDescription)
+            return (false, error.localizedDescription)
         }
     }
 

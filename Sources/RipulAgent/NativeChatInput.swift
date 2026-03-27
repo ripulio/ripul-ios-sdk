@@ -39,6 +39,13 @@ public struct NativeImageAttachment: Identifiable {
     }
 }
 
+// MARK: - Preference Keys
+
+private struct FileSuggestionsHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+
 // MARK: - File Suggestion Model
 
 /// A file suggestion returned from the remote host for @files autocomplete.
@@ -87,6 +94,7 @@ public struct NativeChatInput: View {
     @State private var fileSuggestions: [FileSuggestion] = []
     @State private var showFileSuggestions = false
     @State private var fileQueryTask: Task<Void, Never>?
+    @State private var fileSuggestionsHeight: CGFloat = 0
     /// The character index where the `@` trigger was typed
     @State private var atTriggerIndex: String.Index?
 
@@ -128,19 +136,18 @@ public struct NativeChatInput: View {
     }
 
     public var body: some View {
-        ZStack(alignment: .bottom) {
+        VStack(spacing: 4) {
+            if showFileSuggestions && !fileSuggestions.isEmpty {
+                fileSuggestionsOverlay
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+
             Group {
                 if isTwoRow {
                     twoRowBody
                 } else {
                     singleRowBody
                 }
-            }
-
-            // File suggestions overlay (appears above the input)
-            if showFileSuggestions && !fileSuggestions.isEmpty {
-                fileSuggestionsOverlay
-                    .transition(.opacity.combined(with: .move(edge: .bottom)))
             }
         }
         .animation(.easeInOut(duration: 0.15), value: textHeight)
@@ -151,9 +158,6 @@ public struct NativeChatInput: View {
         .onChange(of: text) { newValue in
             if newValue.isEmpty {
                 textHeight = 36 // minHeight — snap immediately when text is cleared
-                dismissFileSuggestions()
-            } else {
-                handleAtDetection(newValue)
             }
         }
         .photosPicker(isPresented: $showPhotoPicker, selection: $selectedPhotos, maxSelectionCount: 4, matching: .images)
@@ -173,7 +177,10 @@ public struct NativeChatInput: View {
 
     /// Detect `@` followed by typing and trigger file query
     private func handleAtDetection(_ value: String) {
-        guard onQueryFiles != nil else { return }
+        guard onQueryFiles != nil else {
+            NSLog("[NativeChatInput] @files: onQueryFiles callback not set")
+            return
+        }
 
         // Find the last `@` in the text
         guard let atRange = value.range(of: "@", options: .backwards) else {
@@ -207,12 +214,14 @@ public struct NativeChatInput: View {
         atTriggerIndex = atRange.lowerBound
 
         // Debounced query
+        NSLog("[NativeChatInput] @files: querying for '%@'", afterAt)
         fileQueryTask?.cancel()
         fileQueryTask = Task {
             try? await Task.sleep(nanoseconds: 150_000_000) // 150ms
             guard !Task.isCancelled else { return }
             if let queryFiles = onQueryFiles {
                 let results = await queryFiles(afterAt)
+                NSLog("[NativeChatInput] @files: got %d results for '%@'", results.count, afterAt)
                 guard !Task.isCancelled else { return }
                 await MainActor.run {
                     fileSuggestions = results
@@ -284,7 +293,6 @@ public struct NativeChatInput: View {
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .shadow(color: .black.opacity(0.15), radius: 8, y: -2)
         .padding(.horizontal, 16)
-        .padding(.bottom, textHeight + 16)
     }
 
     // MARK: - Single Row Layout (default)
@@ -381,11 +389,19 @@ public struct NativeChatInput: View {
         NoAutofillTextView(
             text: $text,
             height: $textHeight,
-            placeholder: "Message..."
-        ) {
-            dismissKeyboard()
-            onSubmit()
-        }
+            placeholder: "Message...",
+            onSubmit: {
+                dismissKeyboard()
+                onSubmit()
+            },
+            onTextChange: { newText in
+                if newText.isEmpty {
+                    dismissFileSuggestions()
+                } else {
+                    handleAtDetection(newText)
+                }
+            }
+        )
         .frame(maxWidth: .infinity, minHeight: textHeight, maxHeight: textHeight, alignment: .leading)
     }
 
@@ -551,8 +567,16 @@ public struct NativeChatInput: View {
     var messageHistory: MessageHistory?
     var chatInputGlassStyle: String?
     var chatInputLayout: String?
+    /// Optional callback to query remote host for file suggestions.
+    /// When provided, typing `@` followed by text triggers file autocomplete.
+    var onQueryFiles: ((String) async -> [FileSuggestion])?
     @State private var showPhotoPicker = false
     @FocusState private var isFocused: Bool
+    @State private var fileSuggestions: [FileSuggestion] = []
+    @State private var showFileSuggestions = false
+    @State private var fileQueryTask: Task<Void, Never>?
+    /// The character index where the `@` trigger was typed
+    @State private var atTriggerIndex: String.Index?
 
     private var isTwoRow: Bool { chatInputLayout == "twoRow" }
     private var resolvedChatInputGlassStyle: String { chatInputGlassStyle ?? "clear" }
@@ -569,7 +593,8 @@ public struct NativeChatInput: View {
         onQuickCommands: (() -> Void)? = nil,
         messageHistory: MessageHistory? = nil,
         chatInputGlassStyle: String? = nil,
-        chatInputLayout: String? = nil
+        chatInputLayout: String? = nil,
+        onQueryFiles: ((String) async -> [FileSuggestion])? = nil
     ) {
         self._text = text
         self._imageAttachments = imageAttachments
@@ -583,6 +608,120 @@ public struct NativeChatInput: View {
         self.messageHistory = messageHistory
         self.chatInputGlassStyle = chatInputGlassStyle
         self.chatInputLayout = chatInputLayout
+        self.onQueryFiles = onQueryFiles
+    }
+
+    // MARK: - File Suggestions
+
+    /// Detect `@` followed by typing and trigger file query
+    private func handleAtDetection(_ value: String) {
+        guard onQueryFiles != nil else { return }
+
+        guard let atRange = value.range(of: "@", options: .backwards) else {
+            dismissFileSuggestions()
+            return
+        }
+
+        if atRange.lowerBound != value.startIndex {
+            let charBefore = value[value.index(before: atRange.lowerBound)]
+            if !charBefore.isWhitespace {
+                dismissFileSuggestions()
+                return
+            }
+        }
+
+        let afterAt = String(value[atRange.upperBound...])
+
+        if afterAt.contains(" ") {
+            dismissFileSuggestions()
+            return
+        }
+
+        guard !afterAt.isEmpty else {
+            dismissFileSuggestions()
+            return
+        }
+
+        atTriggerIndex = atRange.lowerBound
+
+        NSLog("[NativeChatInput] @files: querying for '%@'", afterAt)
+        fileQueryTask?.cancel()
+        fileQueryTask = Task {
+            try? await Task.sleep(nanoseconds: 150_000_000) // 150ms
+            guard !Task.isCancelled else { return }
+            if let queryFiles = onQueryFiles {
+                let results = await queryFiles(afterAt)
+                NSLog("[NativeChatInput] @files: got %d results for '%@'", results.count, afterAt)
+                guard !Task.isCancelled else { return }
+                await MainActor.run {
+                    fileSuggestions = results
+                    showFileSuggestions = !results.isEmpty
+                }
+            }
+        }
+    }
+
+    private func dismissFileSuggestions() {
+        showFileSuggestions = false
+        fileSuggestions = []
+        atTriggerIndex = nil
+        fileQueryTask?.cancel()
+    }
+
+    private func selectFileSuggestion(_ suggestion: FileSuggestion) {
+        if let triggerIdx = atTriggerIndex {
+            let before = String(text[text.startIndex..<triggerIdx])
+            text = before + "@" + suggestion.path + " "
+        } else {
+            text += suggestion.path + " "
+        }
+        dismissFileSuggestions()
+    }
+
+    private var fileSuggestionsOverlay: some View {
+        VStack(spacing: 0) {
+            ScrollView {
+                LazyVStack(spacing: 0) {
+                    ForEach(fileSuggestions) { suggestion in
+                        Button {
+                            selectFileSuggestion(suggestion)
+                        } label: {
+                            HStack(spacing: 8) {
+                                Image(systemName: suggestion.isDirectory ? "folder.fill" : "doc.text.fill")
+                                    .foregroundStyle(suggestion.isDirectory ? .blue : .secondary)
+                                    .frame(width: 20)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(suggestion.fileName)
+                                        .font(.system(size: 14, weight: .medium))
+                                        .foregroundStyle(.primary)
+                                        .lineLimit(1)
+                                    if suggestion.path != suggestion.fileName {
+                                        Text(suggestion.path)
+                                            .font(.system(size: 11))
+                                            .foregroundStyle(.secondary)
+                                            .lineLimit(1)
+                                    }
+                                }
+                                Spacer()
+                            }
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+
+                        if suggestion.id != fileSuggestions.last?.id {
+                            Divider().padding(.leading, 40)
+                        }
+                    }
+                }
+            }
+            .frame(maxHeight: 200)
+        }
+        .background(.ultraThinMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .shadow(color: .black.opacity(0.15), radius: 8, y: -2)
+        .padding(.horizontal, 16)
     }
 
     public var body: some View {
@@ -593,9 +732,17 @@ public struct NativeChatInput: View {
                 singleRowBody
             }
         }
+        .overlay(alignment: .top) {
+            if showFileSuggestions {
+                fileSuggestionsOverlay
+                    .offset(y: -8)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
         .animation(.easeInOut(duration: 0.2), value: imageAttachments.count)
         .animation(.easeInOut(duration: 0.2), value: isAgentRunning)
         .animation(.easeInOut(duration: 0.2), value: isTwoRow)
+        .animation(.easeInOut(duration: 0.2), value: showFileSuggestions)
         .photosPicker(isPresented: $showPhotoPicker, selection: $selectedPhotos, maxSelectionCount: 4, matching: .images)
         .onAppear {
             isFocused = true
@@ -720,6 +867,9 @@ public struct NativeChatInput: View {
             .padding(.vertical, 8)
             .onSubmit {
                 onSubmit()
+            }
+            .onChange(of: text) { newValue in
+                handleAtDetection(newValue)
             }
     }
 
@@ -978,6 +1128,7 @@ struct NoAutofillTextView: UIViewRepresentable {
     @Binding var height: CGFloat
     var placeholder: String
     var onSubmit: () -> Void
+    var onTextChange: ((String) -> Void)?
 
     private let minHeight: CGFloat = 36
     private let maxHeight: CGFloat = 120
@@ -1063,6 +1214,7 @@ struct NoAutofillTextView: UIViewRepresentable {
             parent.text = textView.text
             placeholderLabel?.isHidden = !textView.text.isEmpty
             recalcHeight(textView)
+            parent.onTextChange?(textView.text)
         }
 
         func textView(_ textView: UITextView, shouldChangeTextIn range: NSRange, replacementText text: String) -> Bool {
