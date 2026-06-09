@@ -1,0 +1,1149 @@
+#if os(iOS)
+import SwiftUI
+import UIKit
+
+// MARK: - View Inspector Overlay
+//
+// Native equivalent of the web ElementDebuggerOverlay. When active, a
+// transparent full-screen layer captures touches. A virtual cursor (crosshair)
+// tracks relative finger movement (Jump-Desktop style) so the target is never
+// occluded by the thumb. The UIView under the cursor is highlighted and its
+// properties are shown in a draggable HUD.
+
+// MARK: - UIKit Identifier Registry
+//
+// SwiftUI views ≠ UIKit views. There's no reliable way to map from the UIKit
+// view that hitTest returns to the SwiftUI view that had .uiKitIdentifier().
+//
+// Simple approach: each .uiKitIdentifier() modifier inserts a tiny background
+// UIView that registers itself (with its window-space frame) in a global registry.
+// When the inspector needs to resolve an identifier at a point, it iterates all
+// registered views and picks the smallest frame containing that point — like the
+// web inspector's elementsFromPoint() finding the tightest data-ui match.
+
+public final class UIKitIdentifierRegistry {
+    public static let shared = UIKitIdentifierRegistry()
+    private let map = NSMapTable<UIView, NSString>.weakToStrongObjects()
+
+    public func register(_ view: UIView, identifier: String) {
+        map.setObject(identifier as NSString, forKey: view)
+    }
+
+    public func identifier(for view: UIView) -> String? {
+        map.object(forKey: view) as String?
+    }
+
+    /// Find the identifier whose registered view best matches `windowPoint`.
+    ///
+    /// Two-pass algorithm:
+    /// 1. Collect all stamper views whose frame contains the point.
+    /// 2. Compare by **Z-order first** (frontmost wins), then by **area**
+    ///    (smallest wins among views at the same Z-level).
+    ///
+    /// Z-order is determined by walking each view's superview chain to the
+    /// window root and recording the subview index at each level. Comparing
+    /// these index-paths lexicographically (from root to leaf) tells us which
+    /// view is rendered in front — exactly like comparing layer order in a
+    /// depth-first traversal.
+    func bestMatch(at windowPoint: CGPoint) -> (identifier: String, view: UIView)? {
+        struct Candidate {
+            let view: UIView
+            let identifier: String
+            let area: CGFloat
+            let zPath: [Int]   // root-to-leaf subview indices
+        }
+
+        var candidates: [Candidate] = []
+        let enumerator = map.keyEnumerator()
+        while let view = enumerator.nextObject() as? UIView {
+            guard view.window != nil, !view.isHidden else { continue }
+            guard !Self.isOccludedByAncestor(view) else { continue }
+            let frame = view.convert(view.bounds, to: nil)
+            guard frame.contains(windowPoint) else { continue }
+            guard let id = map.object(forKey: view) as? String else { continue }
+            let area = frame.width * frame.height
+            let zPath = Self.zOrderPath(of: view)
+            candidates.append(Candidate(view: view, identifier: id, area: area, zPath: zPath))
+        }
+
+        guard !candidates.isEmpty else { return nil }
+
+        // Sort: higher z-order first, then smaller area first
+        candidates.sort { a, b in
+            let cmp = Self.compareZPaths(a.zPath, b.zPath)
+            if cmp != 0 { return cmp > 0 }  // higher z-order wins
+            return a.area < b.area           // smaller area wins as tiebreaker
+        }
+
+        let best = candidates[0]
+        return (best.identifier, best.view)
+    }
+
+    /// Build a root-to-leaf array of subview indices for Z-order comparison.
+    private static func zOrderPath(of view: UIView) -> [Int] {
+        var path: [Int] = []
+        var current = view
+        while let parent = current.superview {
+            let idx = parent.subviews.firstIndex(of: current) ?? 0
+            path.append(idx)
+            current = parent
+        }
+        path.reverse()
+        return path
+    }
+
+    /// Compare two z-order paths lexicographically.
+    /// Returns >0 if `a` is in front, <0 if `b` is in front, 0 if equal.
+    private static func compareZPaths(_ a: [Int], _ b: [Int]) -> Int {
+        let len = min(a.count, b.count)
+        for i in 0..<len {
+            if a[i] != b[i] { return a[i] - b[i] }
+        }
+        // Deeper view is "inside" the shallower one — treat deeper as in front
+        return a.count - b.count
+    }
+
+    /// Returns true if any ancestor of `view` is effectively invisible
+    /// (hidden or alpha ≈ 0). This filters out views inside always-mounted
+    /// but invisible layers (e.g. `.opacity(0)` screens in a ZStack).
+    private static func isOccludedByAncestor(_ view: UIView) -> Bool {
+        var current = view.superview
+        while let v = current {
+            if v.isHidden || v.alpha < 0.01 { return true }
+            current = v.superview
+        }
+        return false
+    }
+}
+
+private struct UIKitIdentifierStamper: UIViewRepresentable {
+    let identifier: String
+
+    func makeUIView(context: Context) -> UIView {
+        let v = UIView()
+        v.isUserInteractionEnabled = false
+        // Not hidden — needs a valid frame for spatial lookup.
+        // Fully transparent so it's invisible.
+        v.backgroundColor = .clear
+        v.alpha = 0.01
+        return v
+    }
+
+    func updateUIView(_ uiView: UIView, context: Context) {
+        // Register ourselves. Our frame matches the content's frame
+        // because .background() sizes us to fit.
+        UIKitIdentifierRegistry.shared.register(uiView, identifier: identifier)
+    }
+}
+
+public extension View {
+    /// Assigns a logical identifier visible to the View Inspector.
+    /// Uses a background UIView registered in a spatial lookup — the inspector
+    /// finds the tightest match at the cursor point, no tree walking needed.
+    func uiKitIdentifier(_ identifier: String) -> some View {
+        self
+            .accessibilityIdentifier(identifier)
+            .background(UIKitIdentifierStamper(identifier: identifier))
+    }
+}
+
+// MARK: - Inspected View Model
+
+struct InspectedView {
+    let view: UIView
+    let className: String
+    let accessibilityId: String?
+    let accessibilityLabel: String?
+    let frame: CGRect
+    let frameInWindow: CGRect
+    let backgroundColor: UIColor?
+    let alpha: CGFloat
+    let isHidden: Bool
+    let clipsToBounds: Bool
+    let tag: Int
+    let layer: LayerInfo
+    let childCount: Int
+    let depth: Int
+
+    struct LayerInfo {
+        let cornerRadius: CGFloat
+        let borderWidth: CGFloat
+        let borderColor: UIColor?
+        let shadowRadius: CGFloat
+        let shadowOpacity: Float
+    }
+
+    static func inspect(_ view: UIView, depth: Int = 0, resolvedIdentifier: String? = nil) -> InspectedView {
+        let className = String(describing: type(of: view))
+        let frameInWindow = view.convert(view.bounds, to: nil)
+        let resolvedId = resolvedIdentifier
+        return InspectedView(
+            view: view,
+            className: className,
+            accessibilityId: resolvedId,
+            accessibilityLabel: view.accessibilityLabel,
+            frame: view.frame,
+            frameInWindow: frameInWindow,
+            backgroundColor: view.backgroundColor,
+            alpha: view.alpha,
+            isHidden: view.isHidden,
+            clipsToBounds: view.clipsToBounds,
+            tag: view.tag,
+            layer: LayerInfo(
+                cornerRadius: view.layer.cornerRadius,
+                borderWidth: view.layer.borderWidth,
+                borderColor: view.layer.borderColor.map { UIColor(cgColor: $0) },
+                shadowRadius: view.layer.shadowRadius,
+                shadowOpacity: view.layer.shadowOpacity
+            ),
+            childCount: view.subviews.count,
+            depth: depth
+        )
+    }
+}
+
+// MARK: - Tree Node
+
+struct ViewTreeNode: Identifiable {
+    let id = UUID()
+    let view: UIView
+    let label: String
+    let depth: Int
+    var children: [ViewTreeNode]
+
+    static func build(from view: UIView, depth: Int = 0, maxDepth: Int = 12) -> ViewTreeNode {
+        let label = Self.nodeLabel(view)
+        let children: [ViewTreeNode]
+        if depth < maxDepth {
+            children = view.subviews.map { build(from: $0, depth: depth + 1, maxDepth: maxDepth) }
+        } else {
+            children = []
+        }
+        return ViewTreeNode(view: view, label: label, depth: depth, children: children)
+    }
+
+    static func nodeLabel(_ view: UIView) -> String {
+        var s = String(describing: type(of: view))
+        // Shorten SwiftUI hosting prefixes
+        if s.hasPrefix("_") { s = String(s.dropFirst()) }
+        if let regId = UIKitIdentifierRegistry.shared.identifier(for: view) {
+            s += " [\(regId)]"
+        } else if let aid = view.accessibilityIdentifier, !aid.isEmpty {
+            s += " [\(aid)]"
+        }
+        return s
+    }
+}
+
+// MARK: - Inspector Controller (UIKit)
+
+/// Transparent UIView installed over the key window that captures all touches
+/// and implements the virtual cursor + hit testing.
+class ViewInspectorController: UIView {
+    var onInspect: ((InspectedView) -> Void)?
+    var onCursorMoved: ((CGPoint) -> Void)?
+    var onDismiss: (() -> Void)?
+
+    private let cursorAccel: CGFloat = 1.4
+    private var cursorPos: CGPoint
+    private var lastTouch: CGPoint?
+
+    // Highlight layer drawn around the selected view
+    private let highlightLayer = CAShapeLayer()
+
+    override init(frame: CGRect) {
+        cursorPos = CGPoint(x: frame.width / 2, y: frame.height / 2)
+        super.init(frame: frame)
+        backgroundColor = .clear
+        isMultipleTouchEnabled = false
+
+        highlightLayer.fillColor = UIColor.systemPink.withAlphaComponent(0.12).cgColor
+        highlightLayer.strokeColor = UIColor.systemPink.cgColor
+        highlightLayer.lineWidth = 2
+        layer.addSublayer(highlightLayer)
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    func resetCursor() {
+        cursorPos = CGPoint(x: bounds.width / 2, y: bounds.height / 2)
+        onCursorMoved?(cursorPos)
+    }
+
+    // MARK: Touch handling
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        guard let t = touches.first else { return }
+        let loc = t.location(in: self)
+        lastTouch = loc
+        pickAt(cursorPos)
+    }
+
+    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
+        guard let t = touches.first, let last = lastTouch else { return }
+        let loc = t.location(in: self)
+        let dx = (loc.x - last.x) * cursorAccel
+        let dy = (loc.y - last.y) * cursorAccel
+        lastTouch = loc
+
+        cursorPos.x = max(0, min(bounds.width - 1, cursorPos.x + dx))
+        cursorPos.y = max(0, min(bounds.height - 1, cursorPos.y + dy))
+        onCursorMoved?(cursorPos)
+        pickAt(cursorPos)
+    }
+
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        lastTouch = nil
+    }
+
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+        lastTouch = nil
+    }
+
+    // MARK: Hit testing
+
+    private func pickAt(_ point: CGPoint) {
+        // Temporarily hide ourselves so hitTest sees through
+        isUserInteractionEnabled = false
+        isHidden = true
+
+        let windowPoint = convert(point, to: nil)
+        var hit: UIView? = nil
+        if let window = self.window {
+            hit = window.hitTest(windowPoint, with: nil)
+        }
+
+        isHidden = false
+        isUserInteractionEnabled = true
+
+        // If we hit ourselves or the window root, try elementFromPoint via subviews
+        if hit == nil || hit === self || hit === self.window {
+            hit = deepestSubview(at: windowPoint)
+        }
+
+        guard let target = hit, target !== self else {
+            highlightLayer.path = nil
+            return
+        }
+
+        // Spatial lookup: find the tightest .uiKitIdentifier() match at this point
+        let match = UIKitIdentifierRegistry.shared.bestMatch(at: windowPoint)
+
+        // Highlight the registry match's frame if available, otherwise the hit view
+        let highlightView = match?.view ?? target
+        let frameInWindow = highlightView.convert(highlightView.bounds, to: nil)
+        let frameInSelf = convert(frameInWindow, from: nil)
+        highlightLayer.path = UIBezierPath(roundedRect: frameInSelf, cornerRadius: highlightView.layer.cornerRadius).cgPath
+
+        // Inspect — pass the resolved identifier from spatial lookup
+        let info = InspectedView.inspect(target, depth: viewDepth(target), resolvedIdentifier: match?.identifier)
+        onInspect?(info)
+    }
+
+    private func deepestSubview(at windowPoint: CGPoint) -> UIView? {
+        guard let window = self.window else { return nil }
+        var best: UIView? = nil
+        func walk(_ view: UIView) {
+            guard view !== self else { return }
+            guard !view.isHidden, view.alpha > 0.01 else { return }
+            let localPoint = view.convert(windowPoint, from: window)
+            if view.bounds.contains(localPoint) {
+                best = view
+                for sub in view.subviews {
+                    walk(sub)
+                }
+            }
+        }
+        for sub in window.subviews {
+            walk(sub)
+        }
+        return best
+    }
+
+    private func viewDepth(_ view: UIView) -> Int {
+        var d = 0
+        var v: UIView? = view.superview
+        while v != nil { d += 1; v = v?.superview }
+        return d
+    }
+}
+
+// MARK: - UIKit Representable
+
+struct ViewInspectorTouchLayer: UIViewRepresentable {
+    let onInspect: (InspectedView) -> Void
+    let onCursorMoved: (CGPoint) -> Void
+
+    func makeUIView(context: Context) -> ViewInspectorController {
+        let v = ViewInspectorController(frame: UIScreen.main.bounds)
+        v.onInspect = onInspect
+        v.onCursorMoved = onCursorMoved
+        v.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        return v
+    }
+
+    func updateUIView(_ uiView: ViewInspectorController, context: Context) {
+        uiView.onInspect = onInspect
+        uiView.onCursorMoved = onCursorMoved
+    }
+}
+
+// MARK: - Crosshair Reticle
+
+struct CrosshairReticle: View {
+    let position: CGPoint
+    let size: CGFloat = 28
+
+    var body: some View {
+        ZStack {
+            // Circle
+            Circle()
+                .stroke(Color.pink, lineWidth: 2)
+                .frame(width: size, height: size)
+                .shadow(color: .black.opacity(0.5), radius: 1, x: 0, y: 0)
+
+            // Horizontal line
+            Rectangle()
+                .fill(Color.pink.opacity(0.75))
+                .frame(width: size + 8, height: 2)
+
+            // Vertical line
+            Rectangle()
+                .fill(Color.pink.opacity(0.75))
+                .frame(width: 2, height: size + 8)
+
+            // Center dot
+            Circle()
+                .fill(.white)
+                .frame(width: 3, height: 3)
+        }
+        .position(position)
+        .allowsHitTesting(false)
+    }
+}
+
+// MARK: - Properties Tab
+
+@available(iOS 16.0, *)
+struct InspectorPropertiesTab: View {
+    let info: InspectedView
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            section("Identity") {
+                if let aid = info.accessibilityId, !aid.isEmpty {
+                    // Orange pill badge — prominent, like web ElementDebuggerOverlay data-ui
+                    Button {
+                        UIPasteboard.general.string = aid
+                    } label: {
+                        Text(aid)
+                            .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 3)
+                            .background(Color.orange.opacity(0.7))
+                            .clipShape(Capsule())
+                            .overlay(
+                                Capsule()
+                                    .stroke(Color.orange, lineWidth: 1)
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.bottom, 2)
+                }
+                copyableRow("Class", info.className, valueColor: .green)
+                if let label = info.accessibilityLabel, !label.isEmpty {
+                    row("a11y Label", label)
+                }
+                if info.tag != 0 {
+                    row("Tag", "\(info.tag)")
+                }
+            }
+
+            section("Geometry") {
+                row("Frame", String(format: "%.0f, %.0f  %.0f x %.0f",
+                    info.frame.origin.x, info.frame.origin.y,
+                    info.frame.width, info.frame.height))
+                row("Window", String(format: "%.0f, %.0f  %.0f x %.0f",
+                    info.frameInWindow.origin.x, info.frameInWindow.origin.y,
+                    info.frameInWindow.width, info.frameInWindow.height))
+            }
+
+            section("Appearance") {
+                row("Alpha", String(format: "%.2f", info.alpha))
+                row("Hidden", info.isHidden ? "YES" : "NO")
+                row("Clips", info.clipsToBounds ? "YES" : "NO")
+                if let bg = info.backgroundColor {
+                    HStack(spacing: 8) {
+                        Text("Background")
+                            .foregroundStyle(.gray)
+                            .frame(width: 90, alignment: .leading)
+                        RoundedRectangle(cornerRadius: 3)
+                            .fill(Color(bg))
+                            .frame(width: 16, height: 16)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 3)
+                                    .stroke(.white.opacity(0.3), lineWidth: 0.5)
+                            )
+                        Text(bg.hexString)
+                            .foregroundStyle(.white)
+                    }
+                    .font(.system(size: 11, design: .monospaced))
+                }
+            }
+
+            section("Layer") {
+                row("Corner R", String(format: "%.1f", info.layer.cornerRadius))
+                if info.layer.borderWidth > 0 {
+                    row("Border", String(format: "%.1f", info.layer.borderWidth))
+                }
+                if info.layer.shadowOpacity > 0 {
+                    row("Shadow R", String(format: "%.1f", info.layer.shadowRadius))
+                    row("Shadow α", String(format: "%.2f", info.layer.shadowOpacity))
+                }
+            }
+
+            section("Hierarchy") {
+                row("Children", "\(info.childCount)")
+                row("Depth", "\(info.depth)")
+            }
+
+            // Diagnostic: show ancestor chain with identifiers
+            section("Ancestors") {
+                let ancestors = Self.ancestorChain(info.view, maxDepth: 12)
+                ForEach(Array(ancestors.enumerated()), id: \.offset) { idx, entry in
+                    HStack(spacing: 4) {
+                        Text("↑\(idx)")
+                            .foregroundStyle(.gray)
+                            .frame(width: 24, alignment: .trailing)
+                        Text(entry.className)
+                            .foregroundStyle(.cyan)
+                            .lineLimit(1)
+                        if let aid = entry.identifier {
+                            Text("[\(aid)]")
+                                .foregroundStyle(.orange)
+                                .lineLimit(1)
+                        }
+                    }
+                    .font(.system(size: 10, design: .monospaced))
+                }
+            }
+        }
+    }
+
+    private struct AncestorEntry {
+        let className: String
+        let identifier: String?
+    }
+
+    private static func ancestorChain(_ view: UIView, maxDepth: Int) -> [AncestorEntry] {
+        var result: [AncestorEntry] = []
+        let registry = UIKitIdentifierRegistry.shared
+        var current: UIView? = view.superview
+        while let v = current, result.count < maxDepth {
+            let name = String(describing: type(of: v))
+            let regId = registry.identifier(for: v)
+            let aid = v.accessibilityIdentifier
+            let displayId = regId ?? ((aid != nil && !aid!.isEmpty) ? aid : nil)
+            result.append(AncestorEntry(className: name, identifier: displayId))
+            current = v.superview
+        }
+        return result
+    }
+
+    private func section(_ title: String, @ViewBuilder content: () -> some View) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+                .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                .foregroundStyle(.pink)
+                .textCase(.uppercase)
+                .tracking(0.5)
+            content()
+        }
+        .padding(.bottom, 4)
+    }
+
+    private func row(_ key: String, _ value: String, valueColor: Color = .white) -> some View {
+        HStack(spacing: 8) {
+            Text(key)
+                .foregroundStyle(.gray)
+                .frame(width: 90, alignment: .leading)
+            Text(value)
+                .foregroundStyle(valueColor)
+        }
+        .font(.system(size: 11, design: .monospaced))
+    }
+
+    private func copyableRow(_ key: String, _ value: String, valueColor: Color = .white) -> some View {
+        Button {
+            UIPasteboard.general.string = value
+        } label: {
+            HStack(spacing: 8) {
+                Text(key)
+                    .foregroundStyle(.gray)
+                    .frame(width: 90, alignment: .leading)
+                Text(value)
+                    .foregroundStyle(valueColor)
+            }
+            .font(.system(size: 11, design: .monospaced))
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+// MARK: - Tree Tab
+
+@available(iOS 16.0, *)
+struct InspectorTreeTab: View {
+    let selectedView: UIView
+    let onSelect: (UIView) -> Void
+
+    var body: some View {
+        // Build tree from the window root so we always show the full hierarchy.
+        // Auto-expand the path to the selected view.
+        let root = windowRoot(for: selectedView)
+        let ancestorSet = ancestors(of: selectedView)
+        let tree = ViewTreeNode.build(from: root, maxDepth: 10)
+        ScrollView(.vertical, showsIndicators: true) {
+            VStack(alignment: .leading, spacing: 0) {
+                TreeNodeRow(node: tree, selectedView: selectedView, expandedAncestors: ancestorSet, onSelect: onSelect)
+            }
+        }
+    }
+
+    private func windowRoot(for view: UIView) -> UIView {
+        var v = view
+        while let parent = v.superview { v = parent }
+        return v
+    }
+
+    private func ancestors(of view: UIView) -> Set<ObjectIdentifier> {
+        var set = Set<ObjectIdentifier>()
+        var v: UIView? = view
+        while let current = v {
+            set.insert(ObjectIdentifier(current))
+            v = current.superview
+        }
+        return set
+    }
+}
+
+@available(iOS 16.0, *)
+struct TreeNodeRow: View {
+    let node: ViewTreeNode
+    let selectedView: UIView
+    let expandedAncestors: Set<ObjectIdentifier>
+    let onSelect: (UIView) -> Void
+    @State private var isExpanded: Bool
+
+    init(node: ViewTreeNode, selectedView: UIView, expandedAncestors: Set<ObjectIdentifier>, onSelect: @escaping (UIView) -> Void) {
+        self.node = node
+        self.selectedView = selectedView
+        self.expandedAncestors = expandedAncestors
+        self.onSelect = onSelect
+        // Auto-expand if this node is an ancestor of the selected view
+        _isExpanded = State(initialValue: expandedAncestors.contains(ObjectIdentifier(node.view)))
+    }
+
+    private var isSelected: Bool {
+        node.view === selectedView
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 4) {
+                if !node.children.isEmpty {
+                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 9))
+                        .foregroundStyle(.pink)
+                        .frame(width: 14)
+                        .onTapGesture { isExpanded.toggle() }
+                } else {
+                    Text("·")
+                        .font(.system(size: 9))
+                        .foregroundStyle(.gray.opacity(0.3))
+                        .frame(width: 14)
+                }
+
+                Text(node.label)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(isSelected ? .pink : .cyan)
+                    .fontWeight(isSelected ? .bold : .regular)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .onTapGesture { onSelect(node.view) }
+            }
+            .padding(.leading, CGFloat(node.depth) * 10)
+            .frame(minHeight: 28)
+            .padding(.vertical, 2)
+            .background(isSelected ? Color.pink.opacity(0.15) : .clear)
+            .clipShape(RoundedRectangle(cornerRadius: 3))
+
+            if isExpanded {
+                ForEach(node.children) { child in
+                    TreeNodeRow(node: child, selectedView: selectedView, expandedAncestors: expandedAncestors, onSelect: onSelect)
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Draggable HUD Container (UIKit)
+
+/// Wraps any SwiftUI content in a UIKit container with a UIPanGestureRecognizer.
+/// The pan directly applies `transform` on the hosted content view for 60fps 1:1
+/// tracking, completely bypassing SwiftUI's state/render pipeline during the drag.
+/// On gesture end, persists the final position to UserDefaults.
+///
+/// The container VC uses a PassthroughRootView as its root. This view overrides
+/// `hitTest` so that touches landing outside the actual HUD content fall through
+/// to sibling views below in the ZStack (i.e. the ViewInspectorTouchLayer).
+private struct DraggableHUDWrapper<Content: View>: UIViewControllerRepresentable {
+    let content: Content
+    let posXKey: String
+    let posYKey: String
+    let store: UserDefaults
+
+    func makeUIViewController(context: Context) -> DraggableHUDContainerVC<Content> {
+        DraggableHUDContainerVC(
+            content: content,
+            posXKey: posXKey,
+            posYKey: posYKey,
+            store: store
+        )
+    }
+
+    func updateUIViewController(_ vc: DraggableHUDContainerVC<Content>, context: Context) {
+        vc.updateContent(content)
+    }
+}
+
+/// Pan gesture that requires a minimum translation before activating,
+/// so taps pass through to underlying SwiftUI buttons.
+private class ThresholdPanGesture: UIPanGestureRecognizer {
+    private let threshold: CGFloat = 8
+    private var initialPoint: CGPoint = .zero
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+        super.touchesBegan(touches, with: event)
+        initialPoint = touches.first?.location(in: view) ?? .zero
+    }
+
+    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
+        super.touchesMoved(touches, with: event)
+        guard state == .possible, let touch = touches.first else { return }
+        let loc = touch.location(in: view)
+        let dx = abs(loc.x - initialPoint.x)
+        let dy = abs(loc.y - initialPoint.y)
+        if dx + dy < threshold {
+            // Not enough movement — don't transition to .began yet
+            // (UIPanGestureRecognizer handles this internally, but we
+            // need to explicitly fail if the touch ends before threshold)
+        }
+    }
+
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
+        if state == .possible {
+            // Never reached threshold — fail so the tap can fire
+            state = .failed
+        }
+        super.touchesEnded(touches, with: event)
+    }
+}
+
+/// A UIView that only claims touches landing within `contentView`'s bounds.
+/// Touches outside pass through (hitTest returns nil), allowing views below
+/// in the SwiftUI ZStack to receive them.
+private class PassthroughRootView: UIView {
+    weak var contentView: UIView?
+
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        guard let cv = contentView, !cv.isHidden, cv.alpha > 0.01 else { return nil }
+        let cvPoint = cv.convert(point, from: self)
+        guard cv.bounds.contains(cvPoint) else { return nil }
+        return cv.hitTest(cvPoint, with: event)
+    }
+}
+
+/// Container VC with a passthrough root view. Embeds a UIHostingController as
+/// a child VC, sized to its intrinsic content, with a pan gesture for dragging.
+class DraggableHUDContainerVC<Content: View>: UIViewController {
+    private let posXKey: String
+    private let posYKey: String
+    private let store: UserDefaults
+    private var hostingController: UIHostingController<Content>!
+    private var dragStartTransform: CGAffineTransform = .identity
+
+    init(content: Content, posXKey: String, posYKey: String, store: UserDefaults) {
+        self.posXKey = posXKey
+        self.posYKey = posYKey
+        self.store = store
+        super.init(nibName: nil, bundle: nil)
+        self.hostingController = UIHostingController(rootView: content)
+    }
+
+    @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
+
+    override func loadView() {
+        self.view = PassthroughRootView()
+    }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = .clear
+        view.clipsToBounds = false
+
+        // Add hosting controller as proper child VC
+        addChild(hostingController)
+        hostingController.view.backgroundColor = .clear
+        hostingController.view.clipsToBounds = false
+        hostingController.view.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(hostingController.view)
+        hostingController.didMove(toParent: self)
+
+        // Size hosting view to its SwiftUI content
+        if #available(iOS 16.0, *) {
+            hostingController.sizingOptions = .intrinsicContentSize
+        }
+        NSLayoutConstraint.activate([
+            hostingController.view.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            hostingController.view.topAnchor.constraint(equalTo: view.topAnchor),
+        ])
+
+        // Pan gesture on the content-sized hosting view
+        let pan = ThresholdPanGesture(target: self, action: #selector(handlePan(_:)))
+        pan.maximumNumberOfTouches = 1
+        hostingController.view.addGestureRecognizer(pan)
+
+        // Apply saved position, clamped to visible bounds so a HUD dragged
+        // off-screen in a previous session can't strand itself.
+        let savedX = store.double(forKey: posXKey)
+        let savedY = store.double(forKey: posYKey)
+        let screen = UIScreen.main.bounds
+        // Keep at least 80pt of the HUD visible from each edge.
+        let minX = -(screen.width - 80)
+        let maxX = screen.width - 80
+        let minY: CGFloat = 0
+        let maxY = screen.height - 80
+        let x = min(max(savedX, minX), maxX)
+        let y = min(max(savedY, minY), maxY)
+        hostingController.view.transform = CGAffineTransform(translationX: x, y: y)
+        if x != savedX { store.set(x, forKey: posXKey) }
+        if y != savedY { store.set(y, forKey: posYKey) }
+
+        // Tell passthrough root which subview to allow hits on
+        (view as? PassthroughRootView)?.contentView = hostingController.view
+    }
+
+    @objc private func handlePan(_ gesture: UIPanGestureRecognizer) {
+        let hv = hostingController.view!
+        switch gesture.state {
+        case .began:
+            dragStartTransform = hv.transform
+        case .changed:
+            let t = gesture.translation(in: view)
+            hv.transform = CGAffineTransform(
+                translationX: dragStartTransform.tx + t.x,
+                y: dragStartTransform.ty + t.y
+            )
+        case .ended, .cancelled:
+            let t = gesture.translation(in: view)
+            let finalX = dragStartTransform.tx + t.x
+            let finalY = dragStartTransform.ty + t.y
+            hv.transform = CGAffineTransform(translationX: finalX, y: finalY)
+            store.set(finalX, forKey: posXKey)
+            store.set(finalY, forKey: posYKey)
+        default:
+            break
+        }
+    }
+
+    func updateContent(_ content: Content) {
+        hostingController.rootView = content
+    }
+}
+
+// MARK: - HUD Panel
+
+@available(iOS 16.0, *)
+struct InspectorHUD: View {
+    let inspected: InspectedView?
+    let history: [UIView]
+    @Binding var folded: Bool
+    let onUp: () -> Void
+    let onBack: () -> Void
+    let onExit: () -> Void
+    let onSelectView: (UIView) -> Void
+
+    @State private var tab: InspectorTab = .properties
+    @State private var size: CGSize = CGSize(
+        width: min(360, UIScreen.main.bounds.width - 16),
+        height: UIScreen.main.bounds.height * 0.3
+    )
+
+    enum InspectorTab: String, CaseIterable {
+        case properties = "Properties"
+        case tree = "Tree"
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Header
+            header
+
+            if !folded {
+                // Tab bar
+                tabBar
+
+                // Body
+                ScrollView {
+                    bodyContent
+                        .padding(10)
+                }
+                .frame(maxHeight: size.height - 70)
+            }
+        }
+        .frame(width: size.width)
+        .background(.black.opacity(0.88))
+        .background(.ultraThinMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(.white.opacity(0.15), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.4), radius: 10, y: 4)
+        .fixedSize()
+    }
+
+    private var header: some View {
+        HStack(spacing: 6) {
+            // Title — tap to fold
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) { folded.toggle() }
+            } label: {
+                HStack(spacing: 4) {
+                    Text(folded ? "▸" : "▾")
+                    Text("View Inspector")
+                        .fontWeight(.bold)
+                    if folded, let info = inspected {
+                        let summary = {
+                            if let aid = info.accessibilityId, !aid.isEmpty {
+                                return aid
+                            }
+                            return info.className
+                        }()
+                        let hasA11yId = info.accessibilityId != nil && !(info.accessibilityId?.isEmpty ?? true)
+                        Text("— \(summary)")
+                            .fontWeight(.regular)
+                            .foregroundStyle(hasA11yId ? Color.orange : .white)
+                            .lineLimit(1)
+                    }
+                }
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(Color.pink.opacity(0.8))
+            }
+            .buttonStyle(.plain)
+
+            Spacer()
+
+            hudButton("← Back", disabled: history.isEmpty, action: onBack)
+                .uiKitIdentifier("InspectorHUD.backButton")
+            hudButton("↑ Up", disabled: inspected?.view.superview == nil, action: onUp)
+                .uiKitIdentifier("InspectorHUD.upButton")
+            hudButton("Exit", tone: .red, action: onExit)
+                .uiKitIdentifier("InspectorHUD.exitButton")
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(Color.pink.opacity(0.2))
+    }
+
+    private var tabBar: some View {
+        HStack(spacing: 2) {
+            ForEach(InspectorTab.allCases, id: \.self) { t in
+                Button {
+                    tab = t
+                } label: {
+                    Text(t.rawValue)
+                        .font(.system(size: 11, weight: tab == t ? .bold : .medium, design: .monospaced))
+                        .foregroundStyle(tab == t ? Color.pink.opacity(0.8) : .gray)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .overlay(alignment: .bottom) {
+                            if tab == t {
+                                Rectangle()
+                                    .fill(Color.pink)
+                                    .frame(height: 2)
+                            }
+                        }
+                }
+                .buttonStyle(.plain)
+            }
+            Spacer()
+        }
+        .padding(.horizontal, 6)
+        .background(.white.opacity(0.04))
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(.white.opacity(0.1)).frame(height: 1)
+        }
+    }
+
+    @ViewBuilder
+    private var bodyContent: some View {
+        if let info = inspected {
+            switch tab {
+            case .properties:
+                InspectorPropertiesTab(info: info)
+            case .tree:
+                InspectorTreeTab(selectedView: info.view, onSelect: onSelectView)
+            }
+        } else {
+            Text("Drag your finger to inspect views")
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(.gray)
+                .italic()
+        }
+    }
+
+    private func hudButton(_ label: String, disabled: Bool = false, tone: Color = .white, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(label)
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(disabled ? .gray.opacity(0.4) : tone)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 3)
+                .background(
+                    tone == .red
+                        ? Color.red.opacity(0.25)
+                        : Color.white.opacity(0.12)
+                )
+                .clipShape(RoundedRectangle(cornerRadius: 4))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 4)
+                        .stroke(
+                            tone == .red
+                                ? Color.red.opacity(0.4)
+                                : Color.white.opacity(0.2),
+                            lineWidth: 1
+                        )
+                )
+        }
+        .buttonStyle(.plain)
+        .disabled(disabled)
+    }
+}
+
+// MARK: - Main Overlay View
+
+@available(iOS 16.0, *)
+public struct ViewInspectorOverlay: View {
+    @Binding var isActive: Bool
+    @State private var inspected: InspectedView?
+    @State private var cursorPosition: CGPoint = CGPoint(
+        x: UIScreen.main.bounds.width / 2,
+        y: UIScreen.main.bounds.height / 2
+    )
+    @State private var history: [UIView] = []
+    @State private var currentView: UIView?
+    /// When folded, the HUD header stays visible but touch capture and
+    /// crosshair are removed so normal app interaction resumes.
+    @AppStorage("viewInspector.folded") private var folded = false
+
+    public init(isActive: Binding<Bool>) {
+        self._isActive = isActive
+    }
+
+    public var body: some View {
+        if isActive {
+            ZStack {
+                // Touch capture layer — only when unfolded
+                if !folded {
+                    ViewInspectorTouchLayer(
+                        onInspect: { info in
+                            if info.view !== currentView {
+                                if let old = currentView {
+                                    history.append(old)
+                                    if history.count > 50 { history.removeFirst() }
+                                }
+                                currentView = info.view
+                            }
+                            inspected = info
+                        },
+                        onCursorMoved: { pos in
+                            cursorPosition = pos
+                        }
+                    )
+                    .ignoresSafeArea()
+
+                    // Crosshair — only when unfolded
+                    CrosshairReticle(position: cursorPosition)
+                        .ignoresSafeArea()
+                }
+
+                // HUD — always visible, wrapped in UIKit container for smooth dragging
+                DraggableHUDWrapper(
+                    content: InspectorHUD(
+                        inspected: inspected,
+                        history: history,
+                        folded: $folded,
+                        onUp: navigateUp,
+                        onBack: navigateBack,
+                        onExit: { isActive = false },
+                        onSelectView: selectView
+                    ),
+                    posXKey: "viewInspector.posX",
+                    posYKey: "viewInspector.posY",
+                    store: .standard
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .ignoresSafeArea()
+            }
+            .transition(.opacity)
+        }
+    }
+
+    private func navigateUp() {
+        guard let current = currentView, let parent = current.superview else { return }
+        selectView(parent)
+    }
+
+    private func navigateBack() {
+        guard let prev = history.popLast() else { return }
+        currentView = prev
+        inspected = InspectedView.inspect(prev)
+    }
+
+    private func selectView(_ view: UIView) {
+        if let old = currentView {
+            history.append(old)
+            if history.count > 50 { history.removeFirst() }
+        }
+        currentView = view
+        inspected = InspectedView.inspect(view)
+    }
+}
+
+// MARK: - UIColor hex helper
+
+extension UIColor {
+    var hexString: String {
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        getRed(&r, green: &g, blue: &b, alpha: &a)
+        if a < 1 {
+            return String(format: "#%02X%02X%02X (%.0f%%)", Int(r * 255), Int(g * 255), Int(b * 255), a * 100)
+        }
+        return String(format: "#%02X%02X%02X", Int(r * 255), Int(g * 255), Int(b * 255))
+    }
+}
+
+#else
+// macOS no-op — uiKitIdentifier is used in Shared/ code but the UIKit-based
+// implementation only compiles on iOS. On macOS we just pass through.
+import SwiftUI
+
+public extension View {
+    func uiKitIdentifier(_ identifier: String) -> some View {
+        self.accessibilityIdentifier(identifier)
+    }
+}
+#endif

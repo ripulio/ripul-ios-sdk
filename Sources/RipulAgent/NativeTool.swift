@@ -132,6 +132,16 @@ public enum ToolSchema {
             Property(name: name, type: "string", description: description, isRequired: required, extra: nil)
         }
 
+        /// Accepts JSON Schema `"type": ["string", "number"]`. Useful for fields
+        /// where the LLM commonly emits a JSON number (e.g. all-numeric IDs,
+        /// money amounts) but the tool body needs a string. Pair with
+        /// `coerceString(_:from:)` in the tool body for safe extraction.
+        /// The serialiser overrides the default `"type"` via `extra` —
+        /// see `ToolSchema.object(_:)`.
+        public static func stringOrNumber(_ name: String, _ description: String, required: Bool = false) -> Property {
+            Property(name: name, type: "string", description: description, isRequired: required, extra: ["type": ["string", "number"]])
+        }
+
         /// A string property constrained to a fixed set of allowed values.
         public static func stringEnum(_ name: String, _ description: String, values: [String], required: Bool = false) -> Property {
             Property(name: name, type: "string", description: description, isRequired: required, extra: ["enum": values])

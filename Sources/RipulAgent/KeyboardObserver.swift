@@ -1,5 +1,6 @@
 #if os(iOS)
 import UIKit
+import SwiftUI
 import Combine
 
 /// Observes keyboard show/hide and publishes the height above the safe area.
@@ -27,21 +28,36 @@ public final class KeyboardObserver: ObservableObject {
             .safeAreaInsets.bottom ?? 0
     }
 
+    /// Build a SwiftUI animation that matches the system keyboard curve and duration.
+    private func keyboardAnimation(from notification: Notification) -> Animation {
+        let duration = notification.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? TimeInterval ?? 0.25
+        // iOS keyboard uses curve 7 (private). A critically-damped spring is the closest match.
+        return .interpolatingSpring(mass: 3, stiffness: 1000, damping: 500, initialVelocity: 0)
+            .speed(1.0 / max(0.01, duration / 0.25))
+    }
+
     @objc private func keyboardWillShow(_ notification: Notification) {
         if let frame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect {
             // Subtract bottom safe area since the overlay is already positioned above it
             let adjusted = max(0, frame.height - bottomSafeArea)
+            let animation = keyboardAnimation(from: notification)
             DispatchQueue.main.async {
-                self.height = adjusted
-                self.rawHeight = frame.height
+                withAnimation(animation) {
+                    self.height = adjusted
+                    self.rawHeight = frame.height
+                }
             }
         }
     }
 
     @objc private func keyboardWillHide(_ notification: Notification) {
+        // Fast initial travel then long gentle settle at the end
+        let animation = Animation.timingCurve(0.05, 0.7, 0.1, 1.0, duration: 0.45)
         DispatchQueue.main.async {
-            self.height = 0
-            self.rawHeight = 0
+            withAnimation(animation) {
+                self.height = 0
+                self.rawHeight = 0
+            }
         }
     }
 }

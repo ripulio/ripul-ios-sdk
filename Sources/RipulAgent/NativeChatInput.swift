@@ -65,6 +65,35 @@ public struct FileSuggestion: Identifiable {
     }
 }
 
+/// A UI element suggestion from the current page's data-ui attributes.
+public struct ElementSuggestion: Identifiable {
+    public let id: String
+    public let dataUi: String
+
+    public var componentName: String {
+        dataUi.split(separator: ".").first.map(String.init) ?? dataUi
+    }
+
+    public init(dataUi: String) {
+        self.id = dataUi
+        self.dataUi = dataUi
+    }
+}
+
+/// A participant suggestion for @-mention routing in multi-participant chats.
+/// Maps to a model id (agent) or, eventually, a human client id.
+public struct ParticipantSuggestion: Identifiable {
+    public let id: String       // ParticipantId — model id today, client id in future
+    public let name: String     // Display name (e.g. "Claude")
+    public let group: String?   // Provider / category for grouping (e.g. "Anthropic")
+
+    public init(id: String, name: String, group: String? = nil) {
+        self.id = id
+        self.name = name
+        self.group = group
+    }
+}
+
 // MARK: - Cross-platform Chat Input
 
 /// A floating chat input that uses Liquid Glass on iOS 26+ and ultraThinMaterial elsewhere.
@@ -79,24 +108,54 @@ public struct NativeChatInput: View {
     let isAgentRunning: Bool
     let isAgentPaused: Bool
     let onSubmit: () -> Void
+    /// Send a human note (not sent to agent, for human-to-human communication).
+    var onSubmitNote: (() -> Void)?
     let onPause: (() -> Void)?
     let onNewChat: (() -> Void)?
     let onQuickCommands: (() -> Void)?
+    let onAddTodoItem: (() -> Void)?
+    /// Fetches the user's todo items (with current-chat id for grouping) when
+    /// the "Pick to do" menu entry is tapped. A selected todo's text is appended
+    /// to this view's own `$text` binding — the native composer is the source
+    /// of truth, not the hidden web composer.
+    let onFetchTodoItems: (() async -> RipulTodoItemsResult)?
     var messageHistory: MessageHistory?
     var chatInputGlassStyle: String?
     var chatInputLayout: String?
+    /// Toggle between plan (read-only) and edit (default) mode for CLI sessions.
+    @Binding var planMode: Bool
+    /// Whether to show the plan/edit mode toggle (e.g., only in raw CLI sessions).
+    var showPlanModeToggle: Bool
     /// Optional callback to query remote host for file suggestions.
     /// When provided, typing `@` followed by text triggers file autocomplete.
     var onQueryFiles: ((String) async -> [FileSuggestion])?
+    /// Optional callback to fetch UI element suggestions from the current page.
+    var onQueryElements: (() async -> [ElementSuggestion])?
+    /// Optional callback to fetch chat participant suggestions (agents + humans).
+    /// When provided, the `@` category overlay shows a "People" row that lists them.
+    var onQueryParticipants: (() async -> [ParticipantSuggestion])?
+    /// Structured participant IDs picked since the last send. Cleared on submit
+    /// by the parent so a new turn starts empty. Drives `addressedTo` routing.
+    @Binding var addressedParticipants: [String]
+    var onFocusChanged: ((Bool) -> Void)?
+    /// Hidden debug shortcut: long-press on the "+" button.
+    var onPlusLongPress: (() -> Void)?
     @State private var showPhotoPicker = false
     @State private var showCamera = false
     @State private var textHeight: CGFloat = 36
     @State private var fileSuggestions: [FileSuggestion] = []
-    @State private var showFileSuggestions = false
     @State private var fileQueryTask: Task<Void, Never>?
     @State private var fileSuggestionsHeight: CGFloat = 0
     /// The character index where the `@` trigger was typed
     @State private var atTriggerIndex: String.Index?
+    @State private var showAtSuggestions = false
+    @State private var allElementSuggestions: [ElementSuggestion] = []
+    @State private var elementSuggestions: [ElementSuggestion] = []
+    @State private var allParticipantSuggestions: [ParticipantSuggestion] = []
+    @State private var participantSuggestions: [ParticipantSuggestion] = []
+    @State private var showHistorySheet = false
+    @State private var showTodoPicker = false
+    @State private var glowPhase: Bool = false
 
     private var isTwoRow: Bool { chatInputLayout == "twoRow" }
     private var resolvedChatInputGlassStyle: String { chatInputGlassStyle ?? "clear" }
@@ -108,13 +167,23 @@ public struct NativeChatInput: View {
         isAgentRunning: Bool = false,
         isAgentPaused: Bool = false,
         onSubmit: @escaping () -> Void,
+        onSubmitNote: (() -> Void)? = nil,
         onPause: (() -> Void)? = nil,
         onNewChat: (() -> Void)? = nil,
         onQuickCommands: (() -> Void)? = nil,
+        onAddTodoItem: (() -> Void)? = nil,
+        onFetchTodoItems: (() async -> RipulTodoItemsResult)? = nil,
         messageHistory: MessageHistory? = nil,
         chatInputGlassStyle: String? = nil,
         chatInputLayout: String? = nil,
-        onQueryFiles: ((String) async -> [FileSuggestion])? = nil
+        planMode: Binding<Bool> = .constant(false),
+        showPlanModeToggle: Bool = false,
+        onQueryFiles: ((String) async -> [FileSuggestion])? = nil,
+        onQueryElements: (() async -> [ElementSuggestion])? = nil,
+        onQueryParticipants: (() async -> [ParticipantSuggestion])? = nil,
+        addressedParticipants: Binding<[String]> = .constant([]),
+        onFocusChanged: ((Bool) -> Void)? = nil,
+        onPlusLongPress: (() -> Void)? = nil
     ) {
         self._text = text
         self._imageAttachments = imageAttachments
@@ -122,13 +191,23 @@ public struct NativeChatInput: View {
         self.isAgentRunning = isAgentRunning
         self.isAgentPaused = isAgentPaused
         self.onSubmit = onSubmit
+        self.onSubmitNote = onSubmitNote
         self.onPause = onPause
         self.onNewChat = onNewChat
         self.onQuickCommands = onQuickCommands
+        self.onAddTodoItem = onAddTodoItem
+        self.onFetchTodoItems = onFetchTodoItems
         self.messageHistory = messageHistory
         self.chatInputGlassStyle = chatInputGlassStyle
         self.chatInputLayout = chatInputLayout
+        self._planMode = planMode
+        self.showPlanModeToggle = showPlanModeToggle
         self.onQueryFiles = onQueryFiles
+        self.onQueryElements = onQueryElements
+        self.onQueryParticipants = onQueryParticipants
+        self._addressedParticipants = addressedParticipants
+        self.onFocusChanged = onFocusChanged
+        self.onPlusLongPress = onPlusLongPress
     }
 
     private func dismissKeyboard() {
@@ -137,8 +216,8 @@ public struct NativeChatInput: View {
 
     public var body: some View {
         VStack(spacing: 4) {
-            if showFileSuggestions && !fileSuggestions.isEmpty {
-                fileSuggestionsOverlay
+            if showAtSuggestions {
+                unifiedSuggestionsOverlay
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
 
@@ -152,9 +231,8 @@ public struct NativeChatInput: View {
         }
         .animation(.easeInOut(duration: 0.15), value: textHeight)
         .animation(.easeInOut(duration: 0.2), value: imageAttachments.count)
-        .animation(.easeInOut(duration: 0.2), value: isAgentRunning)
         .animation(.easeInOut(duration: 0.2), value: isTwoRow)
-        .animation(.easeInOut(duration: 0.15), value: showFileSuggestions)
+        .animation(.easeInOut(duration: 0.15), value: showAtSuggestions)
         .onChange(of: text) { newValue in
             if newValue.isEmpty {
                 textHeight = 36 // minHeight — snap immediately when text is cleared
@@ -163,136 +241,324 @@ public struct NativeChatInput: View {
         .photosPicker(isPresented: $showPhotoPicker, selection: $selectedPhotos, maxSelectionCount: 4, matching: .images)
         .fullScreenCover(isPresented: $showCamera) {
             CameraPicker { uiImage in
-                if let jpeg = uiImage.jpegData(compressionQuality: 0.8) {
+                let resized = PhotoAttachmentHelper.downsamplePublic(uiImage)
+                if let jpeg = resized.jpegData(compressionQuality: 0.7) {
                     let base64 = jpeg.base64EncodedString()
                     let id = "img_\(Int(Date().timeIntervalSince1970 * 1000))_\(Int.random(in: 0..<100000))"
-                    imageAttachments.append(NativeImageAttachment(id: id, mediaType: "image/jpeg", data: base64, thumbnail: uiImage))
+                    imageAttachments.append(NativeImageAttachment(id: id, mediaType: "image/jpeg", data: base64, thumbnail: resized))
                 }
             }
             .ignoresSafeArea()
         }
+        .sheet(isPresented: $showTodoPicker) {
+            TodoPickerSheet(
+                onFetch: onFetchTodoItems,
+                onSelect: { todoText in
+                    let separator = text.isEmpty || text.hasSuffix("\n") || text.hasSuffix(" ") ? "" : " "
+                    text = text + separator + todoText
+                    showTodoPicker = false
+                }
+            )
+        }
     }
 
-    // MARK: - File Suggestions
+    // MARK: - @ Mention Suggestions
 
-    /// Detect `@` followed by typing and trigger file query
+    /// Detect `@` followed by typing and populate a single ranked suggestion list
+    /// (participants first, then files, then UI elements).
     private func handleAtDetection(_ value: String) {
-        guard onQueryFiles != nil else {
-            NSLog("[NativeChatInput] @files: onQueryFiles callback not set")
-            return
-        }
+        guard onQueryFiles != nil || onQueryElements != nil || onQueryParticipants != nil else { return }
 
-        // Find the last `@` in the text
         guard let atRange = value.range(of: "@", options: .backwards) else {
-            dismissFileSuggestions()
+            dismissAtOverlay()
             return
         }
 
-        // Check that @ is at start of text or preceded by a space
         if atRange.lowerBound != value.startIndex {
             let charBefore = value[value.index(before: atRange.lowerBound)]
             if !charBefore.isWhitespace {
-                dismissFileSuggestions()
+                dismissAtOverlay()
                 return
             }
         }
 
         let afterAt = String(value[atRange.upperBound...])
 
-        // If there's a space after the query portion, the mention is "closed" — dismiss
         if afterAt.contains(" ") {
-            dismissFileSuggestions()
+            dismissAtOverlay()
             return
         }
 
-        // Need at least 1 char after @ to search
-        guard !afterAt.isEmpty else {
-            dismissFileSuggestions()
-            return
-        }
-
+        let wasOpen = showAtSuggestions
         atTriggerIndex = atRange.lowerBound
+        showAtSuggestions = true
 
-        // Debounced query
-        NSLog("[NativeChatInput] @files: querying for '%@'", afterAt)
+        if !wasOpen {
+            // Pre-fetch participants and elements once when the overlay opens.
+            if let queryParticipants = onQueryParticipants {
+                Task {
+                    let results = await queryParticipants()
+                    await MainActor.run {
+                        allParticipantSuggestions = results
+                        participantSuggestions = filterParticipants(by: afterAt, all: results)
+                    }
+                }
+            }
+            if let queryElements = onQueryElements {
+                Task {
+                    let results = await queryElements()
+                    await MainActor.run {
+                        allElementSuggestions = results
+                        elementSuggestions = filterElements(by: afterAt, all: results)
+                    }
+                }
+            }
+        } else {
+            // Already open — refilter cached lists locally.
+            participantSuggestions = filterParticipants(by: afterAt, all: allParticipantSuggestions)
+            elementSuggestions = filterElements(by: afterAt, all: allElementSuggestions)
+        }
+
+        // Files: debounced remote query, only when there's text to search for.
         fileQueryTask?.cancel()
-        fileQueryTask = Task {
-            try? await Task.sleep(nanoseconds: 150_000_000) // 150ms
-            guard !Task.isCancelled else { return }
-            if let queryFiles = onQueryFiles {
+        if afterAt.isEmpty {
+            fileSuggestions = []
+        } else if let queryFiles = onQueryFiles {
+            fileQueryTask = Task {
+                try? await Task.sleep(nanoseconds: 150_000_000) // 150ms
+                guard !Task.isCancelled else { return }
                 let results = await queryFiles(afterAt)
-                NSLog("[NativeChatInput] @files: got %d results for '%@'", results.count, afterAt)
                 guard !Task.isCancelled else { return }
                 await MainActor.run {
                     fileSuggestions = results
-                    showFileSuggestions = !results.isEmpty
                 }
             }
         }
     }
 
-    private func dismissFileSuggestions() {
-        showFileSuggestions = false
+    private func filterParticipants(by query: String, all: [ParticipantSuggestion]) -> [ParticipantSuggestion] {
+        guard !query.isEmpty else { return all }
+        let q = query.lowercased()
+        return all.filter { $0.name.lowercased().contains(q) || $0.id.lowercased().contains(q) }
+    }
+
+    private func filterElements(by query: String, all: [ElementSuggestion]) -> [ElementSuggestion] {
+        guard !query.isEmpty else { return all }
+        let q = query.lowercased()
+        return all.filter { $0.dataUi.lowercased().contains(q) }
+    }
+
+    private func dismissAtOverlay() {
+        showAtSuggestions = false
         fileSuggestions = []
+        elementSuggestions = []
+        allElementSuggestions = []
+        participantSuggestions = []
+        allParticipantSuggestions = []
         atTriggerIndex = nil
         fileQueryTask?.cancel()
     }
 
     private func selectFileSuggestion(_ suggestion: FileSuggestion) {
-        // Replace the @query with @path/to/file
         if let triggerIdx = atTriggerIndex {
             let before = String(text[text.startIndex..<triggerIdx])
             text = before + "@" + suggestion.path + " "
         } else {
             text += suggestion.path + " "
         }
-        dismissFileSuggestions()
+        dismissAtOverlay()
     }
 
-    private var fileSuggestionsOverlay: some View {
-        VStack(spacing: 0) {
-            ScrollView {
-                LazyVStack(spacing: 0) {
-                    ForEach(fileSuggestions) { suggestion in
-                        Button {
-                            selectFileSuggestion(suggestion)
-                        } label: {
-                            HStack(spacing: 8) {
-                                Image(systemName: suggestion.isDirectory ? "folder.fill" : "doc.text.fill")
-                                    .foregroundStyle(suggestion.isDirectory ? .blue : .secondary)
-                                    .frame(width: 20)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(suggestion.fileName)
-                                        .font(.system(size: 14, weight: .medium))
-                                        .foregroundStyle(.primary)
-                                        .lineLimit(1)
-                                    if suggestion.path != suggestion.fileName {
-                                        Text(suggestion.path)
-                                            .font(.system(size: 11))
-                                            .foregroundStyle(.secondary)
-                                            .lineLimit(1)
-                                    }
-                                }
-                                Spacer()
-                            }
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 8)
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
+    private func selectElementSuggestion(_ suggestion: ElementSuggestion) {
+        if let triggerIdx = atTriggerIndex {
+            let before = String(text[text.startIndex..<triggerIdx])
+            text = before + "@ui:\(suggestion.dataUi) "
+        } else {
+            text += "@ui:\(suggestion.dataUi) "
+        }
+        dismissAtOverlay()
+    }
 
-                        if suggestion.id != fileSuggestions.last?.id {
-                            Divider().padding(.leading, 40)
+    private func selectParticipantSuggestion(_ suggestion: ParticipantSuggestion) {
+        if let triggerIdx = atTriggerIndex {
+            let before = String(text[text.startIndex..<triggerIdx])
+            text = before + "@" + suggestion.name + " "
+        } else {
+            text += "@" + suggestion.name + " "
+        }
+        if !addressedParticipants.contains(suggestion.id) {
+            addressedParticipants.append(suggestion.id)
+        }
+        dismissAtOverlay()
+    }
+
+    private var afterAtText: String {
+        guard let triggerIdx = atTriggerIndex,
+              triggerIdx < text.endIndex else { return "" }
+        let after = text.index(after: triggerIdx)
+        guard after <= text.endIndex else { return "" }
+        return String(text[after...])
+    }
+
+    private var unifiedSuggestionsOverlay: some View {
+        VStack(spacing: 0) {
+            let hasResults = !participantSuggestions.isEmpty || !fileSuggestions.isEmpty || !elementSuggestions.isEmpty
+            if !hasResults {
+                HStack(spacing: 8) {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundStyle(.secondary)
+                        .frame(width: 20)
+                    Text(afterAtText.isEmpty ? "Type to search people, files, and UI elements" : "No matches for \u{201C}\(afterAtText)\u{201D}")
+                        .font(.system(size: 14))
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 12)
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        if !participantSuggestions.isEmpty {
+                            suggestionSectionHeader("People")
+                            ForEach(participantSuggestions) { suggestion in
+                                participantRow(suggestion)
+                                if suggestion.id != participantSuggestions.last?.id {
+                                    Divider().padding(.leading, 40)
+                                }
+                            }
+                        }
+                        if !fileSuggestions.isEmpty {
+                            if !participantSuggestions.isEmpty {
+                                Divider()
+                            }
+                            suggestionSectionHeader("Files")
+                            ForEach(fileSuggestions) { suggestion in
+                                fileRow(suggestion)
+                                if suggestion.id != fileSuggestions.last?.id {
+                                    Divider().padding(.leading, 40)
+                                }
+                            }
+                        }
+                        if !elementSuggestions.isEmpty {
+                            if !participantSuggestions.isEmpty || !fileSuggestions.isEmpty {
+                                Divider()
+                            }
+                            suggestionSectionHeader("UI Elements")
+                            ForEach(elementSuggestions) { suggestion in
+                                elementRow(suggestion)
+                                if suggestion.id != elementSuggestions.last?.id {
+                                    Divider().padding(.leading, 40)
+                                }
+                            }
                         }
                     }
                 }
+                .frame(maxHeight: 280)
             }
-            .frame(maxHeight: 200)
         }
         .background(.ultraThinMaterial)
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .shadow(color: .black.opacity(0.15), radius: 8, y: -2)
         .padding(.horizontal, 16)
+    }
+
+    private func suggestionSectionHeader(_ title: String) -> some View {
+        HStack {
+            Text(title.uppercased())
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.secondary)
+            Spacer()
+        }
+        .padding(.horizontal, 12)
+        .padding(.top, 8)
+        .padding(.bottom, 4)
+    }
+
+    private func participantRow(_ suggestion: ParticipantSuggestion) -> some View {
+        Button {
+            selectParticipantSuggestion(suggestion)
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: AutocompleteConstants.category(for: "people")?.sfSymbol ?? "person.fill")
+                    .foregroundStyle(.secondary)
+                    .frame(width: 20)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(suggestion.name)
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                    if let group = suggestion.group, !group.isEmpty {
+                        Text(group)
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+                Spacer()
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func fileRow(_ suggestion: FileSuggestion) -> some View {
+        Button {
+            selectFileSuggestion(suggestion)
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: suggestion.isDirectory ? "folder.fill" : (AutocompleteConstants.category(for: "files")?.sfSymbol ?? "doc.text.fill"))
+                    .foregroundStyle(suggestion.isDirectory ? .blue : .secondary)
+                    .frame(width: 20)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(suggestion.fileName)
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                    if suggestion.path != suggestion.fileName {
+                        Text(suggestion.path)
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+                Spacer()
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func elementRow(_ suggestion: ElementSuggestion) -> some View {
+        Button {
+            selectElementSuggestion(suggestion)
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: AutocompleteConstants.category(for: "ui")?.sfSymbol ?? "tag.fill")
+                    .foregroundStyle(.secondary)
+                    .frame(width: 20)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(suggestion.componentName)
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                    if suggestion.dataUi != suggestion.componentName {
+                        Text(suggestion.dataUi)
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+                Spacer()
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 
     // MARK: - Single Row Layout (default)
@@ -308,13 +574,28 @@ public struct NativeChatInput: View {
                         imageThumbsRow
                     }
                     HStack(spacing: 4) {
+                        if showPlanModeToggle {
+                            planModeToggle
+                        }
                         textInputView
                         actionButton
                     }
                 }
                 .modifier(GlassChatInputBackground(glassStyle: resolvedChatInputGlassStyle))
+                .modifier(WaitingGlowModifier(isActive: agentWaiting, glowPhase: glowPhase))
 
                 historyMenuButton
+            }
+        }
+        .onChange(of: agentWaiting) { waiting in
+            if waiting {
+                withAnimation(.easeInOut(duration: 6.0).repeatForever(autoreverses: true)) {
+                    glowPhase = true
+                }
+            } else {
+                withAnimation(.easeOut(duration: 0.3)) {
+                    glowPhase = false
+                }
             }
         }
     }
@@ -337,6 +618,9 @@ public struct NativeChatInput: View {
                 HStack(spacing: 8) {
                     plusMenuButton
                     historyMenuButton
+                    if showPlanModeToggle {
+                        planModeToggle
+                    }
                     Spacer()
                     twoRowActionButton
                 }
@@ -344,7 +628,50 @@ public struct NativeChatInput: View {
                 .padding(.bottom, 6)
             }
             .modifier(GlassChatInputBackground(glassStyle: resolvedChatInputGlassStyle))
+            .modifier(WaitingGlowModifier(isActive: agentWaiting, glowPhase: glowPhase))
         }
+        .onChange(of: agentWaiting) { waiting in
+            if waiting {
+                withAnimation(.easeInOut(duration: 6.0).repeatForever(autoreverses: true)) {
+                    glowPhase = true
+                }
+            } else {
+                withAnimation(.easeOut(duration: 0.3)) {
+                    glowPhase = false
+                }
+            }
+        }
+    }
+
+    // MARK: - Plan Mode Toggle
+
+    private var planModeToggle: some View {
+        Menu {
+            Button {
+                planMode = false
+            } label: {
+                if !planMode { Label("Edit", systemImage: "checkmark") }
+                else { Text("Edit") }
+            }
+            Button {
+                planMode = true
+            } label: {
+                if planMode { Label("Plan", systemImage: "checkmark") }
+                else { Text("Plan") }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: planMode ? "eye" : "pencil")
+                    .font(.system(size: 14, weight: .semibold))
+                Text(planMode ? "Plan" : "Edit")
+                    .font(.system(size: 12, weight: .semibold))
+            }
+            .foregroundStyle(.primary)
+            .frame(height: 36)
+            .padding(.horizontal, 10)
+            .modifier(GlassPillModifier())
+        }
+        .animation(.easeInOut(duration: 0.15), value: planMode)
     }
 
     // MARK: - Shared Subviews
@@ -360,6 +687,22 @@ public struct NativeChatInput: View {
                 showPhotoPicker = true
             } label: {
                 Label("Photos", systemImage: "photo")
+            }
+            if onFetchTodoItems != nil {
+                Button {
+                    dismissKeyboard()
+                    showTodoPicker = true
+                } label: {
+                    Label("Pick to do", systemImage: "list.bullet.clipboard")
+                }
+            }
+            if onAddTodoItem != nil {
+                Button {
+                    dismissKeyboard()
+                    onAddTodoItem?()
+                } label: {
+                    Label("New to do", systemImage: "checklist")
+                }
             }
             if onQuickCommands != nil {
                 Button {
@@ -383,24 +726,38 @@ public struct NativeChatInput: View {
                 .contentShape(Circle())
                 .modifier(GlassCircleModifier(glassStyle: isTwoRow ? nil : resolvedChatInputGlassStyle))
         }
+        .simultaneousGesture(
+            LongPressGesture(minimumDuration: 0.6).onEnded { _ in
+                onPlusLongPress?()
+            }
+        )
+    }
+
+    private var agentWaiting: Bool {
+        isAgentRunning && !isAgentPaused
     }
 
     private var textInputView: some View {
         NoAutofillTextView(
             text: $text,
             height: $textHeight,
-            placeholder: "Message...",
+            placeholder: agentWaiting ? "Waiting on agent…" : isAgentPaused ? "Agent is paused, add new instruction…" : "Message...",
             onSubmit: {
+                // On Catalyst (hardware keyboard) keep focus after sending so the
+                // next message can be typed immediately; on iOS dismiss as before.
+                #if !targetEnvironment(macCatalyst)
                 dismissKeyboard()
+                #endif
                 onSubmit()
             },
             onTextChange: { newText in
                 if newText.isEmpty {
-                    dismissFileSuggestions()
+                    dismissAtOverlay()
                 } else {
                     handleAtDetection(newText)
                 }
-            }
+            },
+            onFocusChanged: onFocusChanged
         )
         .frame(maxWidth: .infinity, minHeight: textHeight, maxHeight: textHeight, alignment: .leading)
     }
@@ -409,47 +766,73 @@ public struct NativeChatInput: View {
     private var actionButton: some View {
         let hasContent = !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !imageAttachments.isEmpty
         if isAgentRunning && !isAgentPaused {
-            Button {
-                dismissKeyboard()
-                onPause?()
-            } label: {
-                Image(systemName: "pause.fill")
-                    .font(.system(size: 16, weight: .bold))
-                    .foregroundStyle(.orange)
-                    .frame(width: 36, height: 36)
-                    .contentShape(Circle())
-                    .modifier(GlassCircleModifier(glassStyle: "clear"))
+            HStack(spacing: 4) {
+                if hasContent, let onSubmitNote {
+                    noteButton(size: 36, onTap: onSubmitNote, glassStyle: "clear")
+                }
+                Button {
+                    dismissKeyboard()
+                    onPause?()
+                } label: {
+                    Image(systemName: "pause.fill")
+                        .font(.system(size: 16, weight: .bold))
+                        .foregroundStyle(.orange)
+                        .frame(width: 36, height: 36)
+                        .contentShape(Circle())
+                        .modifier(GlassCircleModifier(glassStyle: "clear"))
+                }
             }
-            .transition(.scale.combined(with: .opacity))
             .padding(.trailing, 4)
         } else if isAgentPaused && isAgentRunning {
-            Button {
-                dismissKeyboard()
-                onSubmit()
-            } label: {
-                Image(systemName: "play.fill")
-                    .font(.system(size: 16, weight: .bold))
-                    .foregroundStyle(.green)
-                    .frame(width: 36, height: 36)
-                    .contentShape(Circle())
-                    .modifier(GlassCircleModifier(glassStyle: "clear"))
+            HStack(spacing: 4) {
+                if hasContent, let onSubmitNote {
+                    noteButton(size: 36, onTap: onSubmitNote, glassStyle: "clear")
+                }
+                Button {
+                    dismissKeyboard()
+                    onSubmit()
+                } label: {
+                    Image(systemName: "play.fill")
+                        .font(.system(size: 16, weight: .bold))
+                        .foregroundStyle(.green)
+                        .frame(width: 36, height: 36)
+                        .contentShape(Circle())
+                        .modifier(GlassCircleModifier(glassStyle: "clear"))
+                }
             }
-            .transition(.scale.combined(with: .opacity))
             .padding(.trailing, 4)
         } else if isAgentPaused || hasContent {
-            Button {
-                dismissKeyboard()
-                onSubmit()
-            } label: {
-                Image(systemName: "arrow.up")
-                    .font(.system(size: 16, weight: .bold))
-                    .foregroundStyle(Color.accentColor)
-                    .frame(width: 36, height: 36)
-                    .contentShape(Circle())
-                    .modifier(GlassCircleModifier(glassStyle: "clear"))
+            HStack(spacing: 4) {
+                if let onSubmitNote {
+                    noteButton(size: 36, onTap: onSubmitNote, glassStyle: "clear")
+                }
+                Button {
+                    dismissKeyboard()
+                    onSubmit()
+                } label: {
+                    Image(systemName: "arrow.up")
+                        .font(.system(size: 16, weight: .bold))
+                        .foregroundStyle(Color.accentColor)
+                        .frame(width: 36, height: 36)
+                        .contentShape(Circle())
+                        .modifier(GlassCircleModifier(glassStyle: "clear"))
+                }
             }
-            .transition(.scale.combined(with: .opacity))
             .padding(.trailing, 4)
+        }
+    }
+
+    private func noteButton(size: CGFloat, onTap: @escaping () -> Void, glassStyle: String?) -> some View {
+        Button {
+            dismissKeyboard()
+            onTap()
+        } label: {
+            Image(systemName: "bubble.left.fill")
+                .font(.system(size: size == 40 ? 18 : 16, weight: .bold))
+                .foregroundStyle(.purple)
+                .frame(width: size, height: size)
+                .contentShape(Circle())
+                .modifier(GlassCircleModifier(glassStyle: glassStyle))
         }
     }
 
@@ -457,58 +840,70 @@ public struct NativeChatInput: View {
     private var twoRowActionButton: some View {
         let hasContent = !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !imageAttachments.isEmpty
         if isAgentRunning && !isAgentPaused {
-            Button {
-                dismissKeyboard()
-                onPause?()
-            } label: {
-                Image(systemName: "pause.fill")
-                    .font(.system(size: 18, weight: .bold))
-                    .foregroundStyle(.orange)
-                    .frame(width: 40, height: 40)
-                    .contentShape(Circle())
-                    .modifier(GlassCircleModifier(glassStyle: nil))
+            HStack(spacing: 4) {
+                if hasContent, let onSubmitNote {
+                    noteButton(size: 40, onTap: onSubmitNote, glassStyle: nil)
+                        .transition(.scale.combined(with: .opacity))
+                }
+                Button {
+                    dismissKeyboard()
+                    onPause?()
+                } label: {
+                    Image(systemName: "pause.fill")
+                        .font(.system(size: 18, weight: .bold))
+                        .foregroundStyle(.orange)
+                        .frame(width: 40, height: 40)
+                        .contentShape(Circle())
+                        .modifier(GlassCircleModifier(glassStyle: nil))
+                }
+                .transition(.scale.combined(with: .opacity))
             }
-            .transition(.scale.combined(with: .opacity))
         } else if isAgentPaused && isAgentRunning {
-            Button {
-                dismissKeyboard()
-                onSubmit()
-            } label: {
-                Image(systemName: "play.fill")
-                    .font(.system(size: 18, weight: .bold))
-                    .foregroundStyle(.green)
-                    .frame(width: 40, height: 40)
-                    .contentShape(Circle())
-                    .modifier(GlassCircleModifier(glassStyle: nil))
+            HStack(spacing: 4) {
+                if hasContent, let onSubmitNote {
+                    noteButton(size: 40, onTap: onSubmitNote, glassStyle: nil)
+                        .transition(.scale.combined(with: .opacity))
+                }
+                Button {
+                    dismissKeyboard()
+                    onSubmit()
+                } label: {
+                    Image(systemName: "play.fill")
+                        .font(.system(size: 18, weight: .bold))
+                        .foregroundStyle(.green)
+                        .frame(width: 40, height: 40)
+                        .contentShape(Circle())
+                        .modifier(GlassCircleModifier(glassStyle: nil))
+                }
+                .transition(.scale.combined(with: .opacity))
             }
-            .transition(.scale.combined(with: .opacity))
         } else if isAgentPaused || hasContent {
-            Button {
-                dismissKeyboard()
-                onSubmit()
-            } label: {
-                Image(systemName: "arrow.up")
-                    .font(.system(size: 18, weight: .bold))
-                    .foregroundStyle(Color.accentColor)
-                    .frame(width: 40, height: 40)
-                    .contentShape(Circle())
-                    .modifier(GlassCircleModifier(glassStyle: nil))
+            HStack(spacing: 4) {
+                if let onSubmitNote {
+                    noteButton(size: 40, onTap: onSubmitNote, glassStyle: nil)
+                        .transition(.scale.combined(with: .opacity))
+                }
+                Button {
+                    dismissKeyboard()
+                    onSubmit()
+                } label: {
+                    Image(systemName: "arrow.up")
+                        .font(.system(size: 18, weight: .bold))
+                        .foregroundStyle(Color.accentColor)
+                        .frame(width: 40, height: 40)
+                        .contentShape(Circle())
+                        .modifier(GlassCircleModifier(glassStyle: nil))
+                }
+                .transition(.scale.combined(with: .opacity))
             }
-            .transition(.scale.combined(with: .opacity))
         }
     }
 
     @ViewBuilder
     private var historyMenuButton: some View {
-        if let history = messageHistory, !history.recentMessages.isEmpty {
-            Menu {
-                ForEach(history.recentMessages.prefix(15), id: \.self) { msg in
-                    Button {
-                        text = msg
-                    } label: {
-                        Text(msg.prefix(80) + (msg.count > 80 ? "..." : ""))
-                    }
-                }
+        if let history = messageHistory, history.hasMessages {
+            Button {
+                showHistorySheet = true
             } label: {
                 Image(systemName: "clock.arrow.circlepath")
                     .font(.system(size: 18, weight: .medium))
@@ -516,6 +911,12 @@ public struct NativeChatInput: View {
                     .frame(width: 40, height: 40)
                     .contentShape(Circle())
                     .modifier(GlassCircleModifier(glassStyle: isTwoRow ? nil : resolvedChatInputGlassStyle))
+            }
+            .sheet(isPresented: $showHistorySheet) {
+                HistorySheet(history: history) { msg in
+                    text = msg
+                    showHistorySheet = false
+                }
             }
         }
     }
@@ -561,22 +962,50 @@ public struct NativeChatInput: View {
     let isAgentRunning: Bool
     let isAgentPaused: Bool
     let onSubmit: () -> Void
+    /// Send a human note (not sent to agent, for human-to-human communication).
+    var onSubmitNote: (() -> Void)?
     let onPause: (() -> Void)?
     let onNewChat: (() -> Void)?
     let onQuickCommands: (() -> Void)?
+    let onAddTodoItem: (() -> Void)?
+    /// Fetches the user's todo items (with current-chat id for grouping) when
+    /// the "Pick to do" menu entry is tapped. A selected todo's text is appended
+    /// to this view's own `$text` binding — the native composer is the source
+    /// of truth, not the hidden web composer.
+    let onFetchTodoItems: (() async -> RipulTodoItemsResult)?
     var messageHistory: MessageHistory?
     var chatInputGlassStyle: String?
     var chatInputLayout: String?
+    /// Toggle between plan (read-only) and edit (default) mode for CLI sessions.
+    @Binding var planMode: Bool
+    /// Whether to show the plan/edit mode toggle (e.g., only in raw CLI sessions).
+    var showPlanModeToggle: Bool
     /// Optional callback to query remote host for file suggestions.
     /// When provided, typing `@` followed by text triggers file autocomplete.
     var onQueryFiles: ((String) async -> [FileSuggestion])?
+    /// Optional callback to fetch UI element suggestions from the current page.
+    var onQueryElements: (() async -> [ElementSuggestion])?
+    /// Optional callback to fetch chat participant suggestions (agents + humans).
+    /// When provided, the `@` category overlay shows a "People" row that lists them.
+    var onQueryParticipants: (() async -> [ParticipantSuggestion])?
+    /// Structured participant IDs picked since the last send. Cleared on submit
+    /// by the parent so a new turn starts empty. Drives `addressedTo` routing.
+    @Binding var addressedParticipants: [String]
+    var onFocusChanged: ((Bool) -> Void)?
     @State private var showPhotoPicker = false
     @FocusState private var isFocused: Bool
     @State private var fileSuggestions: [FileSuggestion] = []
-    @State private var showFileSuggestions = false
     @State private var fileQueryTask: Task<Void, Never>?
     /// The character index where the `@` trigger was typed
     @State private var atTriggerIndex: String.Index?
+    @State private var showHistorySheet = false
+    @State private var showTodoPicker = false
+    @State private var glowPhase: Bool = false
+    @State private var showAtSuggestions = false
+    @State private var allElementSuggestions: [ElementSuggestion] = []
+    @State private var elementSuggestions: [ElementSuggestion] = []
+    @State private var allParticipantSuggestions: [ParticipantSuggestion] = []
+    @State private var participantSuggestions: [ParticipantSuggestion] = []
 
     private var isTwoRow: Bool { chatInputLayout == "twoRow" }
     private var resolvedChatInputGlassStyle: String { chatInputGlassStyle ?? "clear" }
@@ -588,13 +1017,22 @@ public struct NativeChatInput: View {
         isAgentRunning: Bool = false,
         isAgentPaused: Bool = false,
         onSubmit: @escaping () -> Void,
+        onSubmitNote: (() -> Void)? = nil,
         onPause: (() -> Void)? = nil,
         onNewChat: (() -> Void)? = nil,
         onQuickCommands: (() -> Void)? = nil,
+        onAddTodoItem: (() -> Void)? = nil,
+        onFetchTodoItems: (() async -> RipulTodoItemsResult)? = nil,
         messageHistory: MessageHistory? = nil,
         chatInputGlassStyle: String? = nil,
         chatInputLayout: String? = nil,
-        onQueryFiles: ((String) async -> [FileSuggestion])? = nil
+        planMode: Binding<Bool> = .constant(false),
+        showPlanModeToggle: Bool = false,
+        onQueryFiles: ((String) async -> [FileSuggestion])? = nil,
+        onQueryElements: (() async -> [ElementSuggestion])? = nil,
+        onQueryParticipants: (() async -> [ParticipantSuggestion])? = nil,
+        addressedParticipants: Binding<[String]> = .constant([]),
+        onFocusChanged: ((Bool) -> Void)? = nil
     ) {
         self._text = text
         self._imageAttachments = imageAttachments
@@ -602,30 +1040,40 @@ public struct NativeChatInput: View {
         self.isAgentRunning = isAgentRunning
         self.isAgentPaused = isAgentPaused
         self.onSubmit = onSubmit
+        self.onSubmitNote = onSubmitNote
         self.onPause = onPause
         self.onNewChat = onNewChat
         self.onQuickCommands = onQuickCommands
+        self.onAddTodoItem = onAddTodoItem
+        self.onFetchTodoItems = onFetchTodoItems
         self.messageHistory = messageHistory
         self.chatInputGlassStyle = chatInputGlassStyle
         self.chatInputLayout = chatInputLayout
+        self._planMode = planMode
+        self.showPlanModeToggle = showPlanModeToggle
         self.onQueryFiles = onQueryFiles
+        self.onQueryElements = onQueryElements
+        self.onQueryParticipants = onQueryParticipants
+        self._addressedParticipants = addressedParticipants
+        self.onFocusChanged = onFocusChanged
     }
 
-    // MARK: - File Suggestions
+    // MARK: - @ Mention Suggestions
 
-    /// Detect `@` followed by typing and trigger file query
+    /// Detect `@` followed by typing and populate a single ranked suggestion list
+    /// (participants first, then files, then UI elements).
     private func handleAtDetection(_ value: String) {
-        guard onQueryFiles != nil else { return }
+        guard onQueryFiles != nil || onQueryElements != nil || onQueryParticipants != nil else { return }
 
         guard let atRange = value.range(of: "@", options: .backwards) else {
-            dismissFileSuggestions()
+            dismissAtOverlay()
             return
         }
 
         if atRange.lowerBound != value.startIndex {
             let charBefore = value[value.index(before: atRange.lowerBound)]
             if !charBefore.isWhitespace {
-                dismissFileSuggestions()
+                dismissAtOverlay()
                 return
             }
         }
@@ -633,37 +1081,76 @@ public struct NativeChatInput: View {
         let afterAt = String(value[atRange.upperBound...])
 
         if afterAt.contains(" ") {
-            dismissFileSuggestions()
+            dismissAtOverlay()
             return
         }
 
-        guard !afterAt.isEmpty else {
-            dismissFileSuggestions()
-            return
-        }
-
+        let wasOpen = showAtSuggestions
         atTriggerIndex = atRange.lowerBound
+        showAtSuggestions = true
 
-        NSLog("[NativeChatInput] @files: querying for '%@'", afterAt)
+        if !wasOpen {
+            // Pre-fetch participants and elements once when the overlay opens.
+            if let queryParticipants = onQueryParticipants {
+                Task {
+                    let results = await queryParticipants()
+                    await MainActor.run {
+                        allParticipantSuggestions = results
+                        participantSuggestions = filterParticipants(by: afterAt, all: results)
+                    }
+                }
+            }
+            if let queryElements = onQueryElements {
+                Task {
+                    let results = await queryElements()
+                    await MainActor.run {
+                        allElementSuggestions = results
+                        elementSuggestions = filterElements(by: afterAt, all: results)
+                    }
+                }
+            }
+        } else {
+            // Already open — refilter cached lists locally.
+            participantSuggestions = filterParticipants(by: afterAt, all: allParticipantSuggestions)
+            elementSuggestions = filterElements(by: afterAt, all: allElementSuggestions)
+        }
+
+        // Files: debounced remote query, only when there's text to search for.
         fileQueryTask?.cancel()
-        fileQueryTask = Task {
-            try? await Task.sleep(nanoseconds: 150_000_000) // 150ms
-            guard !Task.isCancelled else { return }
-            if let queryFiles = onQueryFiles {
+        if afterAt.isEmpty {
+            fileSuggestions = []
+        } else if let queryFiles = onQueryFiles {
+            fileQueryTask = Task {
+                try? await Task.sleep(nanoseconds: 150_000_000) // 150ms
+                guard !Task.isCancelled else { return }
                 let results = await queryFiles(afterAt)
-                NSLog("[NativeChatInput] @files: got %d results for '%@'", results.count, afterAt)
                 guard !Task.isCancelled else { return }
                 await MainActor.run {
                     fileSuggestions = results
-                    showFileSuggestions = !results.isEmpty
                 }
             }
         }
     }
 
-    private func dismissFileSuggestions() {
-        showFileSuggestions = false
+    private func filterParticipants(by query: String, all: [ParticipantSuggestion]) -> [ParticipantSuggestion] {
+        guard !query.isEmpty else { return all }
+        let q = query.lowercased()
+        return all.filter { $0.name.lowercased().contains(q) || $0.id.lowercased().contains(q) }
+    }
+
+    private func filterElements(by query: String, all: [ElementSuggestion]) -> [ElementSuggestion] {
+        guard !query.isEmpty else { return all }
+        let q = query.lowercased()
+        return all.filter { $0.dataUi.lowercased().contains(q) }
+    }
+
+    private func dismissAtOverlay() {
+        showAtSuggestions = false
         fileSuggestions = []
+        elementSuggestions = []
+        allElementSuggestions = []
+        participantSuggestions = []
+        allParticipantSuggestions = []
         atTriggerIndex = nil
         fileQueryTask?.cancel()
     }
@@ -675,53 +1162,199 @@ public struct NativeChatInput: View {
         } else {
             text += suggestion.path + " "
         }
-        dismissFileSuggestions()
+        dismissAtOverlay()
     }
 
-    private var fileSuggestionsOverlay: some View {
-        VStack(spacing: 0) {
-            ScrollView {
-                LazyVStack(spacing: 0) {
-                    ForEach(fileSuggestions) { suggestion in
-                        Button {
-                            selectFileSuggestion(suggestion)
-                        } label: {
-                            HStack(spacing: 8) {
-                                Image(systemName: suggestion.isDirectory ? "folder.fill" : "doc.text.fill")
-                                    .foregroundStyle(suggestion.isDirectory ? .blue : .secondary)
-                                    .frame(width: 20)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(suggestion.fileName)
-                                        .font(.system(size: 14, weight: .medium))
-                                        .foregroundStyle(.primary)
-                                        .lineLimit(1)
-                                    if suggestion.path != suggestion.fileName {
-                                        Text(suggestion.path)
-                                            .font(.system(size: 11))
-                                            .foregroundStyle(.secondary)
-                                            .lineLimit(1)
-                                    }
-                                }
-                                Spacer()
-                            }
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 8)
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
+    private func selectElementSuggestion(_ suggestion: ElementSuggestion) {
+        if let triggerIdx = atTriggerIndex {
+            let before = String(text[text.startIndex..<triggerIdx])
+            text = before + "@ui:\(suggestion.dataUi) "
+        } else {
+            text += "@ui:\(suggestion.dataUi) "
+        }
+        dismissAtOverlay()
+    }
 
-                        if suggestion.id != fileSuggestions.last?.id {
-                            Divider().padding(.leading, 40)
+    private func selectParticipantSuggestion(_ suggestion: ParticipantSuggestion) {
+        if let triggerIdx = atTriggerIndex {
+            let before = String(text[text.startIndex..<triggerIdx])
+            text = before + "@" + suggestion.name + " "
+        } else {
+            text += "@" + suggestion.name + " "
+        }
+        if !addressedParticipants.contains(suggestion.id) {
+            addressedParticipants.append(suggestion.id)
+        }
+        dismissAtOverlay()
+    }
+
+    private var afterAtText: String {
+        guard let triggerIdx = atTriggerIndex,
+              triggerIdx < text.endIndex else { return "" }
+        let after = text.index(after: triggerIdx)
+        guard after <= text.endIndex else { return "" }
+        return String(text[after...])
+    }
+
+    private var unifiedSuggestionsOverlay: some View {
+        VStack(spacing: 0) {
+            let hasResults = !participantSuggestions.isEmpty || !fileSuggestions.isEmpty || !elementSuggestions.isEmpty
+            if !hasResults {
+                HStack(spacing: 8) {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundStyle(.secondary)
+                        .frame(width: 20)
+                    Text(afterAtText.isEmpty ? "Type to search people, files, and UI elements" : "No matches for \u{201C}\(afterAtText)\u{201D}")
+                        .font(.system(size: 14))
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 12)
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        if !participantSuggestions.isEmpty {
+                            suggestionSectionHeader("People")
+                            ForEach(participantSuggestions) { suggestion in
+                                participantRow(suggestion)
+                                if suggestion.id != participantSuggestions.last?.id {
+                                    Divider().padding(.leading, 40)
+                                }
+                            }
+                        }
+                        if !fileSuggestions.isEmpty {
+                            if !participantSuggestions.isEmpty {
+                                Divider()
+                            }
+                            suggestionSectionHeader("Files")
+                            ForEach(fileSuggestions) { suggestion in
+                                fileRow(suggestion)
+                                if suggestion.id != fileSuggestions.last?.id {
+                                    Divider().padding(.leading, 40)
+                                }
+                            }
+                        }
+                        if !elementSuggestions.isEmpty {
+                            if !participantSuggestions.isEmpty || !fileSuggestions.isEmpty {
+                                Divider()
+                            }
+                            suggestionSectionHeader("UI Elements")
+                            ForEach(elementSuggestions) { suggestion in
+                                elementRow(suggestion)
+                                if suggestion.id != elementSuggestions.last?.id {
+                                    Divider().padding(.leading, 40)
+                                }
+                            }
                         }
                     }
                 }
+                .frame(maxHeight: 280)
             }
-            .frame(maxHeight: 200)
         }
         .background(.ultraThinMaterial)
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .shadow(color: .black.opacity(0.15), radius: 8, y: -2)
         .padding(.horizontal, 16)
+    }
+
+    private func suggestionSectionHeader(_ title: String) -> some View {
+        HStack {
+            Text(title.uppercased())
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.secondary)
+            Spacer()
+        }
+        .padding(.horizontal, 12)
+        .padding(.top, 8)
+        .padding(.bottom, 4)
+    }
+
+    private func participantRow(_ suggestion: ParticipantSuggestion) -> some View {
+        Button {
+            selectParticipantSuggestion(suggestion)
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: AutocompleteConstants.category(for: "people")?.sfSymbol ?? "person.fill")
+                    .foregroundStyle(.secondary)
+                    .frame(width: 20)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(suggestion.name)
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                    if let group = suggestion.group, !group.isEmpty {
+                        Text(group)
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+                Spacer()
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func fileRow(_ suggestion: FileSuggestion) -> some View {
+        Button {
+            selectFileSuggestion(suggestion)
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: suggestion.isDirectory ? "folder.fill" : (AutocompleteConstants.category(for: "files")?.sfSymbol ?? "doc.text.fill"))
+                    .foregroundStyle(suggestion.isDirectory ? .blue : .secondary)
+                    .frame(width: 20)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(suggestion.fileName)
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                    if suggestion.path != suggestion.fileName {
+                        Text(suggestion.path)
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+                Spacer()
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func elementRow(_ suggestion: ElementSuggestion) -> some View {
+        Button {
+            selectElementSuggestion(suggestion)
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: AutocompleteConstants.category(for: "ui")?.sfSymbol ?? "tag.fill")
+                    .foregroundStyle(.secondary)
+                    .frame(width: 20)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(suggestion.componentName)
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                    if suggestion.dataUi != suggestion.componentName {
+                        Text(suggestion.dataUi)
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+                Spacer()
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 
     public var body: some View {
@@ -733,8 +1366,8 @@ public struct NativeChatInput: View {
             }
         }
         .overlay(alignment: .top) {
-            if showFileSuggestions {
-                fileSuggestionsOverlay
+            if showAtSuggestions {
+                unifiedSuggestionsOverlay
                     .offset(y: -8)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
@@ -742,10 +1375,23 @@ public struct NativeChatInput: View {
         .animation(.easeInOut(duration: 0.2), value: imageAttachments.count)
         .animation(.easeInOut(duration: 0.2), value: isAgentRunning)
         .animation(.easeInOut(duration: 0.2), value: isTwoRow)
-        .animation(.easeInOut(duration: 0.2), value: showFileSuggestions)
+        .animation(.easeInOut(duration: 0.2), value: showAtSuggestions)
         .photosPicker(isPresented: $showPhotoPicker, selection: $selectedPhotos, maxSelectionCount: 4, matching: .images)
+        .sheet(isPresented: $showTodoPicker) {
+            TodoPickerSheet(
+                onFetch: onFetchTodoItems,
+                onSelect: { todoText in
+                    let separator = text.isEmpty || text.hasSuffix("\n") || text.hasSuffix(" ") ? "" : " "
+                    text = text + separator + todoText
+                    showTodoPicker = false
+                }
+            )
+        }
         .onAppear {
             isFocused = true
+        }
+        .onChange(of: isFocused) { focused in
+            onFocusChanged?(focused)
         }
         .onKeyPress(.escape) {
             if isAgentRunning && !isAgentPaused {
@@ -784,14 +1430,29 @@ public struct NativeChatInput: View {
                         imageThumbsRow
                     }
                     HStack(spacing: 4) {
+                        if showPlanModeToggle {
+                            planModeToggle
+                        }
                         textInputView
                         actionButton
                     }
                 }
                 .frame(minHeight: 40)
                 .modifier(GlassChatInputBackground(glassStyle: resolvedChatInputGlassStyle))
+                .modifier(WaitingGlowModifier(isActive: agentWaiting, glowPhase: glowPhase))
 
                 historyMenuButton
+            }
+        }
+        .onChange(of: agentWaiting) { waiting in
+            if waiting {
+                withAnimation(.easeInOut(duration: 6.0).repeatForever(autoreverses: true)) {
+                    glowPhase = true
+                }
+            } else {
+                withAnimation(.easeOut(duration: 0.3)) {
+                    glowPhase = false
+                }
             }
         }
     }
@@ -814,6 +1475,9 @@ public struct NativeChatInput: View {
                 HStack(spacing: 8) {
                     plusMenuButton
                     historyMenuButton
+                    if showPlanModeToggle {
+                        planModeToggle
+                    }
                     Spacer()
                     twoRowActionButton
                 }
@@ -821,7 +1485,50 @@ public struct NativeChatInput: View {
                 .padding(.bottom, 6)
             }
             .modifier(GlassChatInputBackground(glassStyle: resolvedChatInputGlassStyle))
+            .modifier(WaitingGlowModifier(isActive: agentWaiting, glowPhase: glowPhase))
         }
+        .onChange(of: agentWaiting) { waiting in
+            if waiting {
+                withAnimation(.easeInOut(duration: 6.0).repeatForever(autoreverses: true)) {
+                    glowPhase = true
+                }
+            } else {
+                withAnimation(.easeOut(duration: 0.3)) {
+                    glowPhase = false
+                }
+            }
+        }
+    }
+
+    // MARK: - Plan Mode Toggle
+
+    private var planModeToggle: some View {
+        Menu {
+            Button {
+                planMode = false
+            } label: {
+                if !planMode { Label("Edit", systemImage: "checkmark") }
+                else { Text("Edit") }
+            }
+            Button {
+                planMode = true
+            } label: {
+                if planMode { Label("Plan", systemImage: "checkmark") }
+                else { Text("Plan") }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: planMode ? "eye" : "pencil")
+                    .font(.system(size: 14, weight: .semibold))
+                Text(planMode ? "Plan" : "Edit")
+                    .font(.system(size: 12, weight: .semibold))
+            }
+            .foregroundStyle(.primary)
+            .frame(height: 36)
+            .padding(.horizontal, 10)
+            .modifier(GlassPillModifier())
+        }
+        .animation(.easeInOut(duration: 0.15), value: planMode)
     }
 
     // MARK: - Shared Subviews
@@ -832,6 +1539,20 @@ public struct NativeChatInput: View {
                 showPhotoPicker = true
             } label: {
                 Label("Photos", systemImage: "photo")
+            }
+            if onFetchTodoItems != nil {
+                Button {
+                    showTodoPicker = true
+                } label: {
+                    Label("Pick to do", systemImage: "list.bullet.clipboard")
+                }
+            }
+            if onAddTodoItem != nil {
+                Button {
+                    onAddTodoItem?()
+                } label: {
+                    Label("New to do", systemImage: "checklist")
+                }
             }
             if onQuickCommands != nil {
                 Button {
@@ -858,8 +1579,12 @@ public struct NativeChatInput: View {
         .modifier(GlassCircleModifier(glassStyle: isTwoRow ? nil : resolvedChatInputGlassStyle))
     }
 
+    private var agentWaiting: Bool {
+        isAgentRunning && !isAgentPaused
+    }
+
     private var textInputView: some View {
-        TextField("Message...", text: $text, axis: .vertical)
+        TextField(agentWaiting ? "Waiting on agent…" : isAgentPaused ? "Agent is paused, add new instruction…" : "Message...", text: $text, axis: .vertical)
             .textFieldStyle(.plain)
             .lineLimit(1...5)
             .focused($isFocused)
@@ -873,46 +1598,75 @@ public struct NativeChatInput: View {
             }
     }
 
+    private func macNoteButton(onTap: @escaping () -> Void) -> some View {
+        Button {
+            onTap()
+        } label: {
+            Image(systemName: "bubble.left.fill")
+                .font(.system(size: 14, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: 34, height: 28)
+                .background(Color.purple, in: Capsule())
+        }
+        .buttonStyle(.plain)
+        .help("Send note (not sent to agent)")
+    }
+
     @ViewBuilder
     private var actionButton: some View {
         let hasContent = !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !imageAttachments.isEmpty
         if isAgentRunning && !isAgentPaused {
-            Button {
-                onPause?()
-            } label: {
-                Image(systemName: "pause.fill")
-                    .font(.system(size: 14, weight: .bold))
-                    .foregroundStyle(.white)
-                    .frame(width: 34, height: 28)
-                    .background(Color.orange, in: Capsule())
+            HStack(spacing: 4) {
+                if hasContent, let onSubmitNote {
+                    macNoteButton(onTap: onSubmitNote)
+                }
+                Button {
+                    onPause?()
+                } label: {
+                    Image(systemName: "pause.fill")
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 34, height: 28)
+                        .background(Color.orange, in: Capsule())
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
             .transition(.scale.combined(with: .opacity))
             .padding(.trailing, 6)
         } else if isAgentPaused {
-            Button {
-                onSubmit()
-            } label: {
-                Image(systemName: "play.fill")
-                    .font(.system(size: 14, weight: .bold))
-                    .foregroundStyle(.white)
-                    .frame(width: 34, height: 28)
-                    .background(Color.green, in: Capsule())
+            HStack(spacing: 4) {
+                if hasContent, let onSubmitNote {
+                    macNoteButton(onTap: onSubmitNote)
+                }
+                Button {
+                    onSubmit()
+                } label: {
+                    Image(systemName: "play.fill")
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 34, height: 28)
+                        .background(Color.green, in: Capsule())
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
             .transition(.scale.combined(with: .opacity))
             .padding(.trailing, 6)
         } else if hasContent {
-            Button {
-                onSubmit()
-            } label: {
-                Image(systemName: "arrow.up")
-                    .font(.system(size: 14, weight: .bold))
-                    .foregroundStyle(.white)
-                    .frame(width: 34, height: 28)
-                    .background(Color.accentColor, in: Capsule())
+            HStack(spacing: 4) {
+                if let onSubmitNote {
+                    macNoteButton(onTap: onSubmitNote)
+                }
+                Button {
+                    onSubmit()
+                } label: {
+                    Image(systemName: "arrow.up")
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 34, height: 28)
+                        .background(Color.accentColor, in: Capsule())
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
             .transition(.scale.combined(with: .opacity))
             .padding(.trailing, 6)
         }
@@ -922,58 +1676,94 @@ public struct NativeChatInput: View {
     private var twoRowActionButton: some View {
         let hasContent = !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !imageAttachments.isEmpty
         if isAgentRunning && !isAgentPaused {
-            Button {
-                onPause?()
-            } label: {
-                Image(systemName: "pause.fill")
-                    .font(.system(size: 18, weight: .bold))
-                    .foregroundStyle(.orange)
-                    .frame(width: 40, height: 40)
-                    .contentShape(Circle())
-                    .modifier(GlassCircleModifier(glassStyle: nil))
+            HStack(spacing: 4) {
+                if hasContent, let onSubmitNote {
+                    Button { onSubmitNote() } label: {
+                        Image(systemName: "bubble.left.fill")
+                            .font(.system(size: 18, weight: .bold))
+                            .foregroundStyle(.purple)
+                            .frame(width: 40, height: 40)
+                            .contentShape(Circle())
+                            .modifier(GlassCircleModifier(glassStyle: nil))
+                    }
+                    .buttonStyle(.plain)
+                    .transition(.scale.combined(with: .opacity))
+                }
+                Button {
+                    onPause?()
+                } label: {
+                    Image(systemName: "pause.fill")
+                        .font(.system(size: 18, weight: .bold))
+                        .foregroundStyle(.orange)
+                        .frame(width: 40, height: 40)
+                        .contentShape(Circle())
+                        .modifier(GlassCircleModifier(glassStyle: nil))
+                }
+                .buttonStyle(.plain)
+                .transition(.scale.combined(with: .opacity))
             }
-            .buttonStyle(.plain)
-            .transition(.scale.combined(with: .opacity))
         } else if isAgentPaused {
-            Button {
-                onSubmit()
-            } label: {
-                Image(systemName: "play.fill")
-                    .font(.system(size: 18, weight: .bold))
-                    .foregroundStyle(.green)
-                    .frame(width: 40, height: 40)
-                    .contentShape(Circle())
-                    .modifier(GlassCircleModifier(glassStyle: nil))
+            HStack(spacing: 4) {
+                if hasContent, let onSubmitNote {
+                    Button { onSubmitNote() } label: {
+                        Image(systemName: "bubble.left.fill")
+                            .font(.system(size: 18, weight: .bold))
+                            .foregroundStyle(.purple)
+                            .frame(width: 40, height: 40)
+                            .contentShape(Circle())
+                            .modifier(GlassCircleModifier(glassStyle: nil))
+                    }
+                    .buttonStyle(.plain)
+                    .transition(.scale.combined(with: .opacity))
+                }
+                Button {
+                    onSubmit()
+                } label: {
+                    Image(systemName: "play.fill")
+                        .font(.system(size: 18, weight: .bold))
+                        .foregroundStyle(.green)
+                        .frame(width: 40, height: 40)
+                        .contentShape(Circle())
+                        .modifier(GlassCircleModifier(glassStyle: nil))
+                }
+                .buttonStyle(.plain)
+                .transition(.scale.combined(with: .opacity))
             }
-            .buttonStyle(.plain)
-            .transition(.scale.combined(with: .opacity))
         } else if hasContent {
-            Button {
-                onSubmit()
-            } label: {
-                Image(systemName: "arrow.up")
-                    .font(.system(size: 18, weight: .bold))
-                    .foregroundStyle(Color.accentColor)
-                    .frame(width: 40, height: 40)
-                    .contentShape(Circle())
-                    .modifier(GlassCircleModifier(glassStyle: nil))
+            HStack(spacing: 4) {
+                if let onSubmitNote {
+                    Button { onSubmitNote() } label: {
+                        Image(systemName: "bubble.left.fill")
+                            .font(.system(size: 18, weight: .bold))
+                            .foregroundStyle(.purple)
+                            .frame(width: 40, height: 40)
+                            .contentShape(Circle())
+                            .modifier(GlassCircleModifier(glassStyle: nil))
+                    }
+                    .buttonStyle(.plain)
+                    .transition(.scale.combined(with: .opacity))
+                }
+                Button {
+                    onSubmit()
+                } label: {
+                    Image(systemName: "arrow.up")
+                        .font(.system(size: 18, weight: .bold))
+                        .foregroundStyle(Color.accentColor)
+                        .frame(width: 40, height: 40)
+                        .contentShape(Circle())
+                        .modifier(GlassCircleModifier(glassStyle: nil))
+                }
+                .buttonStyle(.plain)
+                .transition(.scale.combined(with: .opacity))
             }
-            .buttonStyle(.plain)
-            .transition(.scale.combined(with: .opacity))
         }
     }
 
     @ViewBuilder
     private var historyMenuButton: some View {
-        if let history = messageHistory, !history.recentMessages.isEmpty {
-            Menu {
-                ForEach(history.recentMessages.prefix(15), id: \.self) { msg in
-                    Button {
-                        text = msg
-                    } label: {
-                        Text(msg.prefix(80) + (msg.count > 80 ? "..." : ""))
-                    }
-                }
+        if let history = messageHistory, history.hasMessages {
+            Button {
+                showHistorySheet = true
             } label: {
                 Image(systemName: "clock.arrow.circlepath")
                     .font(.system(size: 18, weight: .medium))
@@ -981,10 +1771,15 @@ public struct NativeChatInput: View {
                     .frame(width: 40, height: 40)
                     .contentShape(Rectangle())
             }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
+            .buttonStyle(.borderless)
             .frame(width: 40, height: 40)
             .modifier(GlassCircleModifier(glassStyle: isTwoRow ? nil : resolvedChatInputGlassStyle))
+            .sheet(isPresented: $showHistorySheet) {
+                HistorySheet(history: history) { msg in
+                    text = msg
+                    showHistorySheet = false
+                }
+            }
         }
     }
 
@@ -1021,6 +1816,221 @@ public struct NativeChatInput: View {
 }
 
 #endif
+
+// MARK: - History Sheet (cross-platform)
+
+@available(iOS 16.0, macOS 14.0, *)
+struct HistorySheet: View {
+    @ObservedObject var history: MessageHistory
+    let onSelect: (String) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            List {
+                let favs = history.favoriteMessages
+                let recent = history.nonFavoriteRecentMessages
+                if !favs.isEmpty {
+                    Section("Favorites") {
+                        ForEach(favs.prefix(15), id: \.self) { msg in
+                            historyRow(msg)
+                        }
+                    }
+                }
+                if !recent.isEmpty {
+                    Section("Recent") {
+                        ForEach(recent.prefix(15), id: \.self) { msg in
+                            historyRow(msg)
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Recent Prompts")
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            #endif
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+        #if os(macOS)
+        .frame(minWidth: 400, minHeight: 300)
+        #else
+        .presentationDetents([.medium, .large], selection: .constant(.large))
+        #endif
+    }
+
+    private func historyRow(_ msg: String) -> some View {
+        Button {
+            onSelect(msg)
+        } label: {
+            HStack {
+                if history.isFavorite(msg) {
+                    Image(systemName: "star.fill")
+                        .foregroundStyle(.yellow)
+                        .font(.caption2)
+                }
+                Text(msg)
+                    .lineLimit(2)
+                    .foregroundStyle(.primary)
+                Spacer()
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+            Button(role: .destructive) {
+                history.remove(msg)
+            } label: {
+                Label("Delete", systemImage: "trash")
+            }
+        }
+        .swipeActions(edge: .leading, allowsFullSwipe: true) {
+            Button {
+                history.toggleFavorite(msg)
+            } label: {
+                Label(
+                    history.isFavorite(msg) ? "Unfavorite" : "Favorite",
+                    systemImage: history.isFavorite(msg) ? "star.slash.fill" : "star.fill"
+                )
+            }
+            .tint(.yellow)
+        }
+    }
+}
+
+// MARK: - Todo Picker Sheet
+
+/// Native list picker for inserting an existing todo's text into the chat
+/// composer. Current chat's todos render in a "This chat" section on top;
+/// everything else falls into "Other chats". Fetches on appear via the
+/// supplied closure (which wraps `AgentBridge.listTodoItems()`).
+@available(iOS 16.0, macOS 14.0, *)
+struct TodoPickerSheet: View {
+    let onFetch: (() async -> RipulTodoItemsResult)?
+    let onSelect: (String) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var loading = true
+    @State private var items: [RipulTodoItem] = []
+    @State private var currentChatId: String? = nil
+
+    private var thisChatItems: [RipulTodoItem] {
+        guard let currentChatId else { return [] }
+        return items.filter { $0.chatId == currentChatId && !$0.completed }
+    }
+
+    private var otherChatItems: [RipulTodoItem] {
+        items.filter { ($0.chatId ?? "") != (currentChatId ?? "__none__") && !$0.completed }
+    }
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if loading {
+                    ProgressView()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if thisChatItems.isEmpty && otherChatItems.isEmpty {
+                    VStack(spacing: 8) {
+                        Image(systemName: "list.bullet.clipboard")
+                            .font(.largeTitle)
+                            .foregroundStyle(.secondary)
+                        Text("No to do items")
+                            .font(.headline)
+                        Text("Create one from the + menu to pick it later.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                    }
+                    .padding()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    List {
+                        if !thisChatItems.isEmpty {
+                            Section("This chat") {
+                                ForEach(thisChatItems) { item in
+                                    todoRow(item, showChatName: false)
+                                }
+                            }
+                        }
+                        if !otherChatItems.isEmpty {
+                            Section("Other chats") {
+                                ForEach(otherChatItems) { item in
+                                    todoRow(item, showChatName: true)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Pick to do")
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            #endif
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+        #if os(macOS)
+        .frame(minWidth: 400, minHeight: 400)
+        #else
+        .presentationDetents([.medium, .large])
+        #endif
+        .task {
+            guard let onFetch else { loading = false; return }
+            let result = await onFetch()
+            items = result.items
+            currentChatId = result.currentChatId
+            loading = false
+        }
+    }
+
+    private func todoRow(_ item: RipulTodoItem, showChatName: Bool) -> some View {
+        Button {
+            onSelect(item.text)
+        } label: {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(item.text)
+                    .lineLimit(3)
+                    .foregroundStyle(.primary)
+                if showChatName, let chatName = item.chatName, !chatName.isEmpty {
+                    Text(chatName)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+// MARK: - Waiting Glow Effect
+
+@available(iOS 15.0, macOS 14.0, *)
+private struct WaitingGlowModifier: ViewModifier {
+    let isActive: Bool
+    let glowPhase: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .overlay(
+                RoundedRectangle(cornerRadius: 22)
+                    .stroke(
+                        Color.orange.opacity(isActive ? (glowPhase ? 0.35 : 0.12) : 0),
+                        lineWidth: 1.25
+                    )
+            )
+            .shadow(
+                color: .orange.opacity(isActive ? (glowPhase ? 0.25 : 0.08) : 0),
+                radius: glowPhase ? 7 : 3.5
+            )
+    }
+}
 
 // MARK: - Glass Background (cross-platform)
 
@@ -1119,6 +2129,24 @@ class ChatTextView: UITextView {
         }
         return super.canPerformAction(action, withSender: sender)
     }
+
+    #if targetEnvironment(macCatalyst)
+    /// Hardware-keyboard Return (no Shift) sends the message; Shift+Return inserts a
+    /// newline. Wired by NoAutofillTextView to the submit action. iPhone (non-Catalyst)
+    /// keeps the default behaviour where Return inserts a newline.
+    var onReturnKey: (() -> Void)?
+
+    override var keyCommands: [UIKeyCommand]? {
+        let send = UIKeyCommand(input: "\r", modifierFlags: [], action: #selector(handleReturnKey))
+        send.wantsPriorityOverSystemBehavior = true
+        let newline = UIKeyCommand(input: "\r", modifierFlags: .shift, action: #selector(handleShiftReturnKey))
+        newline.wantsPriorityOverSystemBehavior = true
+        return [send, newline]
+    }
+
+    @objc private func handleReturnKey() { onReturnKey?() }
+    @objc private func handleShiftReturnKey() { insertText("\n") }
+    #endif
 }
 
 /// UITextView wrapper that completely disables autofill suggestions.
@@ -1129,6 +2157,7 @@ struct NoAutofillTextView: UIViewRepresentable {
     var placeholder: String
     var onSubmit: () -> Void
     var onTextChange: ((String) -> Void)?
+    var onFocusChanged: ((Bool) -> Void)?
 
     private let minHeight: CGFloat = 36
     private let maxHeight: CGFloat = 120
@@ -1148,8 +2177,8 @@ struct NoAutofillTextView: UIViewRepresentable {
         textView.isScrollEnabled = true
         textView.showsVerticalScrollIndicator = false
         textView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        textView.returnKeyType = .send
-        textView.enablesReturnKeyAutomatically = true
+        textView.returnKeyType = .default
+        textView.enablesReturnKeyAutomatically = false
 
         // Let Apple's vibrancy handle text color adaptation
         textView.textColor = .label
@@ -1177,6 +2206,13 @@ struct NoAutofillTextView: UIViewRepresentable {
     }
 
     func updateUIView(_ textView: ChatTextView, context: Context) {
+        #if targetEnvironment(macCatalyst)
+        textView.onReturnKey = onSubmit
+        #endif
+        // Keep placeholder text in sync with SwiftUI state
+        if context.coordinator.placeholderLabel?.text != placeholder {
+            context.coordinator.placeholderLabel?.text = placeholder
+        }
 
         if textView.text != text {
             textView.text = text
@@ -1214,14 +2250,21 @@ struct NoAutofillTextView: UIViewRepresentable {
             parent.text = textView.text
             placeholderLabel?.isHidden = !textView.text.isEmpty
             recalcHeight(textView)
+            if textView.text.contains("@") {
+                print("[NativeChatInput] textViewDidChange: text contains @, onTextChange is \(parent.onTextChange == nil ? "nil" : "set")")
+            }
             parent.onTextChange?(textView.text)
         }
 
+        func textViewDidBeginEditing(_ textView: UITextView) {
+            parent.onFocusChanged?(true)
+        }
+
+        func textViewDidEndEditing(_ textView: UITextView) {
+            parent.onFocusChanged?(false)
+        }
+
         func textView(_ textView: UITextView, shouldChangeTextIn range: NSRange, replacementText text: String) -> Bool {
-            if text == "\n" {
-                parent.onSubmit()
-                return false
-            }
             return true
         }
     }

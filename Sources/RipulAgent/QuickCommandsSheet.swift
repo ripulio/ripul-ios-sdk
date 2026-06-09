@@ -12,6 +12,9 @@ public struct QuickCommandsSheet: View {
     @State private var commands: [SlashCommandInfo] = []
     @State private var isLoading = true
     @State private var searchText = ""
+    @State private var showEvictConfirm = false
+    @State private var evictStatus: String?
+    @State private var isEvicting = false
 
     public init(bridge: AgentBridge, debugMode: Bool = false) {
         self.bridge = bridge
@@ -88,6 +91,60 @@ public struct QuickCommandsSheet: View {
                                     }
                                     .padding(.vertical, 4)
                                 }
+
+                                NavigationLink {
+                                    RelayHostStatsView(bridge: bridge)
+                                } label: {
+                                    HStack(spacing: 12) {
+                                        Image(systemName: "waveform.path.ecg")
+                                            .font(.system(size: 16))
+                                            .foregroundStyle(.tint)
+                                            .frame(width: 28)
+
+                                        VStack(alignment: .leading, spacing: 3) {
+                                            Text("Relay Host Stats")
+                                                .font(.body)
+                                                .fontWeight(.medium)
+                                            Text("Live ping/pong + frame vs command diagnostics")
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                        }
+
+                                        Spacer()
+                                    }
+                                    .padding(.vertical, 4)
+                                }
+
+                                Button(role: .destructive) {
+                                    showEvictConfirm = true
+                                } label: {
+                                    HStack(spacing: 12) {
+                                        Image(systemName: "bolt.trianglebadge.exclamationmark")
+                                            .font(.system(size: 16))
+                                            .foregroundStyle(.red)
+                                            .frame(width: 28)
+
+                                        VStack(alignment: .leading, spacing: 3) {
+                                            Text("Evict Session DO")
+                                                .font(.body)
+                                                .fontWeight(.medium)
+                                                .foregroundStyle(.red)
+                                            Text(evictSubtitle)
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                                .lineLimit(2)
+                                        }
+
+                                        Spacer()
+
+                                        if isEvicting {
+                                            ProgressView()
+                                                .controlSize(.small)
+                                        }
+                                    }
+                                    .padding(.vertical, 4)
+                                }
+                                .disabled(isEvicting || bridge.activeSession?.sourceChatId == nil)
                             }
                         }
 
@@ -146,6 +203,38 @@ public struct QuickCommandsSheet: View {
         .task {
             commands = await bridge.getSlashCommands(showHidden: debugMode)
             isLoading = false
+        }
+        .alert("Evict Session DO?", isPresented: $showEvictConfirm, presenting: bridge.activeSession?.sourceChatId) { chatId in
+            Button("Evict", role: .destructive) {
+                Task { await performEvict(chatId: chatId) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { chatId in
+            Text("Force-restart the SessionChannel DO for \(chatId.suffix(8)). Open clients will drop and reconnect.")
+        }
+        .alert("Eviction result", isPresented: Binding(get: { evictStatus != nil }, set: { if !$0 { evictStatus = nil } })) {
+            Button("OK", role: .cancel) { evictStatus = nil }
+        } message: {
+            Text(evictStatus ?? "")
+        }
+    }
+
+    private var evictSubtitle: String {
+        if let chatId = bridge.activeSession?.sourceChatId {
+            return "Force-restart DO for ...\(chatId.suffix(8))"
+        }
+        return "No active chat"
+    }
+
+    @MainActor
+    private func performEvict(chatId: String) async {
+        isEvicting = true
+        defer { isEvicting = false }
+        let result = await bridge.evictSessionChannel(chatId: chatId)
+        if result.success {
+            evictStatus = "Evicted DO for ...\(chatId.suffix(8)). Reconnect should pick up the new code."
+        } else {
+            evictStatus = "Failed: \(result.error ?? "unknown error")"
         }
     }
 }

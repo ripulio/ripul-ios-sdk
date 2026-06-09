@@ -25,6 +25,10 @@ public struct AgentView<TopBar: View>: View {
     public weak var linkOpenDelegate: LinkOpenDelegate?
     public var onMinimize: (() -> Void)?
     private let topBar: ((AgentBridge) -> TopBar)?
+    /// When false, the web view respects safe areas so it stays confined to its
+    /// container (e.g. a NavigationSplitView detail column) instead of full-bleeding
+    /// to the window. Defaults true to preserve the full-screen iPhone behaviour.
+    private var fillsSafeArea: Bool = true
 
     @StateObject private var bridge: AgentBridge
     private let skipBridgeSetup: Bool
@@ -37,7 +41,11 @@ public struct AgentView<TopBar: View>: View {
     @State private var imageAttachments: [NativeImageAttachment] = []
     @State private var showingQuickCommands = false
     @State private var showingDebugCommands = false
+    @State private var showingConsoleLogs = false
+    @AppStorage("showNativeViewInspector") private var showingViewInspector = false
     @State private var chatInputMeasuredHeight: CGFloat = 0
+    @State private var planMode = false
+    @State private var addressedParticipants: [String] = []
 
     @StateObject private var messageHistory = MessageHistory()
 
@@ -70,6 +78,7 @@ public struct AgentView<TopBar: View>: View {
         configuration: AgentConfiguration,
         bridge: AgentBridge,
         onMinimize: (() -> Void)? = nil,
+        fillsSafeArea: Bool = true,
         @ViewBuilder topBar: @escaping (AgentBridge) -> TopBar
     ) {
         self.configuration = configuration
@@ -80,6 +89,7 @@ public struct AgentView<TopBar: View>: View {
         self.topBar = topBar
         self._bridge = StateObject(wrappedValue: bridge)
         self.skipBridgeSetup = true
+        self.fillsSafeArea = fillsSafeArea
     }
 
     public var body: some View {
@@ -92,16 +102,20 @@ public struct AgentView<TopBar: View>: View {
             #endif
 
             if let config = readyConfig {
-                #if os(iOS)
-                GeometryReader { geo in
-                    AgentWebView(configuration: config, bridge: bridge)
-                        .frame(height: keyboard.height > 0
-                            ? geo.size.height - keyboard.height + 30
-                            : geo.size.height)
-                }
-                .ignoresSafeArea()
-                #else
                 AgentWebView(configuration: config, bridge: bridge)
+                #if os(iOS)
+                    // fillsSafeArea: ignore all edges (full-bleed iPhone). Otherwise
+                    // ignore only the vertical edges — the web view fills to the top
+                    // (no black gap above the chat top bar) but respects the leading/
+                    // trailing insets so it stays confined to its split column.
+                    .ignoresSafeArea(.all, edges: fillsSafeArea ? .all : .vertical)
+                    // Slide the entire WKWebView up by the full keyboard frame height.
+                    // Only applies when the native chat input is active — on sign-in and
+                    // other non-chat pages the web view handles keyboard avoidance itself
+                    // (the browser scrolls the focused input into the visual viewport).
+                    // Uses rawHeight (not safe-area-adjusted) because the web view ignores safe areas.
+                    // Animation is driven by withAnimation in KeyboardObserver, not here.
+                    .offset(y: bridge.currentPageContext.showNativeChatInput && !bridge.suppressNativeChatInput && bridge.nativeChatInputFocused && keyboard.rawHeight > 0 ? -keyboard.rawHeight : 0)
                 #endif
             }
 
@@ -110,42 +124,100 @@ public struct AgentView<TopBar: View>: View {
             }
         }
         .overlay(alignment: .bottom) {
-            VStack(spacing: 8) {
-                if bridge.showScrollToBottom {
-                    ScrollToBottomButton {
-                        bridge.scrollToBottom()
-                    }
-                    .transition(.scale.combined(with: .opacity))
-                }
-
-                chatInput
-                    .background(
-                        GeometryReader { geo in
-                            Color.clear.preference(key: ChatInputHeightKey.self, value: geo.size.height)
+            if !bridge.fileViewerExpanded && bridge.currentPageContext.showNativeChatInput && !bridge.suppressNativeChatInput {
+                VStack(spacing: 8) {
+                    if bridge.showScrollToBottom {
+                        ScrollToBottomButton(unreadCount: bridge.scrollUnreadCount) {
+                            bridge.scrollToBottom()
                         }
-                    )
+                        .padding(.horizontal, 12)
+                        .transition(.scale.combined(with: .opacity))
+                    }
+
+                    chatInput
+                        .background(
+                            GeometryReader { geo in
+                                Color.clear.preference(key: ChatInputHeightKey.self, value: geo.size.height)
+                            }
+                        )
+                        .padding(.horizontal, 12)
+                        .padding(.top, 32)
+                        .background(
+                            Rectangle()
+                                .fill(.ultraThinMaterial)
+                                .opacity(0.6)
+                                .mask(
+                                    VStack(spacing: 0) {
+                                        LinearGradient(
+                                            colors: [.clear, .black],
+                                            startPoint: .top,
+                                            endPoint: .bottom
+                                        )
+                                        .frame(height: 32)
+                                        Color.black
+                                    }
+                                )
+                                .allowsHitTesting(false)
+                        )
+                        .overlay(alignment: .bottom) {
+                            // Extend blur below the chat input into safe area
+                            Rectangle()
+                                .fill(.ultraThinMaterial)
+                                .opacity(0.6)
+                                .frame(height: 12)
+                                .mask(
+                                    LinearGradient(
+                                        colors: [.black, .clear],
+                                        startPoint: .top,
+                                        endPoint: .bottom
+                                    )
+                                )
+                                .offset(y: 12)
+                                .allowsHitTesting(false)
+                        }
+                }
+                #if os(iOS)
+                .padding(.bottom, keyboard.height > 0 ? keyboard.height + 4 : 8)
+                #else
+                .padding(.bottom, 8)
+                #endif
+                .animation(.spring(duration: 0.3), value: bridge.showScrollToBottom)
             }
-            .padding(.horizontal, 12)
-            #if os(iOS)
-            .padding(.bottom, keyboard.height > 0 ? keyboard.height + 4 : 8)
-            #else
-            .padding(.bottom, 8)
-            #endif
-            .animation(.spring(duration: 0.3), value: bridge.showScrollToBottom)
         }
         .onPreferenceChange(ChatInputHeightKey.self) { height in
             chatInputMeasuredHeight = height
+            #if os(iOS)
+            // Skip web padding updates while keyboard is active — the native
+            // .offset() handles avoidance.  Firing here during the keyboard
+            // animation causes a delayed JS bridge call that scrolls Virtuoso.
+            guard keyboard.rawHeight == 0 else { return }
+            #endif
             updateWebBottomPadding()
         }
         #if os(iOS)
-        .onChange(of: keyboard.height) { _ in
-            updateWebBottomPadding()
+        .onChange(of: keyboard.rawHeight) { newHeight in
+            // Re-sync web padding once keyboard fully dismisses, in case the
+            // chat input changed size while the keyboard was up.
+            if newHeight == 0 {
+                updateWebBottomPadding()
+            }
         }
-        #endif
-        #if os(iOS)
         .ignoresSafeArea(.keyboard)
-        .animation(.easeOut(duration: 0.25), value: keyboard.height)
         #endif
+        .onChange(of: bridge.currentPageContext) { context in
+            if !context.showNativeChatInput || bridge.suppressNativeChatInput {
+                bridge.setNativeChatInputHeight(0)
+            } else {
+                updateWebBottomPadding()
+            }
+        }
+        .onChange(of: bridge.suppressNativeChatInput) { suppressed in
+            if suppressed {
+                bridge.setNativeChatInputHeight(0)
+            } else if bridge.currentPageContext.showNativeChatInput {
+                updateWebBottomPadding()
+            }
+        }
         .onChange(of: colorScheme) { newScheme in
             let theme: AgentTheme = newScheme == .dark ? .dark : .light
             bridge.setTheme(theme)
@@ -157,6 +229,18 @@ public struct AgentView<TopBar: View>: View {
                 } else {
                     dismiss()
                 }
+            }
+        }
+        .onChange(of: bridge.wantsShowConsoleLogs) { wants in
+            if wants {
+                showingConsoleLogs = true
+                bridge.wantsShowConsoleLogs = false
+            }
+        }
+        .onChange(of: bridge.wantsShowViewInspector) { wants in
+            if wants {
+                showingViewInspector = true
+                bridge.wantsShowViewInspector = false
             }
         }
         .onChange(of: selectedPhotos) { newItems in
@@ -174,6 +258,12 @@ public struct AgentView<TopBar: View>: View {
             if let text {
                 chatMessage = text
                 bridge.pendingInputText = nil
+            }
+        }
+        .onChange(of: bridge.pendingInputAppend) { text in
+            if let text {
+                chatMessage += text
+                bridge.pendingInputAppend = nil
             }
         }
         .sheet(isPresented: $showingQuickCommands) {
@@ -206,6 +296,9 @@ public struct AgentView<TopBar: View>: View {
                 bridge.pendingDateQuestion = nil
             })
         }
+        .sheet(item: $bridge.pendingFileView) { request in
+            FileViewerSheet(request: request)
+        }
         .task {
             if !skipBridgeSetup {
                 bridge.register(tools)
@@ -232,27 +325,52 @@ public struct AgentView<TopBar: View>: View {
     private func handleSubmit() {
         let message = chatMessage.trimmingCharacters(in: .whitespacesAndNewlines)
         if bridge.isAgentPaused {
+            let addressed = addressedParticipants
             chatMessage = ""
             imageAttachments = []
             selectedPhotos = []
+            addressedParticipants = []
             if message.isEmpty {
                 Task { await bridge.resumeAgent() }
             } else {
                 recordHistory(message)
-                Task { await bridge.submitMessage(message, imageAttachments: nil) }
+                Task {
+                    await bridge.submitMessage(
+                        message,
+                        imageAttachments: nil,
+                        addressedTo: addressed.isEmpty ? nil : addressed
+                    )
+                }
             }
         } else {
             guard !message.isEmpty || !imageAttachments.isEmpty else { return }
             if !message.isEmpty { recordHistory(message) }
             let images = imageAttachments
+            let addressed = addressedParticipants
             chatMessage = ""
             imageAttachments = []
             selectedPhotos = []
+            addressedParticipants = []
             Task {
                 let imgDicts: [[String: String]]? = images.isEmpty ? nil : images.map { $0.toDictionary() }
-                await bridge.submitMessage(message, imageAttachments: imgDicts)
+                await bridge.submitMessage(
+                    message,
+                    imageAttachments: imgDicts,
+                    addressedTo: addressed.isEmpty ? nil : addressed
+                )
             }
         }
+        #if os(iOS)
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+        #endif
+    }
+
+    private func handleNoteSubmit() {
+        let message = chatMessage.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !message.isEmpty else { return }
+        recordHistory(message)
+        chatMessage = ""
+        Task { await bridge.submitNote(message) }
         #if os(iOS)
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
         #endif
@@ -262,7 +380,11 @@ public struct AgentView<TopBar: View>: View {
         chatMessage = ""
         imageAttachments = []
         selectedPhotos = []
-        Task { await bridge.startNewChat() }
+        planMode = false
+        Task {
+            await bridge.setCliPlanMode(false)
+            await bridge.startNewChat()
+        }
     }
 
     private func recordHistory(_ message: String) {
@@ -276,11 +398,13 @@ public struct AgentView<TopBar: View>: View {
         let safeBottom = UIApplication.shared.connectedScenes
             .compactMap { ($0 as? UIWindowScene)?.keyWindow?.safeAreaInsets.bottom }
             .first ?? 0
-        bottomPad = (keyboard.height > 0 ? keyboard.height + 4 : 8) + safeBottom
+        // Resting padding only — keyboard shift is handled natively via WKWebView offset
+        bottomPad = 8 + safeBottom
         #else
         bottomPad = 8
         #endif
-        let totalHeight = Int(chatInputMeasuredHeight + bottomPad + 8)
+        let fadeGradientHeight: CGFloat = 32
+        let totalHeight = Int(chatInputMeasuredHeight + bottomPad + fadeGradientHeight + 8)
         bridge.setNativeChatInputHeight(totalHeight)
     }
 
@@ -293,21 +417,62 @@ public struct AgentView<TopBar: View>: View {
             isAgentRunning: bridge.isAgentRunning && bridge.pendingUserInteraction == nil && bridge.pendingTextQuestion == nil && bridge.pendingDateQuestion == nil,
             isAgentPaused: bridge.isAgentPaused,
             onSubmit: handleSubmit,
+            onSubmitNote: handleNoteSubmit,
             onPause: { Task { await bridge.interruptAgent() } },
             onNewChat: handleNewChat,
             onQuickCommands: { showingQuickCommands = true },
+            onAddTodoItem: { bridge.emitTodoItemCreate() },
+            onFetchTodoItems: { await bridge.listTodoItems() },
             messageHistory: messageHistory,
             chatInputGlassStyle: bridge.chatInputGlassStyle,
             chatInputLayout: bridge.chatInputLayout,
+            planMode: $planMode,
+            showPlanModeToggle: bridge.chatInputLayout == "twoRow" && bridge.isActiveSessionClaudeCli,
             onQueryFiles: { query in
-                let results = await bridge.queryRemoteFiles(query: query)
+                let results = await bridge.queryAutocomplete(category: "files", query: query)
                 return results.compactMap { dict in
                     guard let path = dict["path"] as? String else { return nil }
                     let isDir = dict["isDirectory"] as? Bool ?? false
                     return FileSuggestion(path: path, isDirectory: isDir)
                 }
-            }
+            },
+            onQueryElements: {
+                let results = await bridge.queryAutocomplete(category: "ui", query: "")
+                return results.compactMap { dict in
+                    guard let dataUi = dict["dataUi"] as? String else { return nil }
+                    return ElementSuggestion(dataUi: dataUi)
+                }
+            },
+            onQueryParticipants: {
+                let dicts = await bridge.queryAutocomplete(category: "people", query: "")
+                return dicts.compactMap { dict in
+                    guard let id = dict["id"] as? String,
+                          let name = dict["name"] as? String else { return nil }
+                    let group = dict["group"] as? String
+                    return ParticipantSuggestion(id: id, name: name, group: group)
+                }
+            },
+            addressedParticipants: $addressedParticipants,
+            onFocusChanged: { focused in
+                bridge.nativeChatInputFocused = focused
+            },
+            onPlusLongPress: { showingConsoleLogs = true }
         )
+        .onChange(of: planMode) { newValue in
+            Task { await bridge.setCliPlanMode(newValue) }
+        }
+        .sheet(isPresented: $showingConsoleLogs) {
+            NavigationStack {
+                ConsoleLogViewer(bridge: bridge)
+                    .navigationTitle("Console Logs")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .topBarTrailing) {
+                            Button("Done") { showingConsoleLogs = false }
+                        }
+                    }
+            }
+        }
     }
     #elseif os(macOS)
     private var chatInput: some View {
@@ -318,21 +483,46 @@ public struct AgentView<TopBar: View>: View {
             isAgentRunning: bridge.isAgentRunning && bridge.pendingUserInteraction == nil && bridge.pendingTextQuestion == nil && bridge.pendingDateQuestion == nil,
             isAgentPaused: bridge.isAgentPaused,
             onSubmit: handleSubmit,
+            onSubmitNote: handleNoteSubmit,
             onPause: { Task { await bridge.interruptAgent() } },
             onNewChat: handleNewChat,
             onQuickCommands: { showingQuickCommands = true },
+            onAddTodoItem: { bridge.emitTodoItemCreate() },
+            onFetchTodoItems: { await bridge.listTodoItems() },
             messageHistory: messageHistory,
             chatInputGlassStyle: bridge.chatInputGlassStyle,
             chatInputLayout: bridge.chatInputLayout,
+            planMode: $planMode,
+            showPlanModeToggle: bridge.isActiveSessionClaudeCli,
             onQueryFiles: { query in
-                let results = await bridge.queryRemoteFiles(query: query)
+                let results = await bridge.queryAutocomplete(category: "files", query: query)
                 return results.compactMap { dict in
                     guard let path = dict["path"] as? String else { return nil }
                     let isDir = dict["isDirectory"] as? Bool ?? false
                     return FileSuggestion(path: path, isDirectory: isDir)
                 }
-            }
+            },
+            onQueryElements: {
+                let results = await bridge.queryAutocomplete(category: "ui", query: "")
+                return results.compactMap { dict in
+                    guard let dataUi = dict["dataUi"] as? String else { return nil }
+                    return ElementSuggestion(dataUi: dataUi)
+                }
+            },
+            onQueryParticipants: {
+                let dicts = await bridge.queryAutocomplete(category: "people", query: "")
+                return dicts.compactMap { dict in
+                    guard let id = dict["id"] as? String,
+                          let name = dict["name"] as? String else { return nil }
+                    let group = dict["group"] as? String
+                    return ParticipantSuggestion(id: id, name: name, group: group)
+                }
+            },
+            addressedParticipants: $addressedParticipants
         )
+        .onChange(of: planMode) { newValue in
+            Task { await bridge.setCliPlanMode(newValue) }
+        }
     }
     #endif
 }

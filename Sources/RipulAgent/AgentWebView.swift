@@ -45,7 +45,7 @@ public struct AgentWebView: NSViewRepresentable {
     }
 
     public func makeCoordinator() -> Coordinator {
-        Coordinator(bridge: bridge)
+        Coordinator(bridge: bridge, baseHost: configuration.baseURL.host)
     }
 
     public func makeNSView(context: Context) -> WKWebView {
@@ -59,6 +59,8 @@ public struct AgentWebView: NSViewRepresentable {
         config.userContentController.addUserScript(bridgeScript)
         config.userContentController.add(context.coordinator, name: "agentBridge")
         config.userContentController.add(context.coordinator, name: "agentLog")
+        config.userContentController.add(context.coordinator, name: "agentNetwork")
+        config.userContentController.add(context.coordinator, name: "curtainLowered")
 
         // Inject font-face declarations for any requested font families
         if let families = configuration.fontFamilies, !families.isEmpty {
@@ -83,15 +85,11 @@ public struct AgentWebView: NSViewRepresentable {
             }
         }
 
-        // Mac-appropriate user agent — include Safari token for OAuth compatibility
-        config.applicationNameForUserAgent = "RipulNative/1.0 Safari/605.1.15"
+        // Mac-appropriate user agent — include Version/ and Safari/ tokens so OAuth
+        // providers (Google, etc.) don't detect an embedded web view and block sign-in.
+        config.applicationNameForUserAgent = "Version/17.0 RipulNative/1.0 Safari/604.1"
 
-        let dataStore = WKWebsiteDataStore.default()
-        if !configuration.nativeApp {
-            let allTypes = WKWebsiteDataStore.allWebsiteDataTypes()
-            dataStore.removeData(ofTypes: allTypes, modifiedSince: .distantPast) { }
-        }
-        config.websiteDataStore = dataStore
+        config.websiteDataStore = configuration.websiteDataStore ?? WKWebsiteDataStore.default()
 
         // Allow the host app to customize the configuration (e.g., register URL scheme handlers)
         configuration.configureWebView?(config)
@@ -109,9 +107,17 @@ public struct AgentWebView: NSViewRepresentable {
 
         bridge.attach(to: webView)
 
-        let url = configuration.embeddedURL
+        // Append a cache-busting query param so sub-resources (JS bundles) aren't
+        // served from WKWebView's disk cache after a deploy.
+        var urlComponents = URLComponents(url: configuration.embeddedURL, resolvingAgainstBaseURL: false)!
+        var queryItems = urlComponents.queryItems ?? []
+        queryItems.append(URLQueryItem(name: "_cb", value: String(Int(Date().timeIntervalSince1970))))
+        urlComponents.queryItems = queryItems
+        let url = urlComponents.url!
         NSLog("[AgentWebView] Loading URL: %@", url.absoluteString)
-        webView.load(URLRequest(url: url))
+        var request = URLRequest(url: url)
+        request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+        webView.load(request)
 
         return webView
     }
@@ -121,6 +127,8 @@ public struct AgentWebView: NSViewRepresentable {
     public static func dismantleNSView(_ webView: WKWebView, coordinator: Coordinator) {
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "agentBridge")
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "agentLog")
+        webView.configuration.userContentController.removeScriptMessageHandler(forName: "agentNetwork")
+        webView.configuration.userContentController.removeScriptMessageHandler(forName: "curtainLowered")
         webView.configuration.userContentController.removeAllUserScripts()
     }
 
@@ -128,15 +136,26 @@ public struct AgentWebView: NSViewRepresentable {
 
     public final class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate, WKUIDelegate {
         let bridge: AgentBridge
+        let baseHost: String?
         private weak var observedWebView: WKWebView?
 
-        init(bridge: AgentBridge) {
+        init(bridge: AgentBridge, baseHost: String?) {
             self.bridge = bridge
+            self.baseHost = baseHost
             super.init()
         }
 
         func attachWebView(_ webView: WKWebView) {
             observedWebView = webView
+        }
+
+        /// Returns true when the URL points to a different host than the app's base URL
+        /// and should be opened externally (in the default browser / Safari).
+        private func isExternalURL(_ url: URL) -> Bool {
+            guard let scheme = url.scheme, ["http", "https"].contains(scheme) else { return false }
+            guard let host = url.host else { return false }
+            guard let baseHost else { return false }
+            return host != baseHost
         }
 
         public func userContentController(
@@ -146,6 +165,10 @@ public struct AgentWebView: NSViewRepresentable {
             Task { @MainActor in
                 if message.name == "agentLog" {
                     bridge.handleConsoleLog(message.body as? String ?? "")
+                } else if message.name == "agentNetwork" {
+                    bridge.handleNetworkLog(message.body)
+                } else if message.name == "curtainLowered" {
+                    bridge.lowerWindowCurtain()
                 } else {
                     bridge.handleMessage(message.body)
                 }
@@ -158,11 +181,16 @@ public struct AgentWebView: NSViewRepresentable {
         ) async -> WKNavigationActionPolicy {
             if let url = navigationAction.request.url {
                 NSLog("[AgentWebView] Navigation: %@", url.absoluteString)
+                if navigationAction.navigationType == .linkActivated && isExternalURL(url) {
+                    NSLog("[AgentWebView] Opening external URL in browser: %@", url.absoluteString)
+                    NSWorkspace.shared.open(url)
+                    return .cancel
+                }
             }
             return .allow
         }
 
-        /// Handle window.open / target="_blank" by loading in the same web view.
+        /// Handle window.open / target="_blank" — open external URLs in the default browser.
         public func webView(
             _ webView: WKWebView,
             createWebViewWith configuration: WKWebViewConfiguration,
@@ -171,9 +199,24 @@ public struct AgentWebView: NSViewRepresentable {
         ) -> WKWebView? {
             if let url = navigationAction.request.url {
                 NSLog("[AgentWebView] Popup request: %@", url.absoluteString)
-                webView.load(navigationAction.request)
+                if isExternalURL(url) {
+                    NSLog("[AgentWebView] Opening external popup URL in browser: %@", url.absoluteString)
+                    NSWorkspace.shared.open(url)
+                } else {
+                    webView.load(navigationAction.request)
+                }
             }
             return nil
+        }
+
+        public func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+            guard let url = webView.url else { return }
+            if isExternalURL(url) {
+                NSLog("[AgentWebView] External navigation committed — hiding native chrome for: %@", url.host ?? "unknown")
+                Task { @MainActor in
+                    bridge.currentPageContext = .externalNavigation
+                }
+            }
         }
 
         public func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
@@ -189,7 +232,7 @@ public struct AgentWebView: NSViewRepresentable {
             if nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled { return }
             Task { @MainActor in
                 bridge.loadError = userFacingErrorMessage(nsError)
-                bridge.loadErrorDetails = "\(nsError.domain) \(nsError.code): \(error.localizedDescription)"
+                bridge.loadErrorDetails = error.localizedDescription
             }
         }
 
@@ -199,7 +242,66 @@ public struct AgentWebView: NSViewRepresentable {
             if nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled { return }
             Task { @MainActor in
                 bridge.loadError = userFacingErrorMessage(nsError)
-                bridge.loadErrorDetails = "\(nsError.domain) \(nsError.code): \(error.localizedDescription)"
+                bridge.loadErrorDetails = error.localizedDescription
+            }
+        }
+
+        /// Called when the WKWebView's web content process crashes or is terminated by the OS.
+        /// The web view shows a blank white page after this — record the crash and reload.
+        public func webView(_ webView: WKWebView, webContentProcessDidTerminate: WKWebView) {
+            Task { @MainActor in
+                bridge.recordProcessTermination()
+            }
+        }
+
+        // MARK: - JavaScript Dialog Handlers (WKUIDelegate)
+
+        public func webView(
+            _ webView: WKWebView,
+            runJavaScriptAlertPanelWithMessage message: String,
+            initiatedByFrame frame: WKFrameInfo,
+            completionHandler: @escaping () -> Void
+        ) {
+            guard let window = webView.window else { completionHandler(); return }
+            let alert = NSAlert()
+            alert.messageText = message
+            alert.addButton(withTitle: "OK")
+            alert.beginSheetModal(for: window) { _ in completionHandler() }
+        }
+
+        public func webView(
+            _ webView: WKWebView,
+            runJavaScriptConfirmPanelWithMessage message: String,
+            initiatedByFrame frame: WKFrameInfo,
+            completionHandler: @escaping (Bool) -> Void
+        ) {
+            guard let window = webView.window else { completionHandler(false); return }
+            let alert = NSAlert()
+            alert.messageText = message
+            alert.addButton(withTitle: "OK")
+            alert.addButton(withTitle: "Cancel")
+            alert.beginSheetModal(for: window) { response in
+                completionHandler(response == .alertFirstButtonReturn)
+            }
+        }
+
+        public func webView(
+            _ webView: WKWebView,
+            runJavaScriptTextInputPanelWithPrompt prompt: String,
+            defaultText: String?,
+            initiatedByFrame frame: WKFrameInfo,
+            completionHandler: @escaping (String?) -> Void
+        ) {
+            guard let window = webView.window else { completionHandler(nil); return }
+            let alert = NSAlert()
+            alert.messageText = prompt
+            alert.addButton(withTitle: "OK")
+            alert.addButton(withTitle: "Cancel")
+            let input = NSTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
+            input.stringValue = defaultText ?? ""
+            alert.accessoryView = input
+            alert.beginSheetModal(for: window) { response in
+                completionHandler(response == .alertFirstButtonReturn ? input.stringValue : nil)
             }
         }
     }
@@ -240,6 +342,10 @@ public struct AgentWebView: View {
             .overlay(alignment: .top) {
                 if let config = bridge.mastheadConfig {
                     GlassMastheadView(config: config)
+                        .contentShape(Capsule())
+                        .onLongPressGesture(minimumDuration: 0.6) {
+                            bridge.wantsShowConsoleLogs = true
+                        }
                         .padding(.horizontal, 12)
                         .padding(.top, safeAreaTop + (config.topOffset ?? 4))
                         .transition(.opacity.combined(with: .move(edge: .top)))
@@ -256,7 +362,7 @@ private struct AgentWebViewRepresentable: UIViewRepresentable {
     let bridge: AgentBridge
 
     func makeCoordinator() -> AgentWebView.Coordinator {
-        AgentWebView.Coordinator(bridge: bridge)
+        AgentWebView.Coordinator(bridge: bridge, baseHost: configuration.baseURL.host)
     }
 
     func makeUIView(context: Context) -> WKWebView {
@@ -272,6 +378,8 @@ private struct AgentWebViewRepresentable: UIViewRepresentable {
 
         config.userContentController.add(context.coordinator, name: "agentBridge")
         config.userContentController.add(context.coordinator, name: "agentLog")
+        config.userContentController.add(context.coordinator, name: "agentNetwork")
+        config.userContentController.add(context.coordinator, name: "curtainLowered")
 
         // Inject font-face declarations for any requested font families
         if let families = configuration.fontFamilies, !families.isEmpty {
@@ -299,25 +407,54 @@ private struct AgentWebViewRepresentable: UIViewRepresentable {
         // Allow inline media playback
         config.allowsInlineMediaPlayback = true
 
-        // Append Safari-like tokens to the user agent so OAuth providers
-        // (Google, etc.) don't reject sign-in with "disallowed_useragent".
-        // WKWebView's default UA omits "Safari/..." which triggers the block.
-        // RipulNative lets the web app detect native mode via navigator.userAgent.
-        config.applicationNameForUserAgent = "RipulNative/1.0 Mobile/15E148 Safari/605.1.15"
+        // Build a user agent that matches Mobile Safari closely so OAuth
+        // providers (Google, etc.) don't reject sign-in with "disallowed_useragent".
+        // WKWebView's default UA omits "Version/..." and "Safari/..." — Google
+        // specifically checks for the "Version/" token to distinguish real Safari
+        // from embedded web views and blocks OAuth when it's absent.
+        // "RipulNative" lets the web app detect native mode via navigator.userAgent.
+        config.applicationNameForUserAgent = "Version/17.0 RipulNative/1.0 Mobile/15E148 Safari/604.1"
 
-        // In embedded/site-key mode, clear all cached web content on each
-        // launch to avoid stale assets causing black screens or broken UI.
-        // In native app mode, preserve cookies and localStorage so the
-        // Clerk auth session survives app relaunches.
-        let dataStore = WKWebsiteDataStore.default()
-        if !configuration.nativeApp {
-            let allTypes = WKWebsiteDataStore.allWebsiteDataTypes()
-            dataStore.removeData(ofTypes: allTypes, modifiedSince: .distantPast) { }
-        }
-        config.websiteDataStore = dataStore
+        // Content-hashed JS bundles + no-cache HTML headers on the server
+        // handle cache invalidation correctly. No need to nuke the WKWebView
+        // cache on every launch — that just hurts performance.
+        config.websiteDataStore = configuration.websiteDataStore ?? WKWebsiteDataStore.default()
 
         // Allow the host app to customize the configuration (e.g., register URL scheme handlers)
         configuration.configureWebView?(config)
+
+        // Tell the browser engine the virtual keyboard overlays content instead of
+        // resizing the viewport.  This prevents WKWebView from shrinking the visual
+        // viewport (and by extension any CSS vh / dvh units) when the keyboard opens,
+        // which would cause Virtuoso to detect a container resize and re-scroll.
+        // Also snapshot the initial viewport height into a CSS custom property so
+        // the #tabs container can use a stable value instead of 100vh.
+        let viewportFixScript = WKUserScript(
+            source: """
+            (function() {
+                var done = false;
+                function patch(meta) {
+                    if (done) return;
+                    if (meta && meta.content.indexOf('interactive-widget') === -1) {
+                        meta.content += ', interactive-widget=overlays-content';
+                    }
+                    done = true;
+                }
+                // Try immediately (meta may already be in the parser stream)
+                var meta = document.querySelector('meta[name="viewport"]');
+                if (meta) { patch(meta); return; }
+                // Otherwise watch for it
+                var obs = new MutationObserver(function() {
+                    var m = document.querySelector('meta[name="viewport"]');
+                    if (m) { patch(m); obs.disconnect(); }
+                });
+                obs.observe(document.documentElement, { childList: true, subtree: true });
+            })();
+            """,
+            injectionTime: .atDocumentStart,
+            forMainFrameOnly: true
+        )
+        config.userContentController.addUserScript(viewportFixScript)
 
         let webView = FullBleedWebView(frame: .zero, configuration: config)
         webView.isOpaque = false
@@ -347,9 +484,17 @@ private struct AgentWebViewRepresentable: UIViewRepresentable {
         // AgentView validates the site key natively before creating this
         // view, so the config (including theme) is available synchronously
         // on the web side — matching the browser EmbedManager flow.
-        let url = configuration.embeddedURL
+        // Append a cache-busting query param so sub-resources (JS bundles) aren't
+        // served from WKWebView's disk cache after a deploy.
+        var urlComponents = URLComponents(url: configuration.embeddedURL, resolvingAgainstBaseURL: false)!
+        var queryItems = urlComponents.queryItems ?? []
+        queryItems.append(URLQueryItem(name: "_cb", value: String(Int(Date().timeIntervalSince1970))))
+        urlComponents.queryItems = queryItems
+        let url = urlComponents.url!
         NSLog("[AgentWebView] Loading URL: %@", url.absoluteString)
-        webView.load(URLRequest(url: url))
+        var request = URLRequest(url: url)
+        request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+        webView.load(request)
 
         return webView
     }
@@ -361,6 +506,8 @@ private struct AgentWebViewRepresentable: UIViewRepresentable {
     static func dismantleUIView(_ webView: WKWebView, coordinator: AgentWebView.Coordinator) {
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "agentBridge")
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "agentLog")
+        webView.configuration.userContentController.removeScriptMessageHandler(forName: "agentNetwork")
+        webView.configuration.userContentController.removeScriptMessageHandler(forName: "curtainLowered")
         webView.configuration.userContentController.removeAllUserScripts()
     }
 }
@@ -370,10 +517,12 @@ private struct AgentWebViewRepresentable: UIViewRepresentable {
 extension AgentWebView {
     public final class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate, WKUIDelegate {
         let bridge: AgentBridge
+        let baseHost: String?
         private weak var observedWebView: WKWebView?
 
-        init(bridge: AgentBridge) {
+        init(bridge: AgentBridge, baseHost: String?) {
             self.bridge = bridge
+            self.baseHost = baseHost
             super.init()
             // iOS re-adds input assistant bar button groups each time the
             // keyboard appears, so we must clear them on every show.
@@ -381,6 +530,12 @@ extension AgentWebView {
                 self,
                 selector: #selector(keyboardWillShow),
                 name: UIResponder.keyboardWillShowNotification,
+                object: nil
+            )
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(keyboardWillHide),
+                name: UIResponder.keyboardWillHideNotification,
                 object: nil
             )
         }
@@ -393,10 +548,71 @@ extension AgentWebView {
             observedWebView = webView
         }
 
+        /// Returns true when the URL points to a different host than the app's base URL
+        /// and should be opened externally (in Safari).
+        private func isExternalURL(_ url: URL) -> Bool {
+            guard let scheme = url.scheme, ["http", "https"].contains(scheme) else { return false }
+            guard let host = url.host else { return false }
+            guard let baseHost else { return false }
+            return host != baseHost
+        }
+
+        /// JS snippet that freezes the Virtuoso scroller's scrollTop for a
+        /// duration, preventing any keyboard-triggered web scroll from firing.
+        private static let scrollLockJS = """
+            (function() {
+                var s = document.querySelector('[data-virtuoso-scroller]');
+                if (!s) return;
+                var saved = s.scrollTop;
+                // Remove any previous lock first
+                if (s.__kbScrollLock) s.removeEventListener('scroll', s.__kbScrollLock);
+                var handler = function() { s.scrollTop = saved; };
+                s.__kbScrollLock = handler;
+                s.addEventListener('scroll', handler);
+                clearTimeout(window.__kbScrollLockTimer);
+                window.__kbScrollLockTimer = setTimeout(function() {
+                    s.removeEventListener('scroll', handler);
+                    delete s.__kbScrollLock;
+                }, 1500);
+            })();
+            """
+
         @objc private func keyboardWillShow() {
             guard let webView = observedWebView else { return }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
                 Self.removeInputAccessoryView(from: webView)
+            }
+            // Tell the web app to suppress smooth-scroll during the keyboard
+            // transition — the native .offset() handles avoidance.
+            webView.evaluateJavaScript("window.__ripulKeyboardTransitioning = true")
+            webView.evaluateJavaScript(Self.scrollLockJS)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                webView.evaluateJavaScript("window.__ripulKeyboardTransitioning = false")
+            }
+            // WKWebView's UIScrollView auto-scrolls to reveal focused web inputs,
+            // but miscalculates the position when the input is inside a CSS-
+            // transformed container (e.g. the metadata swipe panel). The viewport
+            // meta tag declares interactive-widget=overlays-content so the web app
+            // handles keyboard avoidance itself — reset the scroll view to prevent
+            // the native scroll-to-reveal from pushing content offscreen.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                webView.scrollView.contentOffset = .zero
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                webView.scrollView.contentOffset = .zero
+            }
+        }
+
+        @objc private func keyboardWillHide() {
+            // No scroll lock on hide — let auto-follow work naturally so new
+            // content (user message) scrolls into view during the native
+            // .offset() animation instead of snapping after a 1.5s freeze.
+            guard let webView = observedWebView else { return }
+            // Reset any residual scroll view offset from the keyboard show.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                if webView.scrollView.contentOffset != .zero {
+                    webView.scrollView.contentOffset = .zero
+                }
             }
         }
 
@@ -407,6 +623,10 @@ extension AgentWebView {
             Task { @MainActor in
                 if message.name == "agentLog" {
                     bridge.handleConsoleLog(message.body as? String ?? "")
+                } else if message.name == "agentNetwork" {
+                    bridge.handleNetworkLog(message.body)
+                } else if message.name == "curtainLowered" {
+                    bridge.lowerWindowCurtain()
                 } else {
                     bridge.handleMessage(message.body)
                 }
@@ -419,10 +639,16 @@ extension AgentWebView {
         ) async -> WKNavigationActionPolicy {
             if let url = navigationAction.request.url {
                 NSLog("[AgentWebView] Navigation: %@", url.absoluteString)
+                if navigationAction.navigationType == .linkActivated && isExternalURL(url) {
+                    NSLog("[AgentWebView] Opening external URL in Safari: %@", url.absoluteString)
+                    await UIApplication.shared.open(url)
+                    return .cancel
+                }
             }
             return .allow
         }
 
+        /// Handle window.open / target="_blank" — open external URLs in Safari.
         public func webView(
             _ webView: WKWebView,
             createWebViewWith configuration: WKWebViewConfiguration,
@@ -431,16 +657,55 @@ extension AgentWebView {
         ) -> WKWebView? {
             if let url = navigationAction.request.url {
                 NSLog("[AgentWebView] Popup request: %@", url.absoluteString)
-                webView.load(navigationAction.request)
+                if isExternalURL(url) {
+                    NSLog("[AgentWebView] Opening external popup URL in Safari: %@", url.absoluteString)
+                    UIApplication.shared.open(url)
+                } else {
+                    webView.load(navigationAction.request)
+                }
             }
             return nil
+        }
+
+        /// Fires when the web view commits a navigation (content starts rendering).
+        /// Detects external navigations (OAuth redirects to Google, etc.) and switches
+        /// to minimal page context so the native glass header doesn't occlude the
+        /// third-party UI. When the web view returns to the app domain, didFinish
+        /// fires and the web app re-sends its own page:context message.
+        public func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+            guard let url = webView.url else { return }
+            if isExternalURL(url) {
+                NSLog("[AgentWebView] External navigation committed — hiding native chrome for: %@", url.host ?? "unknown")
+                Task { @MainActor in
+                    bridge.currentPageContext = .externalNavigation
+                }
+            }
         }
 
         public func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             Self.removeInputAccessoryView(from: webView)
             Self.injectSafeAreaInset(into: webView)
+            Self.lockTabsHeight(in: webView)
             Task { @MainActor in
                 bridge.pageDidFinishLoading()
+            }
+        }
+
+        /// Pin the #tabs container to the WKWebView frame height so that
+        /// keyboard-driven visual viewport changes can't resize it (and
+        /// therefore can't trigger Virtuoso's internal scroll adjustment).
+        private static func lockTabsHeight(in webView: WKWebView) {
+            let height = Int(webView.frame.height)
+            let js = """
+                var t = document.getElementById('tabs');
+                if (t) t.style.height = '\(height)px';
+            """
+            webView.evaluateJavaScript(js) { _, error in
+                if let error {
+                    NSLog("[AgentWebView] Failed to lock #tabs height: %@", error.localizedDescription)
+                } else {
+                    NSLog("[AgentWebView] Locked #tabs height to %dpx", height)
+                }
             }
         }
 
@@ -492,7 +757,7 @@ extension AgentWebView {
             if nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled { return }
             Task { @MainActor in
                 bridge.loadError = userFacingErrorMessage(nsError)
-                bridge.loadErrorDetails = "\(nsError.domain) \(nsError.code): \(error.localizedDescription)"
+                bridge.loadErrorDetails = error.localizedDescription
             }
         }
 
@@ -502,8 +767,119 @@ extension AgentWebView {
             if nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled { return }
             Task { @MainActor in
                 bridge.loadError = userFacingErrorMessage(nsError)
-                bridge.loadErrorDetails = "\(nsError.domain) \(nsError.code): \(error.localizedDescription)"
+                bridge.loadErrorDetails = error.localizedDescription
             }
+        }
+
+        /// Called when the WKWebView's web content process crashes or is terminated by the OS.
+        /// The web view shows a blank white page after this — record the crash and reload.
+        public func webView(_ webView: WKWebView, webContentProcessDidTerminate: WKWebView) {
+            Task { @MainActor in
+                bridge.recordProcessTermination()
+            }
+        }
+
+        // MARK: - JavaScript Dialog Helpers
+
+        /// Find the topmost VC that can present a UIAlertController.
+        /// Uses the responder chain first (most reliable in SwiftUI hosts),
+        /// then falls back to window-scene strategies.
+        private func topPresentableVC(for webView: WKWebView) -> UIViewController? {
+            // Strategy 1: Walk the responder chain from the webView itself.
+            // This always works when the webView is in the view hierarchy,
+            // regardless of SwiftUI's internal VC nesting.
+            var responder: UIResponder? = webView.next
+            while let r = responder {
+                if let vc = r as? UIViewController {
+                    // Walk to topmost presented VC
+                    var top = vc
+                    while let presented = top.presentedViewController {
+                        top = presented
+                    }
+                    return top
+                }
+                responder = r.next
+            }
+
+            // Strategy 2: Window scene fallback
+            let scene = webView.window?.windowScene
+                ?? UIApplication.shared.connectedScenes
+                    .compactMap { $0 as? UIWindowScene }
+                    .first { $0.activationState == .foregroundActive }
+            guard let windowScene = scene else {
+                bridge.handleConsoleLog("[AgentWebView] JS dialog: no window scene found")
+                return nil
+            }
+
+            let rootVC = windowScene.keyWindow?.rootViewController
+                ?? windowScene.windows.first(where: { $0.isKeyWindow })?.rootViewController
+                ?? windowScene.windows.first?.rootViewController
+            guard var vc = rootVC else {
+                bridge.handleConsoleLog("[AgentWebView] JS dialog: no rootViewController found")
+                return nil
+            }
+
+            while let presented = vc.presentedViewController {
+                vc = presented
+            }
+            return vc
+        }
+
+        // MARK: - JavaScript Dialog Handlers (WKUIDelegate)
+
+        // OAuth providers (Google, GitHub) may present JavaScript alerts, confirms, or
+        // prompts during the sign-in flow. WKWebView suppresses these by default unless
+        // the delegate implements the corresponding methods, causing the flow to hang.
+
+        public func webView(
+            _ webView: WKWebView,
+            runJavaScriptAlertPanelWithMessage message: String,
+            initiatedByFrame frame: WKFrameInfo,
+            completionHandler: @escaping () -> Void
+        ) {
+            guard let vc = topPresentableVC(for: webView) else {
+                completionHandler()
+                return
+            }
+            let alert = UIAlertController(title: nil, message: message, preferredStyle: .alert)
+            alert.addAction(UIAlertAction(title: "OK", style: .default) { _ in completionHandler() })
+            vc.present(alert, animated: true)
+        }
+
+        public func webView(
+            _ webView: WKWebView,
+            runJavaScriptConfirmPanelWithMessage message: String,
+            initiatedByFrame frame: WKFrameInfo,
+            completionHandler: @escaping (Bool) -> Void
+        ) {
+            guard let vc = topPresentableVC(for: webView) else {
+                completionHandler(false)
+                return
+            }
+            let alert = UIAlertController(title: nil, message: message, preferredStyle: .alert)
+            alert.addAction(UIAlertAction(title: "Cancel", style: .cancel) { _ in completionHandler(false) })
+            alert.addAction(UIAlertAction(title: "OK", style: .default) { _ in completionHandler(true) })
+            vc.present(alert, animated: true)
+        }
+
+        public func webView(
+            _ webView: WKWebView,
+            runJavaScriptTextInputPanelWithPrompt prompt: String,
+            defaultText: String?,
+            initiatedByFrame frame: WKFrameInfo,
+            completionHandler: @escaping (String?) -> Void
+        ) {
+            guard let vc = topPresentableVC(for: webView) else {
+                completionHandler(nil)
+                return
+            }
+            let alert = UIAlertController(title: nil, message: prompt, preferredStyle: .alert)
+            alert.addTextField { $0.text = defaultText }
+            alert.addAction(UIAlertAction(title: "Cancel", style: .cancel) { _ in completionHandler(nil) })
+            alert.addAction(UIAlertAction(title: "OK", style: .default) { _ in
+                completionHandler(alert.textFields?.first?.text)
+            })
+            vc.present(alert, animated: true)
         }
     }
 }
@@ -515,19 +891,70 @@ extension AgentWebView {
 extension AgentWebView {
     public static let bridgeJavaScript = """
     (function() {
-        // Capture console.log/warn/error and forward to native
+        // Intercept console.log/warn/error and forward every call to the native
+        // agentLog message handler (→ AgentBridge.handleConsoleLog → consoleLogs buffer).
+        // origLog/Warn/Error are also called so the web inspector still receives them.
+        //
+        // This means ALL console.* output from the web view is captured natively, making
+        // device_console_logs a unified view of both Swift logs (sent via
+        // handleConsoleLog directly) and web-view logs (sent via this interception).
+        //
+        // Note: web code that calls window.webkit.messageHandlers.agentLog.postMessage()
+        // directly (e.g. nativeLog() in RemotePairingsContext.tsx) AND also calls
+        // console.log() will produce two entries in the native buffer — one from the direct
+        // postMessage and one from this override. That duplication is intentional: it keeps
+        // the log visible regardless of whether ConsoleWrapper has suppressed console output.
         const origLog = console.log;
         const origWarn = console.warn;
         const origError = console.error;
+        const origInfo = console.info;
+        const origDebug = console.debug;
+
+        // Serialize one console arg. Errors are typeof 'object' but their
+        // name/message/stack are non-enumerable, so a naïve JSON.stringify
+        // returns '{}' and the host log loses all useful detail. Render Error
+        // (and Error-likes that expose `name`+`message`) inline as
+        // "Name: message\\nstack", and use a JSON.stringify replacer to do
+        // the same for errors nested inside plain objects (the common
+        // `console.error('foo:', { err })` shape).
+        function isErrorLike(a) {
+            if (!a || typeof a !== 'object') return false;
+            if (a instanceof Error) return true;
+            return typeof a.message === 'string' && typeof a.name === 'string';
+        }
+        function renderError(a) {
+            var name = a.name || 'Error';
+            var message = a.message || String(a);
+            var stack = a.stack ? '\\n' + a.stack : '';
+            return name + ': ' + message + stack;
+        }
+        function errorReplacer(_key, value) {
+            if (isErrorLike(value)) {
+                var out = { name: value.name, message: value.message };
+                if (value.stack) out.stack = value.stack;
+                if (value.code !== undefined) out.code = value.code;
+                if (value.cause !== undefined) {
+                    try { out.cause = isErrorLike(value.cause) ? errorReplacer('cause', value.cause) : value.cause; } catch(_) {}
+                }
+                return out;
+            }
+            return value;
+        }
+        function serializeArg(a) {
+            if (a === undefined) return 'undefined';
+            if (a === null) return 'null';
+            if (typeof a !== 'object') return String(a);
+            if (isErrorLike(a)) return renderError(a);
+            try {
+                return JSON.stringify(a, errorReplacer);
+            } catch (_) {
+                return String(a);
+            }
+        }
 
         function nativeLog(level, args, stack) {
             try {
-                const msg = Array.from(args).map(a => {
-                    if (typeof a === 'object') {
-                        try { return JSON.stringify(a); } catch { return String(a); }
-                    }
-                    return String(a);
-                }).join(' ');
+                const msg = Array.from(args).map(serializeArg).join(' ');
                 var payload = level + ': ' + msg;
                 if (stack) {
                     payload += '\\n__STACK__\\n' + stack;
@@ -550,6 +977,11 @@ extension AgentWebView {
         console.log = function() { nativeLog('LOG', arguments); origLog.apply(console, arguments); };
         console.warn = function() { nativeLog('WARN', arguments, captureStack()); origWarn.apply(console, arguments); };
         console.error = function() { nativeLog('ERROR', arguments, captureStack()); origError.apply(console, arguments); };
+        // console.info/debug were previously NOT captured — web code using them
+        // appeared in DevTools but never in the native console buffer, which made
+        // legit diagnostics look "missing". Capture them too (as LOG).
+        console.info = function() { nativeLog('LOG', arguments); origInfo.apply(console, arguments); };
+        console.debug = function() { nativeLog('LOG', arguments); origDebug.apply(console, arguments); };
 
         window.addEventListener('error', function(e) {
             var detail = 'Uncaught: ' + e.message + ' at ' + e.filename + ':' + e.lineno;
@@ -572,13 +1004,18 @@ extension AgentWebView {
         // Only override window.parent / window.top on the app's own pages.
         // Third-party pages (Google OAuth, etc.) check top === self as an
         // anti-phishing measure — our overrides would break their sign-in flow.
+        //
+        // IMPORTANT: Defer overrides until after window.load so they don't
+        // interfere with ES module loading. WebKit's module loader checks
+        // browsing context properties (window.parent/top) and if parent !== window
+        // it may apply cross-origin iframe restrictions that block modules.
         var hash = window.location.hash || '';
         var isAppPage = hash.includes('embedded=true') || hash.includes('native=true') || hash.includes('siteKey=');
 
-        var parentOverridden = false;
-        var topOverridden = false;
+        function applyParentTopOverrides() {
+            var parentOverridden = false;
+            var topOverridden = false;
 
-        if (isAppPage) {
             // Create a parent proxy that is !== window
             // with postMessage routing to native
             const parentProxy = Object.create(window);
@@ -650,9 +1087,91 @@ extension AgentWebView {
                     if (window.self !== window.top) topOverridden = true;
                 } catch(e) {}
             }
+
         }
 
-        nativeLog('LOG', ['[NativeBridge] isAppPage: ' + isAppPage + ', parent override: ' + (parentOverridden ? 'SUCCESS' : 'SKIPPED') + ', top override: ' + (topOverridden ? 'SUCCESS' : 'SKIPPED')]);
+        if (isAppPage) {
+            // Defer until after modules have loaded to avoid breaking ES module loader
+            window.addEventListener('load', function() {
+                applyParentTopOverrides();
+            });
+        }
+
+
+        // ── Error monitoring ──
+
+        // Capture module-level errors with detail
+        window.addEventListener('error', function(e) {
+            if (e.target && e.target.tagName === 'SCRIPT') {
+                nativeLog('ERROR', ['[NativeBridge:diag] Script load FAILED — src: ' + (e.target.src || '(inline)') + ', type: ' + (e.target.type || 'classic')]);
+            }
+        }, true); // capture phase to catch resource errors
+
+        // Network request capture — controlled by native toggle (off by default).
+        // When enabled, every fetch() call is logged to the agentNetwork message handler
+        // with method, URL, status, duration, and approximate sizes.
+        var __netCaptureEnabled = false;
+        window.__ripulNetworkCapture = function(enabled) { __netCaptureEnabled = !!enabled; };
+        var origFetch = window.fetch;
+        function collectHeaders(h) {
+            var obj = {};
+            try { h.forEach(function(v, k) { obj[k] = v; }); } catch(e) {}
+            return obj;
+        }
+        window.fetch = function() {
+            var url = typeof arguments[0] === 'string' ? arguments[0] : (arguments[0] && arguments[0].url ? arguments[0].url : String(arguments[0]));
+            var opts = arguments[1] || {};
+            var method = (opts.method || 'GET').toUpperCase();
+            var reqSize = opts.body ? (typeof opts.body === 'string' ? opts.body.length : -1) : 0;
+            var reqHeaders = {};
+            try {
+                if (opts.headers) {
+                    if (opts.headers instanceof Headers) { opts.headers.forEach(function(v,k){ reqHeaders[k]=v; }); }
+                    else if (typeof opts.headers === 'object') { reqHeaders = Object.assign({}, opts.headers); }
+                }
+            } catch(e) {}
+            var t0 = Date.now();
+
+            // Always log resource load failures (original behavior)
+            var p = origFetch.apply(this, arguments);
+            if (!__netCaptureEnabled) {
+                return p.then(function(r) {
+                    if (typeof url === 'string' && (url.endsWith('.js') || url.endsWith('.css')) && !r.ok) {
+                        nativeLog('ERROR', ['[NativeBridge:diag] fetch FAILED: ' + url + ' status=' + r.status]);
+                    }
+                    return r;
+                });
+            }
+
+            return p.then(function(r) {
+                var duration = Date.now() - t0;
+                var resSize = -1;
+                var cl = r.headers.get('content-length');
+                if (cl) resSize = parseInt(cl, 10);
+                try {
+                    window.webkit.messageHandlers.agentNetwork.postMessage({
+                        method: method, url: url, status: r.status, statusText: r.statusText,
+                        duration: duration, reqSize: reqSize, resSize: resSize,
+                        reqHeaders: reqHeaders, resHeaders: collectHeaders(r.headers)
+                    });
+                } catch(e) {}
+                if (typeof url === 'string' && (url.endsWith('.js') || url.endsWith('.css')) && !r.ok) {
+                    nativeLog('ERROR', ['[NativeBridge:diag] fetch FAILED: ' + url + ' status=' + r.status]);
+                }
+                return r;
+            }).catch(function(err) {
+                var duration = Date.now() - t0;
+                try {
+                    window.webkit.messageHandlers.agentNetwork.postMessage({
+                        method: method, url: url, status: 0, statusText: '',
+                        duration: duration, reqSize: reqSize, resSize: -1,
+                        reqHeaders: reqHeaders, resHeaders: {},
+                        error: err.message || String(err)
+                    });
+                } catch(e) {}
+                throw err;
+            });
+        };
 
         // Native → Web: dispatch as MessageEvent on window
         window.__agentBridgeReceive = function(message) {
@@ -716,7 +1235,6 @@ extension AgentWebView {
         lockStyle.textContent = 'html, body { height: 100vh !important; overflow: hidden; }';
         (document.head || document.documentElement).appendChild(lockStyle);
 
-        nativeLog('LOG', ['[NativeBridge] Bridge script initialized']);
     })();
     """
 

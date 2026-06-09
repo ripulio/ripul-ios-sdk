@@ -62,6 +62,35 @@ public struct GlassCircleModifier: ViewModifier {
     }
 }
 
+/// Applies `.glassEffectID` on iOS 26+ so glass shapes inside a
+/// `GlassEffectContainer` can morph between states. No-op on older versions.
+@available(iOS 15.0, macOS 13.0, *)
+public struct GlassEffectIDModifier: ViewModifier {
+    public let id: String
+    public let namespace: Namespace.ID
+
+    public init(id: String, namespace: Namespace.ID) {
+        self.id = id
+        self.namespace = namespace
+    }
+
+    public func body(content: Content) -> some View {
+        #if os(iOS)
+        if #available(iOS 26.0, *) {
+            content.glassEffectID(id, in: namespace)
+        } else {
+            content
+        }
+        #elseif os(macOS)
+        if #available(macOS 26.0, *) {
+            content.glassEffectID(id, in: namespace)
+        } else {
+            content
+        }
+        #endif
+    }
+}
+
 /// A capsule-shaped glass background modifier.
 @available(iOS 15.0, macOS 13.0, *)
 public struct GlassPillModifier: ViewModifier {

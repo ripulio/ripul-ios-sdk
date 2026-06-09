@@ -874,7 +874,7 @@ private struct SheetBackgroundModifier: ViewModifier {
 
 /// Static glass card — visible card with border and shadow on pre-iOS 26.
 @available(iOS 15.0, macOS 13.0, *)
-private struct GlassCardModifier: ViewModifier {
+struct GlassCardModifier: ViewModifier {
     var isSelected: Bool = false
 
     func body(content: Content) -> some View {
@@ -966,7 +966,7 @@ private struct InteractiveGlassCardModifier: ViewModifier {
 
 /// Interactive glass circle for the close button.
 @available(iOS 15.0, macOS 13.0, *)
-private struct InteractiveGlassCircleModifier: ViewModifier {
+struct InteractiveGlassCircleModifier: ViewModifier {
     func body(content: Content) -> some View {
         #if os(iOS)
         if #available(iOS 26.0, *) {

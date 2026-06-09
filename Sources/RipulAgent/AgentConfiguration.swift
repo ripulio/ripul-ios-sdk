@@ -44,11 +44,33 @@ public struct AgentConfiguration {
     /// preventing duplicate bridges across multiple web views.
     public var relayHost: Bool = false
 
+    /// When set, the web app boots in a minimal "file viewer only" mode that
+    /// auto-opens this path in the Monaco viewer and hides the rest of the UI.
+    /// Intended for standalone sheet-hosted viewers that share localStorage
+    /// (and therefore the relay pairing) with the main chat web view.
+    public var fileViewerPath: String? = nil
+
+    /// Optional chat ID the file viewer should route relay reads through.
+    /// When absent, the relay falls back to broadcasting to all paired
+    /// machines — that works but is less targeted. The native app normally
+    /// passes the active session's sourceChatId.
+    public var fileViewerChatId: String? = nil
+
+    /// Optional 1-based line number the file viewer should scroll to on open.
+    /// Used when the user taps a grep hit — the viewer jumps directly to the
+    /// matching line instead of opening at the top of the file.
+    public var fileViewerLine: Int? = nil
+
+    /// Custom WKWebsiteDataStore for profile-isolated multi-instance support.
+    /// When set, the AgentWebView uses this store instead of `.default()`,
+    /// giving each instance its own cookies, localStorage, and IndexedDB.
+    public var websiteDataStore: WKWebsiteDataStore? = nil
+
     /// Optional hook to customize the WKWebViewConfiguration before the web view is created.
     /// Use this to register URL scheme handlers, add user scripts, etc.
     public var configureWebView: ((WKWebViewConfiguration) -> Void)? = nil
 
-    public static let defaultBaseURL = URL(string: "https://demo.ripul.io")!
+    public static let defaultBaseURL = URL(string: RipulDomain.demoURL)!
 
     /// API base URL derived from baseURL. Used for all backend API calls
     /// (relay machines, site key validation, etc.) via the same-origin proxy.
@@ -141,6 +163,20 @@ public struct AgentConfiguration {
 
         if relayHost {
             hashParams.append("relayHost=true")
+        }
+
+        if let fileViewerPath,
+           let encoded = fileViewerPath.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) {
+            hashParams.append("fileViewerPath=\(encoded)")
+        }
+
+        if let fileViewerChatId,
+           let encoded = fileViewerChatId.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) {
+            hashParams.append("fileViewerChatId=\(encoded)")
+        }
+
+        if let fileViewerLine, fileViewerLine > 0 {
+            hashParams.append("fileViewerLine=\(fileViewerLine)")
         }
 
         // Match EmbedManager format: #/?param1=val&param2=val
