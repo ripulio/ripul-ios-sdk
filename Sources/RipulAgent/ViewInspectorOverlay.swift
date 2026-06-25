@@ -742,6 +742,7 @@ private struct InspectorEditField: View {
     let info: InspectedView
     @State private var edited: String
     @State private var sent = false
+    @State private var targetTick = 0   // bump to refresh the target row after Clear
 
     init(info: InspectedView) {
         self.info = info
@@ -766,6 +767,28 @@ private struct InspectorEditField: View {
                         sent = false
                     }
             }
+
+            // Where sends land: a remembered Ripul chat, or "ask" when none set.
+            HStack(spacing: 6) {
+                Image(systemName: "bubble.left.and.bubble.right")
+                    .font(.system(size: 9)).foregroundStyle(.gray)
+                Text(RipulEditHandoff.targetSessionTitle ?? RipulEditHandoff.targetSessionId ?? "Ripul will ask which chat")
+                    .font(.system(size: 9, design: .monospaced))
+                    .foregroundStyle(RipulEditHandoff.targetSessionId != nil ? Color.mint : .gray)
+                    .lineLimit(1)
+                Spacer()
+                Button("Choose") { RipulEditHandoff.chooseSession() }
+                    .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(Color.pink.opacity(0.85))
+                    .buttonStyle(.plain)
+                if RipulEditHandoff.targetSessionId != nil {
+                    Button("Clear") { RipulEditHandoff.clearSession(); targetTick &+= 1 }
+                        .font(.system(size: 9, design: .monospaced))
+                        .foregroundStyle(.gray)
+                        .buttonStyle(.plain)
+                }
+            }
+            .id(targetTick)
 
             HStack(spacing: 8) {
                 // Always available — for any element, edited or not.
@@ -820,7 +843,9 @@ private struct InspectorEditField: View {
                 accessibilityId: info.accessibilityId,
                 storyboard: nil,
                 vcChain: info.viewControllerChain),
-            change: change)
+            change: change,
+            sessionId: RipulEditHandoff.targetSessionId,
+            callback: RipulEditHandoff.callbackURLString)
         RipulEditHandoff.send(intent)
         withAnimation { sent = true }
     }
@@ -1596,10 +1621,14 @@ public struct RipulEditIntent: Codable {
     }
     public var v: Int = 1
     public var target: Target
-    public var change: Change?   // nil = "discuss this element", no concrete change yet
+    public var change: Change?       // nil = "discuss this element", no concrete change yet
+    public var sessionId: String?    // target an existing Ripul chat; nil = Ripul decides/asks
+    public var callback: String?     // consuming app's back-channel URL (e.g. "WAC://ripul-session")
 
-    public init(v: Int = 1, target: Target, change: Change? = nil) {
+    public init(v: Int = 1, target: Target, change: Change? = nil,
+                sessionId: String? = nil, callback: String? = nil) {
         self.v = v; self.target = target; self.change = change
+        self.sessionId = sessionId; self.callback = callback
     }
 
     /// A ready-to-run instruction for the coding CLI on the developer's machine.
@@ -1627,6 +1656,48 @@ public struct RipulEditIntent: Codable {
 public enum RipulEditHandoff {
     public static let scheme = "ripul"
     public static let host = "edit"
+    public static let chooseHost = "choose"
+
+    /// The consuming app sets this to its own callback URL (e.g.
+    /// "WAC://ripul-session") so Ripul can report back which chat the user picked.
+    /// nil → no chooser/callback flow (Ripul just starts a new chat).
+    public static var callbackURLString: String?
+
+    // Remembered target chat — SDK-owned, UserDefaults-backed. The explorer puts
+    // `targetSessionId` on every intent; the host's callback handler calls
+    // `rememberSession(...)` once the user picks a chat in Ripul. "Until cleared".
+    private static let targetIdKey = "ripul.edit.targetSessionId"
+    private static let targetTitleKey = "ripul.edit.targetSessionTitle"
+    public static var targetSessionId: String? { UserDefaults.standard.string(forKey: targetIdKey) }
+    public static var targetSessionTitle: String? { UserDefaults.standard.string(forKey: targetTitleKey) }
+    public static func rememberSession(id: String, title: String?) {
+        UserDefaults.standard.set(id, forKey: targetIdKey)
+        if let title { UserDefaults.standard.set(title, forKey: targetTitleKey) }
+        else { UserDefaults.standard.removeObject(forKey: targetTitleKey) }
+    }
+    public static func clearSession() {
+        UserDefaults.standard.removeObject(forKey: targetIdKey)
+        UserDefaults.standard.removeObject(forKey: targetTitleKey)
+    }
+
+    /// Parse a callback URL (`<scheme>://…?id=…&title=…`) into (id, title).
+    public static func sessionFromCallback(_ url: URL) -> (id: String, title: String?)? {
+        guard let comps = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              let id = comps.queryItems?.first(where: { $0.name == "id" })?.value, !id.isEmpty
+        else { return nil }
+        return (id, comps.queryItems?.first(where: { $0.name == "title" })?.value)
+    }
+
+    /// Ask Ripul to present its chat chooser; it calls back to `callbackURLString`
+    /// with the chosen chat. No-op if the host hasn't set a callback URL.
+    @MainActor
+    public static func chooseSession() {
+        guard let cb = callbackURLString,
+              var comps = URLComponents(string: "\(scheme)://\(chooseHost)") else { return }
+        comps.queryItems = [URLQueryItem(name: "cb", value: cb)]
+        guard let url = comps.url else { return }
+        UIApplication.shared.open(url, options: [:], completionHandler: nil)
+    }
 
     /// Build the `ripul://edit?p=…` deep link (base64url-encoded JSON).
     public static func makeURL(_ intent: RipulEditIntent) -> URL? {
