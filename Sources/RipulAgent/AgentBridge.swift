@@ -1,5 +1,6 @@
 import Combine
 import Foundation
+import Network
 import WebKit
 
 private let protocolVersion = "1.0.0"
@@ -731,6 +732,15 @@ public final class AgentBridge: NSObject, ObservableObject {
         persistEphemeralIds()
     }
 
+    /// Working directory the NEXT new chat should be created in, mirrored from
+    /// the session list's project filter (selected project's cwd; nil = "All
+    /// Projects" => host default workspace). `createNewChat()` passes it to the
+    /// web `__ripulCreateChat`, which seeds it so the new session's first turn
+    /// starts the CLI in that folder instead of under the default workspace.
+    /// Intentionally NOT @Published — it is written during a web interaction
+    /// (filter change) and must not re-render the WKWebView host.
+    public var pendingNewChatWorkingDirectory: String?
+
     /// When true, the native chat input is hidden even if the page context
     /// says to show it. Used by the commit viewer to enforce read-only mode.
     @Published public var suppressNativeChatInput: Bool = false
@@ -773,8 +783,12 @@ public final class AgentBridge: NSObject, ObservableObject {
     /// animation completes. SessionsListSections uses this to keep the row spinner
     /// running until the animation is done (not just until focusSession starts).
     @Published public var navigatingToSessionId: String? = nil
-    @Published public var showScrollToBottom = false
-    @Published public var scrollUnreadCount: Int = 0
+    // Scroll-to-bottom button state lives in its OWN ObservableObject (NOT @Published
+    // on the bridge) so that crossing the bottom threshold while scrolling does not
+    // invalidate AgentView. AgentView hosts the WKWebView; re-rendering it on the
+    // app main thread mid-scroll stalls the web view's scroll (proven by isolating
+    // this exact post). Only the small button overlay observes scrollButton.
+    public let scrollButton = ScrollButtonModel()
     /// Text to prefill in the native chat input (set by welcome card / prompt suggestion clicks).
     @Published public var pendingInputText: String?
     /// Text to append to the native chat input without replacing existing content.
@@ -1203,6 +1217,7 @@ public final class AgentBridge: NSObject, ObservableObject {
     public override init() {
         super.init()
         AgentBridge.current = self
+        startNetworkPathMonitoring()
     }
 
     /// Most-recently-initialized bridge, so static / off-instance native logging
@@ -1489,6 +1504,67 @@ public final class AgentBridge: NSObject, ObservableObject {
             if (window.__ripulForegrounded) { window.__ripulForegrounded(); }
             true;
         """)
+    }
+
+    // MARK: - Network Path Monitoring
+
+    private var pathMonitor: NWPathMonitor?
+    private let pathMonitorQueue = DispatchQueue(label: "io.ripul.network-path-monitor")
+    /// Fingerprint of the last observed network path (reachability + active
+    /// interface). We only force recovery when this actually changes, so the
+    /// baseline callback and duplicate updates are ignored.
+    private var lastPathFingerprint: String?
+
+    /// Start watching for network path changes so a cellular <-> Wi-Fi handoff (or
+    /// connectivity returning) forces the web app's relay/session sockets to
+    /// rebuild IMMEDIATELY.
+    ///
+    /// WHY: when the device changes networks while the app stays FOREGROUNDED, the
+    /// OS swaps the active interface and the existing WebSocket is stranded on the
+    /// old/dead one as a half-open zombie (readyState stays OPEN, no `onclose`).
+    /// No app-lifecycle recovery path fires (the app never backgrounded), so
+    /// recovery would otherwise wait out the web heartbeat's liveness window
+    /// (~37.5s relay / ~75s session). NWPathMonitor delivers the handoff the
+    /// moment it happens; we reuse the existing `__ripulForegrounded()` hook — the
+    /// same "re-validate every socket now" entry point used on foreground.
+    private func startNetworkPathMonitoring() {
+        guard pathMonitor == nil else { return }
+        let monitor = NWPathMonitor()
+        monitor.pathUpdateHandler = { [weak self] path in
+            // Derive a Sendable fingerprint off the path on this (background) queue,
+            // then hop to the main actor to compare against the last one and act.
+            let satisfied = path.status == .satisfied
+            let fingerprint = "\(path.status)"
+                + "|wifi:\(path.usesInterfaceType(.wifi))"
+                + "|cell:\(path.usesInterfaceType(.cellular))"
+                + "|wired:\(path.usesInterfaceType(.wiredEthernet))"
+            Task { @MainActor in
+                guard let self else { return }
+                let previous = self.lastPathFingerprint
+                self.lastPathFingerprint = fingerprint
+                // First callback only establishes the baseline. Act on a genuine
+                // change that leaves us with a usable ('satisfied') network.
+                guard let previous, previous != fingerprint, satisfied else { return }
+                AgentBridge.debugLog("[AgentBridge] network path changed (\(previous) -> \(fingerprint)) — forcing comms recovery")
+                self.notifyNetworkPathChanged()
+            }
+        }
+        monitor.start(queue: pathMonitorQueue)
+        pathMonitor = monitor
+    }
+
+    /// Force relay/session-channel recovery after a network handoff. Reuses the
+    /// foreground hook (`__ripulForegrounded`) but does NOT fake a
+    /// `visibilitychange` — visibility never changed, only the network did.
+    public func notifyNetworkPathChanged() {
+        evaluateJavaScript("""
+            if (window.__ripulForegrounded) { window.__ripulForegrounded(); }
+            true;
+        """)
+    }
+
+    deinit {
+        pathMonitor?.cancel()
     }
 
     /// Evaluate arbitrary JavaScript in the attached web view.
@@ -2799,7 +2875,14 @@ public final class AgentBridge: NSObject, ObservableObject {
         } catch {
             NSLog("[AgentBridge] focusSession error: %@", error.localizedDescription)
         }
+        // Defer post-focus catch-up past the native open slide. fetchSessions()
+        // re-publishes the session list (and syncAgentStatus/syncShowThinking poke
+        // the web view), which re-renders the view DURING the slide-in and visibly
+        // stutters it — this is the one thing the different-chat open does that the
+        // same-chat re-entry (smooth) does not. The work is non-urgent catch-up, so
+        // let the slide settle first.
         Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 800_000_000)
             await self?.syncAgentStatus()
             await self?.syncShowThinking()
             await self?.fetchSessions()
@@ -4366,11 +4449,13 @@ public final class AgentBridge: NSObject, ObservableObject {
 
         do {
             logSessionStartMarker("ios.bridge_js_call_start")
+            let wdArgument: Any = pendingNewChatWorkingDirectory ?? NSNull()
             let result = try await webView.callAsyncJavaScript(
                 """
                 if (!window.__ripulCreateChat) return {success:false, error:'not ready'};
-                return await window.__ripulCreateChat();
+                return await window.__ripulCreateChat(workingDirectory);
                 """,
+                arguments: ["workingDirectory": wdArgument],
                 contentWorld: .page
             )
 
@@ -4880,12 +4965,12 @@ public final class AgentBridge: NSObject, ObservableObject {
 
     private func handleScrollState(_ message: [String: Any]) {
         let show = message["showButton"] as? Bool ?? false
-        if showScrollToBottom != show {
-            showScrollToBottom = show
+        if scrollButton.show != show {
+            scrollButton.show = show
         }
         let count = message["unreadCount"] as? Int ?? 0
-        if scrollUnreadCount != count {
-            scrollUnreadCount = count
+        if scrollButton.unreadCount != count {
+            scrollButton.unreadCount = count
         }
     }
 
@@ -4967,7 +5052,13 @@ public final class AgentBridge: NSObject, ObservableObject {
 
     /// Ask the web file viewer to close (triggered by the native back button).
     public func requestFileViewerClose() {
-        NSLog("[AgentBridge] requestFileViewerClose -> JS bridge")
+        NSLog("[AgentBridge] requestFileViewerClose")
+        // Clear native state directly so the native file-viewer panel dismisses
+        // immediately. The viewer is now a native StandaloneFileViewer panel (not the
+        // in-chat web viewer), so we must not depend on a web round-trip to clear it.
+        fileViewerExpanded = false
+        fileViewerTitle = nil
+        // Also close the (web-only) in-chat viewer if one is showing; harmless on native.
         evaluateJavaScript("window.__ripulCloseFileViewer?.()")
     }
 
@@ -5216,14 +5307,20 @@ public final class AgentBridge: NSObject, ObservableObject {
         }
     }
 
-    /// Read a file's content from the connected remote machine.
+    /// Read a file's content from the connected remote machine. Pass `chatId` so the
+    /// read targets the paired machine for that chat (matches the reliable in-chat
+    /// viewer path); without it the web falls back to the active chat id.
     @available(iOS 15.0, macOS 13.0, *)
-    public func readRemoteFile(path: String) async -> String? {
-        guard let data = try? JSONEncoder().encode(path),
-              let jsonStr = String(data: data, encoding: .utf8) else { return nil }
+    public func readRemoteFile(path: String, chatId: String? = nil) async -> String? {
+        func jsonString(_ value: String) -> String? {
+            guard let data = try? JSONEncoder().encode(value) else { return nil }
+            return String(data: data, encoding: .utf8)
+        }
+        guard let pathStr = jsonString(path) else { return nil }
+        let chatIdStr = chatId.flatMap(jsonString) ?? "null"
         do {
             let result = try await callAsyncJavaScript(
-                "return await window.__ripulReadRemoteFile?.(\(jsonStr))"
+                "return await window.__ripulReadRemoteFile?.(\(pathStr), \(chatIdStr))"
             )
             guard let dict = result as? [String: Any] else { return nil }
             return dict["content"] as? String
@@ -5233,29 +5330,57 @@ public final class AgentBridge: NSObject, ObservableObject {
         }
     }
 
-    /// Inject pre-fetched file content into a file-viewer web view.
-    /// Called when the main bridge reads a file via its authenticated relay
-    /// and forwards the content to a standalone file viewer's separate web view.
+    /// Poll the file-viewer web view until its inject hook is registered (i.e.
+    /// FileViewerManager has mounted in file-viewer bootstrap mode). The viewer
+    /// loads a FULL web app, which routinely takes longer than a fixed delay —
+    /// injecting before it was ready dropped the content on the floor (spinner ->
+    /// "host did not respond"; it only "worked once" when the app happened to boot
+    /// within the old 500ms).
+    @available(iOS 15.0, macOS 13.0, *)
+    public func waitForFileViewerReady(timeout: TimeInterval = 12) async {
+        let start = CFAbsoluteTimeGetCurrent()
+        while CFAbsoluteTimeGetCurrent() - start < timeout {
+            if let ready = try? await callAsyncJavaScript(
+                "return typeof window.__ripulInjectFileContent === 'function'"
+            ) as? Bool, ready {
+                return
+            }
+            try? await Task.sleep(nanoseconds: 150_000_000)
+        }
+    }
+
+    /// Inject pre-fetched file content into a file-viewer web view. Waits for the
+    /// viewer to be ready first so the content is never dropped into a web app that
+    /// hasn't mounted yet.
     @available(iOS 15.0, macOS 13.0, *)
     public func injectFileContent(_ content: String) {
         guard let data = try? JSONEncoder().encode(content),
               let jsonStr = String(data: data, encoding: .utf8) else { return }
-        let js = "window.__ripulInjectFileContent?.(\(jsonStr))"
         Task { @MainActor in
-            try? await callAsyncJavaScript(js)
+            await waitForFileViewerReady()
+            try? await callAsyncJavaScript("window.__ripulInjectFileContent?.(\(jsonStr))")
         }
     }
 
-    /// Signal that file content could not be read, so the viewer stops
-    /// showing a loading spinner and displays an error instead.
+    /// Signal that file content could not be read, so the viewer stops showing a
+    /// loading spinner and displays an error instead. Also waits for readiness.
     @available(iOS 15.0, macOS 13.0, *)
     public func injectFileError(_ message: String) {
         guard let data = try? JSONEncoder().encode(message),
               let jsonStr = String(data: data, encoding: .utf8) else { return }
-        let js = "window.__ripulInjectFileError?.(\(jsonStr))"
         Task { @MainActor in
-            try? await callAsyncJavaScript(js)
+            await waitForFileViewerReady()
+            try? await callAsyncJavaScript("window.__ripulInjectFileError?.(\(jsonStr))")
         }
+    }
+
+    /// Log a message to this web view's JS console (visible via device_console_logs).
+    /// For native-side diagnostics that need to be visible without Xcode.
+    @available(iOS 15.0, macOS 13.0, *)
+    public func logToWebConsole(_ message: String) {
+        guard let data = try? JSONEncoder().encode(message),
+              let jsonStr = String(data: data, encoding: .utf8) else { return }
+        evaluateJavaScript("console.log(\(jsonStr))")
     }
 
     private func handleSessionsListResponse(_ message: [String: Any]) {

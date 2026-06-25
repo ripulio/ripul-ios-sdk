@@ -16,6 +16,45 @@ private struct ChatInputHeightKey: PreferenceKey {
     }
 }
 
+/// Scroll-to-bottom button state, deliberately separate from AgentBridge so that
+/// frequent scroll-state updates do not invalidate AgentView (the WKWebView host).
+@MainActor
+public final class ScrollButtonModel: ObservableObject {
+    @Published public var show = false
+    @Published public var unreadCount = 0
+    public init() {}
+}
+
+/// Renders the scroll-to-bottom button from `ScrollButtonModel`. Because only this
+/// tiny view observes the model, a scroll-state flip re-renders just the button —
+/// AgentView (and the WKWebView it hosts) is never invalidated mid-scroll, which
+/// was stalling the web view's scroll.
+@available(iOS 16.0, macOS 14.0, *)
+private struct ScrollToBottomOverlay: View {
+    @ObservedObject var model: ScrollButtonModel
+    let onTap: () -> Void
+    var body: some View {
+        // Float the button in a ZERO-HEIGHT overlay so showing/hiding it never
+        // changes the VStack layout. As a layout member it snapped OUT: AgentView
+        // (by design) doesn't animate its VStack on the model flip, so the button's
+        // space collapsed instantly and clipped the scale-out. With no layout change
+        // the fade plays fully in place in BOTH directions. The .animation is scoped
+        // here and the model is off AgentBridge, so this re-renders only this child —
+        // never AgentView / the WKWebView host.
+        Color.clear
+            .frame(height: 0)
+            .overlay(alignment: .bottom) {
+                if model.show {
+                    ScrollToBottomButton(unreadCount: model.unreadCount, action: onTap)
+                        .padding(.horizontal, 12)
+                        .padding(.bottom, 8) // gap above the chat input
+                        .transition(.scale.combined(with: .opacity))
+                }
+            }
+            .animation(.easeInOut(duration: 0.45), value: model.show)
+    }
+}
+
 @available(iOS 16.0, macOS 14.0, *)
 @MainActor
 public struct AgentView<TopBar: View>: View {
@@ -125,13 +164,14 @@ public struct AgentView<TopBar: View>: View {
         }
         .overlay(alignment: .bottom) {
             if !bridge.fileViewerExpanded && bridge.currentPageContext.showNativeChatInput && !bridge.suppressNativeChatInput {
-                VStack(spacing: 8) {
-                    if bridge.showScrollToBottom {
-                        ScrollToBottomButton(unreadCount: bridge.scrollUnreadCount) {
-                            bridge.scrollToBottom()
-                        }
-                        .padding(.horizontal, 12)
-                        .transition(.scale.combined(with: .opacity))
+                VStack(spacing: 0) {
+                    // Zero-height: floats the scroll-to-bottom button above the input
+                    // without taking VStack space. Observes bridge.scrollButton (its
+                    // OWN ObservableObject), so a scroll-state flip re-renders only
+                    // this child — never AgentView, whose re-render mid-scroll stalled
+                    // the web scroll.
+                    ScrollToBottomOverlay(model: bridge.scrollButton) {
+                        bridge.scrollToBottom()
                     }
 
                     chatInput
@@ -181,7 +221,10 @@ public struct AgentView<TopBar: View>: View {
                 #else
                 .padding(.bottom, 8)
                 #endif
-                .animation(.spring(duration: 0.3), value: bridge.showScrollToBottom)
+                // No appearance animation: the button shows/hides instantly. The prior
+                // .spring(0.3s) ran on the main thread for its full duration mid-scroll
+                // and stuttered the web view's scroll exactly as the button appeared.
+                // An instant show is a single layout pass — no sustained animation work.
             }
         }
         .onPreferenceChange(ChatInputHeightKey.self) { height in
