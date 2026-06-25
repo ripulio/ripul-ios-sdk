@@ -310,17 +310,26 @@ class ViewInspectorController: UIView {
         guard let window = self.window else { highlightLayer.path = nil; return }
         let windowPoint = convert(point, to: nil)
 
-        // Temporarily hide ourselves so hitTest sees through the touch layer.
+        // Probe what's under the cursor. We must make the ENTIRE inspector overlay
+        // transparent to hitTest, not just the touch layer: a launcher-presented
+        // overlay's full-screen UIHostingController view has default user
+        // interaction, so it claims the probe and hitTest never reaches the app.
+        // Disabling the tagged overlay root lets hitTest resolve through every
+        // passthrough layer — ours AND the system floating tab-bar host
+        // (FloatingBarHostingView) — to the real top-most app view at the point.
+        let overlayRoot = inspectorOverlayRoot()
+        let savedRootInteraction = overlayRoot?.isUserInteractionEnabled ?? true
         isUserInteractionEnabled = false
         isHidden = true
+        overlayRoot?.isUserInteractionEnabled = false
         var hit = window.hitTest(windowPoint, with: nil)
+        overlayRoot?.isUserInteractionEnabled = savedRootInteraction
         isHidden = false
         isUserInteractionEnabled = true
 
-        // hitTest can land on the inspector's OWN overlay (its full-screen host
-        // view / passthrough HUD container), on the bare window, or on nothing.
-        // In all those cases fall back to a geometric walk of the window that
-        // ignores interactivity and excludes our overlay subtree.
+        // Belt-and-suspenders: if hitTest still gave nothing usable (or our own
+        // overlay), fall back to a geometric walk of the window that ignores
+        // interactivity and excludes our overlay subtree.
         if hit == nil || hit === self.window || isInspectorOwnView(hit!) {
             hit = deepestView(in: window, at: windowPoint)
         }
@@ -366,6 +375,18 @@ class ViewInspectorController: UIView {
             cur = c.superview
         }
         return false
+    }
+
+    /// The launcher's tagged overlay host (walking up from the touch layer), or
+    /// nil for the SwiftUI `.overlay` mount where the overlay shares the host's
+    /// hosting view and there's no separate full-screen container to neutralise.
+    private func inspectorOverlayRoot() -> UIView? {
+        var cur: UIView? = self
+        while let c = cur {
+            if c.tag == ripulViewExplorerOverlayTag { return c }
+            cur = c.superview
+        }
+        return nil
     }
 
     /// Deepest, frontmost view at `windowPoint` across the whole window tree,
