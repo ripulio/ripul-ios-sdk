@@ -354,6 +354,20 @@ struct InspectedView {
     /// Scan the owner's own class layers (app bundle only — never UIKit internals)
     /// for a stored object property/ivar whose value is `target`, and return its name.
     private static func storedPropertyName(on owner: NSObject, pointingTo target: UIView) -> String? {
+        // Pass 0 — Swift Mirror. Reflects Swift stored properties directly, so it
+        // catches what the Obj-C runtime misses: `private`/`let`/non-@objc
+        // programmatic views (e.g. `private let logoImageView = UIImageView()`),
+        // as well as weak outlets. Walk superclass mirrors for inherited props.
+        var mirror: Mirror? = Mirror(reflecting: owner)
+        while let m = mirror {
+            for child in m.children {
+                if let label = child.label, (child.value as? UIView) === target {
+                    return label
+                }
+            }
+            mirror = m.superclassMirror
+        }
+
         var cls: AnyClass? = type(of: owner)
         while let c = cls, Bundle(for: c) == Bundle.main {
             // Pass 1 — @objc stored object properties, read via KVC. KVC resolves
