@@ -352,16 +352,36 @@ struct InspectedView {
     }
 
     /// Scan the owner's own class layers (app bundle only — never UIKit internals)
-    /// for an object ivar whose value is `target`, and return its name.
+    /// for a stored object property/ivar whose value is `target`, and return its name.
     private static func storedPropertyName(on owner: NSObject, pointingTo target: UIView) -> String? {
         var cls: AnyClass? = type(of: owner)
         while let c = cls, Bundle(for: c) == Bundle.main {
-            var count: UInt32 = 0
-            if let ivars = class_copyIvarList(c, &count) {
+            // Pass 1 — @objc stored object properties, read via KVC. KVC resolves
+            // WEAK references correctly (object_getIvar does not), and almost every
+            // @IBOutlet is `weak`, so this is the case that actually matters.
+            var pCount: UInt32 = 0
+            if let props = class_copyPropertyList(c, &pCount) {
+                defer { free(props) }
+                for i in 0..<Int(pCount) {
+                    let name = String(cString: property_getName(props[i]))
+                    guard let attrsC = property_getAttributes(props[i]) else { continue }
+                    let attrs = String(cString: attrsC)
+                    // Object type ("T@…") and ivar-backed (",V…") → a stored property.
+                    // Skips scalars and computed props (no side effects on read).
+                    guard attrs.hasPrefix("T@"), attrs.contains(",V") else { continue }
+                    // Only the default getter (== property name); guard avoids any
+                    // KVC "not compliant" exception and rare custom-getter accessors.
+                    guard owner.responds(to: NSSelectorFromString(name)) else { continue }
+                    if (owner.value(forKey: name) as AnyObject?) === target { return name }
+                }
+            }
+            // Pass 2 — strong, non-@objc Swift stored properties (object_getIvar is
+            // reliable for strong refs; weak ones were handled in pass 1).
+            var iCount: UInt32 = 0
+            if let ivars = class_copyIvarList(c, &iCount) {
                 defer { free(ivars) }
-                for i in 0..<Int(count) {
+                for i in 0..<Int(iCount) {
                     let ivar = ivars[i]
-                    // Object-typed ivars only ('@' == 64); skip scalars/structs.
                     guard let enc = ivar_getTypeEncoding(ivar), enc.pointee == 64 else { continue }
                     if (object_getIvar(owner, ivar) as AnyObject?) === target,
                        let namePtr = ivar_getName(ivar) {
