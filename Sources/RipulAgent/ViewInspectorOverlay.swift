@@ -2,6 +2,10 @@
 import SwiftUI
 import UIKit
 
+/// Tag stamped by `RipulViewExplorer` on its overlay host view so the inspector's
+/// hit-walks can recognise and skip their own subtree (arbitrary, collision-unlikely).
+let ripulViewExplorerOverlayTag = 0x5249_5055   // "RIPU"
+
 // MARK: - View Inspector Overlay
 //
 // Native equivalent of the web ElementDebuggerOverlay. When active, a
@@ -303,25 +307,25 @@ class ViewInspectorController: UIView {
     // MARK: Hit testing
 
     private func pickAt(_ point: CGPoint) {
-        // Temporarily hide ourselves so hitTest sees through
+        guard let window = self.window else { highlightLayer.path = nil; return }
+        let windowPoint = convert(point, to: nil)
+
+        // Temporarily hide ourselves so hitTest sees through the touch layer.
         isUserInteractionEnabled = false
         isHidden = true
-
-        let windowPoint = convert(point, to: nil)
-        var hit: UIView? = nil
-        if let window = self.window {
-            hit = window.hitTest(windowPoint, with: nil)
-        }
-
+        var hit = window.hitTest(windowPoint, with: nil)
         isHidden = false
         isUserInteractionEnabled = true
 
-        // If we hit ourselves or the window root, try elementFromPoint via subviews
-        if hit == nil || hit === self || hit === self.window {
-            hit = deepestSubview(at: windowPoint)
+        // hitTest can land on the inspector's OWN overlay (its full-screen host
+        // view / passthrough HUD container), on the bare window, or on nothing.
+        // In all those cases fall back to a geometric walk of the window that
+        // ignores interactivity and excludes our overlay subtree.
+        if hit == nil || hit === self.window || isInspectorOwnView(hit!) {
+            hit = deepestView(in: window, at: windowPoint)
         }
 
-        guard let hitView = hit, hitView !== self else {
+        guard let hitView = hit, !isInspectorOwnView(hitView) else {
             highlightLayer.path = nil
             return
         }
@@ -330,10 +334,8 @@ class ViewInspectorController: UIView {
         // screen it lands on the nearest interactive container (cell, button,
         // scroll view) and skips the labels / image views / decorative subviews
         // that make up most of the UI. Refine downward through the hit view's own
-        // subtree — a geometric walk that ignores `isUserInteractionEnabled` — to
-        // reach the deepest leaf under the cursor. Staying inside the hit view's
-        // subtree keeps us in app content (never the inspector's own overlay,
-        // which hitTest already saw through via the hidden touch layer).
+        // subtree — a geometric walk that ignores `isUserInteractionEnabled` (and
+        // our own overlay) — to reach the deepest leaf under the cursor.
         let target = deepestDescendant(of: hitView, at: windowPoint)
 
         // Spatial lookup: find the tightest .uiKitIdentifier() match at this point
@@ -350,23 +352,38 @@ class ViewInspectorController: UIView {
         onInspect?(info)
     }
 
-    private func deepestSubview(at windowPoint: CGPoint) -> UIView? {
-        guard let window = self.window else { return nil }
+    /// True if `v` is part of the inspector's own overlay (the touch layer, the
+    /// crosshair, the draggable HUD's PassthroughRootView, or — for a
+    /// launcher-presented overlay — the tagged host view). Checks `v` and its
+    /// ancestor chain, so any descendant of the overlay is caught too. App views
+    /// are never inside this subtree, so their ancestor walk returns false.
+    private func isInspectorOwnView(_ v: UIView) -> Bool {
+        var cur: UIView? = v
+        while let c = cur {
+            if c === self { return true }
+            if c.tag == ripulViewExplorerOverlayTag { return true }
+            if c is PassthroughRootView { return true }
+            cur = c.superview
+        }
+        return false
+    }
+
+    /// Deepest, frontmost view at `windowPoint` across the whole window tree,
+    /// ignoring `isUserInteractionEnabled` and excluding the inspector's own
+    /// overlay. Used when hitTest gives nothing usable.
+    private func deepestView(in root: UIView, at windowPoint: CGPoint) -> UIView? {
         var best: UIView? = nil
-        func walk(_ view: UIView) {
-            guard view !== self else { return }
-            guard !view.isHidden, view.alpha > 0.01 else { return }
-            let localPoint = view.convert(windowPoint, from: window)
-            if view.bounds.contains(localPoint) {
-                best = view
-                for sub in view.subviews {
+        func walk(_ v: UIView) {
+            for sub in v.subviews {
+                guard !sub.isHidden, sub.alpha > 0.01, !isInspectorOwnView(sub) else { continue }
+                let local = sub.convert(windowPoint, from: nil)
+                if sub.bounds.contains(local) {
+                    best = sub
                     walk(sub)
                 }
             }
         }
-        for sub in window.subviews {
-            walk(sub)
-        }
+        walk(root)
         return best
     }
 
@@ -374,11 +391,13 @@ class ViewInspectorController: UIView {
     /// `hitTest` respects) and return the deepest, frontmost subview whose
     /// bounds contain `windowPoint`. Lets the inspector reach non-interactive
     /// leaves — labels, image views, decorative subviews — that hitTest skips.
+    /// Excludes the inspector's own overlay so a hit on a container that also
+    /// hosts the overlay (e.g. the top view controller's view) can't re-enter it.
     private func deepestDescendant(of view: UIView, at windowPoint: CGPoint) -> UIView {
         var best = view
         func walk(_ v: UIView) {
             for sub in v.subviews {
-                guard sub !== self, !sub.isHidden, sub.alpha > 0.01 else { continue }
+                guard !sub.isHidden, sub.alpha > 0.01, !isInspectorOwnView(sub) else { continue }
                 let local = sub.convert(windowPoint, from: nil)
                 if sub.bounds.contains(local) {
                     best = sub

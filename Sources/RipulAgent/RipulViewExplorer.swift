@@ -45,6 +45,10 @@ public enum RipulViewExplorer {
         let parent = topMostViewController(from: root)
         let hosting = UIHostingController(rootView: RipulViewExplorerRoot(onDismiss: { dismiss() }))
         hosting.view.backgroundColor = .clear
+        // Tag so the inspector's hit-walks skip their own overlay subtree (this
+        // host is a sibling of app content under the same VC, so the geometric
+        // walk would otherwise re-enter it — see ViewInspectorController).
+        hosting.view.tag = ripulViewExplorerOverlayTag
         // Don't block touches the overlay itself lets through (folded HUD etc.).
         hosting.view.frame = parent.view.bounds
         hosting.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
