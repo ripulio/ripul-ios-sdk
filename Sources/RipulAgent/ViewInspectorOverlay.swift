@@ -768,34 +768,14 @@ private struct InspectorEditField: View {
                     }
             }
 
-            // Where sends land: a remembered Ripul chat, or "ask" when none set.
-            HStack(spacing: 6) {
-                Image(systemName: "bubble.left.and.bubble.right")
-                    .font(.system(size: 9)).foregroundStyle(.gray)
-                Text(RipulEditHandoff.targetSessionTitle ?? RipulEditHandoff.targetSessionId ?? "Ripul will ask which chat")
-                    .font(.system(size: 9, design: .monospaced))
-                    .foregroundStyle(RipulEditHandoff.targetSessionId != nil ? Color.mint : .gray)
-                    .lineLimit(1)
-                Spacer()
-                Button("Choose") { RipulEditHandoff.chooseSession() }
-                    .font(.system(size: 9, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(Color.pink.opacity(0.85))
-                    .buttonStyle(.plain)
-                if RipulEditHandoff.targetSessionId != nil {
-                    Button("Clear") { RipulEditHandoff.clearSession(); targetTick &+= 1 }
-                        .font(.system(size: 9, design: .monospaced))
-                        .foregroundStyle(.gray)
-                        .buttonStyle(.plain)
-                }
-            }
-            .id(targetTick)
-
-            HStack(spacing: 8) {
-                // Always available — for any element, edited or not.
-                Button { send() } label: {
-                    Label(sent ? "Sent ✓" : "Send to Ripul", systemImage: "paperplane.fill")
+            HStack(spacing: 10) {
+                // One adaptive action: no target → "Discuss in Ripul" opens Ripul's
+                // chooser; once a session is set → "Discuss in <name>" sends to it.
+                Button { primaryAction() } label: {
+                    Label(primaryTitle, systemImage: "paperplane.fill")
                         .font(.system(size: 11, weight: .semibold, design: .monospaced))
                         .foregroundStyle(.black)
+                        .lineLimit(1)
                         .padding(.horizontal, 10)
                         .padding(.vertical, 4)
                         .background(Color.pink.opacity(0.9))
@@ -803,20 +783,40 @@ private struct InspectorEditField: View {
                 }
                 .buttonStyle(.plain)
 
+                if RipulEditHandoff.targetSessionId != nil {
+                    Button("clear") { RipulEditHandoff.clearSession() }
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(.gray)
+                        .buttonStyle(.plain)
+                }
                 if textChanged {
-                    Button { reset() } label: {
-                        Text("Reset")
-                            .font(.system(size: 11, design: .monospaced))
-                            .foregroundStyle(.gray)
-                    }
-                    .buttonStyle(.plain)
+                    Button("reset text") { reset() }
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(.gray)
+                        .buttonStyle(.plain)
                 }
                 Spacer()
             }
+            .id(targetTick)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: RipulEditHandoff.targetChangedNotification)) { _ in
+            targetTick &+= 1   // refresh the button title when the target chat changes
+        }
+    }
 
-            Text(textChanged ? "Sends your text change." : "Sends this element to the agent to discuss or change.")
-                .font(.system(size: 9, design: .monospaced))
-                .foregroundStyle(.gray)
+    private var primaryTitle: String {
+        if sent { return "Sent ✓" }
+        if let name = RipulEditHandoff.targetSessionTitle ?? RipulEditHandoff.targetSessionId {
+            return "Discuss in \(name)"
+        }
+        return "Discuss in Ripul"
+    }
+
+    private func primaryAction() {
+        if RipulEditHandoff.targetSessionId == nil {
+            RipulEditHandoff.chooseSession()   // no session yet → pick one first
+        } else {
+            send()                              // session set → send the element/edit
         }
     }
 
@@ -1670,14 +1670,19 @@ public enum RipulEditHandoff {
     private static let targetTitleKey = "ripul.edit.targetSessionTitle"
     public static var targetSessionId: String? { UserDefaults.standard.string(forKey: targetIdKey) }
     public static var targetSessionTitle: String? { UserDefaults.standard.string(forKey: targetTitleKey) }
+    /// Posted when the remembered target changes, so the explorer button can refresh
+    /// (e.g. after the user picks a chat in Ripul and returns to the consuming app).
+    public static let targetChangedNotification = Notification.Name("ripul.edit.targetSessionChanged")
     public static func rememberSession(id: String, title: String?) {
         UserDefaults.standard.set(id, forKey: targetIdKey)
         if let title { UserDefaults.standard.set(title, forKey: targetTitleKey) }
         else { UserDefaults.standard.removeObject(forKey: targetTitleKey) }
+        NotificationCenter.default.post(name: targetChangedNotification, object: nil)
     }
     public static func clearSession() {
         UserDefaults.standard.removeObject(forKey: targetIdKey)
         UserDefaults.standard.removeObject(forKey: targetTitleKey)
+        NotificationCenter.default.post(name: targetChangedNotification, object: nil)
     }
 
     /// Parse a callback URL (`<scheme>://…?id=…&title=…`) into (id, title).
