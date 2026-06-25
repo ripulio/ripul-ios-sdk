@@ -177,6 +177,7 @@ struct InspectedView {
     let viewControllerChain: [String]  // full VC chain, nearest first
     let controlActions: [String]       // "TargetClass.selector" for UIControl targets
     let restorationIdentifier: String?
+    let container: String?             // nearest app-defined ancestor view (e.g. a cell)
 
     struct LayerInfo {
         let cornerRadius: CGFloat
@@ -217,7 +218,8 @@ struct InspectedView {
             owningViewController: vcChain.first,
             viewControllerChain: vcChain,
             controlActions: controlActions(of: view),
-            restorationIdentifier: nonEmpty(view.restorationIdentifier)
+            restorationIdentifier: nonEmpty(view.restorationIdentifier),
+            container: nearestAppView(of: view, excluding: className)
         )
     }
 
@@ -243,15 +245,42 @@ struct InspectedView {
     }
 
     /// Crash-safe: parse `UIImage.description` (string ops only — no private KVC)
-    /// for an SF Symbol or asset name. Returns nil when the description carries none.
+    /// for an SF Symbol or asset name. Returns nil when the description carries
+    /// none. Only the precise markers are trusted (the loose "name = " form
+    /// false-matched non-name tokens in configuration dumps), and the result is
+    /// validated so structural noise never leaks through as a fake asset name.
     static func symbolOrAssetName(from image: UIImage) -> String? {
         let desc = image.description
-        for marker in ["name = ", "name: '", "named("] {
+        for marker in ["named(", "name: '", "systemName: "] {
             guard let r = desc.range(of: marker) else { continue }
-            let stop = CharacterSet(charactersIn: "',) >\n")
+            let stop = CharacterSet(charactersIn: "',)>= \n\t")
             let scalars = desc[r.upperBound...].unicodeScalars.prefix { !stop.contains($0) }
             let name = String(String.UnicodeScalarView(scalars))
-            if !name.isEmpty { return name }
+            if isPlausibleAssetName(name) { return name }
+        }
+        return nil
+    }
+
+    /// Guards against `UIImage.description` noise being shown as a real name.
+    static func isPlausibleAssetName(_ s: String) -> Bool {
+        guard s.count >= 2, s.count <= 64 else { return false }
+        if s.rangeOfCharacter(from: CharacterSet(charactersIn: ":=(){}<>,;")) != nil { return false }
+        return s.rangeOfCharacter(from: .letters) != nil   // reject pure numbers / hex
+    }
+
+    /// Nearest ancestor (or the view itself) whose class is defined in the app
+    /// bundle — typically a UITableViewCell / UICollectionViewCell subclass or a
+    /// custom view. That class name is the most greppable handle for views that
+    /// carry no text/identifier. `excluding` skips it when it equals the leaf's
+    /// own class (already shown as Class).
+    static func nearestAppView(of v: UIView, excluding ownClass: String) -> String? {
+        var cur: UIView? = v
+        while let c = cur {
+            if Bundle(for: type(of: c)) == Bundle.main {
+                let name = String(describing: type(of: c))
+                if name != ownClass { return name }
+            }
+            cur = c.superview
         }
         return nil
     }
@@ -298,6 +327,7 @@ struct InspectedView {
     /// A compact, greppable one-paste reference for finding this element in source.
     func sourceReference() -> String {
         var lines = ["class: \(className)"]
+        if let c = container { lines.append("container: \(c)") }
         if let vc = owningViewController { lines.append("controller: \(vc)") }
         if let t = text { lines.append("text: \"\(t)\"") }
         if let img = imageName { lines.append("image: \(img)") }
@@ -638,6 +668,9 @@ struct InspectorPropertiesTab: View {
             }
 
             section("Find in source") {
+                if let c = info.container {
+                    copyableRow("Container", c, valueColor: .mint)
+                }
                 if let vc = info.owningViewController {
                     copyableRow("Controller", vc, valueColor: .cyan)
                 }
