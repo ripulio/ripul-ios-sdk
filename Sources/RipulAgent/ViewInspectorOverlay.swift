@@ -169,6 +169,15 @@ struct InspectedView {
     let childCount: Int
     let depth: Int
 
+    // Source-finding hints. UIKit screens rarely set accessibilityIdentifier, so
+    // these give other ways to locate the element in code.
+    let text: String?                  // UILabel / UIButton / UITextField / UITextView
+    let imageName: String?             // SF Symbol or asset name (best-effort)
+    let owningViewController: String?  // nearest VC up the responder chain → the file
+    let viewControllerChain: [String]  // full VC chain, nearest first
+    let controlActions: [String]       // "TargetClass.selector" for UIControl targets
+    let restorationIdentifier: String?
+
     struct LayerInfo {
         let cornerRadius: CGFloat
         let borderWidth: CGFloat
@@ -181,6 +190,7 @@ struct InspectedView {
         let className = String(describing: type(of: view))
         let frameInWindow = view.convert(view.bounds, to: nil)
         let resolvedId = resolvedIdentifier
+        let vcChain = viewControllerChain(of: view)
         return InspectedView(
             view: view,
             className: className,
@@ -201,8 +211,105 @@ struct InspectedView {
                 shadowOpacity: view.layer.shadowOpacity
             ),
             childCount: view.subviews.count,
-            depth: depth
+            depth: depth,
+            text: textContent(of: view),
+            imageName: imageName(of: view),
+            owningViewController: vcChain.first,
+            viewControllerChain: vcChain,
+            controlActions: controlActions(of: view),
+            restorationIdentifier: nonEmpty(view.restorationIdentifier)
         )
+    }
+
+    // MARK: Source-finding extractors
+
+    /// Visible text of the common text-bearing controls.
+    static func textContent(of v: UIView) -> String? {
+        if let l = v as? UILabel { return nonEmpty(l.text) }
+        if let f = v as? UITextField { return nonEmpty(f.text) ?? nonEmpty(f.placeholder) }
+        if let t = v as? UITextView { return nonEmpty(t.text) }
+        if let b = v as? UIButton { return nonEmpty(b.title(for: .normal)) ?? nonEmpty(b.titleLabel?.text) }
+        return nil
+    }
+
+    /// SF Symbol or asset name for image-bearing views, best-effort.
+    static func imageName(of v: UIView) -> String? {
+        let image: UIImage?
+        if let iv = v as? UIImageView { image = iv.image }
+        else if let b = v as? UIButton { image = b.image(for: .normal) ?? b.currentImage }
+        else { image = nil }
+        guard let img = image else { return nil }
+        return symbolOrAssetName(from: img)
+    }
+
+    /// Crash-safe: parse `UIImage.description` (string ops only — no private KVC)
+    /// for an SF Symbol or asset name. Returns nil when the description carries none.
+    static func symbolOrAssetName(from image: UIImage) -> String? {
+        let desc = image.description
+        for marker in ["name = ", "name: '", "named("] {
+            guard let r = desc.range(of: marker) else { continue }
+            let stop = CharacterSet(charactersIn: "',) >\n")
+            let scalars = desc[r.upperBound...].unicodeScalars.prefix { !stop.contains($0) }
+            let name = String(String.UnicodeScalarView(scalars))
+            if !name.isEmpty { return name }
+        }
+        return nil
+    }
+
+    /// "TargetClass.selector" for every target/action wired on a UIControl — the
+    /// most direct way to jump to the handler in source.
+    static func controlActions(of v: UIView) -> [String] {
+        guard let c = v as? UIControl else { return [] }
+        let events: [UIControl.Event] = [.touchUpInside, .primaryActionTriggered, .valueChanged,
+                                         .editingChanged, .editingDidBegin, .editingDidEnd,
+                                         .editingDidEndOnExit, .touchDown, .touchUpOutside]
+        var out: [String] = []
+        for target in c.allTargets {
+            let tName = String(describing: type(of: target))
+            for ev in events {
+                for sel in c.actions(forTarget: target, forControlEvent: ev) ?? [] {
+                    let entry = "\(tName).\(sel)"
+                    if !out.contains(entry) { out.append(entry) }
+                }
+            }
+        }
+        return out
+    }
+
+    /// View-controller classes up the responder chain, nearest first. The first
+    /// entry is the controller whose view hosts this element — i.e. the file.
+    static func viewControllerChain(of v: UIView) -> [String] {
+        var out: [String] = []
+        var responder: UIResponder? = v
+        while let r = responder {
+            if let vc = r as? UIViewController {
+                out.append(String(describing: type(of: vc)))
+            }
+            responder = r.next
+        }
+        return out
+    }
+
+    private static func nonEmpty(_ s: String?) -> String? {
+        guard let s = s, !s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        return s
+    }
+
+    /// A compact, greppable one-paste reference for finding this element in source.
+    func sourceReference() -> String {
+        var lines = ["class: \(className)"]
+        if let vc = owningViewController { lines.append("controller: \(vc)") }
+        if let t = text { lines.append("text: \"\(t)\"") }
+        if let img = imageName { lines.append("image: \(img)") }
+        if let aid = accessibilityId, !aid.isEmpty { lines.append("a11yId: \(aid)") }
+        if let label = accessibilityLabel, !label.isEmpty { lines.append("a11yLabel: \(label)") }
+        if let rid = restorationIdentifier { lines.append("restorationId: \(rid)") }
+        if tag != 0 { lines.append("tag: \(tag)") }
+        for a in controlActions { lines.append("action: \(a)") }
+        if viewControllerChain.count > 1 {
+            lines.append("vcChain: \(viewControllerChain.joined(separator: " ← "))")
+        }
+        return lines.joined(separator: "\n")
     }
 }
 
@@ -528,6 +635,37 @@ struct InspectorPropertiesTab: View {
                 if info.tag != 0 {
                     row("Tag", "\(info.tag)")
                 }
+            }
+
+            section("Find in source") {
+                if let vc = info.owningViewController {
+                    copyableRow("Controller", vc, valueColor: .cyan)
+                }
+                if let t = info.text {
+                    copyableRow("Text", "\"\(t)\"", valueColor: .yellow)
+                }
+                if let img = info.imageName {
+                    copyableRow("Image", img, valueColor: .yellow)
+                }
+                ForEach(info.controlActions, id: \.self) { action in
+                    copyableRow("Action", action, valueColor: .orange)
+                }
+                if let rid = info.restorationIdentifier {
+                    copyableRow("Restoration", rid)
+                }
+                Button {
+                    UIPasteboard.general.string = info.sourceReference()
+                } label: {
+                    Text("⧉ Copy reference")
+                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(.black)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 4)
+                        .background(Color.pink.opacity(0.9))
+                        .clipShape(RoundedRectangle(cornerRadius: 5))
+                }
+                .buttonStyle(.plain)
+                .padding(.top, 3)
             }
 
             section("Geometry") {
@@ -999,6 +1137,9 @@ struct InspectorHUD: View {
                         let summary = {
                             if let aid = info.accessibilityId, !aid.isEmpty {
                                 return aid
+                            }
+                            if let t = info.text, !t.isEmpty {
+                                return "\(info.className) \u{201C}\(t)\u{201D}"
                             }
                             return info.className
                         }()
