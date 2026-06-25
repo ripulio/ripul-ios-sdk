@@ -321,10 +321,20 @@ class ViewInspectorController: UIView {
             hit = deepestSubview(at: windowPoint)
         }
 
-        guard let target = hit, target !== self else {
+        guard let hitView = hit, hitView !== self else {
             highlightLayer.path = nil
             return
         }
+
+        // `hitTest` only returns user-interaction-enabled views, so on a UIKit
+        // screen it lands on the nearest interactive container (cell, button,
+        // scroll view) and skips the labels / image views / decorative subviews
+        // that make up most of the UI. Refine downward through the hit view's own
+        // subtree — a geometric walk that ignores `isUserInteractionEnabled` — to
+        // reach the deepest leaf under the cursor. Staying inside the hit view's
+        // subtree keeps us in app content (never the inspector's own overlay,
+        // which hitTest already saw through via the hidden touch layer).
+        let target = deepestDescendant(of: hitView, at: windowPoint)
 
         // Spatial lookup: find the tightest .uiKitIdentifier() match at this point
         let match = UIKitIdentifierRegistry.shared.bestMatch(at: windowPoint)
@@ -357,6 +367,26 @@ class ViewInspectorController: UIView {
         for sub in window.subviews {
             walk(sub)
         }
+        return best
+    }
+
+    /// Walk `view`'s subtree (ignoring `isUserInteractionEnabled`, which
+    /// `hitTest` respects) and return the deepest, frontmost subview whose
+    /// bounds contain `windowPoint`. Lets the inspector reach non-interactive
+    /// leaves — labels, image views, decorative subviews — that hitTest skips.
+    private func deepestDescendant(of view: UIView, at windowPoint: CGPoint) -> UIView {
+        var best = view
+        func walk(_ v: UIView) {
+            for sub in v.subviews {
+                guard sub !== self, !sub.isHidden, sub.alpha > 0.01 else { continue }
+                let local = sub.convert(windowPoint, from: nil)
+                if sub.bounds.contains(local) {
+                    best = sub
+                    walk(sub)
+                }
+            }
+        }
+        walk(view)
         return best
     }
 
