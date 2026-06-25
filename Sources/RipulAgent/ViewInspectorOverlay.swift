@@ -1,6 +1,7 @@
 #if os(iOS)
 import SwiftUI
 import UIKit
+import ObjectiveC
 
 /// Tag stamped by `RipulViewExplorer` on its overlay host view so the inspector's
 /// hit-walks can recognise and skip their own subtree (arbitrary, collision-unlikely).
@@ -178,6 +179,7 @@ struct InspectedView {
     let controlActions: [String]       // "TargetClass.selector" for UIControl targets
     let restorationIdentifier: String?
     let container: String?             // nearest app-defined ancestor view (e.g. a cell)
+    let propertyRef: String?           // "Owner.property" if a VC/cell holds this view (IBOutlet or stored prop)
 
     struct LayerInfo {
         let cornerRadius: CGFloat
@@ -219,7 +221,8 @@ struct InspectedView {
             viewControllerChain: vcChain,
             controlActions: controlActions(of: view),
             restorationIdentifier: nonEmpty(view.restorationIdentifier),
-            container: nearestAppView(of: view, excluding: className)
+            container: nearestAppView(of: view, excluding: className),
+            propertyRef: propertyReference(of: view)
         )
     }
 
@@ -319,6 +322,60 @@ struct InspectedView {
         return out
     }
 
+    /// "Owner.property" when a view controller or app-defined ancestor view holds
+    /// this view in a stored property (almost always an @IBOutlet, occasionally a
+    /// plain stored var). Pure runtime reflection over the app's own class layers —
+    /// no annotation, no build step. An outlet name is unique within its owner and
+    /// directly greppable, so this is usually the most precise source handle.
+    static func propertyReference(of view: UIView) -> String? {
+        var owners: [NSObject] = []
+        // App-defined ancestor views (cells, custom views) — nearest first.
+        var v: UIView? = view.superview
+        while let cur = v {
+            if Bundle(for: type(of: cur)) == .main { owners.append(cur) }
+            v = cur.superview
+        }
+        // Owning view controllers, via the responder chain.
+        var r: UIResponder? = view
+        while let resp = r {
+            if let vc = resp as? UIViewController, Bundle(for: type(of: vc)) == .main {
+                owners.append(vc)
+            }
+            r = resp.next
+        }
+        for owner in owners {
+            if let name = storedPropertyName(on: owner, pointingTo: view) {
+                return "\(String(describing: type(of: owner))).\(name)"
+            }
+        }
+        return nil
+    }
+
+    /// Scan the owner's own class layers (app bundle only — never UIKit internals)
+    /// for an object ivar whose value is `target`, and return its name.
+    private static func storedPropertyName(on owner: NSObject, pointingTo target: UIView) -> String? {
+        var cls: AnyClass? = type(of: owner)
+        while let c = cls, Bundle(for: c) == Bundle.main {
+            var count: UInt32 = 0
+            if let ivars = class_copyIvarList(c, &count) {
+                defer { free(ivars) }
+                for i in 0..<Int(count) {
+                    let ivar = ivars[i]
+                    // Object-typed ivars only ('@' == 64); skip scalars/structs.
+                    guard let enc = ivar_getTypeEncoding(ivar), enc.pointee == 64 else { continue }
+                    if (object_getIvar(owner, ivar) as AnyObject?) === target,
+                       let namePtr = ivar_getName(ivar) {
+                        var name = String(cString: namePtr)
+                        if name.hasPrefix("_") { name.removeFirst() }
+                        return name
+                    }
+                }
+            }
+            cls = class_getSuperclass(c)
+        }
+        return nil
+    }
+
     private static func nonEmpty(_ s: String?) -> String? {
         guard let s = s, !s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
         return s
@@ -327,6 +384,7 @@ struct InspectedView {
     /// A compact, greppable one-paste reference for finding this element in source.
     func sourceReference() -> String {
         var lines = ["class: \(className)"]
+        if let p = propertyRef { lines.append("property: \(p)") }
         if let c = container { lines.append("container: \(c)") }
         if let vc = owningViewController { lines.append("controller: \(vc)") }
         if let t = text { lines.append("text: \"\(t)\"") }
@@ -668,6 +726,9 @@ struct InspectorPropertiesTab: View {
             }
 
             section("Find in source") {
+                if let p = info.propertyRef {
+                    copyableRow("Property", p, valueColor: .orange)
+                }
                 if let c = info.container {
                     copyableRow("Container", c, valueColor: .mint)
                 }
