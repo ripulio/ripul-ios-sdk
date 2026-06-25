@@ -732,9 +732,11 @@ struct CrosshairReticle: View {
 
 // MARK: - Properties Tab
 
-/// Inline text editor for a text-bearing view: edits the live view in-context,
-/// then hands the change to the Ripul app as a structured edit intent. Keyed by
-/// the selected view's identity (via `.id`) so its state resets per selection.
+/// Hand off ANY inspected element to the Ripul app for the coding agent. For a
+/// text-bearing view it also offers an inline editor to trial a concrete copy
+/// change (sent as a from→to); for everything else it sends a "discuss this
+/// element" intent. The Send button is always available. Keyed by the selected
+/// view's identity (via `.id`) so its state resets per selection.
 @available(iOS 16.0, *)
 private struct InspectorEditField: View {
     let info: InspectedView
@@ -746,21 +748,27 @@ private struct InspectorEditField: View {
         _edited = State(initialValue: info.text ?? "")
     }
 
+    private var isTextView: Bool { info.text != nil }
+    private var textChanged: Bool { isTextView && edited != (info.text ?? "") }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            TextField("text", text: $edited, axis: .vertical)
-                .font(.system(size: 12, design: .monospaced))
-                .foregroundStyle(.white)
-                .textFieldStyle(.plain)
-                .padding(6)
-                .background(Color.white.opacity(0.08))
-                .clipShape(RoundedRectangle(cornerRadius: 5))
-                .onChange(of: edited) { newValue in
-                    InspectedView.applyText(newValue, to: info.view)   // live in-context preview
-                    sent = false
-                }
+            if isTextView {
+                TextField("text", text: $edited, axis: .vertical)
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundStyle(.white)
+                    .textFieldStyle(.plain)
+                    .padding(6)
+                    .background(Color.white.opacity(0.08))
+                    .clipShape(RoundedRectangle(cornerRadius: 5))
+                    .onChange(of: edited) { newValue in
+                        InspectedView.applyText(newValue, to: info.view)   // live in-context preview
+                        sent = false
+                    }
+            }
 
             HStack(spacing: 8) {
+                // Always available — for any element, edited or not.
                 Button { send() } label: {
                     Label(sent ? "Sent ✓" : "Send to Ripul", systemImage: "paperplane.fill")
                         .font(.system(size: 11, weight: .semibold, design: .monospaced))
@@ -771,16 +779,21 @@ private struct InspectorEditField: View {
                         .clipShape(RoundedRectangle(cornerRadius: 5))
                 }
                 .buttonStyle(.plain)
-                .disabled(edited == (info.text ?? ""))
 
-                Button { reset() } label: {
-                    Text("Reset")
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundStyle(.gray)
+                if textChanged {
+                    Button { reset() } label: {
+                        Text("Reset")
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundStyle(.gray)
+                    }
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
                 Spacer()
             }
+
+            Text(textChanged ? "Sends your text change." : "Sends this element to the agent to discuss or change.")
+                .font(.system(size: 9, design: .monospaced))
+                .foregroundStyle(.gray)
         }
     }
 
@@ -791,6 +804,11 @@ private struct InspectorEditField: View {
 
     private func send() {
         let appName = Bundle.main.infoDictionary?["CFBundleName"] as? String
+        // A concrete text edit when the field was changed; otherwise nil → the
+        // intent is a "discuss this element" anchor the dev completes in Ripul.
+        let change: RipulEditIntent.Change? = textChanged
+            ? .init(kind: "text", from: info.text, to: edited)
+            : nil
         let intent = RipulEditIntent(
             target: .init(
                 app: appName,
@@ -802,7 +820,7 @@ private struct InspectorEditField: View {
                 accessibilityId: info.accessibilityId,
                 storyboard: nil,
                 vcChain: info.viewControllerChain),
-            change: .init(kind: "text", from: info.text, to: edited))
+            change: change)
         RipulEditHandoff.send(intent)
         withAnimation { sent = true }
     }
@@ -881,11 +899,9 @@ struct InspectorPropertiesTab: View {
                 .padding(.top, 3)
             }
 
-            if info.text != nil {
-                section("Edit & send") {
-                    InspectorEditField(info: info)
-                        .id(ObjectIdentifier(info.view))
-                }
+            section("Send to Ripul") {
+                InspectorEditField(info: info)
+                    .id(ObjectIdentifier(info.view))
             }
 
             section("Geometry") {
@@ -1580,9 +1596,9 @@ public struct RipulEditIntent: Codable {
     }
     public var v: Int = 1
     public var target: Target
-    public var change: Change
+    public var change: Change?   // nil = "discuss this element", no concrete change yet
 
-    public init(v: Int = 1, target: Target, change: Change) {
+    public init(v: Int = 1, target: Target, change: Change? = nil) {
         self.v = v; self.target = target; self.change = change
     }
 
@@ -1595,14 +1611,16 @@ public struct RipulEditIntent: Codable {
             return ""
         }()
         let appPart = target.app.map { " in the \($0) codebase" } ?? ""
-        switch change.kind {
-        case "text":
+        if let change, change.kind == "text" {
             return "Change the \(target.className)\(loc)\(appPart): set its text from "
                 + "\"\(change.from ?? "")\" to \"\(change.to ?? "")\". It may be a storyboard "
                 + "literal or set in code — locate it via the property/controller and update the source."
-        default:
-            return "Apply a \(change.kind) change to the \(target.className)\(loc)\(appPart)."
         }
+        // No concrete change yet — anchor a discussion to this element; the
+        // developer completes the request in the composer before sending.
+        let current = target.text.map { " Its current text is \"\($0)\"." } ?? ""
+        return "I'm looking at the \(target.className)\(loc)\(appPart).\(current) "
+            + "Find it in source via the property/controller, then make this change: "
     }
 }
 
