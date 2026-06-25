@@ -1,5 +1,7 @@
 # DevTools SDK Extraction Plan
 
+> **Part of the [DevKit Program](../../docs/plans/devkit-program.md)** — Layer 2 · SDK packaging: extract web-content capture + a generic localhost MCP server into the SDK. See the hub for the map, the surfaces glossary, and cross-cluster status.
+
 > Extract Ripul's in-app developer tools into a reusable SDK so any app can embed console logs, network monitoring, and MCP tool exposure.
 
 Ripul is the first consumer — every phase replaces Ripul's own code with the SDK API, proving the extraction works before any external developer touches it.

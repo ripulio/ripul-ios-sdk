@@ -1361,7 +1361,7 @@ private class PassthroughRootView: UIView {
 
 /// Container VC with a passthrough root view. Embeds a UIHostingController as
 /// a child VC, sized to its intrinsic content, with a pan gesture for dragging.
-class DraggableHUDContainerVC<Content: View>: UIViewController {
+class DraggableHUDContainerVC<Content: View>: UIViewController, UIGestureRecognizerDelegate {
     private let posXKey: String
     private let posYKey: String
     private let store: UserDefaults
@@ -1407,6 +1407,7 @@ class DraggableHUDContainerVC<Content: View>: UIViewController {
         // Pan gesture on the content-sized hosting view
         let pan = ThresholdPanGesture(target: self, action: #selector(handlePan(_:)))
         pan.maximumNumberOfTouches = 1
+        pan.delegate = self
         hostingController.view.addGestureRecognizer(pan)
 
         // Apply saved position, clamped to visible bounds so a HUD dragged
@@ -1452,6 +1453,17 @@ class DraggableHUDContainerVC<Content: View>: UIViewController {
         }
     }
 
+    // Let the SwiftUI resize grip (bottom-right corner of the HUD) win over the
+    // move pan: ignore touches that start in that corner so dragging it resizes
+    // the panel instead of repositioning it.
+    func gestureRecognizer(_ g: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+        let hv = hostingController.view!
+        let p = touch.location(in: hv)
+        let grip: CGFloat = 44
+        let inResizeCorner = p.x > hv.bounds.width - grip && p.y > hv.bounds.height - grip
+        return !inResizeCorner
+    }
+
     func updateContent(_ content: Content) {
         hostingController.rootView = content
     }
@@ -1474,6 +1486,7 @@ struct InspectorHUD: View {
         width: min(360, UIScreen.main.bounds.width - 16),
         height: UIScreen.main.bounds.height * 0.3
     )
+    @State private var resizeBase: CGSize? = nil   // size captured when a resize drag starts
 
     enum InspectorTab: String, CaseIterable {
         case properties = "Properties"
@@ -1506,8 +1519,33 @@ struct InspectorHUD: View {
             RoundedRectangle(cornerRadius: 10)
                 .stroke(.white.opacity(0.15), lineWidth: 1)
         )
+        // Bottom-right resize grip. The UIKit move-pan ignores this corner (see
+        // DraggableHUDContainerVC.gestureRecognizer(_:shouldReceive:)) so dragging
+        // it resizes the panel instead of repositioning it.
+        .overlay(alignment: .bottomTrailing) {
+            if !folded { resizeGrip }
+        }
         .shadow(color: .black.opacity(0.4), radius: 10, y: 4)
         .fixedSize()
+    }
+
+    private var resizeGrip: some View {
+        Image(systemName: "arrow.down.right")
+            .font(.system(size: 10, weight: .bold))
+            .foregroundStyle(.white.opacity(0.55))
+            .frame(width: 36, height: 36)
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 1)
+                    .onChanged { g in
+                        if resizeBase == nil { resizeBase = size }
+                        let base = resizeBase ?? size
+                        let screen = UIScreen.main.bounds
+                        size.width = min(max(220, base.width + g.translation.width), screen.width - 12)
+                        size.height = min(max(180, base.height + g.translation.height), screen.height - 40)
+                    }
+                    .onEnded { _ in resizeBase = nil }
+            )
     }
 
     private var header: some View {
