@@ -415,6 +415,15 @@ struct InspectedView {
         return s
     }
 
+    /// Live-set the text of a text-bearing view — backs the inspector's inline edit
+    /// so a trial copy change is visible in-context before it's handed off.
+    static func applyText(_ s: String, to v: UIView) {
+        if let l = v as? UILabel { l.text = s }
+        else if let f = v as? UITextField { f.text = s }
+        else if let t = v as? UITextView { t.text = s }
+        else if let b = v as? UIButton { b.setTitle(s, for: .normal) }
+    }
+
     /// A compact, greppable one-paste reference for finding this element in source.
     func sourceReference() -> String {
         var lines = ["class: \(className)"]
@@ -723,6 +732,82 @@ struct CrosshairReticle: View {
 
 // MARK: - Properties Tab
 
+/// Inline text editor for a text-bearing view: edits the live view in-context,
+/// then hands the change to the Ripul app as a structured edit intent. Keyed by
+/// the selected view's identity (via `.id`) so its state resets per selection.
+@available(iOS 16.0, *)
+private struct InspectorEditField: View {
+    let info: InspectedView
+    @State private var edited: String
+    @State private var sent = false
+
+    init(info: InspectedView) {
+        self.info = info
+        _edited = State(initialValue: info.text ?? "")
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            TextField("text", text: $edited, axis: .vertical)
+                .font(.system(size: 12, design: .monospaced))
+                .foregroundStyle(.white)
+                .textFieldStyle(.plain)
+                .padding(6)
+                .background(Color.white.opacity(0.08))
+                .clipShape(RoundedRectangle(cornerRadius: 5))
+                .onChange(of: edited) { newValue in
+                    InspectedView.applyText(newValue, to: info.view)   // live in-context preview
+                    sent = false
+                }
+
+            HStack(spacing: 8) {
+                Button { send() } label: {
+                    Label(sent ? "Sent ✓" : "Send to Ripul", systemImage: "paperplane.fill")
+                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(.black)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 4)
+                        .background(Color.pink.opacity(0.9))
+                        .clipShape(RoundedRectangle(cornerRadius: 5))
+                }
+                .buttonStyle(.plain)
+                .disabled(edited == (info.text ?? ""))
+
+                Button { reset() } label: {
+                    Text("Reset")
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(.gray)
+                }
+                .buttonStyle(.plain)
+                Spacer()
+            }
+        }
+    }
+
+    private func reset() {
+        edited = info.text ?? ""
+        InspectedView.applyText(edited, to: info.view)
+    }
+
+    private func send() {
+        let appName = Bundle.main.infoDictionary?["CFBundleName"] as? String
+        let intent = RipulEditIntent(
+            target: .init(
+                app: appName,
+                controller: info.owningViewController,
+                container: info.container,
+                property: info.propertyRef,
+                className: info.className,
+                text: info.text,
+                accessibilityId: info.accessibilityId,
+                storyboard: nil,
+                vcChain: info.viewControllerChain),
+            change: .init(kind: "text", from: info.text, to: edited))
+        RipulEditHandoff.send(intent)
+        withAnimation { sent = true }
+    }
+}
+
 @available(iOS 16.0, *)
 struct InspectorPropertiesTab: View {
     let info: InspectedView
@@ -794,6 +879,13 @@ struct InspectorPropertiesTab: View {
                 }
                 .buttonStyle(.plain)
                 .padding(.top, 3)
+            }
+
+            if info.text != nil {
+                section("Edit & send") {
+                    InspectorEditField(info: info)
+                        .id(ObjectIdentifier(info.view))
+                }
             }
 
             section("Geometry") {
@@ -1459,6 +1551,98 @@ public struct ViewInspectorOverlay: View {
         }
         currentView = view
         inspected = InspectedView.inspect(view)
+    }
+}
+
+// MARK: - Edit hand-off (View Explorer → coding agent)
+
+/// A structured "make this change" intent produced by the View Explorer and
+/// carried to the Ripul app over a `ripul://edit?p=<base64url(JSON)>` deep link.
+/// Lives in the SDK so the sender (any consuming app's explorer) and the receiver
+/// (the Ripul app, which imports RipulAgent) share one definition — URL-only, no
+/// app-group/shared-team coupling, so it works for any third-party consumer.
+public struct RipulEditIntent: Codable {
+    public struct Target: Codable {
+        public var app: String?
+        public var controller: String?
+        public var container: String?
+        public var property: String?
+        public var className: String
+        public var text: String?
+        public var accessibilityId: String?
+        public var storyboard: String?
+        public var vcChain: [String]?
+    }
+    public struct Change: Codable {
+        public var kind: String        // "text" (more later: color, font, …)
+        public var from: String?
+        public var to: String?
+    }
+    public var v: Int = 1
+    public var target: Target
+    public var change: Change
+
+    public init(v: Int = 1, target: Target, change: Change) {
+        self.v = v; self.target = target; self.change = change
+    }
+
+    /// A ready-to-run instruction for the coding CLI on the developer's machine.
+    public func prompt() -> String {
+        let loc: String = {
+            if let p = target.property { return " (held by `\(p)`)" }
+            if let c = target.container { return " inside `\(c)`" }
+            if let vc = target.controller { return " in `\(vc)`" }
+            return ""
+        }()
+        let appPart = target.app.map { " in the \($0) codebase" } ?? ""
+        switch change.kind {
+        case "text":
+            return "Change the \(target.className)\(loc)\(appPart): set its text from "
+                + "\"\(change.from ?? "")\" to \"\(change.to ?? "")\". It may be a storyboard "
+                + "literal or set in code — locate it via the property/controller and update the source."
+        default:
+            return "Apply a \(change.kind) change to the \(target.className)\(loc)\(appPart)."
+        }
+    }
+}
+
+public enum RipulEditHandoff {
+    public static let scheme = "ripul"
+    public static let host = "edit"
+
+    /// Build the `ripul://edit?p=…` deep link (base64url-encoded JSON).
+    public static func makeURL(_ intent: RipulEditIntent) -> URL? {
+        guard let data = try? JSONEncoder().encode(intent) else { return nil }
+        let b64 = data.base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+        var comps = URLComponents()
+        comps.scheme = scheme
+        comps.host = host
+        comps.queryItems = [URLQueryItem(name: "p", value: b64)]
+        return comps.url
+    }
+
+    /// Decode an intent from an incoming `ripul://edit` URL (receiver side).
+    public static func decode(from url: URL) -> RipulEditIntent? {
+        guard url.scheme == scheme, url.host == host,
+              let comps = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              let p = comps.queryItems?.first(where: { $0.name == "p" })?.value else { return nil }
+        var b64 = p.replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
+        while b64.count % 4 != 0 { b64 += "=" }
+        guard let data = Data(base64Encoded: b64) else { return nil }
+        return try? JSONDecoder().decode(RipulEditIntent.self, from: data)
+    }
+
+    /// Open the Ripul app with the intent. Falls back to copying the URL to the
+    /// pasteboard if the Ripul app isn't installed to handle the scheme.
+    @MainActor
+    public static func send(_ intent: RipulEditIntent, fallbackToPasteboard: Bool = true) {
+        guard let url = makeURL(intent) else { return }
+        UIApplication.shared.open(url, options: [:]) { ok in
+            if !ok && fallbackToPasteboard { UIPasteboard.general.string = url.absoluteString }
+        }
     }
 }
 
