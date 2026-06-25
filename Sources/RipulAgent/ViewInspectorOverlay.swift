@@ -424,6 +424,46 @@ struct InspectedView {
         else if let b = v as? UIButton { b.setTitle(s, for: .normal) }
     }
 
+    // MARK: Live property editing (backs the Edit tab)
+
+    /// The view's foreground/text colour, where it has one.
+    static func currentTextColor(_ v: UIView) -> UIColor? {
+        if let l = v as? UILabel { return l.textColor }
+        if let f = v as? UITextField { return f.textColor }
+        if let t = v as? UITextView { return t.textColor }
+        if let b = v as? UIButton { return b.titleColor(for: .normal) }
+        return nil
+    }
+    static func applyTextColor(_ c: UIColor, to v: UIView) {
+        if let l = v as? UILabel { l.textColor = c }
+        else if let f = v as? UITextField { f.textColor = c }
+        else if let t = v as? UITextView { t.textColor = c }
+        else if let b = v as? UIButton { b.setTitleColor(c, for: .normal) }
+    }
+
+    /// The view's font, where it has one.
+    static func currentFont(_ v: UIView) -> UIFont? {
+        if let l = v as? UILabel { return l.font }
+        if let f = v as? UITextField { return f.font }
+        if let t = v as? UITextView { return t.font }
+        if let b = v as? UIButton { return b.titleLabel?.font }
+        return nil
+    }
+    static func applyFontSize(_ size: CGFloat, to v: UIView) {
+        if let l = v as? UILabel { l.font = l.font.withSize(size) }
+        else if let f = v as? UITextField { f.font = (f.font ?? .systemFont(ofSize: size)).withSize(size) }
+        else if let t = v as? UITextView { t.font = (t.font ?? .systemFont(ofSize: size)).withSize(size) }
+        else if let b = v as? UIButton { b.titleLabel?.font = (b.titleLabel?.font ?? .systemFont(ofSize: size)).withSize(size) }
+    }
+
+    static func applyCornerRadius(_ r: CGFloat, to v: UIView) {
+        v.layer.cornerRadius = r
+        if r > 0 { v.clipsToBounds = true }
+    }
+
+    /// A comparable string for a colour (hex), used for change detection + from/to.
+    static func hex(_ c: UIColor?) -> String { c?.hexString ?? "—" }
+
     /// A compact, greppable one-paste reference for finding this element in source.
     func sourceReference() -> String {
         var lines = ["class: \(className)"]
@@ -732,77 +772,151 @@ struct CrosshairReticle: View {
 
 // MARK: - Properties Tab
 
-/// Hand off ANY inspected element to the Ripul app for the coding agent. For a
-/// text-bearing view it also offers an inline editor to trial a concrete copy
-/// change (sent as a from→to); for everything else it sends a "discuss this
-/// element" intent. The Send button is always available. Keyed by the selected
-/// view's identity (via `.id`) so its state resets per selection.
+/// Dedicated element editor (the "Edit" tab): trial changes to the inspected
+/// view's properties live — text plus common visual props — then hand the whole
+/// change set to Ripul via the adaptive "Discuss in <chat>" button. Keyed by the
+/// selected view's identity (via `.id`) so its state resets per selection.
 @available(iOS 16.0, *)
-private struct InspectorEditField: View {
+struct InspectorEditTab: View {
     let info: InspectedView
-    @State private var edited: String
+
+    // Editable state, seeded from the live view.
+    @State private var text: String
+    @State private var bg: Color
+    @State private var tint: Color
+    @State private var textColor: Color
+    @State private var alpha: Double
+    @State private var corner: Double
+    @State private var fontSize: Double
+    @State private var isHidden: Bool
     @State private var sent = false
-    @State private var targetTick = 0   // bump to refresh the target row after Clear
+    @State private var targetTick = 0
+
+    // Originals (for change detection + reset), captured once.
+    private let hasText: Bool, hasTextColor: Bool, hasFont: Bool
+    private let origText: String
+    private let origBg: Color, origTint: Color, origTextColor: Color
+    private let origAlpha: Double, origCorner: Double, origFontSize: Double
+    private let origHidden: Bool
 
     init(info: InspectedView) {
         self.info = info
-        _edited = State(initialValue: info.text ?? "")
+        let v = info.view
+        let tc = InspectedView.currentTextColor(v)
+        let font = InspectedView.currentFont(v)
+        hasText = info.text != nil
+        hasTextColor = tc != nil
+        hasFont = font != nil
+        origText = info.text ?? ""
+        origBg = Color(uiColor: v.backgroundColor ?? .clear)
+        origTint = Color(uiColor: v.tintColor ?? .clear)
+        origTextColor = Color(uiColor: tc ?? .clear)
+        origAlpha = Double(v.alpha)
+        origCorner = Double(v.layer.cornerRadius)
+        origFontSize = Double(font?.pointSize ?? 14)
+        origHidden = v.isHidden
+        _text = State(initialValue: info.text ?? "")
+        _bg = State(initialValue: Color(uiColor: v.backgroundColor ?? .clear))
+        _tint = State(initialValue: Color(uiColor: v.tintColor ?? .clear))
+        _textColor = State(initialValue: Color(uiColor: tc ?? .clear))
+        _alpha = State(initialValue: Double(v.alpha))
+        _corner = State(initialValue: Double(v.layer.cornerRadius))
+        _fontSize = State(initialValue: Double(font?.pointSize ?? 14))
+        _isHidden = State(initialValue: v.isHidden)
     }
 
-    private var isTextView: Bool { info.text != nil }
-    private var textChanged: Bool { isTextView && edited != (info.text ?? "") }
-
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            if isTextView {
-                TextField("text", text: $edited, axis: .vertical)
-                    .font(.system(size: 12, design: .monospaced))
-                    .foregroundStyle(.white)
-                    .textFieldStyle(.plain)
-                    .padding(6)
-                    .background(Color.white.opacity(0.08))
-                    .clipShape(RoundedRectangle(cornerRadius: 5))
-                    .onChange(of: edited) { newValue in
-                        InspectedView.applyText(newValue, to: info.view)   // live in-context preview
-                        sent = false
-                    }
+        VStack(alignment: .leading, spacing: 12) {
+            if hasText {
+                labeled("Text") {
+                    TextField("text", text: $text, axis: .vertical)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 12, design: .monospaced))
+                        .foregroundStyle(.white)
+                        .padding(6)
+                        .background(Color.white.opacity(0.08))
+                        .clipShape(RoundedRectangle(cornerRadius: 5))
+                        .onChange(of: text) { v in InspectedView.applyText(v, to: info.view); sent = false }
+                }
             }
 
+            colorRow("Background", $bg) { info.view.backgroundColor = UIColor($0) }
+            if hasTextColor {
+                colorRow("Text colour", $textColor) { InspectedView.applyTextColor(UIColor($0), to: info.view) }
+            }
+            colorRow("Tint", $tint) { info.view.tintColor = UIColor($0) }
+
+            sliderRow("Alpha", $alpha, 0...1, "%.2f") { info.view.alpha = CGFloat($0) }
+            sliderRow("Corner", $corner, 0...40, "%.0f") { InspectedView.applyCornerRadius(CGFloat($0), to: info.view) }
+            if hasFont {
+                sliderRow("Font size", $fontSize, 8...40, "%.0f") { InspectedView.applyFontSize(CGFloat($0), to: info.view) }
+            }
+
+            Toggle(isOn: $isHidden) {
+                Text("Hidden").font(.system(size: 11, design: .monospaced)).foregroundStyle(.gray)
+            }
+            .tint(.pink)
+            .onChange(of: isHidden) { info.view.isHidden = $0; sent = false }
+
             HStack(spacing: 10) {
-                // One adaptive action: no target → "Discuss in Ripul" opens Ripul's
-                // chooser; once a session is set → "Discuss in <name>" sends to it.
+                // No target → "Discuss in Ripul" opens the chooser; set → sends the edits.
                 Button { primaryAction() } label: {
                     Label(primaryTitle, systemImage: "paperplane.fill")
                         .font(.system(size: 11, weight: .semibold, design: .monospaced))
                         .foregroundStyle(.black)
                         .lineLimit(1)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 4)
+                        .padding(.horizontal, 10).padding(.vertical, 4)
                         .background(Color.pink.opacity(0.9))
                         .clipShape(RoundedRectangle(cornerRadius: 5))
                 }
                 .buttonStyle(.plain)
-
                 if RipulEditHandoff.targetSessionId != nil {
                     Button("clear") { RipulEditHandoff.clearSession() }
-                        .font(.system(size: 10, design: .monospaced))
-                        .foregroundStyle(.gray)
-                        .buttonStyle(.plain)
+                        .font(.system(size: 10, design: .monospaced)).foregroundStyle(.gray).buttonStyle(.plain)
                 }
-                if textChanged {
-                    Button("reset text") { reset() }
-                        .font(.system(size: 10, design: .monospaced))
-                        .foregroundStyle(.gray)
-                        .buttonStyle(.plain)
-                }
+                Button("reset") { resetAll() }
+                    .font(.system(size: 10, design: .monospaced)).foregroundStyle(.gray).buttonStyle(.plain)
                 Spacer()
             }
             .id(targetTick)
         }
         .onReceive(NotificationCenter.default.publisher(for: RipulEditHandoff.targetChangedNotification)) { _ in
-            targetTick &+= 1   // refresh the button title when the target chat changes
+            targetTick &+= 1
         }
     }
+
+    // MARK: rows
+
+    @ViewBuilder private func labeled(_ title: String, @ViewBuilder _ control: () -> some View) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title).font(.system(size: 10, weight: .semibold, design: .monospaced))
+                .foregroundStyle(.pink).textCase(.uppercase).tracking(0.5)
+            control()
+        }
+    }
+
+    private func colorRow(_ title: String, _ binding: Binding<Color>, apply: @escaping (Color) -> Void) -> some View {
+        HStack(spacing: 8) {
+            Text(title).font(.system(size: 11, design: .monospaced)).foregroundStyle(.gray)
+                .frame(width: 92, alignment: .leading)
+            ColorPicker("", selection: binding, supportsOpacity: true).labelsHidden()
+            Spacer()
+        }
+        .onChange(of: binding.wrappedValue) { v in apply(v); sent = false }
+    }
+
+    private func sliderRow(_ title: String, _ binding: Binding<Double>, _ range: ClosedRange<Double>, _ fmt: String, apply: @escaping (Double) -> Void) -> some View {
+        HStack(spacing: 8) {
+            Text(title).font(.system(size: 11, design: .monospaced)).foregroundStyle(.gray)
+                .frame(width: 92, alignment: .leading)
+            Slider(value: binding, in: range).tint(.pink)
+            Text(String(format: fmt, binding.wrappedValue))
+                .font(.system(size: 10, design: .monospaced)).foregroundStyle(.white).frame(width: 36, alignment: .trailing)
+        }
+        .onChange(of: binding.wrappedValue) { v in apply(v); sent = false }
+    }
+
+    // MARK: send
 
     private var primaryTitle: String {
         if sent { return "Sent ✓" }
@@ -813,25 +927,29 @@ private struct InspectorEditField: View {
     }
 
     private func primaryAction() {
-        if RipulEditHandoff.targetSessionId == nil {
-            RipulEditHandoff.chooseSession()   // no session yet → pick one first
-        } else {
-            send()                              // session set → send the element/edit
-        }
+        if RipulEditHandoff.targetSessionId == nil { RipulEditHandoff.chooseSession() }
+        else { send() }
     }
 
-    private func reset() {
-        edited = info.text ?? ""
-        InspectedView.applyText(edited, to: info.view)
+    private func currentEdits() -> [RipulEditIntent.Edit] {
+        var e: [RipulEditIntent.Edit] = []
+        func add(_ p: String, _ from: String, _ to: String) {
+            if from != to { e.append(.init(property: p, from: from, to: to)) }
+        }
+        if hasText { add("text", origText, text) }
+        add("backgroundColor", InspectedView.hex(UIColor(origBg)), InspectedView.hex(UIColor(bg)))
+        add("tintColor", InspectedView.hex(UIColor(origTint)), InspectedView.hex(UIColor(tint)))
+        if hasTextColor { add("textColor", InspectedView.hex(UIColor(origTextColor)), InspectedView.hex(UIColor(textColor))) }
+        add("alpha", String(format: "%.2f", origAlpha), String(format: "%.2f", alpha))
+        add("cornerRadius", String(format: "%.0f", origCorner), String(format: "%.0f", corner))
+        if hasFont { add("fontSize", String(format: "%.0f", origFontSize), String(format: "%.0f", fontSize)) }
+        add("hidden", "\(origHidden)", "\(isHidden)")
+        return e
     }
 
     private func send() {
         let appName = Bundle.main.infoDictionary?["CFBundleName"] as? String
-        // A concrete text edit when the field was changed; otherwise nil → the
-        // intent is a "discuss this element" anchor the dev completes in Ripul.
-        let change: RipulEditIntent.Change? = textChanged
-            ? .init(kind: "text", from: info.text, to: edited)
-            : nil
+        let edits = currentEdits()
         let intent = RipulEditIntent(
             target: .init(
                 app: appName,
@@ -843,11 +961,23 @@ private struct InspectorEditField: View {
                 accessibilityId: info.accessibilityId,
                 storyboard: nil,
                 vcChain: info.viewControllerChain),
-            change: change,
+            edits: edits.isEmpty ? nil : edits,
             sessionId: RipulEditHandoff.targetSessionId,
             callback: RipulEditHandoff.callbackURLString)
         RipulEditHandoff.send(intent)
         withAnimation { sent = true }
+    }
+
+    private func resetAll() {
+        text = origText; InspectedView.applyText(origText, to: info.view)
+        bg = origBg; info.view.backgroundColor = UIColor(origBg)
+        tint = origTint; info.view.tintColor = UIColor(origTint)
+        if hasTextColor { textColor = origTextColor; InspectedView.applyTextColor(UIColor(origTextColor), to: info.view) }
+        alpha = origAlpha; info.view.alpha = CGFloat(origAlpha)
+        corner = origCorner; InspectedView.applyCornerRadius(CGFloat(origCorner), to: info.view)
+        if hasFont { fontSize = origFontSize; InspectedView.applyFontSize(CGFloat(origFontSize), to: info.view) }
+        isHidden = origHidden; info.view.isHidden = origHidden
+        sent = false
     }
 }
 
@@ -922,11 +1052,6 @@ struct InspectorPropertiesTab: View {
                 }
                 .buttonStyle(.plain)
                 .padding(.top, 3)
-            }
-
-            section("Send to Ripul") {
-                InspectorEditField(info: info)
-                    .id(ObjectIdentifier(info.view))
             }
 
             section("Geometry") {
@@ -1352,6 +1477,7 @@ struct InspectorHUD: View {
 
     enum InspectorTab: String, CaseIterable {
         case properties = "Properties"
+        case edit = "Edit"
         case tree = "Tree"
     }
 
@@ -1466,6 +1592,9 @@ struct InspectorHUD: View {
             switch tab {
             case .properties:
                 InspectorPropertiesTab(info: info)
+            case .edit:
+                InspectorEditTab(info: info)
+                    .id(ObjectIdentifier(info.view))   // reset editor state per selection
             case .tree:
                 InspectorTreeTab(selectedView: info.view, onSelect: onSelectView)
             }
@@ -1614,20 +1743,25 @@ public struct RipulEditIntent: Codable {
         public var storyboard: String?
         public var vcChain: [String]?
     }
-    public struct Change: Codable {
-        public var kind: String        // "text" (more later: color, font, …)
+    /// One property change. `property` is a stable key ("text", "backgroundColor",
+    /// "textColor", "tintColor", "alpha", "cornerRadius", "fontSize", "hidden").
+    public struct Edit: Codable {
+        public var property: String
         public var from: String?
         public var to: String?
+        public init(property: String, from: String?, to: String?) {
+            self.property = property; self.from = from; self.to = to
+        }
     }
     public var v: Int = 1
     public var target: Target
-    public var change: Change?       // nil = "discuss this element", no concrete change yet
+    public var edits: [Edit]?        // nil/empty = "discuss this element", no concrete change yet
     public var sessionId: String?    // target an existing Ripul chat; nil = Ripul decides/asks
     public var callback: String?     // consuming app's back-channel URL (e.g. "WAC://ripul-session")
 
-    public init(v: Int = 1, target: Target, change: Change? = nil,
+    public init(v: Int = 1, target: Target, edits: [Edit]? = nil,
                 sessionId: String? = nil, callback: String? = nil) {
-        self.v = v; self.target = target; self.change = change
+        self.v = v; self.target = target; self.edits = edits
         self.sessionId = sessionId; self.callback = callback
     }
 
@@ -1640,15 +1774,19 @@ public struct RipulEditIntent: Codable {
             return ""
         }()
         let appPart = target.app.map { " in the \($0) codebase" } ?? ""
-        if let change, change.kind == "text" {
-            return "Change the \(target.className)\(loc)\(appPart): set its text from "
-                + "\"\(change.from ?? "")\" to \"\(change.to ?? "")\". It may be a storyboard "
-                + "literal or set in code — locate it via the property/controller and update the source."
+        let element = "the \(target.className)\(loc)\(appPart)"
+        if let edits, !edits.isEmpty {
+            let lines = edits
+                .map { "- \($0.property): \"\($0.from ?? "?")\" → \"\($0.to ?? "?")\"" }
+                .joined(separator: "\n")
+            return "Apply these changes to \(element) and update the source to match — text is "
+                + "usually a storyboard/code literal; visual properties may be set in code or a "
+                + "shared style, so locate them via the property/controller:\n\(lines)"
         }
         // No concrete change yet — anchor a discussion to this element; the
         // developer completes the request in the composer before sending.
         let current = target.text.map { " Its current text is \"\($0)\"." } ?? ""
-        return "I'm looking at the \(target.className)\(loc)\(appPart).\(current) "
+        return "I'm looking at \(element).\(current) "
             + "Find it in source via the property/controller, then make this change: "
     }
 }
