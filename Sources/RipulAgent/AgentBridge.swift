@@ -1153,6 +1153,10 @@ public final class AgentBridge: NSObject, ObservableObject {
     @Published public var chatInputGlassStyle: String?
     /// Layout mode for the native chat input: nil/"single" (default) or "twoRow" (buttons below text area).
     @Published public var chatInputLayout: String?
+    /// Whether to show "New to do" and "Pick to do" in the native chat "+" menu. Default true.
+    @Published public var chatInputShowTodos: Bool = true
+    /// Whether to show "Quick Commands" in the native chat "+" menu. Default true.
+    @Published public var chatInputShowQuickCommands: Bool = true
     /// A multichoice question awaiting native UI presentation.
     @Published public var pendingUserInteraction: UserInteractionQuestion?
     /// A free-text question awaiting native UI presentation.
@@ -1874,6 +1878,8 @@ public final class AgentBridge: NSObject, ObservableObject {
         case "chatInput:config":
             chatInputGlassStyle = dict["glassStyle"] as? String
             chatInputLayout = dict["layout"] as? String
+            chatInputShowTodos = dict["showTodos"] as? Bool ?? true
+            chatInputShowQuickCommands = dict["showQuickCommands"] as? Bool ?? true
         case "sessions:list:response":
             handleSessionsListResponse(dict)
         case "chat:new:ack":
