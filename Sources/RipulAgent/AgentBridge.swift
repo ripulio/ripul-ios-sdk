@@ -3035,7 +3035,7 @@ public final class AgentBridge: NSObject, ObservableObject {
         do {
             let result = try await webView.callAsyncJavaScript(
                 "return await window.__ripulSetModel?.(modelId) ?? {success:false};",
-                arguments: ["modelId": modelId as Any],
+                arguments: ["modelId": modelId.map { $0 as Any } ?? NSNull()],
                 contentWorld: .page
             )
             if let dict = result as? [String: Any],
@@ -3132,7 +3132,7 @@ public final class AgentBridge: NSObject, ObservableObject {
         do {
             let result = try await webView.callAsyncJavaScript(
                 "return await window.__ripulForkSession?.(sourceChatId, displayName) ?? {success:false, error:'not ready'};",
-                arguments: ["sourceChatId": sourceChatId, "displayName": displayName as Any],
+                arguments: ["sourceChatId": sourceChatId, "displayName": displayName.map { $0 as Any } ?? NSNull()],
                 contentWorld: .page
             )
             if let dict = result as? [String: Any],
@@ -3173,7 +3173,7 @@ public final class AgentBridge: NSObject, ObservableObject {
                 arguments: [
                     "sourceChatId": sourceChatId,
                     "targetMachineId": targetMachineId,
-                    "displayName": displayName as Any,
+                    "displayName": displayName.map { $0 as Any } ?? NSNull(),
                 ],
                 contentWorld: .page
             )
@@ -3203,7 +3203,7 @@ public final class AgentBridge: NSObject, ObservableObject {
         do {
             let result = try await webView.callAsyncJavaScript(
                 "return await window.__ripulSetWorkingDirectory?.(sessionId, directory) ?? {success:false};",
-                arguments: ["sessionId": sessionId, "directory": directory as Any],
+                arguments: ["sessionId": sessionId, "directory": directory.map { $0 as Any } ?? NSNull()],
                 contentWorld: .page
             )
             if let dict = result as? [String: Any],
@@ -4358,8 +4358,14 @@ public final class AgentBridge: NSObject, ObservableObject {
                 """,
                 arguments: [
                     "tabId": tabId,
-                    "machineId": machineId as Any,
-                    "remoteSessionId": remoteSessionId as Any,
+                    // Pass NSNull (-> JS null) for nil optionals. A boxed Swift
+                    // `nil as Any` is NOT a serializable argument type, so
+                    // callAsyncJavaScript rejects the call with "result of an
+                    // unknown type". That is why removing a LOCAL session (nil
+                    // machineId / remoteSessionId) failed while removing a remote
+                    // session (real strings) worked.
+                    "machineId": machineId.map { $0 as Any } ?? NSNull(),
+                    "remoteSessionId": remoteSessionId.map { $0 as Any } ?? NSNull(),
                     "keepRemote": keepRemote,
                 ],
                 contentWorld: .page
@@ -4390,6 +4396,20 @@ public final class AgentBridge: NSObject, ObservableObject {
             NSLog("[AgentBridge] deleteSession error: %@", error.localizedDescription)
             return (false, [], [error.localizedDescription])
         }
+    }
+
+    /// Clear the SDK's local session caches (session list, cached list on disk,
+    /// per-session phases and lifecycle sequences) WITHOUT touching auth or
+    /// settings. Pairs with the web-side `__ripulClearSessionData` callable —
+    /// call both to give this device a provably-clean local slate; the web
+    /// view's reload then repopulates everything fresh.
+    @available(iOS 15.0, macOS 13.0, *)
+    public func clearLocalSessionState() {
+        sessions.removeAll()
+        ChatSession.saveToCache(sessions)
+        sessionPhases.removeAll()
+        sessionLifecycleSequences.removeAll()
+        activeSessionId = nil
     }
 
     /// Open/reconnect to an existing session on a remote machine.
@@ -4537,7 +4557,7 @@ public final class AgentBridge: NSObject, ObservableObject {
                 """,
                 arguments: [
                     "enabled": enabled,
-                    "machineName": machineName as Any,
+                    "machineName": machineName.map { $0 as Any } ?? NSNull(),
                 ],
                 contentWorld: .page
             )
@@ -4582,7 +4602,7 @@ public final class AgentBridge: NSObject, ObservableObject {
                 if (!window.__ripulGetRelayDiagnostics) return {available:false, error:'not ready'};
                 return await window.__ripulGetRelayDiagnostics(roomId);
                 """,
-                arguments: ["roomId": roomId as Any],
+                arguments: ["roomId": roomId.map { $0 as Any } ?? NSNull()],
                 contentWorld: .page
             )
             return result as? [String: Any]

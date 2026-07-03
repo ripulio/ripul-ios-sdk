@@ -1367,6 +1367,8 @@ class DraggableHUDContainerVC<Content: View>: UIViewController, UIGestureRecogni
     private let store: UserDefaults
     private var hostingController: UIHostingController<Content>!
     private var dragStartTransform: CGAffineTransform = .identity
+    private var hasRestoredPosition = false
+    private var isDragging = false
 
     init(content: Content, posXKey: String, posYKey: String, store: UserDefaults) {
         self.posXKey = posXKey
@@ -1410,46 +1412,94 @@ class DraggableHUDContainerVC<Content: View>: UIViewController, UIGestureRecogni
         pan.delegate = self
         hostingController.view.addGestureRecognizer(pan)
 
-        // Apply saved position, clamped to visible bounds so a HUD dragged
-        // off-screen in a previous session can't strand itself.
-        let savedX = store.double(forKey: posXKey)
-        let savedY = store.double(forKey: posYKey)
-        let screen = UIScreen.main.bounds
-        // Keep at least 80pt of the HUD visible from each edge.
-        let minX = -(screen.width - 80)
-        let maxX = screen.width - 80
-        let minY: CGFloat = 0
-        let maxY = screen.height - 80
-        let x = min(max(savedX, minX), maxX)
-        let y = min(max(savedY, minY), maxY)
-        hostingController.view.transform = CGAffineTransform(translationX: x, y: y)
-        if x != savedX { store.set(x, forKey: posXKey) }
-        if y != savedY { store.set(y, forKey: posYKey) }
+        // Saved position is restored + clamped in viewDidLayoutSubviews, once
+        // the view has a window and the HUD has an intrinsic size — that's the
+        // first point at which safe-area insets are real. Clamping here (in
+        // viewDidLoad) would run against zero insets and let the HUD strand
+        // itself under the notch or home indicator.
 
         // Tell passthrough root which subview to allow hits on
         (view as? PassthroughRootView)?.contentView = hostingController.view
+    }
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        // Need a real HUD size before we can keep it fully inside the safe area.
+        guard hostingController.view.bounds.width > 0 else { return }
+
+        let proposed: CGPoint
+        if !hasRestoredPosition {
+            // Wait for a window so safe-area insets are real before first place.
+            guard view.window != nil else { return }
+            hasRestoredPosition = true
+            proposed = CGPoint(x: store.double(forKey: posXKey),
+                               y: store.double(forKey: posYKey))
+        } else if !isDragging {
+            // Rotation / content-size change (e.g. unfolding the HUD near an
+            // edge): re-clamp so it can never be stranded inside a safe area.
+            proposed = CGPoint(x: hostingController.view.transform.tx,
+                               y: hostingController.view.transform.ty)
+        } else {
+            return
+        }
+        applyPosition(clampedTranslation(proposed))
+    }
+
+    /// Set the HUD's translation and persist it, skipping redundant writes.
+    private func applyPosition(_ p: CGPoint) {
+        hostingController.view.transform = CGAffineTransform(translationX: p.x, y: p.y)
+        if store.double(forKey: posXKey) != p.x { store.set(p.x, forKey: posXKey) }
+        if store.double(forKey: posYKey) != p.y { store.set(p.y, forKey: posYKey) }
+    }
+
+    /// Clamp a proposed top-left translation so the HUD stays fully within the
+    /// safe area — never under the notch, status bar, home indicator, or a
+    /// landscape sensor housing. The hosting view is pinned to the container's
+    /// top-leading corner and the container fills the whole screen (the wrapper
+    /// uses `.ignoresSafeArea()`), so a translation of (x, y) places the HUD's
+    /// top-left at screen point (x, y). We read the window's safe-area insets
+    /// because SwiftUI can zero out the child controller's own insets under
+    /// `.ignoresSafeArea()`.
+    private func clampedTranslation(_ proposed: CGPoint) -> CGPoint {
+        let margin: CGFloat = 8
+        let insets = view.window?.safeAreaInsets ?? view.safeAreaInsets
+        let bounds = view.bounds.size
+        let hud = hostingController.view.bounds.size
+
+        let minX = insets.left + margin
+        let minY = insets.top + margin
+        // max(minX, …) guards the case where the HUD is wider/taller than the
+        // safe region — keep the top-left anchored just inside it.
+        let maxX = max(minX, bounds.width - insets.right - margin - hud.width)
+        let maxY = max(minY, bounds.height - insets.bottom - margin - hud.height)
+
+        return CGPoint(x: min(max(proposed.x, minX), maxX),
+                       y: min(max(proposed.y, minY), maxY))
     }
 
     @objc private func handlePan(_ gesture: UIPanGestureRecognizer) {
         let hv = hostingController.view!
         switch gesture.state {
         case .began:
+            isDragging = true
             dragStartTransform = hv.transform
         case .changed:
+            // Clamp live so the HUD hard-stops at the safe-area edge and can't
+            // be dragged under the notch / home indicator in the first place.
             let t = gesture.translation(in: view)
-            hv.transform = CGAffineTransform(
-                translationX: dragStartTransform.tx + t.x,
-                y: dragStartTransform.ty + t.y
-            )
+            let clamped = clampedTranslation(CGPoint(x: dragStartTransform.tx + t.x,
+                                                     y: dragStartTransform.ty + t.y))
+            hv.transform = CGAffineTransform(translationX: clamped.x, y: clamped.y)
         case .ended, .cancelled:
             let t = gesture.translation(in: view)
-            let finalX = dragStartTransform.tx + t.x
-            let finalY = dragStartTransform.ty + t.y
-            hv.transform = CGAffineTransform(translationX: finalX, y: finalY)
-            store.set(finalX, forKey: posXKey)
-            store.set(finalY, forKey: posYKey)
+            let clamped = clampedTranslation(CGPoint(x: dragStartTransform.tx + t.x,
+                                                     y: dragStartTransform.ty + t.y))
+            hv.transform = CGAffineTransform(translationX: clamped.x, y: clamped.y)
+            store.set(clamped.x, forKey: posXKey)
+            store.set(clamped.y, forKey: posYKey)
+            isDragging = false
         default:
-            break
+            isDragging = false
         }
     }
 

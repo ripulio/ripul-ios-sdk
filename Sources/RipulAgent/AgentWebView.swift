@@ -107,17 +107,18 @@ public struct AgentWebView: NSViewRepresentable {
 
         bridge.attach(to: webView)
 
-        // Append a cache-busting query param so sub-resources (JS bundles) aren't
-        // served from WKWebView's disk cache after a deploy.
+        // _cb makes the HTML URL unique per launch so WKWebView always fetches
+        // the latest HTML (which references the current content-hashed bundle
+        // URLs). JS bundles are cached by their content-hashed URL, so they are
+        // only re-downloaded when they actually change — dramatically reducing
+        // launch time and CPU load vs nuking the entire cache on every launch.
         var urlComponents = URLComponents(url: configuration.embeddedURL, resolvingAgainstBaseURL: false)!
         var queryItems = urlComponents.queryItems ?? []
         queryItems.append(URLQueryItem(name: "_cb", value: String(Int(Date().timeIntervalSince1970))))
         urlComponents.queryItems = queryItems
         let url = urlComponents.url!
         NSLog("[AgentWebView] Loading URL: %@", url.absoluteString)
-        var request = URLRequest(url: url)
-        request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
-        webView.load(request)
+        webView.load(URLRequest(url: url))
 
         return webView
     }
@@ -484,17 +485,20 @@ private struct AgentWebViewRepresentable: UIViewRepresentable {
         // AgentView validates the site key natively before creating this
         // view, so the config (including theme) is available synchronously
         // on the web side — matching the browser EmbedManager flow.
-        // Append a cache-busting query param so sub-resources (JS bundles) aren't
-        // served from WKWebView's disk cache after a deploy.
+        //
+        // _cb makes the HTML URL unique per launch so WKWebView always fetches
+        // the latest HTML (which references the current content-hashed bundle
+        // URLs). JS bundles are cached by their content-hashed URL and only
+        // re-downloaded when they change. Do NOT set .reloadIgnoringLocalAndRemoteCacheData
+        // here — that forces a full JS bundle re-download + recompile on every
+        // launch, causing sustained CPU and thermal spikes on mobile.
         var urlComponents = URLComponents(url: configuration.embeddedURL, resolvingAgainstBaseURL: false)!
         var queryItems = urlComponents.queryItems ?? []
         queryItems.append(URLQueryItem(name: "_cb", value: String(Int(Date().timeIntervalSince1970))))
         urlComponents.queryItems = queryItems
         let url = urlComponents.url!
         NSLog("[AgentWebView] Loading URL: %@", url.absoluteString)
-        var request = URLRequest(url: url)
-        request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
-        webView.load(request)
+        webView.load(URLRequest(url: url))
 
         return webView
     }

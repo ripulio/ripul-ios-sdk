@@ -110,6 +110,23 @@ public struct AgentConfiguration {
         self.relayHost = relayHost
     }
 
+    /// Strict per-value percent-encoding for hash params: RFC 3986 unreserved
+    /// characters only — the set JavaScript's `encodeURIComponent` keeps bare
+    /// (minus `!'()*`, which we also encode; decoding is unaffected).
+    ///
+    /// `.urlQueryAllowed` is NOT safe for these values: it leaves `&`, `=` and
+    /// `+` literal, so a value containing `&` (e.g. "Company & Employees"
+    /// inside the siteKeyConfig JSON) splits the hash param in two and
+    /// truncates the JSON on the web side, and a literal `+` decodes to a
+    /// space there (URLSearchParams semantics).
+    private static let hashParamValueAllowed = CharacterSet(
+        charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~"
+    )
+
+    private static func hashParamValue(_ value: String) -> String? {
+        value.addingPercentEncoding(withAllowedCharacters: hashParamValueAllowed)
+    }
+
     public var embeddedURL: URL {
         var components = URLComponents(url: baseURL.appendingPathComponent(path), resolvingAgainstBaseURL: false)!
 
@@ -125,7 +142,7 @@ public struct AgentConfiguration {
         }
 
         if let siteKeyConfig,
-           let encoded = siteKeyConfig.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) {
+           let encoded = Self.hashParamValue(siteKeyConfig) {
             hashParams.append("siteKeyConfig=\(encoded)")
         }
 
@@ -154,7 +171,7 @@ public struct AgentConfiguration {
             hashParams.append("newChat=true")
         }
 
-        if let prompt, let encoded = prompt.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) {
+        if let prompt, let encoded = Self.hashParamValue(prompt) {
             hashParams.append("prompt=\(encoded)")
             if !newChat {
                 hashParams.append("newChat=true")
@@ -166,12 +183,12 @@ public struct AgentConfiguration {
         }
 
         if let fileViewerPath,
-           let encoded = fileViewerPath.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) {
+           let encoded = Self.hashParamValue(fileViewerPath) {
             hashParams.append("fileViewerPath=\(encoded)")
         }
 
         if let fileViewerChatId,
-           let encoded = fileViewerChatId.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) {
+           let encoded = Self.hashParamValue(fileViewerChatId) {
             hashParams.append("fileViewerChatId=\(encoded)")
         }
 
