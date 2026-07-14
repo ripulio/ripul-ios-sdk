@@ -778,24 +778,38 @@ struct CrosshairReticle: View {
 @available(iOS 16.0, *)
 struct InspectorTokenSection: View {
     let view: UIView
-    @State private var bindings: [RipulTokenBinding] = []
+    /// Bumped after a remap to force `body` to recompute the bindings against the new theme.
+    @State private var refresh = 0
 
     var body: some View {
-        Group {
+        // Compute the bindings EAGERLY in body — never via @State + .onAppear. A `Group` whose
+        // content is initially empty has no child for `.onAppear` to attach to, so the previous
+        // version's reload never fired and the section stayed permanently blank. Reading `refresh`
+        // here ties a remap's state bump to a recompute.
+        _ = refresh
+        let provider = RipulTokenInspector.provider
+        let bindings = provider?.tokenBindings(for: view) ?? []
+
+        return VStack(alignment: .leading, spacing: 6) {
+            Text("Design token")
+                .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                .foregroundStyle(.pink).textCase(.uppercase).tracking(0.5)
+
             if !bindings.isEmpty {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Design token")
-                        .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                        .foregroundStyle(.pink).textCase(.uppercase).tracking(0.5)
-                    ForEach(bindings) { binding in row(binding) }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(8)
-                .background(Color.pink.opacity(0.10))
-                .clipShape(RoundedRectangle(cornerRadius: 6))
+                ForEach(bindings) { binding in row(binding) }
+            } else {
+                // Always render the header so the section can never be silently invisible again.
+                // This line tells us WHY it's empty: no host provider vs. provider found no token.
+                Text(provider == nil ? "no token provider registered"
+                                     : "no token reported for this view")
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(.gray)
             }
         }
-        .onAppear { reload() }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(8)
+        .background(Color.pink.opacity(0.10))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
     }
 
     private func row(_ binding: RipulTokenBinding) -> some View {
@@ -832,13 +846,11 @@ struct InspectorTokenSection: View {
             .overlay(RoundedRectangle(cornerRadius: 3).stroke(Color.white.opacity(0.25), lineWidth: 0.5))
     }
 
-    private func reload() { bindings = RipulTokenInspector.bindings(for: view) }
-
     private func remap(_ binding: RipulTokenBinding, _ option: RipulTokenOption) {
         RipulTokenInspector.provider?.remap(binding, to: option)
-        // A remap changes the mapping, which can move OTHER bindings that share the token — reload
-        // the whole set so every row's swatch/resolvesTo reflects the new theme.
-        reload()
+        // A remap changes the mapping, which can move OTHER bindings that share the token — bump
+        // refresh so body recomputes the whole set against the new theme.
+        refresh += 1
     }
 }
 
