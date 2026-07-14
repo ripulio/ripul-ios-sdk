@@ -826,7 +826,12 @@ struct InspectorTokenSection: View {
             Spacer(minLength: 6)
             Menu {
                 ForEach(binding.options) { option in
-                    Button { remap(binding, option) } label: { Text(option.label) }
+                    // Label icon → the menu item's image. A colour swatch so you can see what each
+                    // option maps to. .alwaysOriginal (in swatchImage) keeps the true colour rather
+                    // than letting the menu tint it.
+                    Button { remap(binding, option) } label: {
+                        Label { Text(option.label) } icon: { Image(uiImage: Self.swatchImage(option.swatchHex)) }
+                    }
                 }
             } label: {
                 Text("remap")
@@ -844,6 +849,17 @@ struct InspectorTokenSection: View {
             .fill(Color(ripulHex: hex) ?? .clear)
             .frame(width: 18, height: 18)
             .overlay(RoundedRectangle(cornerRadius: 3).stroke(Color.white.opacity(0.25), lineWidth: 0.5))
+    }
+
+    /// A small solid-colour swatch image for a menu item. `.alwaysOriginal` so UIMenu shows the real
+    /// colour instead of tinting it.
+    private static func swatchImage(_ hex: String) -> UIImage {
+        let color = UIColor(Color(ripulHex: hex) ?? .clear)
+        let size = CGSize(width: 16, height: 16)
+        return UIGraphicsImageRenderer(size: size).image { _ in
+            color.setFill()
+            UIBezierPath(roundedRect: CGRect(origin: .zero, size: size), cornerRadius: 3).fill()
+        }.withRenderingMode(.alwaysOriginal)
     }
 
     private func remap(_ binding: RipulTokenBinding, _ option: RipulTokenOption) {
