@@ -60,6 +60,20 @@ public struct CmsPageView: View {
                 }
                 .padding()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+            case .noAccess(let message):
+                VStack(spacing: 12) {
+                    Image(systemName: "lock.circle")
+                        .font(.largeTitle)
+                        .foregroundColor(.secondary)
+                    Text("No access")
+                        .font(.headline)
+                    Text(message)
+                        .font(.footnote)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+                .padding()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             case .loaded(let page):
                 ScrollView {
                     if let blocks = page.blocks {
@@ -128,6 +142,10 @@ final class CmsPageLoader: ObservableObject {
         case loading
         case loaded(CmsPage)
         case error(String)
+        /// Authenticated fine upstream but not a member of this portal (or
+        /// blocked / uninvited on an invite-only portal). Distinct from
+        /// `.error` so hosts show an access message, not a failure.
+        case noAccess(String)
     }
 
     @Published var state: State = .idle
@@ -208,11 +226,37 @@ final class CmsPageLoader: ObservableObject {
             state = .error("Site key validation failed")
             return
         }
-        client.visitorSessionToken = token
         client.siteKeyPublishable = publishableKey
-        // Body siteKeyId is unnecessary: the server derives the RLS site key
-        // from the session token's auth context.
-        client.siteKeyId = nil
+
+        // Opaque member mode: the host app's credentials (e.g. WAC's
+        // secret/secret-id) identify the user. Queries carry those headers —
+        // NOT the anonymous session token — so the worker authenticates the
+        // member and binds @principalId for RLS; the publishable key travels
+        // in the body for owner-context hydration. Anonymous visitor mode
+        // keeps the session-token path unchanged.
+        var membership: CmsPortalMembership?
+        if client.hasPortalCredentials {
+            client.visitorSessionToken = nil
+            client.siteKeyId = publishableKey
+            do {
+                let me = try await client.fetchPortalMembership(siteKey: publishableKey)
+                guard me.isMember else {
+                    state = .noAccess("You don't have access to this portal yet. Ask an administrator to invite you.")
+                    return
+                }
+                membership = me
+            } catch {
+                // Invite-only portals refuse non-members and blocked members
+                // at the auth gate (401) — same outcome as isMember: false.
+                state = .noAccess("You don't have access to this portal. Ask an administrator to invite you.")
+                return
+            }
+        } else {
+            client.visitorSessionToken = token
+            // Body siteKeyId is unnecessary: the server derives the RLS site
+            // key from the session token's auth context.
+            client.siteKeyId = nil
+        }
 
         struct VisitorConfig: Codable {
             struct Cms: Codable {
@@ -240,7 +284,7 @@ final class CmsPageLoader: ObservableObject {
             uniquingKeysWith: { first, _ in first }
         )
         let allPages = cms.pages ?? []
-        let visible = allPages.filter { $0.requiresAuth == false }
+        let visible = allPages.filter { CmsPageVisibility.canView($0, membership: membership) }
         availablePages = visible
         // The shell is CHROME, not routable content — resolve it from ALL
         // pages. Its own auth flag doesn't gate it (the web router renders
@@ -252,14 +296,18 @@ final class CmsPageLoader: ObservableObject {
             if let page = visible.first(where: { $0.slug == pageSlug }) {
                 present(page, animated: false)
             } else if allPages.contains(where: { $0.slug == pageSlug }) {
-                state = .error("Page requires sign-in — not visible to anonymous visitors")
+                state = .error(
+                    membership == nil
+                        ? "Page requires sign-in — not visible to anonymous visitors"
+                        : "Page not visible to your role"
+                )
             } else {
                 state = .error("No page with slug '\(pageSlug)'")
             }
         } else if let entry = landing ?? visible.first {
             present(entry, animated: false)
         } else {
-            state = .error("No public pages on this portal")
+            state = .error(membership == nil ? "No public pages on this portal" : "No pages visible to your role")
         }
     }
 

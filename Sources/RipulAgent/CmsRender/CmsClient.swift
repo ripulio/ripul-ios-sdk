@@ -16,15 +16,24 @@ public struct CmsClientConfig {
     public var baseUrl: String
     /// Optional site key for @siteKeyId expansion in saved queries.
     public var siteKeyId: String?
+    /// Opaque portal credentials (portalAuth.provider 'opaque'): header
+    /// name→value pairs the HOST app's own auth system holds (e.g. WAC's
+    /// `secret`/`secret-id`). When set and non-empty, portal requests carry
+    /// these headers INSTEAD of a Bearer token — the worker forwards them to
+    /// the customer backend's validation endpoint and authenticates the
+    /// caller as that app's user (member id `<subPrefix>:<principalId>`).
+    public var portalCredentialProvider: (() async -> [String: String]?)?
 
     public init(
         getToken: @escaping () async -> String?,
         baseUrl: String = RipulDomain.llmProxyURL,
-        siteKeyId: String? = nil
+        siteKeyId: String? = nil,
+        portalCredentialProvider: (() async -> [String: String]?)? = nil
     ) {
         self.getToken = getToken
         self.baseUrl = baseUrl
         self.siteKeyId = siteKeyId
+        self.portalCredentialProvider = portalCredentialProvider
     }
 }
 
@@ -71,6 +80,13 @@ public final class CmsClient {
         self.siteKeyId = config.siteKeyId
     }
 
+    /// True when the host app supplied opaque portal credentials — the
+    /// loader then runs in member mode (identity = the host app's user)
+    /// instead of anonymous visitor mode.
+    public var hasPortalCredentials: Bool {
+        config.portalCredentialProvider != nil
+    }
+
     /// Site keys linked to the caller's org — used to resolve the RLS
     /// site-key context for a CMS definition.
     public func listSiteKeys() async throws -> [CmsSiteKeySummary] {
@@ -95,6 +111,19 @@ public final class CmsClient {
     public func fetchDefinition(cmsId: String) async throws -> CmsRenderDefinition {
         let data = try await request(path: "/admin/cms-definitions/\(encode(cmsId))", method: "GET", body: nil)
         return try JSONDecoder().decode(CmsRenderDefinition.self, from: data)
+    }
+
+    /// The current user's membership on a site key (`GET /v1/site-key/me`).
+    /// In opaque-portal mode the credential headers identify the user; the
+    /// worker resolves their member row (invite-only portals 401 non-members
+    /// and blocked members at the auth gate — surfaced here as `.http(401,…)`).
+    public func fetchPortalMembership(siteKey: String) async throws -> CmsPortalMembership {
+        let data = try await request(
+            path: "/v1/site-key/me?siteKey=\(encode(siteKey))",
+            method: "GET",
+            body: nil
+        )
+        return try JSONDecoder().decode(CmsPortalMembership.self, from: data)
     }
 
     /// Run a saved query by slug. The server holds the SQL and applies RLS;
@@ -137,21 +166,30 @@ public final class CmsClient {
     }
 
     private func request(path: String, method: String, body: [String: CmsJSON]?) async throws -> Data {
-        let token: String
-        if let visitor = visitorSessionToken, !visitor.isEmpty {
-            token = visitor
-        } else if let clerk = await config.getToken(), !clerk.isEmpty {
-            token = clerk
-        } else {
-            throw CmsClientError.noToken
-        }
         let urlString = config.baseUrl + path
         guard let url = URL(string: urlString) else {
             throw CmsClientError.badURL(urlString)
         }
         var request = URLRequest(url: url)
         request.httpMethod = method
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+
+        // Credential precedence: opaque portal headers (host-app auth, no
+        // Bearer at all) → site-key session token → Clerk JWT. Opaque wins
+        // when configured because the caller's identity IS the host app's
+        // user — a session/Clerk token would run as someone else.
+        if let provider = config.portalCredentialProvider,
+           let headers = await provider(), !headers.isEmpty {
+            for (name, value) in headers {
+                request.setValue(value, forHTTPHeaderField: name)
+            }
+        } else if let visitor = visitorSessionToken, !visitor.isEmpty {
+            request.setValue("Bearer \(visitor)", forHTTPHeaderField: "Authorization")
+        } else if let clerk = await config.getToken(), !clerk.isEmpty {
+            request.setValue("Bearer \(clerk)", forHTTPHeaderField: "Authorization")
+        } else {
+            throw CmsClientError.noToken
+        }
+
         if let body {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             request.httpBody = try JSONEncoder().encode(body)
@@ -163,4 +201,11 @@ public final class CmsClient {
         }
         return data
     }
+}
+
+/// Response of `GET /v1/site-key/me` — the caller's membership on a portal.
+public struct CmsPortalMembership: Codable {
+    public var isMember: Bool
+    public var role: String?
+    public var canDesign: Bool?
 }

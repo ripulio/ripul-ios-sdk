@@ -171,11 +171,34 @@ public struct CmsPage: Codable, Identifiable, Equatable {
     public var body: String?
     public var blocks: CmsPageBlocks?
     public var requiresAuth: Bool?
+    /// Roles allowed to view this page (mirrors the web's pageVisibility):
+    /// "public" ⇒ everyone; empty/nil falls back to `requiresAuth`.
+    public var requiredRoles: [String]?
     /// Native sidebar affordances (authored in page settings): show the
     /// slide-out icon row (default false — it costs a horizontal strip)
     /// and open drawers by edge swipe (default true).
     public var nativeSidebarIcon: Bool?
     public var nativeSidebarEdgeSwipe: Bool?
+}
+
+/// Role-based page visibility — exact mirror of the web's
+/// `src/cms/pageVisibility.ts` (`canViewPage`): owner/admin bypass;
+/// `requiredRoles` wins when configured ("public" ⇒ everyone); otherwise the
+/// legacy fallback (`requiresAuth === false` ⇒ public, else members only).
+public enum CmsPageVisibility {
+    static let publicRole = "public"
+    static let bypassRoles: Set<String> = ["owner", "admin"]
+
+    public static func canView(_ page: CmsPage, membership: CmsPortalMembership?) -> Bool {
+        if let role = membership?.role, bypassRoles.contains(role) { return true }
+        if let required = page.requiredRoles, !required.isEmpty {
+            if required.contains(publicRole) { return true }
+            guard let role = membership?.role else { return false }
+            return required.contains(role)
+        }
+        if page.requiresAuth == false { return true }
+        return membership?.isMember == true
+    }
 }
 
 /// Minimal slice of a CmsDefinition — the renderer needs pages plus query
