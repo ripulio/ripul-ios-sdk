@@ -770,6 +770,78 @@ struct CrosshairReticle: View {
     }
 }
 
+// MARK: - Design-token section
+
+/// The Design-token block at the top of the Edit tab: the tokens the host reports as styling the
+/// tapped view, each remappable in place. Empty (renders nothing) when no provider is registered or
+/// the view carries no token metadata — so it's invisible in hosts that don't opt in.
+@available(iOS 16.0, *)
+struct InspectorTokenSection: View {
+    let view: UIView
+    @State private var bindings: [RipulTokenBinding] = []
+
+    var body: some View {
+        Group {
+            if !bindings.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Design token")
+                        .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(.pink).textCase(.uppercase).tracking(0.5)
+                    ForEach(bindings) { binding in row(binding) }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(8)
+                .background(Color.pink.opacity(0.10))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+            }
+        }
+        .onAppear { reload() }
+    }
+
+    private func row(_ binding: RipulTokenBinding) -> some View {
+        HStack(spacing: 8) {
+            swatch(binding.swatchHex)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(binding.tokenName)
+                    .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(.white)
+                Text(binding.property + (binding.resolvesTo.map { " → \($0)" } ?? ""))
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(.gray)
+            }
+            Spacer(minLength: 6)
+            Menu {
+                ForEach(binding.options) { option in
+                    Button { remap(binding, option) } label: { Text(option.label) }
+                }
+            } label: {
+                Text("remap")
+                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(.black)
+                    .padding(.horizontal, 8).padding(.vertical, 3)
+                    .background(Color.pink.opacity(0.9))
+                    .clipShape(RoundedRectangle(cornerRadius: 5))
+            }
+        }
+    }
+
+    private func swatch(_ hex: String) -> some View {
+        RoundedRectangle(cornerRadius: 3)
+            .fill(Color(ripulHex: hex) ?? .clear)
+            .frame(width: 18, height: 18)
+            .overlay(RoundedRectangle(cornerRadius: 3).stroke(Color.white.opacity(0.25), lineWidth: 0.5))
+    }
+
+    private func reload() { bindings = RipulTokenInspector.bindings(for: view) }
+
+    private func remap(_ binding: RipulTokenBinding, _ option: RipulTokenOption) {
+        RipulTokenInspector.provider?.remap(binding, to: option)
+        // A remap changes the mapping, which can move OTHER bindings that share the token — reload
+        // the whole set so every row's swatch/resolvesTo reflects the new theme.
+        reload()
+    }
+}
+
 // MARK: - Properties Tab
 
 /// Dedicated element editor (the "Edit" tab): trial changes to the inspected
@@ -827,6 +899,10 @@ struct InspectorEditTab: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
+            // Design tokens styling this element, when the host registered a token provider. Sits
+            // above the raw property editors — it's the "what do I change to retheme this" answer.
+            InspectorTokenSection(view: info.view)
+
             if hasText {
                 labeled("Text") {
                     TextField("text", text: $text, axis: .vertical)
@@ -1976,6 +2052,21 @@ extension UIColor {
             return String(format: "#%02X%02X%02X (%.0f%%)", Int(r * 255), Int(g * 255), Int(b * 255), a * 100)
         }
         return String(format: "#%02X%02X%02X", Int(r * 255), Int(g * 255), Int(b * 255))
+    }
+}
+
+extension Color {
+    /// Parse a `#RRGGBB` / `RRGGBB` hex into a SwiftUI Color for token swatches. nil on malformed
+    /// input (any trailing "(NN%)" alpha suffix from `hexString` is tolerated — only the 6 hex
+    /// digits are read).
+    init?(ripulHex hex: String) {
+        var s = hex.trimmingCharacters(in: .whitespaces)
+        if s.hasPrefix("#") { s.removeFirst() }
+        s = String(s.prefix(6))
+        guard s.count == 6, let rgb = UInt64(s, radix: 16) else { return nil }
+        self.init(red: Double((rgb & 0xFF0000) >> 16) / 255,
+                  green: Double((rgb & 0x00FF00) >> 8) / 255,
+                  blue: Double(rgb & 0x0000FF) / 255)
     }
 }
 

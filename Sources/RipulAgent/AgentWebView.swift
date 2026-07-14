@@ -458,9 +458,14 @@ private struct AgentWebViewRepresentable: UIViewRepresentable {
         config.userContentController.addUserScript(viewportFixScript)
 
         let webView = FullBleedWebView(frame: .zero, configuration: config)
-        webView.isOpaque = false
-        webView.backgroundColor = .clear
-        webView.scrollView.backgroundColor = .clear
+        // Thermal A/B (AgentBridge.opaqueWebView): a transparent web view must blend
+        // every repaint against the layers behind it; opaque is a cheap copy. Default
+        // false keeps the current transparent behaviour so glass shows through.
+        let opaqueWeb = AgentBridge.opaqueWebView
+        webView.isOpaque = opaqueWeb
+        let webBg: UIColor = opaqueWeb ? .systemBackground : .clear
+        webView.backgroundColor = webBg
+        webView.scrollView.backgroundColor = webBg
         // Prevent the scroll view from adding automatic content insets for
         // safe areas.  The embedding SwiftUI view already controls the frame
         // placement, so the web content should fill the provided frame exactly.
@@ -895,6 +900,33 @@ extension AgentWebView {
 extension AgentWebView {
     public static let bridgeJavaScript = """
     (function() {
+        // Clear stale host-render-suspended flag before any web JS runs.
+        // If a previous crash left ripul:host-render-suspended='1' in localStorage
+        // the web app would start with its content tree unmounted, causing a
+        // ResizeObserver loop that crashes WKWebView before onAppear can correct it.
+        try { localStorage.removeItem('ripul:host-render-suspended'); } catch(e) {}
+
+        // Capture uncaught JS exceptions and unhandled promise rejections and
+        // forward them to the native log BEFORE any web JS runs. This is the
+        // diagnostic for "web view goes blank / self-heal reloads in a loop"
+        // crashes that do NOT trigger webViewWebContentProcessDidTerminate
+        // (i.e. not jetsam — the process is alive but the JS context is dead).
+        window.addEventListener('error', function(evt) {
+            var msg = 'UNCAUGHT_ERROR: ' + (evt.message || '?')
+                + ' | file: ' + (evt.filename || '?')
+                + ':' + (evt.lineno || '?')
+                + (evt.error && evt.error.stack ? ' | stack: ' + evt.error.stack.slice(0, 400) : '');
+            try { window.webkit.messageHandlers.agentLog.postMessage(msg); } catch(e) {}
+        });
+        window.addEventListener('unhandledrejection', function(evt) {
+            var reason = evt.reason;
+            var msg = 'UNHANDLED_REJECTION: '
+                + (reason instanceof Error
+                    ? reason.message + (reason.stack ? ' | stack: ' + reason.stack.slice(0, 400) : '')
+                    : String(reason));
+            try { window.webkit.messageHandlers.agentLog.postMessage(msg); } catch(e) {}
+        });
+
         // Intercept console.log/warn/error and forward every call to the native
         // agentLog message handler (→ AgentBridge.handleConsoleLog → consoleLogs buffer).
         // origLog/Warn/Error are also called so the web inspector still receives them.
@@ -978,14 +1010,25 @@ extension AgentWebView {
             } catch(e) { return ''; }
         }
 
-        console.log = function() { nativeLog('LOG', arguments); origLog.apply(console, arguments); };
-        console.warn = function() { nativeLog('WARN', arguments, captureStack()); origWarn.apply(console, arguments); };
-        console.error = function() { nativeLog('ERROR', arguments, captureStack()); origError.apply(console, arguments); };
+        // Master gate. When window.__ripulNativeLog is false (the on-device
+        // default), NO console.* output crosses the bridge: no serialize, no IPC,
+        // no native handleConsoleLog. The web app logs heavily on streaming hot
+        // paths and each teed line was cross-process + native-parse work the PWA
+        // never pays, so this is the default so streaming stays cool. Native flips
+        // it on via the "Native Console Logging" toggle (pushed in
+        // pageDidFinishLoading + on toggle change). origX.apply always runs, so the
+        // browser console / Web Inspector still show everything. Uncaught errors
+        // (window.onerror / unhandledrejection below) call nativeLog directly and
+        // bypass this gate, so crash diagnostics survive with logging off.
+        if (typeof window.__ripulNativeLog === 'undefined') window.__ripulNativeLog = false;
+        console.log = function() { if (window.__ripulNativeLog) nativeLog('LOG', arguments); origLog.apply(console, arguments); };
+        console.warn = function() { if (window.__ripulNativeLog) nativeLog('WARN', arguments, captureStack()); origWarn.apply(console, arguments); };
+        console.error = function() { if (window.__ripulNativeLog) nativeLog('ERROR', arguments, captureStack()); origError.apply(console, arguments); };
         // console.info/debug were previously NOT captured — web code using them
         // appeared in DevTools but never in the native console buffer, which made
         // legit diagnostics look "missing". Capture them too (as LOG).
-        console.info = function() { nativeLog('LOG', arguments); origInfo.apply(console, arguments); };
-        console.debug = function() { nativeLog('LOG', arguments); origDebug.apply(console, arguments); };
+        console.info = function() { if (window.__ripulNativeLog) nativeLog('LOG', arguments); origInfo.apply(console, arguments); };
+        console.debug = function() { if (window.__ripulNativeLog) nativeLog('LOG', arguments); origDebug.apply(console, arguments); };
 
         window.addEventListener('error', function(e) {
             var detail = 'Uncaught: ' + e.message + ' at ' + e.filename + ':' + e.lineno;

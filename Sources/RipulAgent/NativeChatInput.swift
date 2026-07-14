@@ -770,6 +770,9 @@ public struct NativeChatInput: View {
                 if hasContent, let onSubmitNote {
                     noteButton(size: 36, onTap: onSubmitNote, glassStyle: "clear")
                 }
+                if hasContent {
+                    sendButton(size: 36, glassStyle: "clear")
+                }
                 Button {
                     dismissKeyboard()
                     onPause?()
@@ -836,6 +839,24 @@ public struct NativeChatInput: View {
         }
     }
 
+    // Send-to-agent button shown while a turn is running (when there's typed
+    // content). Routes onSubmit -> bridge.submitMessage -> __ripulSubmitMessage,
+    // which the web app FIFO-queues for CLI sessions (or injects as mid-run
+    // context for in-process agents). Lets users type-ahead without stopping.
+    private func sendButton(size: CGFloat, glassStyle: String?) -> some View {
+        Button {
+            dismissKeyboard()
+            onSubmit()
+        } label: {
+            Image(systemName: "arrow.up")
+                .font(.system(size: size == 40 ? 18 : 16, weight: .bold))
+                .foregroundStyle(Color.accentColor)
+                .frame(width: size, height: size)
+                .contentShape(Circle())
+                .modifier(GlassCircleModifier(glassStyle: glassStyle))
+        }
+    }
+
     @ViewBuilder
     private var twoRowActionButton: some View {
         let hasContent = !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !imageAttachments.isEmpty
@@ -843,6 +864,10 @@ public struct NativeChatInput: View {
             HStack(spacing: 4) {
                 if hasContent, let onSubmitNote {
                     noteButton(size: 40, onTap: onSubmitNote, glassStyle: nil)
+                        .transition(.scale.combined(with: .opacity))
+                }
+                if hasContent {
+                    sendButton(size: 40, glassStyle: nil)
                         .transition(.scale.combined(with: .opacity))
                 }
                 Button {
@@ -1620,6 +1645,18 @@ public struct NativeChatInput: View {
                 if hasContent, let onSubmitNote {
                     macNoteButton(onTap: onSubmitNote)
                 }
+                if hasContent {
+                    Button {
+                        onSubmit()
+                    } label: {
+                        Image(systemName: "arrow.up")
+                            .font(.system(size: 14, weight: .bold))
+                            .foregroundStyle(.white)
+                            .frame(width: 34, height: 28)
+                            .background(Color.accentColor, in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                }
                 Button {
                     onPause?()
                 } label: {
@@ -1682,6 +1719,18 @@ public struct NativeChatInput: View {
                         Image(systemName: "bubble.left.fill")
                             .font(.system(size: 18, weight: .bold))
                             .foregroundStyle(.purple)
+                            .frame(width: 40, height: 40)
+                            .contentShape(Circle())
+                            .modifier(GlassCircleModifier(glassStyle: nil))
+                    }
+                    .buttonStyle(.plain)
+                    .transition(.scale.combined(with: .opacity))
+                }
+                if hasContent {
+                    Button { onSubmit() } label: {
+                        Image(systemName: "arrow.up")
+                            .font(.system(size: 18, weight: .bold))
+                            .foregroundStyle(Color.accentColor)
                             .frame(width: 40, height: 40)
                             .contentShape(Circle())
                             .modifier(GlassCircleModifier(glassStyle: nil))
@@ -2016,6 +2065,9 @@ private struct WaitingGlowModifier: ViewModifier {
     let isActive: Bool
     let glowPhase: Bool
 
+    // Stroke-opacity pulse only — no .shadow. An animating blur radius over the
+    // glass pill forces the compositor to re-blur the region every frame for the
+    // entire agent run (sustained GPU heat, thermal audit R2-2).
     func body(content: Content) -> some View {
         content
             .overlay(
@@ -2024,10 +2076,6 @@ private struct WaitingGlowModifier: ViewModifier {
                         Color.orange.opacity(isActive ? (glowPhase ? 0.35 : 0.12) : 0),
                         lineWidth: 1.25
                     )
-            )
-            .shadow(
-                color: .orange.opacity(isActive ? (glowPhase ? 0.25 : 0.08) : 0),
-                radius: glowPhase ? 7 : 3.5
             )
     }
 }
@@ -2250,9 +2298,6 @@ struct NoAutofillTextView: UIViewRepresentable {
             parent.text = textView.text
             placeholderLabel?.isHidden = !textView.text.isEmpty
             recalcHeight(textView)
-            if textView.text.contains("@") {
-                print("[NativeChatInput] textViewDidChange: text contains @, onTextChange is \(parent.onTextChange == nil ? "nil" : "set")")
-            }
             parent.onTextChange?(textView.text)
         }
 

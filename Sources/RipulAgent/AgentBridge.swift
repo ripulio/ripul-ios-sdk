@@ -2,6 +2,9 @@ import Combine
 import Foundation
 import Network
 import WebKit
+#if canImport(UIKit)
+import UIKit
+#endif
 
 private let protocolVersion = "1.0.0"
 private let messagePrefix = "agent-framework:"
@@ -132,6 +135,53 @@ public struct ModelInfo: Identifiable, Equatable {
     public let group: String        // Display group (e.g., "Anthropic", "OpenAI")
     public let description: String? // Optional description
     public let supportsThinking: Bool
+
+    // ── CLI-model-editor fields (populated for CLI models; defaulted otherwise) ──
+    public let type: String?        // Client model type, e.g. "claude-cli" / "antigravity-cli"
+    public let url: String          // Companion server URL (CLI); "" for Claude native bridge
+    public let enabled: Bool
+    public let sortOrder: Int?
+    public let cliModelId: String?  // Alias passed to the CLI via --model (e.g. "fable")
+    public let cliRawMode: Bool
+    public let cliEffort: String?   // low | medium | high | xhigh | max
+    public let cliMode: String?     // session | stateless
+
+    /// True when this is a CLI model (Claude Code / Codex / Antigravity).
+    public var isCli: Bool { (type ?? "").hasSuffix("-cli") }
+
+    public init(
+        id: String,
+        name: String,
+        modelId: String,
+        provider: String,
+        group: String,
+        description: String?,
+        supportsThinking: Bool,
+        type: String? = nil,
+        url: String = "",
+        enabled: Bool = true,
+        sortOrder: Int? = nil,
+        cliModelId: String? = nil,
+        cliRawMode: Bool = false,
+        cliEffort: String? = nil,
+        cliMode: String? = nil
+    ) {
+        self.id = id
+        self.name = name
+        self.modelId = modelId
+        self.provider = provider
+        self.group = group
+        self.description = description
+        self.supportsThinking = supportsThinking
+        self.type = type
+        self.url = url
+        self.enabled = enabled
+        self.sortOrder = sortOrder
+        self.cliModelId = cliModelId
+        self.cliRawMode = cliRawMode
+        self.cliEffort = cliEffort
+        self.cliMode = cliMode
+    }
 }
 
 /// A session descriptor from a remote machine, returned by the remote discovery protocol.
@@ -690,6 +740,10 @@ public func nerror(_ message: String) {
 @MainActor
 public final class AgentBridge: NSObject, ObservableObject {
     @Published public var isConnected = false
+    /// Per-thread native CPU sampler (this app process only, not WebKit).
+    /// Off by default; a Settings toggle drives `start()`/`stop()`. Spikes are
+    /// routed to the bridge console so they show up in `host_console_logs`.
+    public let cpuSampler = CpuSampler()
     /// When true, native host UI (e.g. the session list) freezes to save resources
     /// while the host serves remotely. Written by HostRenderSuspensionController on
     /// macOS; mirrors the web "Suspend Host Session Rendering" flag.
@@ -782,7 +836,11 @@ public final class AgentBridge: NSObject, ObservableObject {
     /// Set to the session id being navigated to; cleared to nil after the slide
     /// animation completes. SessionsListSections uses this to keep the row spinner
     /// running until the animation is done (not just until focusSession starts).
-    @Published public var navigatingToSessionId: String? = nil
+    /// Lives on navigationStore so writes don't fire bridge.objectWillChange.
+    public var navigatingToSessionId: String? {
+        get { navigationStore.navigatingToSessionId }
+        set { navigationStore.navigatingToSessionId = newValue }
+    }
     // Scroll-to-bottom button state lives in its OWN ObservableObject (NOT @Published
     // on the bridge) so that crossing the bottom threshold while scrolling does not
     // invalidate AgentView. AgentView hosts the WKWebView; re-rendering it on the
@@ -795,6 +853,7 @@ public final class AgentBridge: NSObject, ObservableObject {
     @Published public var pendingInputAppend: String?
     @Published public var availableModels: [ModelInfo] = []
     @Published public var selectedModelId: String?
+    @Published public var selectedEffort: String?   // CLI reasoning effort override (nil = default)
     @Published public var modelSelectionEnabled: Bool = true
     @Published public var lastModelsError: String?
     /// The most recent structured agent activity event from the web app.
@@ -806,49 +865,32 @@ public final class AgentBridge: NSObject, ObservableObject {
     }
     /// Dedicated publisher for latestActivity changes (replaces $latestActivity).
     public let latestActivitySubject = PassthroughSubject<AgentActivityEvent?, Never>()
-    /// Per-chat latest activity event, used to drive the session-list subtitle
-    /// when a chat is running but has no active TodoWrite plan. Cleared on
-    /// phase transition out of `.running` so the subtitle reverts to
-    /// provider/time when the turn finishes. Keyed by chatId.
-    @Published public var latestActivityByChatId: [String: AgentActivityEvent] = [:]
-    /// Last time any activity (tool call, turn lifecycle) was observed for a chat.
-    /// Used by the session list to sort by recency and show "last active" time.
-    /// NOT cleared on turn completion — the timestamp persists so sort order
-    /// remains meaningful after a turn ends.
-    @Published public var lastActiveTimeByChatId: [String: Date] = [:]
-    /// Absolute file paths the agent has recently edited (Edit tool), newest first.
-    /// Deduplicated, capped at `maxRecentlyEditedFiles`, persisted to UserDefaults
-    /// so the Files screen's "Recently Edited" section survives app restarts.
-    @Published public var recentlyEditedFiles: [String] = UserDefaults.standard.stringArray(forKey: "ripulRecentlyEditedFiles") ?? []
+    /// Session-list-only per-chat maps, isolated onto their own leaf
+    /// ObservableObject so writes (many per second during a run) re-render the
+    /// session list WITHOUT re-rendering the WKWebView host that observes
+    /// `AgentBridge`. See SessionListStore for the full rationale. Access the
+    /// maps as `sessionList.latestActivityByChatId`, etc.
+    public let sessionList = SessionListStore()
 
-    /// Maximum number of recent-edit entries retained. UI typically shows the first 10.
-    public static let maxRecentlyEditedFiles = 30
+    /// Native chat scroller store — messages forwarded from the web app over the
+    /// bridge (see `handleNativeChatMessage`). Its OWN leaf ObservableObject so
+    /// high-frequency message/streaming writes re-render only the native scroller,
+    /// not the WKWebView host. Same rationale as `sessionList` / `chatStatus`.
+    public let nativeChat = NativeChatMessageStore()
 
-    /// Per-chat session-row actions declared by tools (e.g. "Show Plan" from ExitPlanMode).
-    /// Persists across turn boundaries until replaced by a new sessionAction event or
-    /// explicitly cleared. Keyed by chatId.
-    @Published public var sessionActionsByChatId: [String: [SessionRowAction]] = [:]
-    /// Authoritative TodoWrite state per chat. Keyed by chatId.
-    /// Written by the web app via `agent-framework:todos:update`, read by the
-    /// native title-bar lozenge and Live Activity manager.
-    @Published public var todoStates: [String: TodoState] = [:]
-    /// Per-chat dismissal marker. When `dismissedTodoVersions[chatId] == todoStates[chatId].version`
-    /// the lozenge hides itself; a newer version re-shows it automatically.
-    @Published public var dismissedTodoVersions: [String: Int] = [:]
-    /// Per-chat "viewed in list" marker. Mirrors `dismissedTodoVersions` but
-    /// only affects the session-list plan summary row — the title-bar lozenge
-    /// inside the chat is unaffected. Set when the user opens a chat (or when
-    /// a new update lands for the currently-active chat), cleared implicitly
-    /// when a newer version arrives.
-    @Published public var listViewedTodoVersions: [String: Int] = [:]
+    /// Debug: render the chat natively (NativeChatView over the web view) instead of
+    /// the web-rendered scroller. The existing ChatComposer + top bar are reused.
+    /// Flipped rarely (a settings toggle), so plain @Published is fine.
+    @Published public var nativeChatScrollerEnabled = false
+
+    /// Navigation + model-display state on a leaf store so writes don't fire
+    /// bridge.objectWillChange and re-render the WKWebView host or list containers.
+    public let navigationStore = NavigationStore()
+
     /// True when the native chat input's text view is the first responder.
     /// Used to gate the keyboard-avoidance offset so that web inputs inside
     /// the WKWebView (e.g. metadata panel) don't shift the whole view up.
     @Published public var nativeChatInputFocused: Bool = false
-    /// Per-chat agent turn phase, keyed by `sourceChatId`. Drives the per-session
-    /// busy / awaiting-input indicators in the native sessions list. Idle/completed/
-    /// failed chats are removed from the map so the UI shows no glyph by default.
-    @Published public var sessionPhases: [String: AgentTurnPhase] = [:]
     /// Per-chat lifecycle sequence, used to drop out-of-order phase events on a
     /// per-session basis (mirrors the global `latestLifecycleSequence`).
     private var sessionLifecycleSequences: [String: Int] = [:]
@@ -866,7 +908,11 @@ public final class AgentBridge: NSObject, ObservableObject {
     /// Whether the agent is paused (awaiting user input) for the active session.
     @Published public var isAgentPaused = false
     /// How thinking is displayed in LLM panels: "none", "folded", or "open".
-    @Published public var showThinkingMode: String = "none"
+    /// Lives on navigationStore so writes don't fire bridge.objectWillChange.
+    public var showThinkingMode: String {
+        get { navigationStore.showThinkingMode }
+        set { navigationStore.showThinkingMode = newValue }
+    }
     /// Whether the web app has sent lifecycle events/snapshots for the active session.
     private var hasLifecycleAuthority = false
     /// Monotonic lifecycle sequence used to ignore stale/replayed events.
@@ -932,13 +978,13 @@ public final class AgentBridge: NSObject, ObservableObject {
 
     private func resetLifecycleState() {
         resetActiveLifecycleState()
-        sessionPhases = [:]
+        sessionList.sessionPhases = [:]
         sessionLifecycleSequences = [:]
     }
 
     /// Reset only the *active chat's* lifecycle state (global pause button,
     /// running/paused flags, status polling). Leaves the per-session
-    /// `sessionPhases` map intact so indicators for other chats survive a
+    /// `sessionList.sessionPhases` map intact so indicators for other chats survive a
     /// focus/createNewChat transition.
     private func resetActiveLifecycleState() {
         hasLifecycleAuthority = false
@@ -952,7 +998,7 @@ public final class AgentBridge: NSObject, ObservableObject {
     /// The `sourceChatId` of the currently-active session, used to gate which
     /// lifecycle events update the global `agentTurnPhase` (and therefore the
     /// pause button / Live Activity). Background chats still update
-    /// `sessionPhases` for the sessions-list indicators.
+    /// `sessionList.sessionPhases` for the sessions-list indicators.
     private var activeSourceChatId: String? {
         guard let activeSessionId else { return nil }
         return sessions.first(where: { $0.id == activeSessionId })?.sourceChatId
@@ -983,12 +1029,12 @@ public final class AgentBridge: NSObject, ObservableObject {
         }
         switch phase {
         case .running, .awaitingInput:
-            sessionPhases[chatId] = phase
+            sessionList.sessionPhases[chatId] = phase
         case .completed, .failed:
             // Collapse onto awaitingInput so the UI only has two glyphs to worry about.
-            sessionPhases[chatId] = .awaitingInput
+            sessionList.sessionPhases[chatId] = .awaitingInput
         case .idle:
-            sessionPhases.removeValue(forKey: chatId)
+            sessionList.sessionPhases.removeValue(forKey: chatId)
         }
         // Drop any stale per-chat tool-call subtitle when the session
         // goes idle OR the turn completes/fails. We keep the label across
@@ -997,9 +1043,12 @@ public final class AgentBridge: NSObject, ObservableObject {
         // over we don't want the subtitle showing the last tool name
         // from the previous turn.
         if phase == .idle || phase == .completed || phase == .failed {
-            latestActivityByChatId.removeValue(forKey: chatId)
+            sessionList.latestActivityByChatId.removeValue(forKey: chatId)
         }
     }
+
+    /// Counts genuine agentTurnPhase transitions (thermal instrumentation, audit N3).
+    private var turnPhaseChangeCount = 0
 
     private func applyTurnPhase(
         _ phase: AgentTurnPhase,
@@ -1022,18 +1071,31 @@ public final class AgentBridge: NSObject, ObservableObject {
         hasLifecycleAuthority = true
         
         Task { @MainActor in
-            self.agentTurnPhase = phase
+            let running: Bool
+            let paused: Bool
             switch phase {
-            case .running:
-                self.isAgentRunning = true
-                self.isAgentPaused = false
-            case .awaitingInput:
-                self.isAgentRunning = true
-                self.isAgentPaused = true
-            case .idle, .completed, .failed:
-                self.isAgentRunning = false
-                self.isAgentPaused = false
+            case .running:       running = true;  paused = false
+            case .awaitingInput: running = true;  paused = true
+            case .idle, .completed, .failed: running = false; paused = false
             }
+            // Only assign when the value actually changes. @Published fires
+            // objectWillChange on EVERY assignment, even to the same value, and
+            // the CLI re-emits lifecycle phases around each tool call — otherwise
+            // every view observing the bridge (the session list AND the WKWebView
+            // host) re-renders on every tool, even when nothing changed.
+            if self.agentTurnPhase != phase {
+                // Thermal instrumentation (audit N3): if this climbs by hundreds
+                // during one turn, the phase oscillates per tool and the
+                // turn-state leaf-isolation is worth building; a handful per
+                // turn means N3 is a non-issue.
+                self.turnPhaseChangeCount += 1
+                if self.turnPhaseChangeCount % 25 == 0 {
+                    Self.debugLog("[AgentBridge] turn-phase changes this session: \(self.turnPhaseChangeCount) (\(self.agentTurnPhase) → \(phase))")
+                }
+                self.agentTurnPhase = phase
+            }
+            if self.isAgentRunning != running { self.isAgentRunning = running }
+            if self.isAgentPaused != paused { self.isAgentPaused = paused }
             if phase == .running {
                 self.startStatusPolling()
             } else {
@@ -1066,7 +1128,7 @@ public final class AgentBridge: NSObject, ObservableObject {
         }
     }
 
-    /// Update `lastActiveTimeByChatId` from an incoming event.
+    /// Update `sessionList.lastActiveTimeByChatId` from an incoming event.
     ///
     /// When the event carries a real timestamp (epoch ms on the wire), we
     /// trust it as authoritative — the web app reads it from the action's
@@ -1080,16 +1142,16 @@ public final class AgentBridge: NSObject, ObservableObject {
     /// overwriting a known-good older value.
     private func advanceLastActive(chatId: String, eventTimestamp: Any?) {
         if let ms = eventTimestamp as? TimeInterval, ms > 0 {
-            lastActiveTimeByChatId[chatId] = Date(timeIntervalSince1970: ms / 1000)
+            sessionList.lastActiveTimeByChatId[chatId] = Date(timeIntervalSince1970: ms / 1000)
         } else if let ms = eventTimestamp as? Int, ms > 0 {
-            lastActiveTimeByChatId[chatId] = Date(timeIntervalSince1970: TimeInterval(ms) / 1000)
+            sessionList.lastActiveTimeByChatId[chatId] = Date(timeIntervalSince1970: TimeInterval(ms) / 1000)
         } else {
             // No parseable timestamp — fall back to "now" but only advance.
             let now = Date()
-            if let existing = lastActiveTimeByChatId[chatId], existing >= now {
+            if let existing = sessionList.lastActiveTimeByChatId[chatId], existing >= now {
                 return
             }
-            lastActiveTimeByChatId[chatId] = now
+            sessionList.lastActiveTimeByChatId[chatId] = now
         }
     }
 
@@ -1222,6 +1284,10 @@ public final class AgentBridge: NSObject, ObservableObject {
         super.init()
         AgentBridge.current = self
         startNetworkPathMonitoring()
+        startProcessLifecycleMonitoring()
+        // Route CPU spikes into the bridge console (visible in host_console_logs
+        // / device_console_logs). onSpike is invoked on the main thread.
+        cpuSampler.onSpike = { [weak self] line in self?.handleConsoleLog(line) }
     }
 
     /// Most-recently-initialized bridge, so static / off-instance native logging
@@ -1229,6 +1295,22 @@ public final class AgentBridge: NSObject, ObservableObject {
     /// buffer that `device_console_logs` / `host_console_logs` read. Weak so it
     /// never keeps a bridge alive.
     public static weak var current: AgentBridge?
+
+    /// Verbose per-message bridge tracing. OFF by default. These NSLog calls sit
+    /// on the streaming hot path — `agent:activity` "thinking" events arrive at
+    /// ~30 Hz, so an unconditional NSLog here is ~30+ synchronous main-thread
+    /// log writes per second during a run (a confirmed thermal source on iPhone).
+    /// NSLog output is invisible on-device without Xcode attached anyway, so this
+    /// is pure cost in production. Flip it on only when debugging with Xcode; the
+    /// in-app `consoleLogs` buffer (read by device_console_logs) is unaffected.
+    public static var verboseBridgeLog = false
+
+    /// Render the WKWebView opaque instead of transparent (thermal A/B test). A
+    /// transparent web view must blend every repaint against the layers behind it;
+    /// during streaming the chat repaints changing text ~30x/sec, so an opaque view
+    /// (a cheap copy, no per-repaint blend) should run cooler if that blend is the
+    /// heat. Read at web-view creation, so a relaunch is required to apply.
+    public static var opaqueWebView = false
 
     /// Debug log to file (macOS unified log redacts NSLog content as <private>).
     /// ALSO mirrors into the `consoleLogs` buffer so native diagnostics are
@@ -1250,35 +1332,6 @@ public final class AgentBridge: NSObject, ObservableObject {
     }
 
     // MARK: - Recently Edited Files
-
-    /// Insert `path` at the front of `recentlyEditedFiles`, deduplicating and
-    /// capping at `maxRecentlyEditedFiles`. Persists to UserDefaults so the
-    /// list survives app restarts.
-    private func recordRecentlyEditedFile(_ path: String) {
-        var list = recentlyEditedFiles
-        if let existing = list.firstIndex(of: path) {
-            list.remove(at: existing)
-        }
-        list.insert(path, at: 0)
-        if list.count > AgentBridge.maxRecentlyEditedFiles {
-            list = Array(list.prefix(AgentBridge.maxRecentlyEditedFiles))
-        }
-        recentlyEditedFiles = list
-        UserDefaults.standard.set(list, forKey: "ripulRecentlyEditedFiles")
-    }
-
-    /// Clear the "Recently Edited" list (both in-memory state and persisted value).
-    public func clearRecentlyEditedFiles() {
-        recentlyEditedFiles = []
-        UserDefaults.standard.removeObject(forKey: "ripulRecentlyEditedFiles")
-    }
-
-    /// Remove a single path from `recentlyEditedFiles` (e.g. user swipe-to-delete).
-    public func removeRecentlyEditedFile(_ path: String) {
-        guard let idx = recentlyEditedFiles.firstIndex(of: path) else { return }
-        recentlyEditedFiles.remove(at: idx)
-        UserDefaults.standard.set(recentlyEditedFiles, forKey: "ripulRecentlyEditedFiles")
-    }
 
     // MARK: - Tool Registration
 
@@ -1321,6 +1374,17 @@ public final class AgentBridge: NSObject, ObservableObject {
         NSLog("[AgentBridge] Attached to WKWebView")
     }
 
+    /// Master switch for native console logging. Off (the default) means no
+    /// console.* output crosses the bridge (the JS `window.__ripulNativeLog` gate)
+    /// and the hot-path NSLog traces stay silenced — the quiet/cool default. On
+    /// restores the full firehose for debugging. Pushed live to the web view so a
+    /// toggle change takes effect immediately, no reload. Uncaught errors are
+    /// captured regardless (they bypass the console gate).
+    public func setVerboseLogging(_ on: Bool) {
+        AgentBridge.verboseBridgeLog = on
+        evaluateJavaScript("window.__ripulNativeLog = \(on)")
+    }
+
     /// Called by the web view coordinator when the page finishes loading.
     /// Starts a timeout — if the bridge doesn't connect within 10 seconds,
     /// clears the cache and reloads once to evict stale web app bundles.
@@ -1329,6 +1393,10 @@ public final class AgentBridge: NSObject, ObservableObject {
         if isNetworkCaptureEnabled {
             evaluateJavaScript("window.__ripulNetworkCapture && window.__ripulNetworkCapture(true)")
         }
+        // Push the native-console-logging master flag. Default false => console.*
+        // does not cross the bridge (quiet/cool). Re-pushed on every load so a
+        // self-heal reload keeps the setting.
+        evaluateJavaScript("window.__ripulNativeLog = \(AgentBridge.verboseBridgeLog)")
         connectionTimeoutTask?.cancel()
         connectionTimeoutTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 5_000_000_000) // 5s
@@ -1498,16 +1566,102 @@ public final class AgentBridge: NSObject, ObservableObject {
     ///      for the iPhone "locked into a dead comms channel until app restart"
     ///      failure mode.
     public func notifyWebViewBecameVisible() {
-        // Trailing `true;` forces a bridgeable completion value. Without it the
-        // script's last value is `__ripulForegrounded()`'s Promise, which the
-        // legacy evaluateJavaScript API can't bridge → a spurious
-        // "[JS_EVAL] ... unsupported type" ERROR on every foreground (the script
-        // still runs; only the unbridgeable return value was being logged).
+        // ROOT-CAUSE FIX for the network-switch / background wedge:
+        //
+        // While the app is backgrounded, iOS can suspend or jettison the
+        // WKWebView content process (jetsam, worsened by a network-switch
+        // reconnect storm). WKWebView CANNOT perform a load while backgrounded,
+        // so any recovery reload triggered off-foreground (recordProcessTermination,
+        // self-heal) is silently dropped — and the process is still dead on
+        // return. That's why the app came back wedged and the FIRST evals to
+        // fail were these foreground-resume ones. Mobile Safari auto-reloads a
+        // jettisoned tab on foreground and macOS doesn't suspend the process,
+        // which is exactly why both were fine while the iPhone wedged.
+        //
+        // So on foreground: (1) flush any reload we deferred while backgrounded,
+        // then (2) probe the context and reload it if it's dead — instead of
+        // firing the sync evals into a corpse (which only logs "unsupported type").
+        if consumeDeferredRecoveryReload() { return }
+        Task { @MainActor in
+            let health = await probeWebContextHealth()
+            if health == .contextDead || health == .webCrashed {
+                handleConsoleLog("WARN: [WEBVIEW_HEAL] context \(health.rawValue) on foreground — healing before foreground sync")
+                await healWebContext(reason: "foreground: context \(health.rawValue)")
+                return
+            }
+            fireForegroundSyncEvals()
+        }
+    }
+
+    /// The foreground relay/visibility sync. Trailing `true;` forces a bridgeable
+    /// completion value (a bare Promise return logs a spurious "unsupported type").
+    private func fireForegroundSyncEvals() {
         evaluateJavaScript("""
             document.dispatchEvent(new Event('visibilitychange'));
             if (window.__ripulForegrounded) { window.__ripulForegrounded(); }
             true;
         """)
+    }
+
+    // MARK: - Foreground-gated recovery + process-lifecycle instrumentation
+
+    /// True only when the app is actively foregrounded — the only state in which
+    /// a WKWebView will actually perform a network load. Always true on macOS
+    /// (no content-process suspension on background).
+    private var isAppActive: Bool {
+        #if os(iOS)
+        return UIApplication.shared.applicationState == .active
+        #else
+        return true
+        #endif
+    }
+
+    /// A recovery reload that was requested while backgrounded and deferred until
+    /// foreground (WKWebView drops loads while suspended).
+    private var deferredRecoveryReload: (() -> Void)?
+
+    /// Run a recovery reload now if foregrounded, else defer it to the next
+    /// foreground. This is the fix for "reload() dropped while backgrounded →
+    /// still dead on resume". User-initiated reloads do NOT go through here.
+    private func recoveryReload(label: String, _ action: @escaping () -> Void) {
+        if isAppActive {
+            action()
+        } else {
+            handleConsoleLog("WARN: [WEBVIEW_HEAL] \(label) deferred — app backgrounded (WKWebView can't load while suspended); will run on foreground")
+            deferredRecoveryReload = action
+        }
+    }
+
+    /// If a recovery reload was deferred while backgrounded, perform it now.
+    @discardableResult
+    private func consumeDeferredRecoveryReload() -> Bool {
+        guard let action = deferredRecoveryReload else { return false }
+        deferredRecoveryReload = nil
+        handleConsoleLog("LOG: [WEBVIEW_HEAL] performing deferred recovery reload on foreground")
+        action()
+        return true
+    }
+
+    /// Observe app lifecycle + memory-pressure so a wedge's context (was it
+    /// backgrounded? was there a memory warning just before?) is in the log,
+    /// turning the next incident into a root-cause-grade timeline.
+    private func startProcessLifecycleMonitoring() {
+        #if os(iOS)
+        let nc = NotificationCenter.default
+        nc.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.handleConsoleLog("LOG: [LIFECYCLE] app → background") }
+        }
+        nc.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.handleConsoleLog("LOG: [LIFECYCLE] app → foreground (will enter)") }
+        }
+        nc.addObserver(forName: UIApplication.didReceiveMemoryWarningNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in
+                guard let self else { return }
+                let avail = Double(os_proc_available_memory()) / 1_048_576
+                self.handleConsoleLog(String(format: "WARN: [MEMORY_WARNING] iOS memory warning — Avail=%.0fMB (jetsam risk for the web content process)", avail))
+            }
+        }
+        #endif
     }
 
     // MARK: - Network Path Monitoring
@@ -1557,12 +1711,17 @@ public final class AgentBridge: NSObject, ObservableObject {
         pathMonitor = monitor
     }
 
-    /// Force relay/session-channel recovery after a network handoff. Reuses the
-    /// foreground hook (`__ripulForegrounded`) but does NOT fake a
-    /// `visibilitychange` — visibility never changed, only the network did.
+    /// Force relay/session-channel recovery after a network handoff.
+    /// `__ripulNetworkChanged` challenge-probes every socket (a handoff strands
+    /// them half-open with OPEN readyState + fresh liveness, which the plain
+    /// foreground hook trusts — costing the full ~37.5s/75s liveness window
+    /// before rebuild). Falls back to the foreground hook on a web bundle that
+    /// predates the network-change callable. No fake `visibilitychange` —
+    /// visibility never changed, only the network did.
     public func notifyNetworkPathChanged() {
         evaluateJavaScript("""
-            if (window.__ripulForegrounded) { window.__ripulForegrounded(); }
+            if (window.__ripulNetworkChanged) { window.__ripulNetworkChanged(); }
+            else if (window.__ripulForegrounded) { window.__ripulForegrounded(); }
             true;
         """)
     }
@@ -1581,13 +1740,52 @@ public final class AgentBridge: NSObject, ObservableObject {
         }
         webView.evaluateJavaScript(script) { [weak self] result, error in
             if let error {
-                NSLog("[AgentBridge] JS eval error: %@", error.localizedDescription)
-                // Route to console log so it appears in the persisted log stream
-                let snippet = script.prefix(80).replacingOccurrences(of: "\n", with: " ")
-                self?.handleConsoleLog("ERROR: [JS_EVAL] \(error.localizedDescription) | script: \(snippet)")
+                // WKWebView returns code 5 (javaScriptResultTypeIsUnsupported)
+                // whenever the evaluated script's last expression yields a value it
+                // can't bridge (undefined, a DOM node, a function). The JS ran fine;
+                // swallow this benign case so it doesn't mask real crashes.
+                let ns = error as NSError
+                let benignUnsupportedResult = ns.domain == WKError.errorDomain
+                    && ns.code == WKError.Code.javaScriptResultTypeIsUnsupported.rawValue
+                if !benignUnsupportedResult {
+                    NSLog("[AgentBridge] JS eval error: %@", error.localizedDescription)
+                    let snippet = script.prefix(80).replacingOccurrences(of: "\n", with: " ")
+                    self?.handleConsoleLog("ERROR: [JS_EVAL] \(AgentBridge.describeEvalError(error)) | script: \(snippet)")
+                    Task { @MainActor in self?.noteJsEvalFailure() }
+                }
                 completion?(nil)
             } else {
+                Task { @MainActor in self?.consecutiveJsEvalFailures = 0 }
                 completion?(result)
+            }
+        }
+    }
+
+    /// Fire-and-forget JS whose return value we don't use. Appends `; true;` so a
+    /// HEALTHY context returns a bridgeable value instead of `undefined` — a bare
+    /// `window.__ripulFoo?.()` returns undefined and trips WebKit's
+    /// "result of an unsupported type" error on EVERY call, which both spams the
+    /// log and pollutes the consecutive-failure counter that drives the self-heal.
+    /// A genuinely dead context still fails even `true;`, so the counter stays an
+    /// accurate liveness signal. Use this for all void UI-poke evals.
+    func evaluateVoidJavaScript(_ body: String) {
+        evaluateJavaScript(body + "\n; true;")
+    }
+
+    /// Consecutive `evaluateJavaScript` failures. A run of these is the
+    /// signature of a wedged/terminated JS context (every script fails, even
+    /// ones ending in a bridgeable literal) — the state that previously left
+    /// the app permanently broken until a manual cache clear.
+    private var consecutiveJsEvalFailures = 0
+
+    private func noteJsEvalFailure() {
+        consecutiveJsEvalFailures += 1
+        guard consecutiveJsEvalFailures >= 3 else { return }
+        consecutiveJsEvalFailures = 0
+        Task { [weak self] in
+            guard let self else { return }
+            if await self.probeWebContextHealth() == .contextDead {
+                await self.healWebContext(reason: "3 consecutive JS eval failures")
             }
         }
     }
@@ -1601,6 +1799,230 @@ public final class AgentBridge: NSObject, ObservableObject {
                           userInfo: [NSLocalizedDescriptionKey: "webView is nil"])
         }
         return try await webView.callAsyncJavaScript(script, contentWorld: .page)
+    }
+
+    // MARK: - JS-context health probe & self-heal
+
+    /// Result of probing the web view's JS context with a canary eval.
+    public enum WebContextHealth: String {
+        /// Canary round-tripped and the remote-session callables are installed.
+        case healthy
+        /// JS runs, but the React tree crashed (window.__ripulWebAppCrashed set) —
+        /// remote-session providers are gone until the page reloads.
+        case webCrashed
+        /// JS runs, but the __ripul* callables aren't installed yet (boot race).
+        case callablesMissing
+        /// Even a string-literal eval fails — the context is wedged or the
+        /// content process is gone. Only a reload recovers this.
+        case contextDead
+        case noWebView
+    }
+
+    /// Human description of a WKWebView eval error incl. domain + code + name.
+    /// The code is the single most diagnostic datum for the JS-context wedge.
+    static func describeEvalError(_ error: Error) -> String {
+        let ns = error as NSError
+        let name: String
+        switch (ns.domain, ns.code) {
+        case ("WKErrorDomain", 2): name = "WebContentProcessTerminated"
+        case ("WKErrorDomain", 4): name = "JavaScriptExceptionOccurred"
+        case ("WKErrorDomain", 5): name = "JavaScriptResultTypeIsUnsupported"
+        case ("WKErrorDomain", 9): name = "ContentRuleListStoreLookUpFailed"
+        default: name = ns.localizedDescription
+        }
+        return "\(ns.domain)#\(ns.code) \(name)"
+    }
+
+    /// Probe the JS context with a canary that returns a plain string (always
+    /// bridgeable — a probe must never itself fail with "unsupported type").
+    /// A canary failure is captured with its WKError code so `.contextDead`
+    /// carries WHY (process gone vs suspended vs unbridgeable).
+    public func probeWebContextHealth() async -> WebContextHealth {
+        guard let webView else { return .noWebView }
+        let canary = """
+        JSON.stringify({callables: !!window.__ripulOpenRemoteSession, crashed: !!window.__ripulWebAppCrashed});
+        """
+        let raw: String? = await withCheckedContinuation { (cont: CheckedContinuation<String?, Never>) in
+            webView.evaluateJavaScript(canary) { [weak self] value, error in
+                if let error {
+                    Task { @MainActor in
+                        self?.handleConsoleLog("WARN: [CONN_DIAG] context probe canary failed: \(AgentBridge.describeEvalError(error)) — active=\(self?.isAppActive ?? false) url=\(self?.webView?.url?.absoluteString ?? "nil")")
+                    }
+                    cont.resume(returning: nil)
+                } else {
+                    cont.resume(returning: value as? String)
+                }
+            }
+        }
+        guard let raw,
+              let data = raw.data(using: .utf8),
+              let dict = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+            return .contextDead
+        }
+        if (dict["crashed"] as? Bool) == true { return .webCrashed }
+        if (dict["callables"] as? Bool) != true { return .callablesMissing }
+        return .healthy
+    }
+
+    // MARK: Escalating self-heal ladder
+    //
+    // A plain reload() is NOT enough: the wedge often recurs on the fresh boot
+    // because persisted state re-poisons it (remote-tab-pairings / cliSessionMap
+    // in localStorage rebind to a dead/stranded machine; IndexedDB preloads
+    // stale chat actions). That is exactly why the manual fix is "Clear cache &
+    // reload" + "Clear sessions data", not just a reload. So the heal escalates:
+    //   attempt 1 → reload()                     (cheap, fixes transient wedges)
+    //   attempt 2 → purgeWebStateAndReload()     (auto "clear sessions data")
+    //   attempt 3 → purgeWebStateAndReload()     (network may have settled)
+    //   attempt 4+ → stop (don't loop; a truly-offline device can't be reloaded
+    //               back to life, and a reload loop burns battery)
+    // A short FLOOR between heals prevents a tight loop; the ESCALATION WINDOW
+    // resets the ladder so a later, unrelated incident starts cheap again.
+
+    private var lastContextHealAt: Date?
+    private var healAttempts = 0
+    private var healVerifyTask: Task<Void, Never>?
+    /// Minimum gap between heals — stops a reload storm.
+    private let healFloor: TimeInterval = 10
+    /// Heals within this window escalate; a heal after it resets the ladder.
+    private let healEscalationWindow: TimeInterval = 90
+
+    /// Recover a dead/crashed JS context, escalating on repeated failures within
+    /// the window. Returns true if a recovery action was triggered.
+    @discardableResult
+    public func healWebContext(reason: String) async -> Bool {
+        // A suspended WKWebView won't reload, and probing/escalating while
+        // backgrounded is pointless (and would burn through the ladder against a
+        // process that can't recover until resume). Arm a deferred reload and
+        // bail; notifyWebViewBecameVisible() heals for real on foreground.
+        if !isAppActive {
+            handleConsoleLog("WARN: [WEBVIEW_HEAL] unhealthy while backgrounded (\(reason)) — deferring reload to foreground")
+            deferredRecoveryReload = { [weak self] in self?.reload() }
+            return false
+        }
+        let now = Date()
+        if let last = lastContextHealAt {
+            let since = now.timeIntervalSince(last)
+            if since < healFloor {
+                handleConsoleLog("WARN: [WEBVIEW_HEAL] skipped, healed \(Int(since))s ago (floor \(Int(healFloor))s) — \(reason)")
+                return false
+            }
+            if since > healEscalationWindow { healAttempts = 0 } // fresh incident
+        }
+        lastContextHealAt = now
+        healAttempts += 1
+
+        switch healAttempts {
+        case 1:
+            handleConsoleLog("ERROR: [WEBVIEW_HEAL] attempt 1 (\(reason)) — reloading web app")
+            recoveryReload(label: "heal reload") { [weak self] in self?.reload() }
+        case 2, 3:
+            handleConsoleLog("ERROR: [WEBVIEW_HEAL] attempt \(healAttempts) (\(reason)) — reload didn't stick; purging session state + reloading")
+            recoveryReload(label: "heal purge") { [weak self] in self?.purgeWebStateAndReload() }
+        default:
+            handleConsoleLog("ERROR: [WEBVIEW_HEAL] attempt \(healAttempts) (\(reason)) — auto-recovery exhausted; relaunch required (device may be offline)")
+            return false
+        }
+        scheduleHealVerification(reason: reason)
+        return true
+    }
+
+    /// Escalation heal: clear the persisted state that re-poisons a fresh boot
+    /// (localStorage pairings/cliSessionMap, IndexedDB chat actions) plus caches,
+    /// then fresh-load. PRESERVES cookies so the Clerk session survives (login
+    /// also re-injects natively). This is the manual "Clear cache & reload +
+    /// Clear sessions data" recovery, done automatically.
+    public func purgeWebStateAndReload() {
+        var types = WKWebsiteDataStore.allWebsiteDataTypes()
+        types.remove(WKWebsiteDataTypeCookies) // keep auth
+        let store = webView?.configuration.websiteDataStore ?? WKWebsiteDataStore.default()
+        store.removeData(ofTypes: types, modifiedSince: .distantPast) { [weak self] in
+            guard let self, let webView = self.webView else { return }
+            self.handleConsoleLog("WARN: [WEBVIEW_HEAL] session state + caches purged (cookies kept) — fresh load")
+            self.isConnected = false
+            self.isThemeReady = false
+            self.hasAttemptedCacheReload = false
+            if let url = webView.url,
+               var components = URLComponents(url: url, resolvingAgainstBaseURL: true) {
+                var items = (components.queryItems ?? []).filter { $0.name != "_cb" }
+                items.append(URLQueryItem(name: "_cb", value: "\(Int(Date().timeIntervalSince1970))"))
+                components.queryItems = items
+                var request = URLRequest(url: components.url ?? url)
+                request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+                webView.load(request)
+            } else {
+                webView.reloadFromOrigin()
+            }
+        }
+    }
+
+    /// After a heal, verify the context actually came back — and escalate
+    /// proactively if it didn't, rather than waiting for the user's next failed
+    /// tap (which the floor might defer). Healthy → reset the ladder.
+    private func scheduleHealVerification(reason: String) {
+        healVerifyTask?.cancel()
+        healVerifyTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 15_000_000_000) // 15s — fair chance to reload on cellular
+            guard let self, !Task.isCancelled else { return }
+            let health = await self.probeWebContextHealth()
+            switch health {
+            case .healthy:
+                self.handleConsoleLog("LOG: [WEBVIEW_HEAL] post-heal probe healthy — recovered after \(self.healAttempts) attempt(s)")
+                self.healAttempts = 0
+            case .contextDead, .webCrashed:
+                self.handleConsoleLog("WARN: [WEBVIEW_HEAL] post-heal probe \(health.rawValue) — escalating")
+                await self.healWebContext(reason: "post-heal still \(health.rawValue)")
+            case .callablesMissing, .noWebView:
+                // Still booting or no view — don't escalate to a purge on a slow
+                // load; the eval-failure counter remains armed as a backstop.
+                self.handleConsoleLog("LOG: [WEBVIEW_HEAL] post-heal probe \(health.rawValue) — leaving to finish booting")
+            }
+        }
+    }
+
+    /// Fetch the web app's one-shot connection diagnostics snapshot
+    /// (`__ripulDiagnostics`) as a JSON string, or nil if unreachable.
+    @available(iOS 15.0, macOS 13.0, *)
+    public func fetchWebDiagnostics() async -> String? {
+        guard let webView else { return nil }
+        let script = """
+        if (!window.__ripulDiagnostics) return null;
+        return JSON.stringify(await window.__ripulDiagnostics());
+        """
+        return (try? await webView.callAsyncJavaScript(script, arguments: [:], contentWorld: .page)) as? String
+    }
+
+    /// Turn an opaque JS-call failure (throw, or an unbridgeable/nil result)
+    /// into a classified, actionable error string — probing the JS context and
+    /// self-healing when that's what's actually broken. This is what stops
+    /// "JavaScript execution returned a result of an unsupported type" from
+    /// being both the alert text AND a permanent state.
+    @available(iOS 15.0, macOS 13.0, *)
+    private func classifyJsCallFailure(_ rawDescription: String, callable: String) async -> String {
+        handleConsoleLog("ERROR: [CONN_DIAG] \(callable) failed: \(rawDescription) — probing web context")
+        switch await probeWebContextHealth() {
+        case .contextDead:
+            let healed = await healWebContext(reason: "\(callable): \(rawDescription)")
+            return healed
+                ? "web-context-dead: the app's web layer stopped responding and was reloaded automatically — try again in a few seconds. (was: \(rawDescription))"
+                : "web-context-dead: the app's web layer is not responding; a reload was already attempted recently. (was: \(rawDescription))"
+        case .webCrashed:
+            let healed = await healWebContext(reason: "\(callable): web app crashed")
+            return healed
+                ? "web-crashed: the app hit an internal error and was reloaded automatically — try again in a few seconds. (was: \(rawDescription))"
+                : "web-crashed: the app hit an internal error; a reload was already attempted recently. (was: \(rawDescription))"
+        case .callablesMissing:
+            return "not ready: the app is still starting up — try again in a moment. (was: \(rawDescription))"
+        case .noWebView:
+            return "no web view attached. (was: \(rawDescription))"
+        case .healthy:
+            // The context is fine — the failure is in the call itself. Attach
+            // the web diagnostics snapshot to the console log for forensics.
+            if let diag = await fetchWebDiagnostics() {
+                handleConsoleLog("WARN: [CONN_DIAG] web context healthy; diagnostics: \(diag)")
+            }
+            return rawDescription
+        }
     }
 
     // MARK: - WebView Health & Crash Diagnostics
@@ -1664,8 +2086,11 @@ public final class AgentBridge: NSObject, ObservableObject {
         // Schedule a post-crash probe once the bridge reconnects
         pendingPostCrashProbe = true
 
-        // Reload to recover
-        reload()
+        // Reload to recover — but ONLY while foregrounded. A content-process
+        // termination almost always happens while backgrounded (jetsam), and a
+        // WKWebView won't load while suspended, so an unconditional reload here
+        // is dropped and the app returns still-dead. Defer to foreground.
+        recoveryReload(label: "post-crash reload") { [weak self] in self?.reload() }
     }
 
     /// Probe the web view from the native side. Layer 1 (native properties) always
@@ -1844,7 +2269,9 @@ public final class AgentBridge: NSObject, ObservableObject {
         }
 
         let messageType = String(type.dropFirst(messagePrefix.count))
-        NSLog("[AgentBridge] ← Received: %@", messageType)
+        if AgentBridge.verboseBridgeLog {
+            NSLog("[AgentBridge] ← Received: %@", messageType)
+        }
 
         switch messageType {
         case "handshake":
@@ -1936,7 +2363,7 @@ public final class AgentBridge: NSObject, ObservableObject {
                 // event that isn't carried by the Swift enum, so read it here.
                 if let toolName = eventDict["toolName"] as? String, toolName == "Edit",
                    let filePath = eventDict["toolFilePath"] as? String, !filePath.isEmpty {
-                    recordRecentlyEditedFile(filePath)
+                    sessionList.recordRecentlyEditedFile(filePath)
                 }
                 if let chatId = dict["chatId"] as? String, !chatId.isEmpty {
                     // Stamp last-active time for sort order, but only if the
@@ -1949,7 +2376,7 @@ public final class AgentBridge: NSObject, ObservableObject {
                     // Session-row actions are stored separately — they persist
                     // across turns and are not part of the tool-activity subtitle.
                     if case .sessionAction(let actions) = event {
-                        sessionActionsByChatId[chatId] = actions
+                        sessionList.sessionActionsByChatId[chatId] = actions
                     } else {
                         let toolName: String?
                         switch event {
@@ -1958,7 +2385,7 @@ public final class AgentBridge: NSObject, ObservableObject {
                         default: toolName = nil
                         }
                         if toolName == "completion" || toolName == "TodoWrite" {
-                            latestActivityByChatId.removeValue(forKey: chatId)
+                            sessionList.latestActivityByChatId.removeValue(forKey: chatId)
                             // A "completion" activity is a strong signal the turn
                             // ended. If the lifecycle event was lost, the button is
                             // stuck on pause — pull the authoritative state now.
@@ -1974,7 +2401,7 @@ public final class AgentBridge: NSObject, ObservableObject {
                             // in applySessionPhase. Replayed (old-timestamp) events
                             // are skipped so a finished-offline turn doesn't show a
                             // stale live subtitle that never clears.
-                            latestActivityByChatId[chatId] = event
+                            sessionList.latestActivityByChatId[chatId] = event
                         }
                     }
                 }
@@ -1991,11 +2418,13 @@ public final class AgentBridge: NSObject, ObservableObject {
                     chatStatusLog.removeFirst(chatStatusLog.count - maxChatStatusEntries)
                 }
                 if persistent {
-                    persistentChatStatus = message
+                    chatStatus.persistentChatStatus = message
                 } else {
-                    latestChatStatus = message
+                    chatStatus.latestChatStatus = message
                 }
             }
+        case "chat:message":
+            handleNativeChatMessage(dict)
         case "chat:prefill":
             pendingInputText = dict["text"] as? String
         case "chat:append":
@@ -2216,7 +2645,7 @@ public final class AgentBridge: NSObject, ObservableObject {
         set {
             UserDefaults.standard.set(newValue, forKey: Self.networkCaptureKey)
             // Tell the web view to start/stop intercepting
-            evaluateJavaScript("window.__ripulNetworkCapture && window.__ripulNetworkCapture(\(newValue))")
+            evaluateVoidJavaScript("window.__ripulNetworkCapture && window.__ripulNetworkCapture(\(newValue))")
         }
     }
 
@@ -2264,12 +2693,10 @@ public final class AgentBridge: NSObject, ObservableObject {
     }
     /// Dedicated publisher for chatStatusLog changes (replaces implicit @Published).
     public let chatStatusLogSubject = PassthroughSubject<Void, Never>()
-    /// The most recent chat status message (convenience for single-line display).
-    @Published public var latestChatStatus: String?
-    /// Sticky chat status (e.g. rate-limit state). Unlike `latestChatStatus`,
-    /// this is not auto-hidden by the native UI — it persists until replaced
-    /// or cleared via `clearChatStatusLog`.
-    @Published public var persistentChatStatus: String?
+    /// Chat-status line fields (latest / persistent), isolated onto their own leaf
+    /// so per-pipeline-stage writes don't re-render the WKWebView host. Access as
+    /// `chatStatus.latestChatStatus` / `chatStatus.persistentChatStatus`.
+    public let chatStatus = ChatStatusStore()
     private let maxChatStatusEntries = 200
 
     /// Unified log sink for both web-view and native-originated log entries.
@@ -2288,8 +2715,13 @@ public final class AgentBridge: NSObject, ObservableObject {
         // the new chat cleanly. This message is posted via agentLog so it shares
         // the existing message channel without needing a new handler registration.
         // Foundation.* so the NSLog tee shadow doesn't re-ingest what we're already
-        // appending below (would double-append + recurse).
-        Foundation.NSLog("[JS] %@", message)
+        // appending below (would double-append + recurse). Gated: this fires once
+        // per bridged web console.log, which floods during streaming; NSLog is
+        // synchronous main-thread I/O and invisible on-device without Xcode. The
+        // in-app buffer append below is the on-device log path and stays live.
+        if AgentBridge.verboseBridgeLog {
+            Foundation.NSLog("[JS] %@", message)
+        }
 
         // Split off stack trace if present (appended after __STACK__ separator)
         let mainMessage: String
@@ -2369,8 +2801,8 @@ public final class AgentBridge: NSObject, ObservableObject {
 
     public func clearChatStatusLog() {
         chatStatusLog.removeAll()
-        latestChatStatus = nil
-        persistentChatStatus = nil
+        chatStatus.latestChatStatus = nil
+        chatStatus.persistentChatStatus = nil
     }
 
     /// Emit a `[SESSION-START]` marker into both NSLog and the unified consoleLogs
@@ -3012,7 +3444,15 @@ public final class AgentBridge: NSObject, ObservableObject {
                     provider: provider,
                     group: (item["group"] as? String) ?? provider,
                     description: item["description"] as? String,
-                    supportsThinking: (item["supportsThinking"] as? Bool) ?? false
+                    supportsThinking: (item["supportsThinking"] as? Bool) ?? false,
+                    type: item["type"] as? String,
+                    url: (item["url"] as? String) ?? "",
+                    enabled: (item["enabled"] as? Bool) ?? true,
+                    sortOrder: item["sortOrder"] as? Int,
+                    cliModelId: item["cliModelId"] as? String,
+                    cliRawMode: (item["cliRawMode"] as? Bool) ?? false,
+                    cliEffort: item["cliEffort"] as? String,
+                    cliMode: item["cliMode"] as? String
                 )
             }
 
@@ -3054,6 +3494,115 @@ public final class AgentBridge: NSObject, ObservableObject {
         } catch {
             NSLog("[AgentBridge] setModel error: %@", error.localizedDescription)
             return false
+        }
+    }
+
+    /// Load the current reasoning-effort override from the web app.
+    @available(iOS 15.0, macOS 13.0, *)
+    public func fetchEffort() async {
+        guard let webView else { return }
+        do {
+            let result = try await webView.callAsyncJavaScript(
+                "return await window.__ripulGetEffort?.() ?? {effort:null};",
+                contentWorld: .page
+            )
+            if let dict = result as? [String: Any] {
+                self.selectedEffort = dict["effort"] as? String
+            }
+        } catch {
+            NSLog("[AgentBridge] fetchEffort error: %@", error.localizedDescription)
+        }
+    }
+
+    /// Set the reasoning-effort override. Pass nil for the CLI default.
+    @available(iOS 15.0, macOS 13.0, *)
+    @discardableResult
+    public func setEffort(_ effort: String?) async -> Bool {
+        guard let webView else { return false }
+        do {
+            let result = try await webView.callAsyncJavaScript(
+                "return await window.__ripulSetEffort?.(effort) ?? {success:false};",
+                arguments: ["effort": effort.map { $0 as Any } ?? NSNull()],
+                contentWorld: .page
+            )
+            if let dict = result as? [String: Any], (dict["success"] as? Bool) == true {
+                self.selectedEffort = effort
+                NSLog("[AgentBridge] setEffort: %@", effort ?? "default")
+                return true
+            }
+            return false
+        } catch {
+            NSLog("[AgentBridge] setEffort error: %@", error.localizedDescription)
+            return false
+        }
+    }
+
+    /// Whether the current principal may edit CLI models (owner/admin, not a
+    /// site-key portal visitor). The backend also enforces admin on /admin/models*.
+    @available(iOS 15.0, macOS 13.0, *)
+    public func canEditModels() async -> Bool {
+        guard let webView else { return false }
+        do {
+            let result = try await webView.callAsyncJavaScript(
+                "return await window.__ripulCanEditModels?.() ?? {canEdit:false};",
+                contentWorld: .page
+            )
+            if let dict = result as? [String: Any], let can = dict["canEdit"] as? Bool { return can }
+            return false
+        } catch {
+            NSLog("[AgentBridge] canEditModels error: %@", error.localizedDescription)
+            return false
+        }
+    }
+
+    /// Create or update a CLI model in the catalog. `bodyJSON` is a JSON
+    /// UpsertModelRequest. Refreshes `availableModels` on success.
+    /// Returns (success, errorMessage?).
+    @available(iOS 15.0, macOS 13.0, *)
+    public func saveModel(id: String, bodyJSON: String) async -> (Bool, String?) {
+        guard let webView else { return (false, "No web view") }
+        do {
+            let result = try await webView.callAsyncJavaScript(
+                "return await window.__ripulSaveModel?.(id, body) ?? {success:false, error:'__ripulSaveModel unavailable'};",
+                arguments: ["id": id, "body": bodyJSON],
+                contentWorld: .page
+            )
+            if let dict = result as? [String: Any] {
+                if (dict["success"] as? Bool) == true {
+                    await fetchModels()
+                    return (true, nil)
+                }
+                return (false, (dict["error"] as? String) ?? "Save failed")
+            }
+            return (false, "Unexpected response")
+        } catch {
+            NSLog("[AgentBridge] saveModel error: %@", error.localizedDescription)
+            return (false, error.localizedDescription)
+        }
+    }
+
+    /// Delete a CLI model from the catalog. Refreshes `availableModels` on success.
+    /// Returns (success, errorMessage?).
+    @available(iOS 15.0, macOS 13.0, *)
+    public func deleteModel(id: String) async -> (Bool, String?) {
+        guard let webView else { return (false, "No web view") }
+        do {
+            let result = try await webView.callAsyncJavaScript(
+                "return await window.__ripulDeleteModel?.(id) ?? {success:false, error:'__ripulDeleteModel unavailable'};",
+                arguments: ["id": id],
+                contentWorld: .page
+            )
+            if let dict = result as? [String: Any] {
+                if (dict["success"] as? Bool) == true {
+                    await fetchModels()
+                    return (true, nil)
+                }
+                return (false, (dict["error"] as? String) ?? "Delete failed")
+            }
+            return (false, "Unexpected response")
+        } catch {
+            NSLog("[AgentBridge] deleteModel error: %@", error.localizedDescription)
+            return (false, error.localizedDescription)
         }
     }
 
@@ -3511,7 +4060,7 @@ public final class AgentBridge: NSObject, ObservableObject {
             let closed = sessions.first(where: { $0.id == id })
             sessions.removeAll { $0.id == id }
             if let sourceChatId = closed?.sourceChatId {
-                sessionPhases.removeValue(forKey: sourceChatId)
+                sessionList.sessionPhases.removeValue(forKey: sourceChatId)
                 sessionLifecycleSequences.removeValue(forKey: sourceChatId)
             }
             if activeSessionId == id {
@@ -3617,7 +4166,8 @@ public final class AgentBridge: NSObject, ObservableObject {
                 )
             }
             guard let dict = result as? [String: Any] else {
-                return (nil, "Unexpected result")
+                let classified = await classifyJsCallFailure("empty/unbridgeable result", callable: "__ripulConnectToMachine")
+                return (nil, classified)
             }
             if let success = dict["success"] as? Bool, success {
                 let tabId = dict["tabId"] as? String
@@ -3627,13 +4177,19 @@ public final class AgentBridge: NSObject, ObservableObject {
                 await fetchSessions()
                 return (tabId, nil)
             } else {
-                let error = dict["error"] as? String ?? "Unknown error"
+                var error = dict["error"] as? String ?? "Unknown error"
+                if let code = dict["errorCode"] as? String { error = "\(code): \(error)" }
                 NSLog("[AgentBridge] connectToMachine failed: %@", error)
+                handleConsoleLog("ERROR: [CONN_DIAG] connectToMachine(\(machineId)) failed: \(error)")
+                if let diag = await fetchWebDiagnostics() {
+                    handleConsoleLog("WARN: [CONN_DIAG] diagnostics: \(diag)")
+                }
                 return (nil, error)
             }
         } catch {
             NSLog("[AgentBridge] connectToMachine error: %@", error.localizedDescription)
-            return (nil, error.localizedDescription)
+            let classified = await classifyJsCallFailure(error.localizedDescription, callable: "__ripulConnectToMachine")
+            return (nil, classified)
         }
     }
 
@@ -3662,7 +4218,8 @@ public final class AgentBridge: NSObject, ObservableObject {
             }
             logSessionStartMarker("ios.connect_with_provider_js_end")
             guard let dict = result as? [String: Any] else {
-                return (nil, "Unexpected result")
+                let classified = await classifyJsCallFailure("empty/unbridgeable result", callable: "__ripulConnectToMachineWithProvider")
+                return (nil, classified)
             }
             if let success = dict["success"] as? Bool, success {
                 let tabId = dict["tabId"] as? String
@@ -3673,12 +4230,73 @@ public final class AgentBridge: NSObject, ObservableObject {
                 logSessionStartMarker("ios.fetch_sessions_end", chatId: tabId, extra: "sessionCount=\(sessions.count)")
                 return (tabId, nil)
             } else {
-                let error = dict["error"] as? String ?? "Unknown error"
+                var error = dict["error"] as? String ?? "Unknown error"
+                if let code = dict["errorCode"] as? String { error = "\(code): \(error)" }
+                handleConsoleLog("ERROR: [CONN_DIAG] connectToMachineWithProvider(\(providerKey)) failed: \(error)")
+                if let diag = await fetchWebDiagnostics() {
+                    handleConsoleLog("WARN: [CONN_DIAG] diagnostics: \(diag)")
+                }
                 return (nil, error)
             }
         } catch {
             NSLog("[AgentBridge] connectToMachineWithProvider(%@) error: %@", providerKey, error.localizedDescription)
-            return (nil, error.localizedDescription)
+            let classified = await classifyJsCallFailure(error.localizedDescription, callable: "__ripulConnectToMachineWithProvider")
+            return (nil, classified)
+        }
+    }
+
+    /// Bulk-fetch the user's session tags as `{ sessionId: [tags] }`.
+    /// One authed request via the web app's metadata service — used to decorate
+    /// the native session list with lozenges. Returns empty on any failure.
+    @available(iOS 15.0, macOS 13.0, *)
+    public func getSessionTags() async -> [String: [String]] {
+        guard let webView else { return [:] }
+        do {
+            let result = try await webView.callAsyncJavaScript(
+                """
+                if (!window.__ripulGetSessionTags) return {};
+                return await window.__ripulGetSessionTags();
+                """,
+                contentWorld: .page
+            )
+            guard let dict = result as? [String: Any] else { return [:] }
+            var out: [String: [String]] = [:]
+            for (key, value) in dict {
+                if let arr = value as? [String] {
+                    out[key] = arr
+                } else if let arr = value as? [Any] {
+                    out[key] = arr.compactMap { $0 as? String }
+                }
+            }
+            return out
+        } catch {
+            NSLog("[AgentBridge] getSessionTags error: %@", error.localizedDescription)
+            return [:]
+        }
+    }
+
+    /// Replace the tag set for a session (keyed by its metadata id / sourceChatId).
+    /// Returns true on success.
+    @available(iOS 15.0, macOS 13.0, *)
+    @discardableResult
+    public func setSessionTags(sessionId: String, tags: [String]) async -> Bool {
+        guard let webView else { return false }
+        do {
+            let result = try await webView.callAsyncJavaScript(
+                """
+                if (!window.__ripulSetSessionTags) return {ok:false};
+                return await window.__ripulSetSessionTags(sessionId, tags);
+                """,
+                arguments: ["sessionId": sessionId, "tags": tags],
+                contentWorld: .page
+            )
+            if let dict = result as? [String: Any], let ok = dict["ok"] as? Bool {
+                return ok
+            }
+            return false
+        } catch {
+            NSLog("[AgentBridge] setSessionTags error: %@", error.localizedDescription)
+            return false
         }
     }
 
@@ -4390,7 +5008,7 @@ public final class AgentBridge: NSObject, ObservableObject {
             sessions.removeAll { $0.id == tabId }
             ChatSession.saveToCache(sessions)
             if let sourceChatId = deleted?.sourceChatId {
-                sessionPhases.removeValue(forKey: sourceChatId)
+                sessionList.sessionPhases.removeValue(forKey: sourceChatId)
                 sessionLifecycleSequences.removeValue(forKey: sourceChatId)
             }
             if activeSessionId == tabId {
@@ -4413,7 +5031,7 @@ public final class AgentBridge: NSObject, ObservableObject {
     public func clearLocalSessionState() {
         sessions.removeAll()
         ChatSession.saveToCache(sessions)
-        sessionPhases.removeAll()
+        sessionList.sessionPhases.removeAll()
         sessionLifecycleSequences.removeAll()
         activeSessionId = nil
     }
@@ -4439,7 +5057,8 @@ public final class AgentBridge: NSObject, ObservableObject {
                 contentWorld: .page
             )
             guard let dict = result as? [String: Any] else {
-                return (nil, nil, nil, "Unexpected result")
+                let classified = await classifyJsCallFailure("empty/unbridgeable result", callable: "__ripulOpenRemoteSession")
+                return (nil, nil, nil, classified)
             }
             if let success = dict["success"] as? Bool, success {
                 let tabId = dict["tabId"] as? String
@@ -4449,13 +5068,21 @@ public final class AgentBridge: NSObject, ObservableObject {
                 await fetchSessions()
                 return (tabId, provider, providerLabel, nil)
             } else {
-                let error = dict["error"] as? String ?? "Unknown error"
+                // Prefix the web app's stable errorCode so ConnectionDiagnosis can
+                // classify without string-sniffing the human message.
+                var error = dict["error"] as? String ?? "Unknown error"
+                if let code = dict["errorCode"] as? String { error = "\(code): \(error)" }
                 NSLog("[AgentBridge] openRemoteSession failed: %@", error)
+                handleConsoleLog("ERROR: [CONN_DIAG] openRemoteSession(\(sessionId)) failed: \(error)")
+                if let diag = await fetchWebDiagnostics() {
+                    handleConsoleLog("WARN: [CONN_DIAG] diagnostics: \(diag)")
+                }
                 return (nil, nil, nil, error)
             }
         } catch {
             NSLog("[AgentBridge] openRemoteSession error: %@", error.localizedDescription)
-            return (nil, nil, nil, error.localizedDescription)
+            let classified = await classifyJsCallFailure(error.localizedDescription, callable: "__ripulOpenRemoteSession")
+            return (nil, nil, nil, classified)
         }
     }
 
@@ -4470,7 +5097,7 @@ public final class AgentBridge: NSObject, ObservableObject {
         }
 
         // A new chat never has an active agent — reset active-chat state
-        // immediately. Don't touch `sessionPhases`; other chats retain theirs.
+        // immediately. Don't touch `sessionList.sessionPhases`; other chats retain theirs.
         resetActiveLifecycleState()
 
         do {
@@ -5000,6 +5627,41 @@ public final class AgentBridge: NSObject, ObservableObject {
         }
     }
 
+    /// Native chat scroller pipe.
+    ///
+    /// The web app forwards raw chat actions from `ChatActionsManager` over the
+    /// bridge so the chat renders natively while the WKWebView stays a comms
+    /// conduit. Routes into `nativeChat` (the scroller store) and logs a one-line
+    /// trace so the pipe stays observable (ordering, ids, streaming).
+    /// Enable from the web side via `window.__ripulSetNativeChatForwarding(true)`.
+    private func handleNativeChatMessage(_ message: [String: Any]) {
+        let kind = message["kind"] as? String ?? "?"
+        if kind == "reset" {
+            nativeChat.clear()
+            handleConsoleLog("LOG: [NativeChat] reset (backfill starting)")
+            return
+        }
+        guard let msg = message["message"] as? [String: Any] else {
+            handleConsoleLog("LOG: [NativeChat] \(kind) — malformed (no message payload)")
+            return
+        }
+        let messageId = msg["messageId"] as? String ?? "?"
+        if kind == "update" {
+            nativeChat.applyUpdate(msg)
+            let thinking = msg["thinking"] as? [String: Any]
+            let streaming = (thinking?["isStreaming"] as? Bool).map { String($0) } ?? "-"
+            let len = (thinking?["content"] as? String)?.count ?? 0
+            handleConsoleLog("LOG: [NativeChat] update id=\(messageId.suffix(6)) thinkingLen=\(len) streaming=\(streaming)")
+        } else {
+            nativeChat.applyAdd(msg)
+            let role = msg["role"] as? String ?? "?"
+            let method = msg["method"] as? String ?? "?"
+            let content = msg["content"] as? String ?? ""
+            let preview = content.count > 60 ? String(content.prefix(60)) + "…" : content
+            handleConsoleLog("LOG: [NativeChat] add id=\(messageId.suffix(6)) role=\(role) method=\(method) count=\(nativeChat.messages.count) content=\"\(preview)\"")
+        }
+    }
+
     private func handleMastheadConfig(_ message: [String: Any]) {
         let text = message["text"] as? String
         let imageUrl = message["imageUrl"] as? String
@@ -5059,21 +5721,21 @@ public final class AgentBridge: NSObject, ObservableObject {
     /// event so the active React component resets auto-scroll state.
     public func scrollToBottom() {
         NSLog("[AgentBridge] scrollToBottom -> JS bridge")
-        evaluateJavaScript("window.__ripulScrollToBottom?.()")
+        evaluateVoidJavaScript("window.__ripulScrollToBottom?.()")
     }
 
     /// Navigate to the next or previous user message in the chat.
     /// - Parameter direction: `"up"` for previous, `"down"` for next.
     public func scrollToUserMessage(direction: String = "up") {
         NSLog("[AgentBridge] scrollToUserMessage(\(direction)) -> JS bridge")
-        evaluateJavaScript("window.__ripulScrollToUserMessage?.('\(direction)')")
+        evaluateVoidJavaScript("window.__ripulScrollToUserMessage?.('\(direction)')")
     }
 
     /// Toggle the on-page element debugger HUD (`ElementDebuggerOverlay`).
     /// Called from the iPhone title-lozenge double-tap.
     public func toggleElementDebugger() {
         NSLog("[AgentBridge] toggleElementDebugger -> JS bridge")
-        evaluateJavaScript("window.__ripulToggleElementDebugger?.()")
+        evaluateVoidJavaScript("window.__ripulToggleElementDebugger?.()")
     }
 
     /// Ask the web file viewer to close (triggered by the native back button).
@@ -5085,32 +5747,32 @@ public final class AgentBridge: NSObject, ObservableObject {
         fileViewerExpanded = false
         fileViewerTitle = nil
         // Also close the (web-only) in-chat viewer if one is showing; harmless on native.
-        evaluateJavaScript("window.__ripulCloseFileViewer?.()")
+        evaluateVoidJavaScript("window.__ripulCloseFileViewer?.()")
     }
 
     /// Zoom in the markdown file viewer.
     public func fileViewerZoomIn() {
-        evaluateJavaScript("window.__ripulFileViewerZoomIn?.()")
+        evaluateVoidJavaScript("window.__ripulFileViewerZoomIn?.()")
     }
 
     /// Zoom out the markdown file viewer.
     public func fileViewerZoomOut() {
-        evaluateJavaScript("window.__ripulFileViewerZoomOut?.()")
+        evaluateVoidJavaScript("window.__ripulFileViewerZoomOut?.()")
     }
 
     /// Reset the markdown file viewer zoom to default.
     public func fileViewerZoomReset() {
-        evaluateJavaScript("window.__ripulFileViewerZoomReset?.()")
+        evaluateVoidJavaScript("window.__ripulFileViewerZoomReset?.()")
     }
 
     /// Toggle between rendered and raw markdown in the file viewer.
     public func fileViewerToggleRaw() {
-        evaluateJavaScript("window.__ripulFileViewerToggleRaw?.()")
+        evaluateVoidJavaScript("window.__ripulFileViewerToggleRaw?.()")
     }
 
     /// Toggle word wrap in the Monaco file viewer.
     public func fileViewerToggleWordWrap() {
-        evaluateJavaScript("window.__ripulFileViewerToggleWordWrap?.()")
+        evaluateVoidJavaScript("window.__ripulFileViewerToggleWordWrap?.()")
     }
 
     /// Set the find-in-file query. Returns total matches and the 1-based
@@ -5162,7 +5824,7 @@ public final class AgentBridge: NSObject, ObservableObject {
 
     /// Emit a TodoItemCreate event in the web app to open the "Add To Do" dialog.
     public func emitTodoItemCreate() {
-        evaluateJavaScript("window.__ripulCreateTodoItem?.()")
+        evaluateVoidJavaScript("window.__ripulCreateTodoItem?.()")
     }
 
     /// Fetch the signed-in user's todo items from the web app, along with the
@@ -5212,7 +5874,7 @@ public final class AgentBridge: NSObject, ObservableObject {
     public func openFavoriteFile(_ path: String) {
         if let data = try? JSONEncoder().encode(path),
            let jsonStr = String(data: data, encoding: .utf8) {
-            evaluateJavaScript("window.__ripulOpenFileViewer?.(\(jsonStr))")
+            evaluateVoidJavaScript("window.__ripulOpenFileViewer?.(\(jsonStr))")
         }
     }
 
@@ -5517,7 +6179,7 @@ public final class AgentBridge: NSObject, ObservableObject {
         }
 
         // Ordering guard — drop out-of-order updates.
-        if let existing = todoStates[chatId], existing.version >= version {
+        if let existing = sessionList.todoStates[chatId], existing.version >= version {
             return
         }
 
@@ -5531,7 +6193,7 @@ public final class AgentBridge: NSObject, ObservableObject {
             )
         }
         let state = TodoState(version: version, todos: items, updatedAt: Date())
-        todoStates[chatId] = state
+        sessionList.todoStates[chatId] = state
         todoStateSubject.send((chatId, state))
         NSLog("[AgentBridge] todos:update chatId=%@ version=%d items=%d",
               chatId, version, items.count)
@@ -5539,11 +6201,11 @@ public final class AgentBridge: NSObject, ObservableObject {
         // If the user is already inside this chat, mark the new version as
         // viewed immediately so the session list doesn't flash the plan
         // summary row the instant they navigate back out. The title-bar
-        // lozenge (which uses `dismissedTodoVersions`) is unaffected.
+        // lozenge (which uses `sessionList.dismissedTodoVersions`) is unaffected.
         if let activeId = activeSessionId,
            let session = sessions.first(where: { $0.id == activeId }),
            session.sourceChatId == chatId {
-            listViewedTodoVersions[chatId] = version
+            sessionList.listViewedTodoVersions[chatId] = version
         }
     }
 
@@ -5551,8 +6213,8 @@ public final class AgentBridge: NSObject, ObservableObject {
     /// the current version only — the next TodoWrite update (new version)
     /// re-shows the lozenge automatically.
     public func dismissTodoState(chatId: String) {
-        guard let current = todoStates[chatId] else { return }
-        dismissedTodoVersions[chatId] = current.version
+        guard let current = sessionList.todoStates[chatId] else { return }
+        sessionList.dismissedTodoVersions[chatId] = current.version
         // Signal high-frequency consumers (Live Activity) to clear.
         todoStateSubject.send((chatId, nil))
     }
@@ -5560,57 +6222,22 @@ public final class AgentBridge: NSObject, ObservableObject {
     /// Returns the todo state that should currently be visible for a chat,
     /// honoring any dismissal. Used by the title-bar lozenge to decide
     /// whether to render.
+    // These methods delegate to SessionListStore so call sites that haven't
+    // yet migrated to reading from bridge.sessionList directly keep compiling.
     public func visibleTodoState(for chatId: String) -> TodoState? {
-        guard let state = todoStates[chatId] else { return nil }
-        if dismissedTodoVersions[chatId] == state.version { return nil }
-        return state
+        sessionList.visibleTodoState(for: chatId)
     }
 
-    /// Session-list variant of `visibleTodoState`. Honors the same dismissal
-    /// marker as the lozenge plus a separate "viewed" marker so a plan
-    /// clears from the list once the user opens the chat, yet re-appears on
-    /// the next TodoWrite update. The in-chat lozenge is unaffected by the
-    /// viewed marker.
     public func visibleTodoStateForList(for chatId: String) -> TodoState? {
-        guard let state = visibleTodoState(for: chatId) else { return nil }
-        if let viewed = listViewedTodoVersions[chatId], viewed >= state.version {
-            return nil
-        }
-        return state
+        sessionList.visibleTodoStateForList(for: chatId)
     }
 
-    /// Returns a short "what's it doing right now" label for the session
-    /// list when a chat has a recent tool call and no plan summary to show.
-    /// Resolves either `.toolStart` or `.toolEnd` — Claude CLI tool actions
-    /// come through only as `.toolEnd` with status=success, so accepting
-    /// both is necessary to see CLI tool labels at all. The store is
-    /// cleared on turn completion/failure in `applySessionPhase` and on
-    /// the `completion` tool in the `agent:activity` handler, so finished
-    /// turns drop their label naturally.
     public func latestToolLabelForList(for chatId: String) -> String? {
-        guard let activity = latestActivityByChatId[chatId] else { return nil }
-        switch activity {
-        case .toolStart(let toolName, _, let toolLabel, _):
-            return toolLabel ?? toolName
-        case .toolEnd(let toolName, _, _, let toolLabel, _):
-            return toolLabel ?? toolName
-        default:
-            return nil
-        }
+        sessionList.latestToolLabelForList(for: chatId)
     }
 
-    /// Returns the full latest tool activity event (toolStart or toolEnd) for a
-    /// chat so row views can render icon + display name + detail together. Uses
-    /// the same latch as `latestToolLabelForList` — cleared on turn completion
-    /// and on the `completion` tool.
     public func latestToolActivityForList(for chatId: String) -> AgentActivityEvent? {
-        guard let activity = latestActivityByChatId[chatId] else { return nil }
-        switch activity {
-        case .toolStart, .toolEnd:
-            return activity
-        default:
-            return nil
-        }
+        sessionList.latestToolActivityForList(for: chatId)
     }
 
     /// Mark the currently-active session's todo state as viewed in the
@@ -5619,8 +6246,8 @@ public final class AgentBridge: NSObject, ObservableObject {
     private func markActiveSessionTodoViewedInList() {
         guard let activeId = activeSessionId,
               let session = sessions.first(where: { $0.id == activeId }),
-              let state = todoStates[session.sourceChatId] else { return }
-        listViewedTodoVersions[session.sourceChatId] = state.version
+              let state = sessionList.todoStates[session.sourceChatId] else { return }
+        sessionList.listViewedTodoVersions[session.sourceChatId] = state.version
     }
 
     // MARK: - Browser Capability Routing

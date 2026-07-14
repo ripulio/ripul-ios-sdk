@@ -30,6 +30,21 @@ public struct ConnectionDiagnosis {
             ConnectionDiagnosis(summary: summary, hint: hint, details: details)
         }
 
+        // Classified codes from AgentBridge.classifyJsCallFailure and the web
+        // callables' errorCode field — match these BEFORE the keyword sniffs so
+        // e.g. "web-context-dead (was: ... timed out)" lands on the right case.
+        if lower.contains("web-context-dead") || lower.contains("unsupported type") {
+            return d("The app stopped responding and reloaded itself",
+                     "Wait a few seconds for it to come back, then try again. If this keeps happening, copy the details below and send them to us.")
+        }
+        if lower.contains("web-crashed") {
+            return d("The app hit an internal error and reloaded itself",
+                     "Wait a few seconds, then try again. The crash details below tell us exactly what broke — please send them to us.")
+        }
+        if lower.contains("machine-offline") {
+            return d("That machine looks offline",
+                     "Its Ripul app hasn't checked in recently. Make sure Ripul is open and awake on it (and the machine isn't asleep), then try again.")
+        }
         if lower.contains("timed out") || lower.contains("timeout") || lower.contains("didn't come back") || lower.contains("unresponsive") {
             return d("Couldn’t reach the machine in time",
                      "It usually IS online — this is most often a stale link after the app was in the background. Try again; it normally connects on the second attempt. If it keeps failing, expand the details and send them to us.")
@@ -61,6 +76,7 @@ public struct ConnectionDiagnosisSheet: View {
 
     @State private var showDetails = false
     @State private var livePhase: String?
+    @State private var webDiagnostics: String?
 
     public init(rawError: String, bridge: AgentBridge? = nil, onClose: @escaping () -> Void) {
         self.rawError = rawError
@@ -70,6 +86,17 @@ public struct ConnectionDiagnosisSheet: View {
 
     private var diagnosis: ConnectionDiagnosis {
         ConnectionDiagnosis.classify(rawError: rawError, phase: livePhase)
+    }
+
+    /// Technical details + the one-shot client diagnostics snapshot (build,
+    /// crash state, machine last-seen, transport states) so a copied report
+    /// contains the actual client state, not just the error string.
+    private var fullDetails: String {
+        var text = diagnosis.details
+        if let webDiagnostics {
+            text += "\n\nClient diagnostics:\n\(webDiagnostics)"
+        }
+        return text
     }
 
     public var body: some View {
@@ -91,11 +118,14 @@ public struct ConnectionDiagnosisSheet: View {
             }
             DisclosureGroup(isExpanded: $showDetails) {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text(diag.details)
-                        .font(.system(.caption, design: .monospaced))
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    Button { copyDetails(diag.details) } label: {
+                    ScrollView {
+                        Text(fullDetails)
+                            .font(.system(.caption, design: .monospaced))
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .frame(maxHeight: 260)
+                    Button { copyDetails(fullDetails) } label: {
                         Label("Copy details", systemImage: "doc.on.doc").font(.caption)
                     }
                 }
@@ -114,9 +144,11 @@ public struct ConnectionDiagnosisSheet: View {
         .presentationDetents(showDetails ? [.large] : [.medium])
         #endif
         // Best-effort: pull the live connect-phase trace so the details name WHERE
-        // the connect actually stalled (local IDB vs the relay handshake).
+        // the connect actually stalled (local IDB vs the relay handshake), plus
+        // the full client diagnostics snapshot for the copyable report.
         .task {
             if let p = await bridge?.getConnectPhase() { livePhase = p }
+            if let d = await bridge?.fetchWebDiagnostics() { webDiagnostics = d }
         }
     }
 

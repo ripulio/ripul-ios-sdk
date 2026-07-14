@@ -10,11 +10,16 @@ import SwiftUI
 @MainActor
 public struct TodoLozenge: View {
     @ObservedObject var bridge: AgentBridge
+    // Observe the session-list store directly: the todo maps live there now, so
+    // the lozenge must observe it to re-render on todo updates (observing
+    // `bridge` no longer sees these changes).
+    @ObservedObject private var store: SessionListStore
     let chatId: String
     @State private var showingExpanded = false
 
     public init(bridge: AgentBridge, chatId: String) {
         self.bridge = bridge
+        self._store = ObservedObject(wrappedValue: bridge.sessionList)
         self.chatId = chatId
     }
 
@@ -24,8 +29,8 @@ public struct TodoLozenge: View {
                 lozengeButton(state: state)
             }
         }
-        .animation(.easeInOut(duration: 0.2), value: bridge.todoStates[chatId]?.version ?? -1)
-        .animation(.easeInOut(duration: 0.2), value: bridge.dismissedTodoVersions[chatId] ?? -1)
+        .animation(.easeInOut(duration: 0.2), value: store.todoStates[chatId]?.version ?? -1)
+        .animation(.easeInOut(duration: 0.2), value: store.dismissedTodoVersions[chatId] ?? -1)
     }
 
     @ViewBuilder
