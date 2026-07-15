@@ -140,6 +140,10 @@ struct CmsAgGridBlockView: View {
         var pinned: String?
         /// Explicit per-column image config — the cards projection renders it.
         var image: [String: CmsJSON]?
+        /// Render the cell as a link that drills — publishes the row to the
+        /// shared selection so a modal/drawer watching this query opens.
+        /// Independent of `rowSelectionMode` (a drill grid needn't be selectable).
+        var drillLink: Bool
         var id: String { key }
     }
 
@@ -160,7 +164,8 @@ struct CmsAgGridBlockView: View {
                 excludeFromTotals: obj.bool("excludeFromTotals") ?? false,
                 hideDetailValue: obj.bool("hideDetailValue") ?? false,
                 pinned: obj.string("pinned"),
-                image: obj.object("image")
+                image: obj.object("image"),
+                drillLink: obj.bool("drillLink") ?? false
             )
         }
         // View columnOrder (runtime state) orders columns; unknown keys keep
@@ -225,7 +230,7 @@ struct CmsAgGridBlockView: View {
                 .padding(12)
         case .ok(let result):
             let cols = columns.isEmpty
-                ? result.schema.map { Column(key: $0.name, valueFrom: $0.name, label: CmsRecordCardsBlockView.humanize($0.name), format: nil, width: nil, rowGroup: false, aggFunc: nil, excludeFromTotals: false, hideDetailValue: false, pinned: nil, image: nil) }
+                ? result.schema.map { Column(key: $0.name, valueFrom: $0.name, label: CmsRecordCardsBlockView.humanize($0.name), format: nil, width: nil, rowGroup: false, aggFunc: nil, excludeFromTotals: false, hideDetailValue: false, pinned: nil, image: nil, drillLink: false) }
                 : columns
             let rows = displayRows(result.rows, columns: cols)
             VStack(alignment: .leading, spacing: 8) {
@@ -501,17 +506,19 @@ struct CmsAgGridBlockView: View {
     private func listRow(_ row: [String: CmsJSON], title: Column?, trailing: Column?, subtitle: [Column]) -> some View {
         let selected = isSelected(row)
         return Button {
-            // Row tap publishes selection (single/multi); a no-selection grid
-            // is inert on tap — mirroring web, where detail is driven by an
-            // authored modal/drawer watching this query, not a built-in sheet.
-            toggle(row)
+            // A drill column makes the row a link to the detail — publish the
+            // selection unconditionally so a watching modal/drawer opens. With
+            // no drill column, the tap publishes selection (single/multi) and a
+            // no-selection grid is inert — the web reading, where detail is
+            // driven by an authored modal/drawer watching this query.
+            if hasDrillLink { drill(row) } else { toggle(row) }
         } label: {
             HStack(alignment: .center, spacing: 10) {
                 VStack(alignment: .leading, spacing: 2) {
                     if let title {
                         Text(cellText(row, title))
                             .font(.subheadline.weight(.medium))
-                            .foregroundColor(.primary)
+                            .foregroundColor(hasDrillLink ? drillLinkColor : .primary)
                     }
                     if !subtitle.isEmpty {
                         Text(subtitle.map { "\($0.label): \(cellText(row, $0))" }.joined(separator: " · "))
@@ -526,7 +533,13 @@ struct CmsAgGridBlockView: View {
                         .font(.subheadline.weight(.semibold))
                         .foregroundColor(.primary)
                 }
-                if selectionMode != "none" {
+                // Drill takes the row's tap target — show a disclosure chevron.
+                // Otherwise a selectable grid shows its checkmark.
+                if hasDrillLink {
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.semibold))
+                        .foregroundColor(.secondary.opacity(0.5))
+                } else if selectionMode != "none" {
                     Image(systemName: selected ? "checkmark.circle.fill" : "circle")
                         .font(.subheadline)
                         .foregroundColor(selected ? .accentColor : .secondary.opacity(0.4))
@@ -723,12 +736,31 @@ struct CmsAgGridBlockView: View {
                     .padding(.horizontal, 6)
             }
             ForEach(bodyColumns) { column in
-                Text(cellText(row, column))
-                    .font(.caption)
-                    .lineLimit(1)
-                    .frame(width: columnWidth(column), alignment: .leading)
-                    .padding(.vertical, 7)
-                    .padding(.horizontal, 6)
+                let text = cellText(row, column)
+                if column.drillLink && !text.isEmpty {
+                    // A drill cell is its own tap target: the Button consumes
+                    // the tap so the row's selection gesture doesn't also fire,
+                    // scoping the click-through to this cell (web parity).
+                    Button { drill(row) } label: {
+                        Text(text)
+                            .font(.caption)
+                            .underline()
+                            .lineLimit(1)
+                            .foregroundColor(drillLinkColor)
+                            .frame(width: columnWidth(column), alignment: .leading)
+                            .padding(.vertical, 7)
+                            .padding(.horizontal, 6)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                } else {
+                    Text(text)
+                        .font(.caption)
+                        .lineLimit(1)
+                        .frame(width: columnWidth(column), alignment: .leading)
+                        .padding(.vertical, 7)
+                        .padding(.horizontal, 6)
+                }
             }
         }
         .background(
@@ -946,6 +978,23 @@ struct CmsAgGridBlockView: View {
         } else {
             runtime.setSelectedRows(querySlug, rows: already ? current.filter { $0 != row } : current + [row])
         }
+    }
+
+    /// Does any visible column drive a drill? Then a row/cell tap opens the
+    /// detail (a modal/drawer watching this query), not multi-select.
+    private var hasDrillLink: Bool { columns.contains { $0.drillLink } }
+
+    /// Authored link tint (the web `accentColor` fed to DrillLinkCellRenderer),
+    /// falling back to the native accent.
+    private var drillLinkColor: Color {
+        runtime.theme.resolve(props.string("accentColor")) ?? .accentColor
+    }
+
+    /// Drill: publish this row as the query's selection — regardless of
+    /// `rowSelectionMode` — so an authored modal/drawer watching `querySlug`
+    /// opens. Twin of the web drillLink handler (setSelectedRows(querySlug,[row])).
+    private func drill(_ row: [String: CmsJSON]) {
+        runtime.setSelectedRows(querySlug, rows: [row])
     }
 
     // MARK: - Aggregation output (unchanged data role)
