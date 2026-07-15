@@ -245,10 +245,16 @@ final class CmsPageLoader: ObservableObject {
                     return
                 }
                 membership = me
-            } catch {
+            } catch let CmsClientError.http(code, _) where code == 401 || code == 403 {
                 // Invite-only portals refuse non-members and blocked members
-                // at the auth gate (401) — same outcome as isMember: false.
+                // at the auth gate — a definitive access verdict.
                 state = .noAccess("You don't have access to this portal. Ask an administrator to invite you.")
+                return
+            } catch {
+                // Anything else (offline, 5xx, missing credentials) is a
+                // FAILURE, surfaced as an error with its cause — it must
+                // never masquerade as an access verdict.
+                state = .error("Membership check failed: \(error.localizedDescription)")
                 return
             }
         } else {
