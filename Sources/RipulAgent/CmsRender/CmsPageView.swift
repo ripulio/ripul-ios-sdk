@@ -29,15 +29,24 @@ public struct CmsPageView: View {
     /// the portal full screen dismiss here. nil = unclaimed swipes no-op.
     public var onEdgeExit: (() -> Void)?
 
+    /// Whether the portal owns the SCREEN EDGES for its own drawer / edge
+    /// navigation. Default true (standalone portal). Set false when the page
+    /// is pushed inside a host that owns navigation (e.g. WAC opening a page
+    /// from its own slide-out sidebar): the CMS then leaves both screen edges
+    /// alone, so the host's edge-swipe and the nav-controller back-swipe keep
+    /// working instead of the CMS drawer hijacking the left edge.
+    public var edgeSwipeEnabled: Bool
+
     /// - Parameters:
     ///   - cmsId: The CMS definition id.
     ///   - pageSlug: Page to render; nil renders the definition's first page.
     ///   - clientConfig: Auth + base URL, following the SDK's injected-token pattern.
-    public init(cmsId: String, pageSlug: String? = nil, clientConfig: CmsClientConfig, visitorSiteKey: String? = nil, onEdgeExit: (() -> Void)? = nil) {
+    public init(cmsId: String, pageSlug: String? = nil, clientConfig: CmsClientConfig, visitorSiteKey: String? = nil, onEdgeExit: (() -> Void)? = nil, edgeSwipeEnabled: Bool = true) {
         self.cmsId = cmsId
         self.pageSlug = pageSlug
         self.visitorSiteKey = visitorSiteKey
         self.onEdgeExit = onEdgeExit
+        self.edgeSwipeEnabled = edgeSwipeEnabled
         _loader = StateObject(wrappedValue: CmsPageLoader(cmsId: cmsId, clientConfig: clientConfig, visitorSiteKey: visitorSiteKey))
     }
 
@@ -112,14 +121,24 @@ public struct CmsPageView: View {
                 // unclaimed left-edge swipe — no left panel, or the drawer
                 // already open — delegates up to the host via onEdgeExit
                 // (first swipe = hamburger, second = exit).
+                //
+                // When embedded in a host that owns navigation
+                // (edgeSwipeEnabled == false) the CMS claims NEITHER edge, so
+                // the host's slide-out and the nav back-swipe keep the left
+                // edge. The drawer overlay stays — it only shows when opened
+                // by a burger tap, never by an edge grab.
                 .overlay(alignment: .trailing) {
-                    CmsEdgeSwipeStrip(runtime: loader.runtime, edge: .trailing, onExit: nil)
+                    if edgeSwipeEnabled {
+                        CmsEdgeSwipeStrip(runtime: loader.runtime, edge: .trailing, onExit: nil)
+                    }
                 }
                 .overlay {
                     CmsDrawerOverlay(runtime: loader.runtime)
                 }
                 .overlay(alignment: .leading) {
-                    CmsEdgeSwipeStrip(runtime: loader.runtime, edge: .leading, onExit: onEdgeExit)
+                    if edgeSwipeEnabled {
+                        CmsEdgeSwipeStrip(runtime: loader.runtime, edge: .leading, onExit: onEdgeExit)
+                    }
                 }
             }
         }
