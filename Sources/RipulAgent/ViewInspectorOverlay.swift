@@ -180,6 +180,8 @@ struct InspectedView {
     let restorationIdentifier: String?
     let container: String?             // nearest app-defined ancestor view (e.g. a cell)
     let propertyRef: String?           // "Owner.property" if a VC/cell holds this view (IBOutlet or stored prop)
+    let enclosingControl: String?      // nearest UIControl up the tree + its id ("UIButton [addShift.save]")
+                                       // — a tap lands on a button's gradient/image subview, not the button
 
     struct LayerInfo {
         let cornerRadius: CGFloat
@@ -192,13 +194,16 @@ struct InspectedView {
     static func inspect(_ view: UIView, depth: Int = 0, resolvedIdentifier: String? = nil) -> InspectedView {
         let className = String(describing: type(of: view))
         let frameInWindow = view.convert(view.bounds, to: nil)
-        let resolvedId = resolvedIdentifier
+        // The leaf's OWN identifier first (a UIKit accessibilityIdentifier set in code), then the
+        // SwiftUI spatial-registry match. Previously only the latter was used, so UIKit identifiers
+        // never surfaced.
+        let resolvedId = nonEmpty(view.accessibilityIdentifier) ?? resolvedIdentifier
         let vcChain = viewControllerChain(of: view)
         return InspectedView(
             view: view,
             className: className,
             accessibilityId: resolvedId,
-            accessibilityLabel: view.accessibilityLabel,
+            accessibilityLabel: view.accessibilityLabel ?? nearestControlLabel(of: view),
             frame: view.frame,
             frameInWindow: frameInWindow,
             backgroundColor: view.backgroundColor,
@@ -222,8 +227,38 @@ struct InspectedView {
             controlActions: controlActions(of: view),
             restorationIdentifier: nonEmpty(view.restorationIdentifier),
             container: nearestAppView(of: view, excluding: className),
-            propertyRef: propertyReference(of: view)
+            propertyRef: propertyReference(of: view),
+            enclosingControl: nearestControl(of: view, excluding: className)
         )
+    }
+
+    /// The nearest `UIControl` at or above `view` (its own class if `view` is one), with its
+    /// accessibilityIdentifier — so a tap on a button's internal gradient/image subview still
+    /// reports the button (e.g. "UIButton [addShift.save]"). nil when nothing above is a control,
+    /// or when the control IS `view` itself (already the class shown).
+    static func nearestControl(of view: UIView, excluding ownClassName: String) -> String? {
+        var v: UIView? = view
+        while let cur = v {
+            if let control = cur as? UIControl {
+                let cls = String(describing: type(of: control))
+                if cur === view && cls == ownClassName { return nil }   // the leaf already IS the control
+                if let id = nonEmpty(control.accessibilityIdentifier) { return "\(cls) [\(id)]" }
+                return cls
+            }
+            v = cur.superview
+        }
+        return nil
+    }
+
+    /// The accessibilityLabel of the nearest enclosing control — so a tapped subview inherits the
+    /// button's VoiceOver label as a hint.
+    static func nearestControlLabel(of view: UIView) -> String? {
+        var v: UIView? = view.superview
+        while let cur = v {
+            if cur is UIControl, let label = nonEmpty(cur.accessibilityLabel) { return label }
+            v = cur.superview
+        }
+        return nil
     }
 
     // MARK: Source-finding extractors
@@ -470,6 +505,7 @@ struct InspectedView {
         if let p = propertyRef { lines.append("property: \(p)") }
         if let c = container { lines.append("container: \(c)") }
         if let vc = owningViewController { lines.append("controller: \(vc)") }
+        if let ctrl = enclosingControl { lines.append("control: \(ctrl)") }
         if let t = text { lines.append("text: \"\(t)\"") }
         if let img = imageName { lines.append("image: \(img)") }
         if let aid = accessibilityId, !aid.isEmpty { lines.append("a11yId: \(aid)") }
