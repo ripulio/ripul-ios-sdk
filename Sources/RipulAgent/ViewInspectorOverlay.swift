@@ -182,6 +182,8 @@ struct InspectedView {
     let propertyRef: String?           // "Owner.property" if a VC/cell holds this view (IBOutlet or stored prop)
     let enclosingControl: String?      // nearest UIControl up the tree + its id ("UIButton [addShift.save]")
                                        // — a tap lands on a button's gradient/image subview, not the button
+    let hitLeafClass: String?          // the actual view under the finger when it differs from the
+                                       // inspected element (i.e. selection was promoted to a control)
 
     struct LayerInfo {
         let cornerRadius: CGFloat
@@ -191,7 +193,7 @@ struct InspectedView {
         let shadowOpacity: Float
     }
 
-    static func inspect(_ view: UIView, depth: Int = 0, resolvedIdentifier: String? = nil) -> InspectedView {
+    static func inspect(_ view: UIView, depth: Int = 0, resolvedIdentifier: String? = nil, hitLeaf: UIView? = nil) -> InspectedView {
         let className = String(describing: type(of: view))
         let frameInWindow = view.convert(view.bounds, to: nil)
         // The leaf's OWN identifier first (a UIKit accessibilityIdentifier set in code), then the
@@ -228,7 +230,8 @@ struct InspectedView {
             restorationIdentifier: nonEmpty(view.restorationIdentifier),
             container: nearestAppView(of: view, excluding: className),
             propertyRef: propertyReference(of: view),
-            enclosingControl: nearestControl(of: view, excluding: className)
+            enclosingControl: nearestControl(of: view, excluding: className),
+            hitLeafClass: hitLeaf.map { String(describing: type(of: $0)) }
         )
     }
 
@@ -501,7 +504,11 @@ struct InspectedView {
 
     /// A compact, greppable one-paste reference for finding this element in source.
     func sourceReference() -> String {
-        var lines = ["class: \(className)"]
+        // Headline carries the identity inline so a control reads "class: UIButton [addSick.save]"
+        // at a glance, not a bare class with the id buried further down.
+        let idBadge = (accessibilityId?.isEmpty == false) ? " [\(accessibilityId!)]" : ""
+        var lines = ["class: \(className)\(idBadge)"]
+        if let leaf = hitLeafClass { lines.append("tapped: \(leaf)") }   // actual view under the finger
         if let p = propertyRef { lines.append("property: \(p)") }
         if let c = container { lines.append("container: \(c)") }
         if let vc = owningViewController { lines.append("controller: \(vc)") }
@@ -659,20 +666,41 @@ class ViewInspectorController: UIView {
         // that make up most of the UI. Refine downward through the hit view's own
         // subtree — a geometric walk that ignores `isUserInteractionEnabled` (and
         // our own overlay) — to reach the deepest leaf under the cursor.
-        let target = deepestDescendant(of: hitView, at: windowPoint)
+        let leaf = deepestDescendant(of: hitView, at: windowPoint)
+
+        // Promote a decorative leaf to its enclosing control: a tap on a button's gradient image or
+        // its title label should inspect the BUTTON (headline "UIButton [addSick.save]"), not the
+        // internal UIImageView/UIButtonLabel. Standalone labels — not inside a control — stay
+        // themselves. `hitLeaf` records what was actually under the finger.
+        let target = controlToInspect(for: leaf)
+        let hitLeaf = (target !== leaf) ? leaf : nil
 
         // Spatial lookup: find the tightest .uiKitIdentifier() match at this point
         let match = UIKitIdentifierRegistry.shared.bestMatch(at: windowPoint)
 
-        // Highlight the registry match's frame if available, otherwise the hit view
+        // Highlight the registry match's frame if available, otherwise the inspected element
         let highlightView = match?.view ?? target
         let frameInWindow = highlightView.convert(highlightView.bounds, to: nil)
         let frameInSelf = convert(frameInWindow, from: nil)
         highlightLayer.path = UIBezierPath(roundedRect: frameInSelf, cornerRadius: highlightView.layer.cornerRadius).cgPath
 
         // Inspect — pass the resolved identifier from spatial lookup
-        let info = InspectedView.inspect(target, depth: viewDepth(target), resolvedIdentifier: match?.identifier)
+        let info = InspectedView.inspect(target, depth: viewDepth(target), resolvedIdentifier: match?.identifier, hitLeaf: hitLeaf)
         onInspect?(info)
+    }
+
+    /// The element to inspect for a tapped `leaf`: the nearest enclosing `UIControl` (so a tap on a
+    /// button's gradient/title subview reports the button), else the leaf itself when it isn't inside
+    /// a control. Already-a-control leaves are returned unchanged.
+    private func controlToInspect(for leaf: UIView) -> UIView {
+        if leaf is UIControl { return leaf }
+        var v = leaf.superview
+        while let cur = v {
+            if isInspectorOwnView(cur) { break }
+            if cur is UIControl { return cur }
+            v = cur.superview
+        }
+        return leaf
     }
 
     /// True if `v` is part of the inspector's own overlay (the touch layer, the
