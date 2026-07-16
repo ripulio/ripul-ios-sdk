@@ -1687,6 +1687,179 @@ class DraggableHUDContainerVC<Content: View>: UIViewController, UIGestureRecogni
     }
 }
 
+// MARK: - Screen audit (completeness of runtime identity)
+
+/// Walks a screen's live view tree and classifies every interactive/text control by whether it can
+/// be identified at runtime — so "is this whole screen instrumented?" is a report you run, not a
+/// claim. Runs after layout, so it sees EVERYTHING rendered (storyboard-only labels, programmatic
+/// controls, outlet-less action buttons) that code-side enumeration structurally misses.
+struct ScreenAudit {
+    enum Bucket: Int { case anonymous = 0, auto = 1, named = 2 }
+
+    struct Item: Identifiable {
+        let id = UUID()
+        let className: String
+        let identity: String      // the resolved identity ("a11yId: …", "property: …", "text: …", "—")
+        let bucket: Bucket
+        weak var view: UIView?
+    }
+
+    let items: [Item]
+    var named: Int { items.filter { $0.bucket == .named }.count }
+    var auto: Int { items.filter { $0.bucket == .auto }.count }
+    var anonymous: Int { items.filter { $0.bucket == .anonymous }.count }
+
+    static func run(on root: UIView) -> ScreenAudit {
+        var items: [Item] = []
+
+        func hasControlAncestor(_ v: UIView) -> Bool {
+            var s = v.superview
+            while let cur = s { if cur is UIControl { return true }; s = cur.superview }
+            return false
+        }
+        // A standalone, auditable element: a control, or a text/tappable view that ISN'T inside a
+        // control (so a button's internal label/image counts as the button, not twice).
+        func isAuditable(_ v: UIView) -> Bool {
+            if v is UIControl { return true }
+            if hasControlAncestor(v) { return false }
+            if v is UILabel || v is UITextField || v is UITextView { return true }
+            if (v.gestureRecognizers ?? []).contains(where: { $0 is UITapGestureRecognizer }) { return true }
+            return false
+        }
+        func empty(_ s: String?) -> Bool { (s ?? "").trimmingCharacters(in: .whitespaces).isEmpty }
+
+        func classify(_ v: UIView) -> Item {
+            let cls = String(describing: type(of: v))
+            if let aid = v.accessibilityIdentifier, !empty(aid) {
+                return Item(className: cls, identity: "a11yId: \(aid)", bucket: .named, view: v)
+            }
+            if let p = InspectedView.propertyReference(of: v) {
+                return Item(className: cls, identity: "property: \(p)", bucket: .auto, view: v)
+            }
+            if let a = InspectedView.controlActions(of: v).first {
+                return Item(className: cls, identity: "action: \(a)", bucket: .auto, view: v)
+            }
+            if let t = InspectedView.textContent(of: v), !empty(t) {
+                return Item(className: cls, identity: "text: \"\(t)\"", bucket: .auto, view: v)
+            }
+            if let img = InspectedView.imageName(of: v) {
+                return Item(className: cls, identity: "image: \(img)", bucket: .auto, view: v)
+            }
+            return Item(className: cls, identity: "—", bucket: .anonymous, view: v)
+        }
+
+        func walk(_ v: UIView) {
+            let visible = !v.isHidden && v.alpha > 0.01
+            if visible {
+                if v.tag == ripulViewExplorerOverlayTag { return }   // skip our own overlay subtree
+                if isAuditable(v) { items.append(classify(v)) }
+                for sub in v.subviews { walk(sub) }
+            }
+        }
+        walk(root)
+        // Anonymous first (the only bucket that needs hand-tagging), then auto, then named.
+        return ScreenAudit(items: items.sorted { $0.bucket.rawValue < $1.bucket.rawValue })
+    }
+
+    /// A copy-paste summary for the whole screen.
+    func report() -> String {
+        var lines = ["Screen audit — \(items.count) controls  ·  named \(named)  ·  auto \(auto)  ·  anonymous \(anonymous)", ""]
+        for it in items { lines.append("\(bucketMark(it.bucket)) \(it.className) — \(it.identity)") }
+        return lines.joined(separator: "\n")
+    }
+    private func bucketMark(_ b: Bucket) -> String { b == .named ? "✓" : (b == .auto ? "·" : "✗") }
+}
+
+// MARK: - Audit tab
+
+/// The screen-completeness report inside the explorer: counts by bucket + the full control list,
+/// anonymous first. Tap a row to jump-inspect it; copy the whole report.
+@available(iOS 16.0, *)
+struct InspectorAuditTab: View {
+    let anchorView: UIView?
+    let onSelect: (UIView) -> Void
+    @State private var audit: ScreenAudit?
+    @State private var copied = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let audit = audit {
+                HStack(spacing: 10) {
+                    countPill("named", audit.named, .green)
+                    countPill("auto", audit.auto, .cyan)
+                    countPill("anon", audit.anonymous, audit.anonymous == 0 ? .gray : .red)
+                    Spacer()
+                    Button { rescan() } label: { badge("rescan", .white.opacity(0.15)) }.buttonStyle(.plain)
+                    Button { UIPasteboard.general.string = audit.report(); copied = true } label: {
+                        badge(copied ? "copied" : "copy", .pink.opacity(0.85))
+                    }.buttonStyle(.plain)
+                }
+                Text(audit.anonymous == 0
+                     ? "Every control is identifiable."
+                     : "\(audit.anonymous) control(s) have no runtime identity — hand-tag these.")
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(audit.anonymous == 0 ? .green : .red)
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 3) {
+                        ForEach(audit.items) { item in row(item) }
+                    }
+                }
+            } else {
+                Text("Auditing…").font(.system(size: 11, design: .monospaced)).foregroundStyle(.gray)
+            }
+        }
+        .onAppear { if audit == nil { rescan() } }
+    }
+
+    private func row(_ item: ScreenAudit.Item) -> some View {
+        Button {
+            if let v = item.view { onSelect(v) }
+        } label: {
+            HStack(spacing: 6) {
+                Circle().fill(color(item.bucket)).frame(width: 6, height: 6)
+                Text(item.className).font(.system(size: 11, weight: .semibold, design: .monospaced)).foregroundStyle(.white)
+                Text(item.identity).font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(.gray).lineLimit(1)
+                Spacer(minLength: 0)
+            }
+            .padding(.vertical, 2)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func color(_ b: ScreenAudit.Bucket) -> Color {
+        b == .named ? .green : (b == .auto ? .cyan : .red)
+    }
+    private func countPill(_ label: String, _ n: Int, _ c: Color) -> some View {
+        HStack(spacing: 4) {
+            Text("\(n)").font(.system(size: 13, weight: .bold, design: .monospaced)).foregroundStyle(c)
+            Text(label).font(.system(size: 9, design: .monospaced)).foregroundStyle(.gray)
+        }
+    }
+    private func badge(_ t: String, _ bg: Color) -> some View {
+        Text(t).font(.system(size: 10, weight: .semibold, design: .monospaced)).foregroundStyle(.white)
+            .padding(.horizontal, 8).padding(.vertical, 3).background(bg).clipShape(RoundedRectangle(cornerRadius: 5))
+    }
+
+    private func rescan() {
+        copied = false
+        guard let root = screenRoot() else { audit = ScreenAudit(items: []); return }
+        audit = ScreenAudit.run(on: root)
+    }
+
+    /// The screen to audit: the top-most view controller's view in the anchor's window (or the key
+    /// window) — the whole visible screen, independent of what's currently selected.
+    private func screenRoot() -> UIView? {
+        let window = anchorView?.window
+            ?? UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+                .flatMap { $0.windows }.first { $0.isKeyWindow }
+        guard var vc = window?.rootViewController else { return window }
+        while let presented = vc.presentedViewController, !presented.isBeingDismissed { vc = presented }
+        return vc.view
+    }
+}
+
 // MARK: - HUD Panel
 
 @available(iOS 16.0, *)
@@ -1710,6 +1883,7 @@ struct InspectorHUD: View {
         case properties = "Properties"
         case edit = "Edit"
         case tree = "Tree"
+        case audit = "Audit"
     }
 
     var body: some View {
@@ -1842,9 +2016,11 @@ struct InspectorHUD: View {
         }
     }
 
-    @ViewBuilder
-    private var bodyContent: some View {
-        if let info = inspected {
+    @ViewBuilder private var bodyContent: some View {
+        if tab == .audit {
+            // Screen-wide — works with or without a current selection.
+            InspectorAuditTab(anchorView: inspected?.view, onSelect: onSelectView)
+        } else if let info = inspected {
             switch tab {
             case .properties:
                 InspectorPropertiesTab(info: info)
@@ -1853,9 +2029,11 @@ struct InspectorHUD: View {
                     .id(ObjectIdentifier(info.view))   // reset editor state per selection
             case .tree:
                 InspectorTreeTab(selectedView: info.view, onSelect: onSelectView)
+            case .audit:
+                EmptyView()   // handled above
             }
         } else {
-            Text("Drag your finger to inspect views")
+            Text("Drag your finger to inspect views — or open the Audit tab")
                 .font(.system(size: 11, design: .monospaced))
                 .foregroundStyle(.gray)
                 .italic()
