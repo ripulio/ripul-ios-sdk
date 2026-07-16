@@ -31,6 +31,9 @@ public final class CmsRuntime: ObservableObject {
     /// Shared column views (columnViewRef target), keyed by slug — set by the
     /// loader from the definition; blocks resolve their `columnViewRef`.
     public var columnViews: [String: CmsColumnView] = [:]
+    /// Shared card views (cardViewRef target), keyed by slug — set by the
+    /// loader; the grid's cards projection resolves its `cardViewRef`.
+    public var cardViews: [String: CmsCardView] = [:]
     /// Portal theme — `color.*` tokens resolve against it. Set by the loader.
     public var theme = CmsPortalTheme(config: nil)
 

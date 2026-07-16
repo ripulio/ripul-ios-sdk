@@ -588,8 +588,16 @@ struct CmsAgGridBlockView: View {
 
     // MARK: - Cards projection (reuse the Record Cards presentation)
 
+    /// A `cardViewRef` designs the cards distinctly from the grid columns — a
+    /// schema-wide Card View (own field set + card chrome). Resolved from the
+    /// runtime; a blank/absent ref falls back to the auto-synth from columns.
+    private var cardView: CmsCardView? {
+        guard let ref = props.string("cardViewRef"), !ref.isEmpty else { return nil }
+        return runtime.cardViews[ref]
+    }
+
     private func cardsProjection(columns: [Column]) -> some View {
-        // Synthesize a recordCards block from the grid's config — the
+        // Synthesize a recordCards block for the cards presentation — the
         // projection is presentation-only, so the shared machinery (selection
         // publishing, formats, theme) behaves identically.
         var props: [String: CmsJSON] = [
@@ -597,16 +605,31 @@ struct CmsAgGridBlockView: View {
             "rowSelectionMode": .string(selectionMode),
             "cardVariant": .string("outlined"),
         ]
-        props["fields"] = .array(columns.map { col in
-            var field: [String: CmsJSON] = [
-                "key": .string(col.key),
-                "valueFrom": .string(col.valueFrom),
-                "label": .string(col.label),
-                "format": col.format.map { .string($0) } ?? .null,
-            ]
-            if let image = col.image { field["image"] = .object(image) }
-            return .object(field)
-        })
+
+        if let cardView, let cardFields = cardView.columns, !cardFields.isEmpty {
+            // Designed cards: the Card View owns the field set (its own
+            // visibility/order/labels/format/image) and the card chrome.
+            props["fields"] = .array(cardFields)
+            // Spread the chrome (recordCards-compatible props: title,
+            // imageColumn, imageShape, imageHeight, cardVariant, showImageInCard)
+            // straight onto the synthesized card.
+            if case .object(let chrome)? = cardView.card {
+                for (key, value) in chrome { props[key] = value }
+            }
+        } else {
+            // Auto: derive the cards from the grid's own columns.
+            props["fields"] = .array(columns.map { col in
+                var field: [String: CmsJSON] = [
+                    "key": .string(col.key),
+                    "valueFrom": .string(col.valueFrom),
+                    "label": .string(col.label),
+                    "format": col.format.map { .string($0) } ?? .null,
+                ]
+                if let image = col.image { field["image"] = .object(image) }
+                return .object(field)
+            })
+        }
+
         let synthetic = CmsBlock(
             id: block.id, slug: block.slug, name: block.name,
             hidden: nil, visibleOn: nil, type: "recordCards",

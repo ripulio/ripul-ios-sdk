@@ -212,6 +212,10 @@ final class CmsPageLoader: ObservableObject {
                     (definition.columnViews ?? []).map { ($0.slug, $0) },
                     uniquingKeysWith: { first, _ in first }
                 )
+                self.runtime.cardViews = Dictionary(
+                    (definition.cardViews ?? []).map { ($0.slug, $0) },
+                    uniquingKeysWith: { first, _ in first }
+                )
                 let pages = definition.pages ?? []
                 self.availablePages = pages
                 self.shellPage = definition.shellPageId.flatMap { id in pages.first { $0.id == id } }
@@ -291,6 +295,7 @@ final class CmsPageLoader: ObservableObject {
                 var shellPageId: String?
                 var landingPageId: String?
                 var columnViews: [CmsColumnView]?
+                var cardViews: [CmsCardView]?
             }
             var cmsDefinitionId: String?
             var cms: Cms?
@@ -306,6 +311,10 @@ final class CmsPageLoader: ObservableObject {
         )
         runtime.columnViews = Dictionary(
             (cms.columnViews ?? []).map { ($0.slug, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        runtime.cardViews = Dictionary(
+            (cms.cardViews ?? []).map { ($0.slug, $0) },
             uniquingKeysWith: { first, _ in first }
         )
         let allPages = cms.pages ?? []

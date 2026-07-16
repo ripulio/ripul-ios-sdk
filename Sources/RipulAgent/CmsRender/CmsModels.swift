@@ -217,6 +217,10 @@ public struct CmsRenderDefinition: Codable {
     /// Schema-wide shared column views (keyed by slug) — blocks reference one
     /// via `columnViewRef` to share a curated/ordered/labelled field set.
     public var columnViews: [CmsColumnView]?
+    /// Schema-wide shared card views (keyed by slug) — the grid's `cards`
+    /// projection references one via `cardViewRef` to design the cards
+    /// distinctly from its columns (own field set + card chrome).
+    public var cardViews: [CmsCardView]?
 }
 
 /// Shared column view (`columnViewRef` target): a named, query-scoped set of
@@ -229,6 +233,19 @@ public struct CmsColumnView: Codable, Equatable {
     public var name: String?
     public var querySlug: String?
     public var columns: [CmsJSON]?
+}
+
+/// Shared card view (`cardViewRef` target): the card-presentation sibling of
+/// `CmsColumnView`. Same RAW-JSON `columns` overlay PLUS `card` chrome
+/// (recordCards-compatible props — title/imageColumn/imageShape/imageHeight/
+/// cardVariant/showImageInCard) that the grid's cards projection spreads onto
+/// the card it renders.
+public struct CmsCardView: Codable, Equatable {
+    public var slug: String
+    public var name: String?
+    public var querySlug: String?
+    public var columns: [CmsJSON]?
+    public var card: CmsJSON?
 }
 
 /// Slice of CmsQuery the runtime needs: slug, the SQL text (only to filter
