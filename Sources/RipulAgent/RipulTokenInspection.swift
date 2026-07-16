@@ -76,4 +76,34 @@ public enum RipulTokenInspector {
         provider?.tokenBindings(for: view) ?? []
     }
 }
+
+// MARK: - Declared token colours (SwiftUI stamps)
+
+/// SwiftUI content draws into layers, not subviews — its colours are unreachable by the UIKit
+/// reads a token provider performs (textColor / backgroundColor / tintColor). A
+/// `.uiKitIdentifier(_:tokenColors:)` stamp therefore DECLARES the token-tagged colours of the
+/// content it stands in for; the host's provider reads them back off the stamp view and treats
+/// them exactly like colours found on a UIKit view.
+public struct RipulDeclaredTokenColor {
+    /// Human label for the styled property, shown in the Design-token section ("Text colour", "Icon").
+    public let property: String
+    /// The host's token-tagged UIColor — the same value the SwiftUI view renders with.
+    public let color: UIColor
+
+    public init(property: String, color: UIColor) {
+        self.property = property
+        self.color = color
+    }
+}
+
+private enum RipulDeclaredTokenColorsKey { static var key: UInt8 = 0 }
+
+public extension UIView {
+    /// Token colours declared for this view by a `.uiKitIdentifier(_:tokenColors:)` stamp.
+    /// Empty for views without a declaration.
+    var ripulDeclaredTokenColors: [RipulDeclaredTokenColor] {
+        get { objc_getAssociatedObject(self, &RipulDeclaredTokenColorsKey.key) as? [RipulDeclaredTokenColor] ?? [] }
+        set { objc_setAssociatedObject(self, &RipulDeclaredTokenColorsKey.key, newValue, .OBJC_ASSOCIATION_RETAIN_NONATOMIC) }
+    }
+}
 #endif

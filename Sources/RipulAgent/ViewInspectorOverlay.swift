@@ -9,7 +9,7 @@ let ripulViewExplorerOverlayTag = 0x5249_5055   // "RIPU"
 
 /// Marketing version of the RipulAgent SDK, surfaced in the inspector's copy output as `sdk: …`
 /// so we can always tell which build is actually running on the device. Bump on every release.
-let ripulSDKVersion = "0.2.34"
+let ripulSDKVersion = "0.2.35"
 
 // MARK: - View Inspector Overlay
 //
@@ -132,6 +132,7 @@ public final class UIKitIdentifierRegistry {
 
 private struct UIKitIdentifierStamper: UIViewRepresentable {
     let identifier: String
+    var tokenColors: [RipulDeclaredTokenColor] = []
 
     func makeUIView(context: Context) -> UIView {
         let v = UIView()
@@ -152,6 +153,9 @@ private struct UIKitIdentifierStamper: UIViewRepresentable {
         // visible to hierarchy scans — the audit's descendant walk and
         // accessibilityIdInTree — not just the spatial lookup.
         uiView.accessibilityIdentifier = identifier
+        // Re-stored on every update so a theme change (which re-renders SwiftUI and
+        // re-runs this) refreshes the declared colours to the current resolve.
+        uiView.ripulDeclaredTokenColors = tokenColors
     }
 }
 
@@ -159,10 +163,23 @@ public extension View {
     /// Assigns a logical identifier visible to the View Inspector.
     /// Uses a background UIView registered in a spatial lookup — the inspector
     /// finds the tightest match at the cursor point, no tree walking needed.
-    func uiKitIdentifier(_ identifier: String) -> some View {
+    ///
+    /// `tokenColors` optionally declares the token-tagged colours this SwiftUI content
+    /// renders with (property label → the host's UIColor), so the inspector's
+    /// Design-token section works for SwiftUI elements — their drawn colours live in
+    /// layers the host's token provider can't otherwise reach:
+    ///
+    ///     Text(title)
+    ///         .foregroundColor(SwiftUI.Color(Color.Component.rowTitle))
+    ///         .uiKitIdentifier("screen.row.title",
+    ///                          tokenColors: ["Text colour": Color.Component.rowTitle])
+    func uiKitIdentifier(_ identifier: String,
+                         tokenColors: KeyValuePairs<String, UIColor> = [:]) -> some View {
         self
             .accessibilityIdentifier(identifier)
-            .background(UIKitIdentifierStamper(identifier: identifier))
+            .background(UIKitIdentifierStamper(
+                identifier: identifier,
+                tokenColors: tokenColors.map { RipulDeclaredTokenColor(property: $0.key, color: $0.value) }))
     }
 }
 
@@ -201,6 +218,12 @@ struct InspectedView {
     let registryStamps: [String]       // ALL .uiKitIdentifier stamps under the tap point, front-to-back
                                        // (first = the resolved one) — makes nested sub-element ids
                                        // discoverable from a single tap on a SwiftUI row
+    let registryMatchView: UIView?     // the resolved stamp's own view — carries the declared token
+                                       // colours for a SwiftUI element (ripulDeclaredTokenColors)
+
+    /// The view the Design-token section should read: the resolved stamp when a SwiftUI
+    /// element was selected (its declared token colours live there), else the inspected view.
+    var tokenAnchorView: UIView { registryMatchView ?? view }
 
     struct LayerInfo {
         let cornerRadius: CGFloat
@@ -210,8 +233,12 @@ struct InspectedView {
         let shadowOpacity: Float
     }
 
-    static func inspect(_ view: UIView, depth: Int = 0, resolvedIdentifier: String? = nil, hitLeaf: UIView? = nil, registryStamps: [String] = []) -> InspectedView {
-        let className = String(describing: type(of: view))
+    static func inspect(_ view: UIView, depth: Int = 0, resolvedIdentifier: String? = nil, hitLeaf: UIView? = nil, registryStamps: [String] = [], registryMatchView: UIView? = nil) -> InspectedView {
+        let rawClassName = String(describing: type(of: view))
+        // A tap that resolves a SwiftUI stamp often lands on the stamp's own host container —
+        // "UIKitPlatformViewHost<…UIKitIdentifierStamper>" is inspector plumbing, not the
+        // user's element. Present it as what it semantically is.
+        let className = rawClassName.contains("UIKitIdentifierStamper") ? "SwiftUI element" : rawClassName
         let frameInWindow = view.convert(view.bounds, to: nil)
         // The leaf's OWN identifier first (a UIKit accessibilityIdentifier set in code), then the
         // SwiftUI spatial-registry match (.uiKitIdentifier). Previously only the latter was used, so
@@ -254,7 +281,8 @@ struct InspectedView {
             propertyRef: propertyReference(of: view),
             enclosingControl: nearestControl(of: view, excluding: className),
             hitLeafClass: hitLeaf.map { String(describing: type(of: $0)) },
-            registryStamps: registryStamps
+            registryStamps: registryStamps,
+            registryMatchView: registryMatchView
         )
     }
 
@@ -929,7 +957,7 @@ class ViewInspectorController: UIView {
         highlightLayer.path = UIBezierPath(roundedRect: frameInSelf, cornerRadius: highlightView.layer.cornerRadius).cgPath
 
         // Inspect — pass the resolved identifier from spatial lookup
-        let info = InspectedView.inspect(target, depth: viewDepth(target), resolvedIdentifier: match?.identifier, hitLeaf: hitLeaf, registryStamps: stampMatches.map(\.identifier))
+        let info = InspectedView.inspect(target, depth: viewDepth(target), resolvedIdentifier: match?.identifier, hitLeaf: hitLeaf, registryStamps: stampMatches.map(\.identifier), registryMatchView: match?.view)
         onInspect?(info)
     }
 
@@ -1237,7 +1265,9 @@ struct InspectorEditTab: View {
         VStack(alignment: .leading, spacing: 12) {
             // Design tokens styling this element, when the host registered a token provider. Sits
             // above the raw property editors — it's the "what do I change to retheme this" answer.
-            InspectorTokenSection(view: info.view)
+            // Anchored on the resolved stamp for SwiftUI elements (declared token colours live
+            // there), falling back to the inspected view for UIKit.
+            InspectorTokenSection(view: info.tokenAnchorView)
 
             if hasText {
                 labeled("Text") {
