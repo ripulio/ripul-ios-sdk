@@ -9,7 +9,7 @@ let ripulViewExplorerOverlayTag = 0x5249_5055   // "RIPU"
 
 /// Marketing version of the RipulAgent SDK, surfaced in the inspector's copy output as `sdk: …`
 /// so we can always tell which build is actually running on the device. Bump on every release.
-let ripulSDKVersion = "0.2.33"
+let ripulSDKVersion = "0.2.34"
 
 // MARK: - View Inspector Overlay
 //
@@ -55,6 +55,14 @@ public final class UIKitIdentifierRegistry {
     /// view is rendered in front — exactly like comparing layer order in a
     /// depth-first traversal.
     func bestMatch(at windowPoint: CGPoint) -> (identifier: String, view: UIView)? {
+        matches(at: windowPoint).first
+    }
+
+    /// All registered stamps containing `windowPoint`, front-to-back — the same ordering
+    /// `bestMatch` resolves by (frontmost, then tightest). Surfacing the full list lets the
+    /// inspector show nested stamps (a row AND its title/subtitle) from a single tap, so
+    /// sub-element ids are discoverable even when the finger lands on the outer stamp.
+    func matches(at windowPoint: CGPoint) -> [(identifier: String, view: UIView)] {
         struct Candidate {
             let view: UIView
             let identifier: String
@@ -75,8 +83,6 @@ public final class UIKitIdentifierRegistry {
             candidates.append(Candidate(view: view, identifier: id, area: area, zPath: zPath))
         }
 
-        guard !candidates.isEmpty else { return nil }
-
         // Sort: higher z-order first, then smaller area first
         candidates.sort { a, b in
             let cmp = Self.compareZPaths(a.zPath, b.zPath)
@@ -84,8 +90,7 @@ public final class UIKitIdentifierRegistry {
             return a.area < b.area           // smaller area wins as tiebreaker
         }
 
-        let best = candidates[0]
-        return (best.identifier, best.view)
+        return candidates.map { ($0.identifier, $0.view) }
     }
 
     /// Build a root-to-leaf array of subview indices for Z-order comparison.
@@ -193,6 +198,9 @@ struct InspectedView {
                                        // — a tap lands on a button's gradient/image subview, not the button
     let hitLeafClass: String?          // the actual view under the finger when it differs from the
                                        // inspected element (i.e. selection was promoted to a control)
+    let registryStamps: [String]       // ALL .uiKitIdentifier stamps under the tap point, front-to-back
+                                       // (first = the resolved one) — makes nested sub-element ids
+                                       // discoverable from a single tap on a SwiftUI row
 
     struct LayerInfo {
         let cornerRadius: CGFloat
@@ -202,7 +210,7 @@ struct InspectedView {
         let shadowOpacity: Float
     }
 
-    static func inspect(_ view: UIView, depth: Int = 0, resolvedIdentifier: String? = nil, hitLeaf: UIView? = nil) -> InspectedView {
+    static func inspect(_ view: UIView, depth: Int = 0, resolvedIdentifier: String? = nil, hitLeaf: UIView? = nil, registryStamps: [String] = []) -> InspectedView {
         let className = String(describing: type(of: view))
         let frameInWindow = view.convert(view.bounds, to: nil)
         // The leaf's OWN identifier first (a UIKit accessibilityIdentifier set in code), then the
@@ -245,7 +253,8 @@ struct InspectedView {
             container: nearestAppView(of: view, excluding: className),
             propertyRef: propertyReference(of: view),
             enclosingControl: nearestControl(of: view, excluding: className),
-            hitLeafClass: hitLeaf.map { String(describing: type(of: $0)) }
+            hitLeafClass: hitLeaf.map { String(describing: type(of: $0)) },
+            registryStamps: registryStamps
         )
     }
 
@@ -645,6 +654,12 @@ struct InspectedView {
         if let t = text { lines.append("text: \"\(t)\"") }
         if let img = imageName { lines.append("image: \(img)") }
         if let aid = accessibilityId, !aid.isEmpty { lines.append("a11yId: \(aid)") }
+        // Nested stamps under the same tap (front-to-back): a SwiftUI row and the
+        // title/subtitle inside it — tap the smaller region to select a sub-element
+        // directly; this line makes those ids discoverable without pixel-hunting.
+        if registryStamps.count > 1 {
+            lines.append("stamps: \(registryStamps.joined(separator: " > "))")
+        }
         if let label = accessibilityLabel, !label.isEmpty { lines.append("a11yLabel: \(label)") }
         if let rid = restorationIdentifier { lines.append("restorationId: \(rid)") }
         if tag != 0 { lines.append("tag: \(tag)") }
@@ -901,8 +916,11 @@ class ViewInspectorController: UIView {
         let target = controlToInspect(for: leaf)
         let hitLeaf = (target !== leaf) ? leaf : nil
 
-        // Spatial lookup: find the tightest .uiKitIdentifier() match at this point
-        let match = UIKitIdentifierRegistry.shared.bestMatch(at: windowPoint)
+        // Spatial lookup: ALL .uiKitIdentifier() stamps at this point, tightest first —
+        // the first resolves the identity, the rest are surfaced as `stamps:` so nested
+        // sub-element ids are discoverable from one tap.
+        let stampMatches = UIKitIdentifierRegistry.shared.matches(at: windowPoint)
+        let match = stampMatches.first
 
         // Highlight the registry match's frame if available, otherwise the inspected element
         let highlightView = match?.view ?? target
@@ -911,7 +929,7 @@ class ViewInspectorController: UIView {
         highlightLayer.path = UIBezierPath(roundedRect: frameInSelf, cornerRadius: highlightView.layer.cornerRadius).cgPath
 
         // Inspect — pass the resolved identifier from spatial lookup
-        let info = InspectedView.inspect(target, depth: viewDepth(target), resolvedIdentifier: match?.identifier, hitLeaf: hitLeaf)
+        let info = InspectedView.inspect(target, depth: viewDepth(target), resolvedIdentifier: match?.identifier, hitLeaf: hitLeaf, registryStamps: stampMatches.map(\.identifier))
         onInspect?(info)
     }
 
