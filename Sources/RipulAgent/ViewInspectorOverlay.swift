@@ -197,9 +197,14 @@ struct InspectedView {
         let className = String(describing: type(of: view))
         let frameInWindow = view.convert(view.bounds, to: nil)
         // The leaf's OWN identifier first (a UIKit accessibilityIdentifier set in code), then the
-        // SwiftUI spatial-registry match. Previously only the latter was used, so UIKit identifiers
-        // never surfaced.
-        let resolvedId = nonEmpty(view.accessibilityIdentifier) ?? resolvedIdentifier
+        // SwiftUI spatial-registry match (.uiKitIdentifier). Previously only the latter was used, so
+        // UIKit identifiers never surfaced. Finally, for a bounded SwiftUI cell/leaf (List/Form rows
+        // arrive as a bare `CellHostingView`), recover a standard SwiftUI `.accessibilityIdentifier`
+        // from the accessibility tree — it lives on the row's accessibility element, not the cell's
+        // own `accessibilityIdentifier`, so without this it never showed.
+        let resolvedId = nonEmpty(view.accessibilityIdentifier)
+            ?? resolvedIdentifier
+            ?? (isSwiftUIHostedLeaf(view) ? accessibilityIdInTree(view) : nil)
         let vcChain = viewControllerChain(of: view)
         return InspectedView(
             view: view,
@@ -451,6 +456,95 @@ struct InspectedView {
     private static func nonEmpty(_ s: String?) -> String? {
         guard let s = s, !s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
         return s
+    }
+
+    // MARK: SwiftUI accessibility-tree identity
+
+    /// A bounded SwiftUI unit the geometric leaf-walk lands on — a List/Form row's `CellHostingView`
+    /// or a SwiftUI leaf-drawing view — as opposed to a whole-screen `_UIHostingView`. ONLY these get
+    /// the accessibility-tree id lookup below, so inspecting a large container never borrows a child
+    /// row's identifier.
+    static func isSwiftUIHostedLeaf(_ view: UIView) -> Bool {
+        let cls = String(describing: type(of: view))
+        return cls.contains("CellHostingView")          // List / Form row (the reported case)
+            || cls.hasPrefix("_UIGraphicsView")          // SwiftUI leaf drawing (text / shapes)
+            || cls.contains("_UIHostingViewCell")        // collection-backed SwiftUI cell
+            || cls.contains("PlatformViewHost")          // UIViewRepresentable leaf
+    }
+
+    /// SwiftUI applies `.accessibilityIdentifier` to a row's *accessibility element*, not to the
+    /// backing `CellHostingView`'s own `accessibilityIdentifier` — so a tapped List/Form row inspects
+    /// as a bare `CellHostingView<…>` with no id even though it IS instrumented (VoiceOver / XCUITest
+    /// read it). Recover the id from the accessibility tree: this view's accessibility elements first
+    /// (where a `.accessibilityElement(children: .combine)` row stores its id), then descendant views'
+    /// own identifiers. Depth-bounded; callers restrict it to a bounded SwiftUI cell/leaf (see
+    /// `isSwiftUIHostedLeaf`) so the id belongs to THIS element.
+    static func accessibilityIdInTree(_ view: UIView, maxDepth: Int = 6) -> String? {
+        if let id = firstElementIdentifier(of: view) { return id }
+        guard maxDepth > 0 else { return nil }
+        for sub in view.subviews {
+            if let id = nonEmpty(sub.accessibilityIdentifier) { return id }
+            if let id = accessibilityIdInTree(sub, maxDepth: maxDepth - 1) { return id }
+        }
+        return nil
+    }
+
+    /// First non-empty `accessibilityIdentifier` among an object's accessibility elements — covering
+    /// SwiftUI's two exposures: the `accessibilityElements` array, or the container protocol
+    /// (`accessibilityElementCount()` / `accessibilityElement(at:)`).
+    private static func firstElementIdentifier(of obj: NSObject) -> String? {
+        if let els = obj.accessibilityElements {
+            for el in els {
+                if let idObj = el as? UIAccessibilityIdentification, let id = nonEmpty(idObj.accessibilityIdentifier) {
+                    return id
+                }
+            }
+        }
+        let count = obj.accessibilityElementCount()
+        if count > 0 && count != NSNotFound {
+            for i in 0..<count {
+                if let idObj = obj.accessibilityElement(at: i) as? UIAccessibilityIdentification,
+                   let id = nonEmpty(idObj.accessibilityIdentifier) {
+                    return id
+                }
+            }
+        }
+        return nil
+    }
+
+    /// The identifiers of the VoiceOver-visible accessibility elements in a hosting subtree, in tree
+    /// order — nil for an element that has no identifier. This is the set the Audit tab should judge:
+    /// SwiftUI Lists/Forms expose one combined element per row, and `.accessibilityHidden(true)`
+    /// decoration is already absent from the tree. Depth- and size-bounded.
+    static func accessibilityElementIdentifiers(in root: UIView, limit: Int = 300) -> [String?] {
+        var out: [String?] = []
+        func visit(_ obj: NSObject, depth: Int) {
+            if out.count >= limit || depth > 60 { return }
+            var children: [NSObject] = []
+            if let els = obj.accessibilityElements as? [NSObject] {
+                children = els
+            } else {
+                let n = obj.accessibilityElementCount()
+                if n > 0 && n != NSNotFound {
+                    for i in 0..<n { if let e = obj.accessibilityElement(at: i) as? NSObject { children.append(e) } }
+                }
+            }
+            if !children.isEmpty {
+                for c in children { visit(c, depth: depth + 1) }
+                return
+            }
+            if obj.isAccessibilityElement {
+                out.append(nonEmpty((obj as? UIAccessibilityIdentification)?.accessibilityIdentifier))
+                return
+            }
+            if let v = obj as? UIView {
+                for sub in v.subviews where !sub.isHidden && sub.alpha > 0.01 && sub.tag != ripulViewExplorerOverlayTag {
+                    visit(sub, depth: depth + 1)
+                }
+            }
+        }
+        visit(root, depth: 0)
+        return out
     }
 
     /// Live-set the text of a text-bearing view — backs the inspector's inline edit
@@ -1760,22 +1854,34 @@ struct ScreenAudit {
             }
             return "SwiftUI"
         }
-        // Any accessibilityIdentifier stamped inside a host subtree (.uiKitIdentifier / SwiftUI
-        // .accessibilityIdentifier) → the hosted field is explicitly NAMED.
+        // Any identifier stamped inside a host subtree → the hosted field is explicitly NAMED. Covers
+        // both `.uiKitIdentifier` (a stamper view's accessibilityIdentifier) and standard SwiftUI
+        // `.accessibilityIdentifier` (stored on the row's accessibility element, via accessibilityIdInTree).
         func stampedIdentifier(in v: UIView) -> String? {
             if let id = v.accessibilityIdentifier, !empty(id) { return id }
-            for sub in v.subviews { if let id = stampedIdentifier(in: sub) { return id } }
-            return nil
+            return InspectedView.accessibilityIdInTree(v)
         }
 
         func walk(_ v: UIView) {
             let visible = !v.isHidden && v.alpha > 0.01
             if visible {
                 if v.tag == ripulViewExplorerOverlayTag { return }   // skip our own overlay subtree
-                // SwiftUI hosting boundary: one unit, don't descend into SwiftUI internals.
+                // SwiftUI hosting boundary: don't descend into SwiftUI internals.
                 if let hostType = hostingRootType(of: v) {
                     let cls = "UIHostingController<\(hostType)>"
-                    if let id = stampedIdentifier(in: v) {
+                    // A List/Form exposes one combined accessibility element PER ROW — audit each so a
+                    // partially-instrumented List shows its gaps, rather than collapsing to one unit
+                    // (which would read green off the first row's id and hide the rest).
+                    let rowIds = InspectedView.accessibilityElementIdentifiers(in: v)
+                    if rowIds.count > 1 {
+                        for (i, id) in rowIds.enumerated() {
+                            if let id = id {
+                                items.append(Item(className: "\(hostType) ▸ element", identity: "a11yId: \(id)", bucket: .named, view: v))
+                            } else {
+                                items.append(Item(className: "\(hostType) ▸ element[\(i)]", identity: "—", bucket: .anonymous, view: v))
+                            }
+                        }
+                    } else if let id = rowIds.compactMap({ $0 }).first ?? stampedIdentifier(in: v) {
                         items.append(Item(className: cls, identity: "a11yId: \(id)", bucket: .named, view: v))
                     } else {
                         items.append(Item(className: cls, identity: "SwiftUI: \(hostType)", bucket: .auto, view: v))
