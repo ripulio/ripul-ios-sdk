@@ -1748,10 +1748,40 @@ struct ScreenAudit {
             return Item(className: cls, identity: "—", bucket: .anonymous, view: v)
         }
 
+        // A UIHostingController's root view → the hosted SwiftUI type name, else nil. Lets the audit
+        // count a whole SwiftUI field (WacFieldGlassButton, …) as ONE unit instead of skipping it:
+        // SwiftUI renders as internal _UIInheritedViews that match no UIKit control class.
+        func hostingRootType(of v: UIView) -> String? {
+            guard let vc = v.next as? UIViewController else { return nil }
+            let cls = String(describing: type(of: vc))
+            guard cls.contains("UIHostingController"), vc.viewIfLoaded === v else { return nil }
+            if let lt = cls.firstIndex(of: "<"), let gt = cls.lastIndex(of: ">"), lt < gt {
+                return String(cls[cls.index(after: lt)..<gt])
+            }
+            return "SwiftUI"
+        }
+        // Any accessibilityIdentifier stamped inside a host subtree (.uiKitIdentifier / SwiftUI
+        // .accessibilityIdentifier) → the hosted field is explicitly NAMED.
+        func stampedIdentifier(in v: UIView) -> String? {
+            if let id = v.accessibilityIdentifier, !empty(id) { return id }
+            for sub in v.subviews { if let id = stampedIdentifier(in: sub) { return id } }
+            return nil
+        }
+
         func walk(_ v: UIView) {
             let visible = !v.isHidden && v.alpha > 0.01
             if visible {
                 if v.tag == ripulViewExplorerOverlayTag { return }   // skip our own overlay subtree
+                // SwiftUI hosting boundary: one unit, don't descend into SwiftUI internals.
+                if let hostType = hostingRootType(of: v) {
+                    let cls = "UIHostingController<\(hostType)>"
+                    if let id = stampedIdentifier(in: v) {
+                        items.append(Item(className: cls, identity: "a11yId: \(id)", bucket: .named, view: v))
+                    } else {
+                        items.append(Item(className: cls, identity: "SwiftUI: \(hostType)", bucket: .auto, view: v))
+                    }
+                    return
+                }
                 if isAuditable(v) { items.append(classify(v)) }
                 for sub in v.subviews { walk(sub) }
             }
