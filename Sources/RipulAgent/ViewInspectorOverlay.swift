@@ -7,6 +7,10 @@ import ObjectiveC
 /// hit-walks can recognise and skip their own subtree (arbitrary, collision-unlikely).
 let ripulViewExplorerOverlayTag = 0x5249_5055   // "RIPU"
 
+/// Marketing version of the RipulAgent SDK, surfaced in the inspector's copy output as `sdk: …`
+/// so we can always tell which build is actually running on the device. Bump on every release.
+let ripulSDKVersion = "0.2.32"
+
 // MARK: - View Inspector Overlay
 //
 // Native equivalent of the web ElementDebuggerOverlay. When active, a
@@ -601,7 +605,7 @@ struct InspectedView {
         // Headline carries the identity inline so a control reads "class: UIButton [addSick.save]"
         // at a glance, not a bare class with the id buried further down.
         let idBadge = (accessibilityId?.isEmpty == false) ? " [\(accessibilityId!)]" : ""
-        var lines = ["class: \(className)\(idBadge)"]
+        var lines = ["class: \(className)\(idBadge)", "sdk: \(ripulSDKVersion)"]
         if let leaf = hitLeafClass { lines.append("tapped: \(leaf)") }   // actual view under the finger
         if let p = propertyRef { lines.append("property: \(p)") }
         if let c = container { lines.append("container: \(c)") }
@@ -617,8 +621,81 @@ struct InspectedView {
         if viewControllerChain.count > 1 {
             lines.append("vcChain: \(viewControllerChain.joined(separator: " ← "))")
         }
+        // TEMP diagnostic: when a SwiftUI hosting cell/leaf resolves NO identifier, dump the raw
+        // accessibility picture so we can see WHERE SwiftUI actually stores `.accessibilityIdentifier`
+        // (its private AX tree is frequently not exposed to in-process UIKit APIs). Remove once the
+        // resolution path is confirmed.
+        if (accessibilityId ?? "").isEmpty && className.contains("Hosting") {
+            lines.append(InspectedView.accessibilityProbe(for: view))
+        }
         return lines.joined(separator: "\n")
     }
+
+    /// Dump everything the in-process UIKit accessibility APIs expose for `view` and its subtree —
+    /// so we can locate a SwiftUI `.accessibilityIdentifier` that isn't surfacing.
+    static func accessibilityProbe(for view: UIView) -> String {
+        var out = ["probe:"]
+        out.append("  self isEl=\(view.isAccessibilityElement) aid=\(q(view.accessibilityIdentifier)) lbl=\(q(view.accessibilityLabel))")
+
+        // accessibilityElements array
+        if let els = view.accessibilityElements {
+            out.append("  accessibilityElements=\(els.count)")
+            for (i, e) in els.prefix(8).enumerated() {
+                let aid = (e as? UIAccessibilityIdentification)?.accessibilityIdentifier
+                let lbl = (e as? NSObject)?.accessibilityLabel
+                out.append("    el[\(i)] \(type(of: e)) aid=\(q(aid)) lbl=\(q(lbl))")
+            }
+        } else {
+            out.append("  accessibilityElements=nil")
+        }
+
+        // container protocol (SwiftUI often implements this instead of the array)
+        let n = view.accessibilityElementCount()
+        out.append("  elementCount=\(n)")
+        if n > 0 && n != NSNotFound {
+            for i in 0..<min(n, 8) {
+                if let e = view.accessibilityElement(at: i) {
+                    let aid = (e as? UIAccessibilityIdentification)?.accessibilityIdentifier
+                    let lbl = (e as? NSObject)?.accessibilityLabel
+                    out.append("    elAt[\(i)] \(type(of: e)) aid=\(q(aid)) lbl=\(q(lbl))")
+                }
+            }
+        }
+
+        // descendant views/elements carrying ANY accessibilityIdentifier
+        var found: [String] = []
+        var viewCount = 0
+        func walk(_ v: UIView, _ d: Int) {
+            for s in v.subviews {
+                viewCount += 1
+                if found.count < 14 {
+                    if let id = nonEmpty(s.accessibilityIdentifier) { found.append("\(type(of: s))=\(id)") }
+                    if let els = s.accessibilityElements {
+                        for e in els {
+                            if let id = nonEmpty((e as? UIAccessibilityIdentification)?.accessibilityIdentifier) {
+                                found.append("el·\(type(of: e))=\(id)")
+                            }
+                        }
+                    }
+                }
+                if d < 10 { walk(s, d + 1) }
+            }
+        }
+        walk(view, 0)
+        out.append("  subtreeViews=\(viewCount) foundIds=[\(found.joined(separator: ", "))]")
+
+        // superview chain identifiers
+        var chain: [String] = []
+        var p = view.superview; var hops = 0
+        while let cur = p, hops < 8 {
+            if let id = nonEmpty(cur.accessibilityIdentifier) { chain.append("\(type(of: cur))=\(id)") }
+            p = cur.superview; hops += 1
+        }
+        out.append("  superIds=[\(chain.joined(separator: ", "))]")
+        return out.joined(separator: "\n")
+    }
+
+    private static func q(_ s: String?) -> String { (s?.isEmpty == false) ? "\"\(s!)\"" : "nil" }
 }
 
 // MARK: - Tree Node
