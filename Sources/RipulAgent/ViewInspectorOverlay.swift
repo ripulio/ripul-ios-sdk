@@ -9,7 +9,7 @@ let ripulViewExplorerOverlayTag = 0x5249_5055   // "RIPU"
 
 /// Marketing version of the RipulAgent SDK, surfaced in the inspector's copy output as `sdk: …`
 /// so we can always tell which build is actually running on the device. Bump on every release.
-let ripulSDKVersion = "0.2.32"
+let ripulSDKVersion = "0.2.33"
 
 // MARK: - View Inspector Overlay
 //
@@ -142,6 +142,11 @@ private struct UIKitIdentifierStamper: UIViewRepresentable {
         // Register ourselves. Our frame matches the content's frame
         // because .background() sizes us to fit.
         UIKitIdentifierRegistry.shared.register(uiView, identifier: identifier)
+        // Also carry the id on the view itself: the stamper is not an accessibility
+        // element (VoiceOver ignores it), but the plain-UIView id makes the stamp
+        // visible to hierarchy scans — the audit's descendant walk and
+        // accessibilityIdInTree — not just the spatial lookup.
+        uiView.accessibilityIdentifier = identifier
     }
 }
 
@@ -493,22 +498,34 @@ struct InspectedView {
         return nil
     }
 
+    /// Read `accessibilityIdentifier` off any accessibility object. A plain
+    /// `as? UIAccessibilityIdentification` cast only works when the class *declares*
+    /// conformance — SwiftUI's private element classes (e.g. `AccessibilityNode`) can
+    /// implement the getter without declaring the protocol, which makes the cast fail
+    /// and read as nil even though an identifier is stored. So fall back to invoking
+    /// the (public-selector) getter through the ObjC runtime when the object responds.
+    static func objectAccessibilityIdentifier(_ obj: AnyObject) -> String? {
+        if let idObj = obj as? UIAccessibilityIdentification, let id = nonEmpty(idObj.accessibilityIdentifier) {
+            return id
+        }
+        let sel = NSSelectorFromString("accessibilityIdentifier")
+        guard let nsObj = obj as? NSObject, nsObj.responds(to: sel) else { return nil }
+        return nonEmpty(nsObj.perform(sel)?.takeUnretainedValue() as? String)
+    }
+
     /// First non-empty `accessibilityIdentifier` among an object's accessibility elements — covering
     /// SwiftUI's two exposures: the `accessibilityElements` array, or the container protocol
     /// (`accessibilityElementCount()` / `accessibilityElement(at:)`).
     private static func firstElementIdentifier(of obj: NSObject) -> String? {
         if let els = obj.accessibilityElements {
             for el in els {
-                if let idObj = el as? UIAccessibilityIdentification, let id = nonEmpty(idObj.accessibilityIdentifier) {
-                    return id
-                }
+                if let id = objectAccessibilityIdentifier(el as AnyObject) { return id }
             }
         }
         let count = obj.accessibilityElementCount()
         if count > 0 && count != NSNotFound {
             for i in 0..<count {
-                if let idObj = obj.accessibilityElement(at: i) as? UIAccessibilityIdentification,
-                   let id = nonEmpty(idObj.accessibilityIdentifier) {
+                if let el = obj.accessibilityElement(at: i), let id = objectAccessibilityIdentifier(el as AnyObject) {
                     return id
                 }
             }
@@ -538,7 +555,7 @@ struct InspectedView {
                 return
             }
             if obj.isAccessibilityElement {
-                out.append(nonEmpty((obj as? UIAccessibilityIdentification)?.accessibilityIdentifier))
+                out.append(elementIdentifier(obj, window: root.window))
                 return
             }
             if let v = obj as? UIView {
@@ -549,6 +566,20 @@ struct InspectedView {
         }
         visit(root, depth: 0)
         return out
+    }
+
+    /// Identifier for one VoiceOver-visible element: its own id (declared conformance or
+    /// runtime-read), else the `.uiKitIdentifier` stamp whose registered frame covers the
+    /// element's on-screen centre. The spatial join is what names a combined SwiftUI row —
+    /// its stamper is a background view the AX tree never exposes, so the frame is the
+    /// only key connecting the element to its stamp.
+    private static func elementIdentifier(_ obj: NSObject, window: UIWindow?) -> String? {
+        if let id = objectAccessibilityIdentifier(obj) { return id }
+        guard let window else { return nil }
+        let screenFrame = obj.accessibilityFrame
+        guard screenFrame.width > 0, screenFrame.height > 0 else { return nil }
+        let windowRect = window.convert(screenFrame, from: window.screen.coordinateSpace)
+        return UIKitIdentifierRegistry.shared.bestMatch(at: CGPoint(x: windowRect.midX, y: windowRect.midY))?.identifier
     }
 
     /// Live-set the text of a text-bearing view — backs the inspector's inline edit
@@ -644,6 +675,7 @@ struct InspectedView {
                 let aid = (e as? UIAccessibilityIdentification)?.accessibilityIdentifier
                 let lbl = (e as? NSObject)?.accessibilityLabel
                 out.append("    el[\(i)] \(type(of: e)) aid=\(q(aid)) lbl=\(q(lbl))")
+                out.append("      \(axReadDiagnostics(e as AnyObject))")
             }
         } else {
             out.append("  accessibilityElements=nil")
@@ -658,6 +690,7 @@ struct InspectedView {
                     let aid = (e as? UIAccessibilityIdentification)?.accessibilityIdentifier
                     let lbl = (e as? NSObject)?.accessibilityLabel
                     out.append("    elAt[\(i)] \(type(of: e)) aid=\(q(aid)) lbl=\(q(lbl))")
+                    out.append("      \(axReadDiagnostics(e as AnyObject))")
                 }
             }
         }
@@ -672,7 +705,7 @@ struct InspectedView {
                     if let id = nonEmpty(s.accessibilityIdentifier) { found.append("\(type(of: s))=\(id)") }
                     if let els = s.accessibilityElements {
                         for e in els {
-                            if let id = nonEmpty((e as? UIAccessibilityIdentification)?.accessibilityIdentifier) {
+                            if let id = objectAccessibilityIdentifier(e as AnyObject) {
                                 found.append("el·\(type(of: e))=\(id)")
                             }
                         }
@@ -693,6 +726,28 @@ struct InspectedView {
         }
         out.append("  superIds=[\(chain.joined(separator: ", "))]")
         return out.joined(separator: "\n")
+    }
+
+    /// How an element's identifier is (or isn't) readable in-process: declared protocol
+    /// conformance vs a runtime-only getter, the value the runtime read returns, and the
+    /// superclass chain. A failed read then *names* the class + missing path instead of
+    /// leaving "aid=nil" ambiguous (which previously conflated "no value" with "cast failed").
+    private static func axReadDiagnostics(_ obj: AnyObject) -> String {
+        let conforms = obj is UIAccessibilityIdentification
+        let sel = NSSelectorFromString("accessibilityIdentifier")
+        let responds = (obj as? NSObject)?.responds(to: sel) ?? false
+        let runtime: String? = responds
+            ? nonEmpty((obj as? NSObject)?.perform(sel)?.takeUnretainedValue() as? String)
+            : nil
+        var chain: [String] = []
+        var cls: AnyClass? = object_getClass(obj)
+        var hops = 0
+        while let c = cls, hops < 4 {
+            chain.append(NSStringFromClass(c))
+            cls = class_getSuperclass(c)
+            hops += 1
+        }
+        return "conforms=\(conforms) responds=\(responds) rt=\(q(runtime)) chain=\(chain.joined(separator: " < "))"
     }
 
     private static func q(_ s: String?) -> String { (s?.isEmpty == false) ? "\"\(s!)\"" : "nil" }
