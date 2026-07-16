@@ -147,8 +147,12 @@ struct CmsAgGridBlockView: View {
         var id: String { key }
     }
 
-    /// Visible columns, reduced/ordered by `nativeColumns` when authored.
-    private var columns: [Column] {
+    /// The columns explicitly configured on the block (`props.columns`), in the
+    /// author's order (a view `columnOrder` re-sorts them). This is the
+    /// CUSTOMISED subset — NOT necessarily every result column. The web only
+    /// stores the columns it needs to customise; `resolvedColumns(schema:)`
+    /// appends the rest of the query's schema on top (see there).
+    private var configuredColumns: [Column] {
         guard case .array(let raw) = props["columns"] ?? .null else { return [] }
         var all: [Column] = raw.compactMap { entry in
             guard let obj = entry.objectValue, let key = obj.string("key") else { return nil }
@@ -173,7 +177,7 @@ struct CmsAgGridBlockView: View {
         if let viewState, case .array(let order) = viewState["columnOrder"] ?? .null {
             let ids = order.compactMap { $0.stringValue }
             if !ids.isEmpty {
-                let index = Dictionary(uniqueKeysWithValues: ids.enumerated().map { ($1, $0) })
+                let index = Dictionary(ids.enumerated().map { ($1, $0) }, uniquingKeysWith: { first, _ in first })
                 all = all.enumerated().sorted { a, b in
                     let ia = index[a.element.key] ?? (order.count + a.offset)
                     let ib = index[b.element.key] ?? (order.count + b.offset)
@@ -181,15 +185,44 @@ struct CmsAgGridBlockView: View {
                 }.map { $0.element }
             }
         }
+        return all
+    }
+
+    /// The rendered column set. Twin of the web's `resolveColumns`: the
+    /// configured columns first, then EVERY result-schema column that wasn't
+    /// configured, appended in schema order — so a grid that customises only a
+    /// few columns still shows the full row, exactly like the web grid. Without
+    /// this append the native grid would show only the handful of columns that
+    /// happened to be customised (the missing-columns bug). A configured column
+    /// is matched by its slot `key`, mirroring the web's `seen.add(cfg.key)`.
+    ///
+    /// The native-only `nativeColumns` knob still wins when authored: it
+    /// whitelists/reorders the final set (its comma order is the column order),
+    /// letting a designer deliberately reduce the native grid to a subset.
+    private func resolvedColumns(schema: [CmsQueryResultColumn]) -> [Column] {
+        var out = configuredColumns
+        let seen = Set(out.map { $0.key })
+        for col in schema where !seen.contains(col.name) {
+            out.append(Column(
+                key: col.name,
+                valueFrom: col.name,
+                label: CmsRecordCardsBlockView.humanize(col.name),
+                format: nil, width: nil, rowGroup: false, aggFunc: nil,
+                excludeFromTotals: false, hideDetailValue: false,
+                pinned: nil, image: nil, drillLink: false
+            ))
+        }
         let reduced = (props.string("nativeColumns") ?? "")
             .split(separator: ",")
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
         if !reduced.isEmpty {
-            let byKey = Dictionary(uniqueKeysWithValues: all.map { ($0.key, $0) })
-            all = reduced.compactMap { byKey[$0] }
+            // uniquingKeysWith (not uniqueKeysWithValues) — duplicate keys would
+            // otherwise TRAP; keep the first slot for a given key.
+            let byKey = Dictionary(out.map { ($0.key, $0) }, uniquingKeysWith: { first, _ in first })
+            return reduced.compactMap { byKey[$0] }
         }
-        return all
+        return out
     }
 
     // MARK: - Body
@@ -229,9 +262,10 @@ struct CmsAgGridBlockView: View {
                 .foregroundColor(.red)
                 .padding(12)
         case .ok(let result):
-            let cols = columns.isEmpty
-                ? result.schema.map { Column(key: $0.name, valueFrom: $0.name, label: CmsRecordCardsBlockView.humanize($0.name), format: nil, width: nil, rowGroup: false, aggFunc: nil, excludeFromTotals: false, hideDetailValue: false, pinned: nil, image: nil, drillLink: false) }
-                : columns
+            // Configured columns + every unconfigured schema column appended
+            // (web parity — see resolvedColumns). No columns configured at all
+            // → the full schema, unchanged from before.
+            let cols = resolvedColumns(schema: result.schema)
             let rows = displayRows(result.rows, columns: cols)
             VStack(alignment: .leading, spacing: 8) {
                 toolbar(columns: cols)
@@ -982,7 +1016,7 @@ struct CmsAgGridBlockView: View {
 
     /// Does any visible column drive a drill? Then a row/cell tap opens the
     /// detail (a modal/drawer watching this query), not multi-select.
-    private var hasDrillLink: Bool { columns.contains { $0.drillLink } }
+    private var hasDrillLink: Bool { configuredColumns.contains { $0.drillLink } }
 
     /// Authored link tint (the web `accentColor` fed to DrillLinkCellRenderer),
     /// falling back to the native accent.
