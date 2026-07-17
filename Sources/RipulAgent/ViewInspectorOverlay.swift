@@ -9,7 +9,7 @@ let ripulViewExplorerOverlayTag = 0x5249_5055   // "RIPU"
 
 /// Marketing version of the RipulAgent SDK, surfaced in the inspector's copy output as `sdk: …`
 /// so we can always tell which build is actually running on the device. Bump on every release.
-let ripulSDKVersion = "0.2.35"
+let ripulSDKVersion = "0.2.36"
 
 // MARK: - View Inspector Overlay
 //
@@ -1106,6 +1106,40 @@ struct CrosshairReticle: View {
     }
 }
 
+// MARK: - Ruler Guides
+
+/// Two thin, phone-wide alignment guides — one horizontal line spanning the full
+/// screen width and one vertical line spanning the full height — crossing at
+/// `position` (the inspector cursor). No measurements: they're purely for eyeballing
+/// whether elements line up. The lines freeze wherever the cursor was last left, so
+/// you can sweep a guide onto one element's edge, lift, and compare other elements
+/// against the frozen line. Non-interactive and drawn edge-to-edge (`.ignoresSafeArea`
+/// is applied by the caller).
+struct RulerGuides: View {
+    let position: CGPoint
+    /// Distinct from the pink crosshair/highlight so the guides read as a separate tool.
+    private let color = Color.cyan
+
+    var body: some View {
+        GeometryReader { geo in
+            // Vertical line — full height, at the cursor's x
+            Rectangle()
+                .fill(color.opacity(0.9))
+                .frame(width: 1, height: geo.size.height)
+                .position(x: position.x, y: geo.size.height / 2)
+                .shadow(color: .black.opacity(0.5), radius: 0.5)
+
+            // Horizontal line — full width, at the cursor's y
+            Rectangle()
+                .fill(color.opacity(0.9))
+                .frame(width: geo.size.width, height: 1)
+                .position(x: geo.size.width / 2, y: position.y)
+                .shadow(color: .black.opacity(0.5), radius: 0.5)
+        }
+        .allowsHitTesting(false)
+    }
+}
+
 // MARK: - Design-token section
 
 /// The Design-token block at the top of the Edit tab: the tokens the host reports as styling the
@@ -2183,6 +2217,7 @@ struct InspectorHUD: View {
     let inspected: InspectedView?
     let history: [UIView]
     @Binding var folded: Bool
+    @Binding var showRulers: Bool
     let onUp: () -> Void
     let onBack: () -> Void
     let onExit: () -> Void
@@ -2290,6 +2325,8 @@ struct InspectorHUD: View {
 
             Spacer()
 
+            hudButton("Ruler", tone: .cyan, active: showRulers) { showRulers.toggle() }
+                .uiKitIdentifier("InspectorHUD.rulersButton")
             hudButton("← Back", disabled: history.isEmpty, action: onBack)
                 .uiKitIdentifier("InspectorHUD.backButton")
             hudButton("↑ Up", disabled: inspected?.view.superview == nil, action: onUp)
@@ -2356,25 +2393,25 @@ struct InspectorHUD: View {
         }
     }
 
-    private func hudButton(_ label: String, disabled: Bool = false, tone: Color = .white, action: @escaping () -> Void) -> some View {
+    private func hudButton(_ label: String, disabled: Bool = false, tone: Color = .white, active: Bool = false, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(label)
                 .font(.system(size: 11, design: .monospaced))
-                .foregroundStyle(disabled ? .gray.opacity(0.4) : tone)
+                .foregroundStyle(disabled ? .gray.opacity(0.4) : (active ? .black : tone))
                 .padding(.horizontal, 10)
                 .padding(.vertical, 3)
                 .background(
-                    tone == .red
-                        ? Color.red.opacity(0.25)
-                        : Color.white.opacity(0.12)
+                    active
+                        ? tone.opacity(0.9)
+                        : (tone == .red ? Color.red.opacity(0.25) : Color.white.opacity(0.12))
                 )
                 .clipShape(RoundedRectangle(cornerRadius: 4))
                 .overlay(
                     RoundedRectangle(cornerRadius: 4)
                         .stroke(
-                            tone == .red
-                                ? Color.red.opacity(0.4)
-                                : Color.white.opacity(0.2),
+                            active
+                                ? tone
+                                : (tone == .red ? Color.red.opacity(0.4) : Color.white.opacity(0.2)),
                             lineWidth: 1
                         )
                 )
@@ -2399,6 +2436,9 @@ public struct ViewInspectorOverlay: View {
     /// When folded, the HUD header stays visible but touch capture and
     /// crosshair are removed so normal app interaction resumes.
     @AppStorage("viewInspector.folded") private var folded = false
+    /// Phone-wide alignment rulers — two thin lines crossing at the cursor,
+    /// extending to the screen edges. Persists across sessions like `folded`.
+    @AppStorage("viewInspector.rulers") private var showRulers = false
 
     public init(isActive: Binding<Bool>) {
         self._isActive = isActive
@@ -2431,12 +2471,21 @@ public struct ViewInspectorOverlay: View {
                         .ignoresSafeArea()
                 }
 
+                // Phone-wide alignment rulers — shown in both folded and unfolded
+                // states so you can freeze a guide on an element's edge, fold to
+                // interact with the app, and still compare against the frozen line.
+                if showRulers {
+                    RulerGuides(position: cursorPosition)
+                        .ignoresSafeArea()
+                }
+
                 // HUD — always visible, wrapped in UIKit container for smooth dragging
                 DraggableHUDWrapper(
                     content: InspectorHUD(
                         inspected: inspected,
                         history: history,
                         folded: $folded,
+                        showRulers: $showRulers,
                         onUp: navigateUp,
                         onBack: navigateBack,
                         onExit: { isActive = false },
