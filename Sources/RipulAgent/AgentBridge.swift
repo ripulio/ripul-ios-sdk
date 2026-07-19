@@ -3212,7 +3212,11 @@ public final class AgentBridge: NSObject, ObservableObject {
                     let isInitialLoad = oldByID.isEmpty
                     var renameLog = "[AgentBridge] sessions changed (\(self.sessions.count)→\(filtered.count)):"
                     for session in filtered {
-                        if session.provider == "claude-cli" || session.provider == "codex-cli" {
+                        // claude-cli only: onCliSessionRenamed is wired to
+                        // ClaudeCliServer, the sole server with a title-write
+                        // endpoint. Codex sessions would misfire into the wrong
+                        // store (failed lookup + pointless retry).
+                        if session.provider == "claude-cli" {
                             let oldName = oldByID[session.id]?.displayName ?? "(new)"
                             // Older hosts don't send displayNameSource — treat as "user" for back-compat.
                             let source = session.displayNameSource ?? "user"
@@ -6110,7 +6114,9 @@ public final class AgentBridge: NSObject, ObservableObject {
                 let oldByID = Dictionary(self.sessions.map { ($0.id, $0) }, uniquingKeysWith: { _, new in new })
                 let isInitialLoad = oldByID.isEmpty
                 for session in filtered {
-                    if session.provider == "claude-cli" || session.provider == "codex-cli" {
+                    // claude-cli only — see the matching gate in the
+                    // sessions-changed path above.
+                    if session.provider == "claude-cli" {
                         let source = session.displayNameSource ?? "user"
                         let isAuthoritative = source == "cli" || source == "user"
                         if !isAuthoritative {

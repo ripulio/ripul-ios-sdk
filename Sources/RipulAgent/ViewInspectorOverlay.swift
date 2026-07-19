@@ -1195,12 +1195,23 @@ struct InspectorTokenSection: View {
             }
             Spacer(minLength: 6)
             Menu {
-                ForEach(binding.options) { option in
-                    // Label icon → the menu item's image. A colour swatch so you can see what each
-                    // option maps to. .alwaysOriginal (in swatchImage) keeps the true colour rather
-                    // than letting the menu tint it.
-                    Button { remap(binding, option) } label: {
-                        Label { Text(option.label) } icon: { Image(uiImage: Self.swatchImage(option.swatchHex)) }
+                // Render sections when the provider has grouped the options (peers / roles /
+                // primitives); fall back to a flat list for ungrouped nil-section options.
+                ForEach(binding.optionGroups) { group in
+                    if let title = group.title {
+                        Section(title) {
+                            ForEach(group.items) { option in
+                                Button { remap(binding, option) } label: {
+                                    Label { Text(option.label) } icon: { Image(uiImage: Self.swatchImage(option.swatchHex)) }
+                                }
+                            }
+                        }
+                    } else {
+                        ForEach(group.items) { option in
+                            Button { remap(binding, option) } label: {
+                                Label { Text(option.label) } icon: { Image(uiImage: Self.swatchImage(option.swatchHex)) }
+                            }
+                        }
                     }
                 }
             } label: {

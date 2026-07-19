@@ -44,11 +44,40 @@ public struct RipulTokenOption: Identifiable, Equatable {
     public let id: String
     public let label: String
     public let swatchHex: String
+    /// Optional section header. Options sharing the same non-nil section render together under a
+    /// labelled group in the remap menu. nil = no section header (ungrouped).
+    public let section: String?
 
-    public init(id: String, label: String, swatchHex: String) {
+    public init(id: String, label: String, swatchHex: String, section: String? = nil) {
         self.id = id
         self.label = label
         self.swatchHex = swatchHex
+        self.section = section
+    }
+}
+
+/// A named group of remap options for sectioned rendering in the remap menu.
+public struct RipulTokenOptionGroup: Identifiable {
+    public let id: String      // stable key — section title or item id for ungrouped
+    public let title: String?  // nil = no Section header rendered
+    public let items: [RipulTokenOption]
+}
+
+extension RipulTokenBinding {
+    /// Options grouped by section, preserving insertion order. Consecutive items with the same
+    /// non-nil section are collected into one group; nil-section items render without a header.
+    public var optionGroups: [RipulTokenOptionGroup] {
+        var groups: [RipulTokenOptionGroup] = []
+        for option in options {
+            if let sec = option.section, let last = groups.last, last.title == sec {
+                let merged = RipulTokenOptionGroup(id: last.id, title: sec, items: last.items + [option])
+                groups[groups.count - 1] = merged
+            } else {
+                groups.append(RipulTokenOptionGroup(id: option.section ?? option.id,
+                                                    title: option.section, items: [option]))
+            }
+        }
+        return groups
     }
 }
 
