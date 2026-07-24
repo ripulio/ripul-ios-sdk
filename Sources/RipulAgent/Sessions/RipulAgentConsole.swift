@@ -42,77 +42,102 @@ public struct RipulAgentConsole: View {
     }
 
     public var body: some View {
-        ZStack {
-            // Chat surface — always mounted (bridge web view = relay + Clerk
-            // token source). Hidden until signed in.
-            AgentView(configuration: agentConfig, bridge: bridge) { _ in EmptyView() }
-                .opacity(authStore.isSignedIn ? 1 : 0)
+        GeometryReader { geo in
+            ZStack {
+                // Chat surface — always mounted (bridge web view = relay + Clerk
+                // token source). Hidden until signed in.
+                AgentView(configuration: agentConfig, bridge: bridge) { _ in EmptyView() }
+                    .opacity(authStore.isSignedIn ? 1 : 0)
 
-            if authStore.isSignedIn {
-                // Session list — overlays the chat when not viewing a chat.
-                if !showingChat {
-                    RipulSessionsView(
+                if authStore.isSignedIn {
+                    // Session list — overlays the chat when not viewing a chat.
+                    // safeAreaInset keeps its content out of the status bar / notch
+                    // when the host renders the console full-bleed (e.g. WAC's
+                    // overlay window ignores the safe area); the background stays
+                    // full-bleed opaque.
+                    if !showingChat {
+                        RipulSessionsView(
+                            bridge: bridge,
+                            cache: configuration.cache,
+                            tokenProvider: { authStore.token },
+                            onSelectSession: { session in select(session) },
+                            onDismiss: { showingChat = true },
+                            allowRipulAgents: configuration.allowRipulAgents,
+                            invitesSection: configuration.invitesSection,
+                            foldersSection: configuration.foldersSection,
+                            emptyStateOverride: configuration.emptyStateOverride
+                        )
+                        .safeAreaInset(edge: .top) { Color.clear.frame(height: 0) }
+                        .background(.background)
+                        .transition(.opacity)
+                    }
+                } else if authStore.wasPreviouslySignedIn && !forceSignIn {
+                    // Returning user: reconnect to the persisted Clerk session (the
+                    // poller restores the token from the shared data store) rather
+                    // than re-prompting for sign-in.
+                    reconnectingSplash
+                } else {
+                    // Genuinely signed out (or "use a different account").
+                    RipulSignInView(
+                        authToken: authStore,
                         bridge: bridge,
-                        cache: configuration.cache,
-                        tokenProvider: { authStore.token },
-                        onSelectSession: { _ in showingChat = true },
-                        onDismiss: { showingChat = true },
-                        allowRipulAgents: configuration.allowRipulAgents,
-                        invitesSection: configuration.invitesSection,
-                        foldersSection: configuration.foldersSection,
-                        emptyStateOverride: configuration.emptyStateOverride
+                        dataStore: configuration.websiteDataStore,
+                        baseURL: configuration.baseURL
                     )
-                    .background(.background)
-                    .transition(.opacity)
                 }
-            } else if authStore.wasPreviouslySignedIn && !forceSignIn {
-                // Returning user: reconnect to the persisted Clerk session (the
-                // poller restores the token from the shared data store) rather
-                // than re-prompting for sign-in.
-                reconnectingSplash
-            } else {
-                // Genuinely signed out (or "use a different account").
-                RipulSignInView(
-                    authToken: authStore,
-                    bridge: bridge,
-                    dataStore: configuration.websiteDataStore,
-                    baseURL: configuration.baseURL
-                )
+            }
+            .task {
+                // Dev-assistant tools: logs + native screen inspection. Registered on
+                // the console's own bridge so the agent driving from here can read logs
+                // and `inspect_screen` the host app (which excludes this overlay).
+                bridge.registerBuiltInTools([
+                    ConsoleLogsTool(bridge: bridge),
+                    NetworkLogsTool(bridge: bridge),
+                    InspectScreenTool(bridge: bridge),
+                ])
+                authStore.startPolling(bridge: bridge)
+            }
+            .onChange(of: authStore.isSignedIn) { _, signedIn in
+                if signedIn { forceSignIn = false }
+            }
+            .animation(.easeInOut(duration: 0.25), value: authStore.isSignedIn)
+            .animation(.easeInOut(duration: 0.25), value: showingChat)
+            .overlay(alignment: .topLeading) {
+                // Back-to-list control while viewing a chat — padded below the
+                // physical safe area (the host may render the console full-bleed).
+                if authStore.isSignedIn && showingChat {
+                    Button {
+                        showingChat = false
+                    } label: {
+                        Image(systemName: "list.bullet")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundStyle(.primary)
+                            .frame(width: 40, height: 40)
+                    }
+                    .modifier(GlassCircleModifier(glassStyle: "regular"))
+                    .buttonStyle(.plain)
+                    .padding(.top, geo.safeAreaInsets.top + 8)
+                    .padding(.leading, 12)
+                    .uiKitIdentifier("RipulAgentConsole.backToList")
+                }
             }
         }
-        .task {
-            // Dev-assistant tools: logs + native screen inspection. Registered on
-            // the console's own bridge so the agent driving from here can read logs
-            // and `inspect_screen` the host app (which excludes this overlay).
-            bridge.registerBuiltInTools([
-                ConsoleLogsTool(bridge: bridge),
-                NetworkLogsTool(bridge: bridge),
-                InspectScreenTool(bridge: bridge),
-            ])
-            authStore.startPolling(bridge: bridge)
+    }
+
+    /// Focus the tapped session in the web app BEFORE revealing the chat, exactly
+    /// like the native app's session list — without this the chat shows whatever
+    /// default tab the web app had (a fresh "new agent" screen) instead of the
+    /// session that was just opened/imported. Skips focusSession when the chat is
+    /// already the active tab (its web-side focus handshake stalls on an
+    /// already-rendered chat — see the native app's SessionListScreen).
+    private func select(_ session: ChatSession) {
+        if bridge.activeSessionId == session.id {
+            showingChat = true
+            return
         }
-        .onChange(of: authStore.isSignedIn) { _, signedIn in
-            if signedIn { forceSignIn = false }
-        }
-        .animation(.easeInOut(duration: 0.25), value: authStore.isSignedIn)
-        .animation(.easeInOut(duration: 0.25), value: showingChat)
-        .overlay(alignment: .topLeading) {
-            // Back-to-list control while viewing a chat.
-            if authStore.isSignedIn && showingChat {
-                Button {
-                    showingChat = false
-                } label: {
-                    Image(systemName: "list.bullet")
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(.primary)
-                        .frame(width: 40, height: 40)
-                }
-                .modifier(GlassCircleModifier(glassStyle: "regular"))
-                .buttonStyle(.plain)
-                .padding(.top, 8)
-                .padding(.leading, 12)
-                .uiKitIdentifier("RipulAgentConsole.backToList")
-            }
+        Task { @MainActor in
+            await bridge.focusSession(id: session.id)
+            showingChat = true
         }
     }
 
