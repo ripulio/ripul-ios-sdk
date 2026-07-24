@@ -13,14 +13,20 @@ import SwiftUI
 ///   view — that web view is what the auth store polls for the Clerk token and
 ///   what the relay connection runs through. It's hidden until signed in.
 /// - `RipulSessionsView` overlays the chat when signed in and not viewing a chat.
-/// - `RipulSignInView` (its own web view, same data store → shared cookies)
-///   gates until a Clerk session exists.
+/// - Sign-in gate (matches the native app): a **returning** user (persisted
+///   `wasPreviouslySignedIn`) gets a brief "Reconnecting" splash while the poller
+///   restores the token from the shared data store's Clerk cookies — NOT the
+///   sign-in prompt. Only a genuinely signed-out user sees `RipulSignInView`.
 @available(iOS 26.0, macOS 26.0, *)
 public struct RipulAgentConsole: View {
     private let configuration: RipulSessionsConfiguration
     @StateObject private var bridge = AgentBridge()
     @StateObject private var authStore: RipulClerkAuthStore
     @State private var showingChat = false
+    /// Set when the user explicitly asks to sign in from the reconnect splash
+    /// (e.g. to use a different account) — forces the sign-in view over the
+    /// returning-user reconnect path.
+    @State private var forceSignIn = false
 
     public init(configuration: RipulSessionsConfiguration) {
         self.configuration = configuration
@@ -42,25 +48,30 @@ public struct RipulAgentConsole: View {
             AgentView(configuration: agentConfig, bridge: bridge) { _ in EmptyView() }
                 .opacity(authStore.isSignedIn ? 1 : 0)
 
-            // Session list — overlays the chat when signed in and not in a chat.
-            if authStore.isSignedIn && !showingChat {
-                RipulSessionsView(
-                    bridge: bridge,
-                    cache: configuration.cache,
-                    tokenProvider: { authStore.token },
-                    onSelectSession: { _ in showingChat = true },
-                    onDismiss: { showingChat = true },
-                    allowRipulAgents: configuration.allowRipulAgents,
-                    invitesSection: configuration.invitesSection,
-                    foldersSection: configuration.foldersSection,
-                    emptyStateOverride: configuration.emptyStateOverride
-                )
-                .background(.background)
-                .transition(.opacity)
-            }
-
-            // Sign-in gate.
-            if !authStore.isSignedIn {
+            if authStore.isSignedIn {
+                // Session list — overlays the chat when not viewing a chat.
+                if !showingChat {
+                    RipulSessionsView(
+                        bridge: bridge,
+                        cache: configuration.cache,
+                        tokenProvider: { authStore.token },
+                        onSelectSession: { _ in showingChat = true },
+                        onDismiss: { showingChat = true },
+                        allowRipulAgents: configuration.allowRipulAgents,
+                        invitesSection: configuration.invitesSection,
+                        foldersSection: configuration.foldersSection,
+                        emptyStateOverride: configuration.emptyStateOverride
+                    )
+                    .background(.background)
+                    .transition(.opacity)
+                }
+            } else if authStore.wasPreviouslySignedIn && !forceSignIn {
+                // Returning user: reconnect to the persisted Clerk session (the
+                // poller restores the token from the shared data store) rather
+                // than re-prompting for sign-in.
+                reconnectingSplash
+            } else {
+                // Genuinely signed out (or "use a different account").
                 RipulSignInView(
                     authToken: authStore,
                     bridge: bridge,
@@ -70,6 +81,9 @@ public struct RipulAgentConsole: View {
             }
         }
         .task { authStore.startPolling(bridge: bridge) }
+        .onChange(of: authStore.isSignedIn) { _, signedIn in
+            if signedIn { forceSignIn = false }
+        }
         .animation(.easeInOut(duration: 0.25), value: authStore.isSignedIn)
         .animation(.easeInOut(duration: 0.25), value: showingChat)
         .overlay(alignment: .topLeading) {
@@ -90,5 +104,22 @@ public struct RipulAgentConsole: View {
                 .uiKitIdentifier("RipulAgentConsole.backToList")
             }
         }
+    }
+
+    private var reconnectingSplash: some View {
+        VStack(spacing: 16) {
+            ProgressView()
+            Text("Reconnecting…")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            Button("Sign in with a different account") { forceSignIn = true }
+                .font(.footnote)
+                .buttonStyle(.plain)
+                .foregroundStyle(.tint)
+                .uiKitIdentifier("RipulAgentConsole.reconnect.signIn")
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(.background)
+        .transition(.opacity)
     }
 }
