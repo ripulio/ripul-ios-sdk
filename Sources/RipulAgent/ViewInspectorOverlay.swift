@@ -837,6 +837,7 @@ class ViewInspectorController: UIView {
     var onInspect: ((InspectedView) -> Void)?
     var onCursorMoved: ((CGPoint) -> Void)?
     var onDismiss: (() -> Void)?
+    var onDoubleTap: ((UIView) -> Void)?
 
     private let cursorAccel: CGFloat = 1.4
     private var cursorPos: CGPoint
@@ -844,6 +845,13 @@ class ViewInspectorController: UIView {
 
     // Highlight layer drawn around the selected view
     private let highlightLayer = CAShapeLayer()
+
+    // Double-tap detection state
+    private var currentTarget: UIView?
+    private var lastTapTime: TimeInterval?
+    private var lastTapPosition: CGPoint?
+    private let doubleTapInterval: TimeInterval = 0.35
+    private let doubleTapDistance: CGFloat = 30
 
     override init(frame: CGRect) {
         cursorPos = CGPoint(x: frame.width / 2, y: frame.height / 2)
@@ -869,8 +877,26 @@ class ViewInspectorController: UIView {
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard let t = touches.first else { return }
         let loc = t.location(in: self)
+
+        // Detect a double-tap on the currently highlighted element and hand it to
+        // the host app as its default action.
+        if isDoubleTap(at: loc, time: t.timestamp), let target = currentTarget {
+            lastTapTime = nil
+            lastTapPosition = nil
+            onDoubleTap?(target)
+            return
+        }
+
+        lastTapTime = t.timestamp
+        lastTapPosition = loc
         lastTouch = loc
         pickAt(cursorPos)
+    }
+
+    /// Two quick taps near each other count as a double-tap on the highlighted element.
+    private func isDoubleTap(at loc: CGPoint, time: TimeInterval) -> Bool {
+        guard let lastTime = lastTapTime, let lastPos = lastTapPosition else { return false }
+        return (time - lastTime) <= doubleTapInterval && hypot(loc.x - lastPos.x, loc.y - lastPos.y) <= doubleTapDistance
     }
 
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
@@ -942,6 +968,7 @@ class ViewInspectorController: UIView {
         // internal UIImageView/UIButtonLabel. Standalone labels — not inside a control — stay
         // themselves. `hitLeaf` records what was actually under the finger.
         let target = controlToInspect(for: leaf)
+        currentTarget = target
         let hitLeaf = (target !== leaf) ? leaf : nil
 
         // Spatial lookup: ALL .uiKitIdentifier() stamps at this point, tightest first —
@@ -1057,11 +1084,13 @@ class ViewInspectorController: UIView {
 struct ViewInspectorTouchLayer: UIViewRepresentable {
     let onInspect: (InspectedView) -> Void
     let onCursorMoved: (CGPoint) -> Void
+    let onDoubleTap: ((UIView) -> Void)?
 
     func makeUIView(context: Context) -> ViewInspectorController {
         let v = ViewInspectorController(frame: UIScreen.main.bounds)
         v.onInspect = onInspect
         v.onCursorMoved = onCursorMoved
+        v.onDoubleTap = onDoubleTap
         v.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         return v
     }
@@ -1069,6 +1098,7 @@ struct ViewInspectorTouchLayer: UIViewRepresentable {
     func updateUIView(_ uiView: ViewInspectorController, context: Context) {
         uiView.onInspect = onInspect
         uiView.onCursorMoved = onCursorMoved
+        uiView.onDoubleTap = onDoubleTap
     }
 }
 
@@ -2481,6 +2511,7 @@ struct InspectorHUD: View {
 @available(iOS 16.0, *)
 public struct ViewInspectorOverlay: View {
     @Binding var isActive: Bool
+    let doubleTapAction: ((UIView) -> Void)?
     @State private var inspected: InspectedView?
     @State private var cursorPosition: CGPoint = CGPoint(
         x: UIScreen.main.bounds.width / 2,
@@ -2499,8 +2530,9 @@ public struct ViewInspectorOverlay: View {
     /// extending to the screen edges. Persists across sessions like `folded`.
     @AppStorage("viewInspector.rulers") private var showRulers = false
 
-    public init(isActive: Binding<Bool>) {
+    public init(isActive: Binding<Bool>, doubleTapAction: ((UIView) -> Void)? = nil) {
         self._isActive = isActive
+        self.doubleTapAction = doubleTapAction
     }
 
     public var body: some View {
@@ -2521,6 +2553,9 @@ public struct ViewInspectorOverlay: View {
                         },
                         onCursorMoved: { pos in
                             cursorPosition = pos
+                        },
+                        onDoubleTap: { view in
+                            doubleTapAction?(view)
                         }
                     )
                     .ignoresSafeArea()

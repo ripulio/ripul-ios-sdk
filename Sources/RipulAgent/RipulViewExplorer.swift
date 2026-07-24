@@ -33,6 +33,12 @@ public enum RipulViewExplorer {
     /// Whether the explorer is currently on screen.
     public static var isPresented: Bool { host != nil }
 
+    /// Optional host-defined action invoked when the user double-taps the element
+    /// currently highlighted by the inspector reticule. Passes the inspected `UIView`
+    /// so the host can present its own default action (e.g. a theme remap).
+    /// When nil, double-taps are ignored. Set before calling `present()`/`toggle()`.
+    public static var doubleTapAction: ((UIView) -> Void)?
+
     /// Present the View Explorer over the given window (defaults to the key
     /// window). No-op if it's already showing. Returns `false` only if no
     /// suitable window/view controller could be found to host it.
@@ -111,7 +117,7 @@ private struct RipulViewExplorerRoot: View {
     let onDismiss: () -> Void
 
     var body: some View {
-        ViewInspectorOverlay(isActive: $isActive)
+        ViewInspectorOverlay(isActive: $isActive, doubleTapAction: RipulViewExplorer.doubleTapAction)
             .onChange(of: isActive) { active in
                 if !active { onDismiss() }
             }
