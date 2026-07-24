@@ -51,10 +51,11 @@ public struct RipulAgentConsole: View {
 
                 if authStore.isSignedIn {
                     // Session list — overlays the chat when not viewing a chat.
-                    // safeAreaInset keeps its content out of the status bar / notch
-                    // when the host renders the console full-bleed (e.g. WAC's
-                    // overlay window ignores the safe area); the background stays
-                    // full-bleed opaque.
+                    // Explicit top padding keeps its content out of the status bar /
+                    // notch when the host renders the console full-bleed (WAC's
+                    // overlay window ignores the safe area); background stays
+                    // full-bleed opaque. (safeAreaInset does not reliably re-assert
+                    // the safe area under an ignoresSafeArea parent.)
                     if !showingChat {
                         RipulSessionsView(
                             bridge: bridge,
@@ -67,7 +68,7 @@ public struct RipulAgentConsole: View {
                             foldersSection: configuration.foldersSection,
                             emptyStateOverride: configuration.emptyStateOverride
                         )
-                        .safeAreaInset(edge: .top) { Color.clear.frame(height: 0) }
+                        .padding(.top, geo.safeAreaInsets.top)
                         .background(.background)
                         .transition(.opacity)
                     }
