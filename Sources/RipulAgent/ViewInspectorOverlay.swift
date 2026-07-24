@@ -878,7 +878,7 @@ class ViewInspectorController: UIView {
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard let t = touches.first else { return }
         let loc = t.location(in: self)
-        print("[RipulViewExplorer] touchesBegan loc=(\(loc.x), \(loc.y)) lastTapTime=\(lastTapTime ?? -1) timestamp=\(t.timestamp)")
+        NSLog("[RipulViewExplorer] touchesBegan loc=(%.1f, %.1f) lastTapTime=%.3f timestamp=%.3f", loc.x, loc.y, lastTapTime ?? -1, t.timestamp)
 
         // Detect a double-tap on the currently highlighted element and hand it to
         // the host app as its default action. Pass the token-anchor view (the
@@ -889,7 +889,7 @@ class ViewInspectorController: UIView {
             lastTapPosition = nil
             let anchorClass = currentTokenAnchor.map { String(describing: type(of: $0)) } ?? "nil"
             let targetClass = currentTarget.map { String(describing: type(of: $0)) } ?? "nil"
-            print("[RipulViewExplorer] double-tap detected anchor=\(anchorClass) target=\(targetClass) onDoubleTap=\(onDoubleTap != nil)")
+            NSLog("[RipulViewExplorer] double-tap detected anchor=%@ target=%@ onDoubleTap=%d", anchorClass, targetClass, onDoubleTap != nil)
             if let anchor = currentTokenAnchor ?? currentTarget {
                 onDoubleTap?(anchor)
             }
@@ -2318,6 +2318,7 @@ struct InspectorHUD: View {
     let history: [UIView]
     @Binding var folded: Bool
     @Binding var showRulers: Bool
+    let consoleAction: (() -> Void)?
     let onUp: () -> Void
     let onBack: () -> Void
     let onExit: () -> Void
@@ -2426,6 +2427,10 @@ struct InspectorHUD: View {
 
             Spacer()
 
+            if let consoleAction {
+                hudButton("Console", tone: .cyan, action: consoleAction)
+                    .uiKitIdentifier("InspectorHUD.consoleButton")
+            }
             hudButton("Ruler", tone: .cyan, active: showRulers) { showRulers.toggle() }
                 .uiKitIdentifier("InspectorHUD.rulersButton")
             hudButton("← Back", disabled: history.isEmpty, action: onBack)
@@ -2530,6 +2535,7 @@ struct InspectorHUD: View {
 public struct ViewInspectorOverlay: View {
     @Binding var isActive: Bool
     let doubleTapAction: ((UIView) -> Void)?
+    let consoleAction: (() -> Void)?
     @State private var inspected: InspectedView?
     @State private var cursorPosition: CGPoint = CGPoint(
         x: UIScreen.main.bounds.width / 2,
@@ -2548,9 +2554,10 @@ public struct ViewInspectorOverlay: View {
     /// extending to the screen edges. Persists across sessions like `folded`.
     @AppStorage("viewInspector.rulers") private var showRulers = false
 
-    public init(isActive: Binding<Bool>, doubleTapAction: ((UIView) -> Void)? = nil) {
+    public init(isActive: Binding<Bool>, doubleTapAction: ((UIView) -> Void)? = nil, consoleAction: (() -> Void)? = nil) {
         self._isActive = isActive
         self.doubleTapAction = doubleTapAction
+        self.consoleAction = consoleAction
     }
 
     public var body: some View {
@@ -2600,6 +2607,7 @@ public struct ViewInspectorOverlay: View {
                         history: history,
                         folded: $folded,
                         showRulers: $showRulers,
+                        consoleAction: consoleAction,
                         onUp: navigateUp,
                         onBack: navigateBack,
                         onExit: { isActive = false },

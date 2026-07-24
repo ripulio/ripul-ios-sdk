@@ -39,6 +39,11 @@ public enum RipulViewExplorer {
     /// When nil, double-taps are ignored. Set before calling `present()`/`toggle()`.
     public static var doubleTapAction: ((UIView) -> Void)?
 
+    /// Optional host-defined action invoked when the user taps the Console button
+    /// in the View Explorer HUD. The host decides how to present its console/log
+    /// viewer. When nil, the Console button is hidden.
+    public static var consoleAction: (() -> Void)?
+
     /// Present the View Explorer over the given window (defaults to the key
     /// window). No-op if it's already showing. Returns `false` only if no
     /// suitable window/view controller could be found to host it.
@@ -117,7 +122,9 @@ private struct RipulViewExplorerRoot: View {
     let onDismiss: () -> Void
 
     var body: some View {
-        ViewInspectorOverlay(isActive: $isActive, doubleTapAction: RipulViewExplorer.doubleTapAction)
+        ViewInspectorOverlay(isActive: $isActive,
+                             doubleTapAction: RipulViewExplorer.doubleTapAction,
+                             consoleAction: RipulViewExplorer.consoleAction)
             .onChange(of: isActive) { active in
                 if !active { onDismiss() }
             }
