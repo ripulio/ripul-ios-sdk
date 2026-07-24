@@ -838,9 +838,6 @@ class ViewInspectorController: UIView {
     var onCursorMoved: ((CGPoint) -> Void)?
     var onDismiss: (() -> Void)?
     var onDoubleTap: ((UIView) -> Void)?
-    /// When folded the HUD is collapsed and app interaction should resume,
-    /// but the reticule itself stays draggable if visible.
-    var folded = false
 
     private let cursorAccel: CGFloat = 1.4
     private var cursorPos: CGPoint
@@ -851,12 +848,11 @@ class ViewInspectorController: UIView {
 
     // Double-tap detection state
     private var currentTarget: UIView?
+    private var currentTokenAnchor: UIView?
     private var lastTapTime: TimeInterval?
     private var lastTapPosition: CGPoint?
     private let doubleTapInterval: TimeInterval = 0.35
     private let doubleTapDistance: CGFloat = 30
-    /// Radius around the reticule that remains touch-active when folded.
-    private let foldedHitRadius: CGFloat = 50
 
     override init(frame: CGRect) {
         cursorPos = CGPoint(x: frame.width / 2, y: frame.height / 2)
@@ -884,26 +880,20 @@ class ViewInspectorController: UIView {
         let loc = t.location(in: self)
 
         // Detect a double-tap on the currently highlighted element and hand it to
-        // the host app as its default action.
-        if isDoubleTap(at: loc, time: t.timestamp), let target = currentTarget {
+        // the host app as its default action. Pass the token-anchor view (the
+        // .uiKitIdentifier stamp) so the host reads the same design tokens the
+        // Edit tab does.
+        if isDoubleTap(at: loc, time: t.timestamp) {
             lastTapTime = nil
             lastTapPosition = nil
-            onDoubleTap?(target)
+            if let anchor = currentTokenAnchor ?? currentTarget {
+                onDoubleTap?(anchor)
+            }
             return
         }
 
         lastTapTime = t.timestamp
         lastTapPosition = loc
-
-        if folded {
-            // Folded: touch layer only claims hits near the reticule. Tapping or
-            // dragging there jumps the reticule to the finger so it stays movable.
-            cursorPos = CGPoint(x: max(0, min(bounds.width - 1, loc.x)),
-                                y: max(0, min(bounds.height - 1, loc.y)))
-            onCursorMoved?(cursorPos)
-            return
-        }
-
         lastTouch = loc
         pickAt(cursorPos)
     }
@@ -915,17 +905,8 @@ class ViewInspectorController: UIView {
     }
 
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
-        guard let t = touches.first else { return }
+        guard let t = touches.first, let last = lastTouch else { return }
         let loc = t.location(in: self)
-
-        if folded {
-            cursorPos = CGPoint(x: max(0, min(bounds.width - 1, loc.x)),
-                                y: max(0, min(bounds.height - 1, loc.y)))
-            onCursorMoved?(cursorPos)
-            return
-        }
-
-        guard let last = lastTouch else { return }
         let dx = (loc.x - last.x) * cursorAccel
         let dy = (loc.y - last.y) * cursorAccel
         lastTouch = loc
@@ -942,15 +923,6 @@ class ViewInspectorController: UIView {
 
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
         lastTouch = nil
-    }
-
-    /// When folded, only the reticule area stays touch-active so the app behind
-    /// receives all other touches. When unfolded the whole screen is active.
-    override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
-        if folded {
-            return hypot(point.x - cursorPos.x, point.y - cursorPos.y) <= foldedHitRadius
-        }
-        return super.point(inside: point, with: event)
     }
 
     // MARK: Hit testing
@@ -1018,6 +990,8 @@ class ViewInspectorController: UIView {
 
         // Inspect — pass the resolved identifier from spatial lookup
         let info = InspectedView.inspect(target, depth: viewDepth(target), resolvedIdentifier: match?.identifier, hitLeaf: hitLeaf, registryStamps: stampMatches.map(\.identifier), registryMatchView: match?.view)
+        currentTarget = target
+        currentTokenAnchor = info.tokenAnchorView
         onInspect?(info)
     }
 
@@ -1118,14 +1092,12 @@ struct ViewInspectorTouchLayer: UIViewRepresentable {
     let onInspect: (InspectedView) -> Void
     let onCursorMoved: (CGPoint) -> Void
     let onDoubleTap: ((UIView) -> Void)?
-    let folded: Bool
 
     func makeUIView(context: Context) -> ViewInspectorController {
         let v = ViewInspectorController(frame: UIScreen.main.bounds)
         v.onInspect = onInspect
         v.onCursorMoved = onCursorMoved
         v.onDoubleTap = onDoubleTap
-        v.folded = folded
         v.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         return v
     }
@@ -1134,7 +1106,6 @@ struct ViewInspectorTouchLayer: UIViewRepresentable {
         uiView.onInspect = onInspect
         uiView.onCursorMoved = onCursorMoved
         uiView.onDoubleTap = onDoubleTap
-        uiView.folded = folded
     }
 }
 
@@ -2574,9 +2545,8 @@ public struct ViewInspectorOverlay: View {
     public var body: some View {
         if isActive {
             ZStack {
-                // Touch capture layer — active full-screen when unfolded; when folded
-                // it only claims touches near the reticule so the reticule stays
-                // draggable while the app behind receives everything else.
+                // Touch capture layer — mounted whenever the explorer is active.
+                // Folding only collapses the HUD; the reticule stays movable/inspectable.
                 ViewInspectorTouchLayer(
                     onInspect: { info in
                         if info.view !== currentView {
@@ -2593,8 +2563,7 @@ public struct ViewInspectorOverlay: View {
                     },
                     onDoubleTap: { view in
                         doubleTapAction?(view)
-                    },
-                    folded: folded
+                    }
                 )
                 .ignoresSafeArea()
 
