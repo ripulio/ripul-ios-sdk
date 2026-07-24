@@ -851,8 +851,8 @@ class ViewInspectorController: UIView {
     private var currentTokenAnchor: UIView?
     private var lastTapTime: TimeInterval?
     private var lastTapPosition: CGPoint?
-    private let doubleTapInterval: TimeInterval = 0.35
-    private let doubleTapDistance: CGFloat = 30
+    private let doubleTapInterval: TimeInterval = 0.45
+    private let doubleTapDistance: CGFloat = 60
 
     override init(frame: CGRect) {
         cursorPos = CGPoint(x: frame.width / 2, y: frame.height / 2)
@@ -891,6 +891,7 @@ class ViewInspectorController: UIView {
             let targetClass = currentTarget.map { String(describing: type(of: $0)) } ?? "nil"
             NSLog("[RipulViewExplorer] double-tap detected anchor=%@ target=%@ onDoubleTap=%d", anchorClass, targetClass, onDoubleTap != nil)
             if let anchor = currentTokenAnchor ?? currentTarget {
+                UISelectionFeedbackGenerator().selectionChanged()
                 onDoubleTap?(anchor)
             }
             return
@@ -905,13 +906,13 @@ class ViewInspectorController: UIView {
     /// Two quick taps near each other count as a double-tap on the highlighted element.
     private func isDoubleTap(at loc: CGPoint, time: TimeInterval) -> Bool {
         guard let lastTime = lastTapTime, let lastPos = lastTapPosition else {
-            print("[RipulViewExplorer] isDoubleTap false: no prior tap")
+            NSLog("[RipulViewExplorer] isDoubleTap false: no prior tap")
             return false
         }
         let dt = time - lastTime
         let dist = hypot(loc.x - lastPos.x, loc.y - lastPos.y)
         let ok = dt <= doubleTapInterval && dist <= doubleTapDistance
-        print("[RipulViewExplorer] isDoubleTap dt=\(dt) dist=\(dist) ok=\(ok)")
+        NSLog("[RipulViewExplorer] isDoubleTap dt=%.3f dist=%.1f ok=%d", dt, dist, ok)
         return ok
     }
 
