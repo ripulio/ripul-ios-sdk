@@ -80,7 +80,17 @@ public struct RipulAgentConsole: View {
                 )
             }
         }
-        .task { authStore.startPolling(bridge: bridge) }
+        .task {
+            // Dev-assistant tools: logs + native screen inspection. Registered on
+            // the console's own bridge so the agent driving from here can read logs
+            // and `inspect_screen` the host app (which excludes this overlay).
+            bridge.registerBuiltInTools([
+                ConsoleLogsTool(bridge: bridge),
+                NetworkLogsTool(bridge: bridge),
+                InspectScreenTool(bridge: bridge),
+            ])
+            authStore.startPolling(bridge: bridge)
+        }
         .onChange(of: authStore.isSignedIn) { _, signedIn in
             if signedIn { forceSignIn = false }
         }
