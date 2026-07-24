@@ -2231,6 +2231,37 @@ struct InspectorAuditTab: View {
     }
 }
 
+// MARK: - Settings tab
+
+@available(iOS 16.0, *)
+struct InspectorSettingsTab: View {
+    /// Whether the crosshair reticule is hidden when the HUD is folded.
+    /// Off by default so the reticule remains visible while folded.
+    @AppStorage("viewInspector.hideReticuleWhenFolded") private var hideReticuleWhenFolded = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Explorer settings")
+                .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                .foregroundStyle(.pink).textCase(.uppercase).tracking(0.5)
+
+            Toggle(isOn: $hideReticuleWhenFolded) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Hide reticule when folded")
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(.white)
+                    Text("Hide the crosshair when the panel is folded so it doesn't overlay the app.")
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(.gray)
+                }
+            }
+            .tint(.pink)
+
+            Spacer()
+        }
+    }
+}
+
 // MARK: - HUD Panel
 
 @available(iOS 16.0, *)
@@ -2256,6 +2287,7 @@ struct InspectorHUD: View {
         case edit = "Edit"
         case tree = "Tree"
         case audit = "Audit"
+        case settings = "Settings"
     }
 
     var body: some View {
@@ -2394,6 +2426,8 @@ struct InspectorHUD: View {
         if tab == .audit {
             // Screen-wide — works with or without a current selection.
             InspectorAuditTab(anchorView: inspected?.view, onSelect: onSelectView)
+        } else if tab == .settings {
+            InspectorSettingsTab()
         } else if let info = inspected {
             switch tab {
             case .properties:
@@ -2403,7 +2437,7 @@ struct InspectorHUD: View {
                     .id(ObjectIdentifier(info.view))   // reset editor state per selection
             case .tree:
                 InspectorTreeTab(selectedView: info.view, onSelect: onSelectView)
-            case .audit:
+            case .audit, .settings:
                 EmptyView()   // handled above
             }
         } else {
@@ -2454,9 +2488,13 @@ public struct ViewInspectorOverlay: View {
     )
     @State private var history: [UIView] = []
     @State private var currentView: UIView?
-    /// When folded, the HUD header stays visible but touch capture and
-    /// crosshair are removed so normal app interaction resumes.
+    /// When folded, the HUD header stays visible but touch capture is removed so
+    /// normal app interaction resumes. The crosshair reticule can optionally stay
+    /// visible via the settings panel.
     @AppStorage("viewInspector.folded") private var folded = false
+    /// Whether to hide the crosshair reticule when the HUD is folded.
+    /// Off by default so the reticule remains visible when folded.
+    @AppStorage("viewInspector.hideReticuleWhenFolded") private var hideReticuleWhenFolded = false
     /// Phone-wide alignment rulers — two thin lines crossing at the cursor,
     /// extending to the screen edges. Persists across sessions like `folded`.
     @AppStorage("viewInspector.rulers") private var showRulers = false
@@ -2486,8 +2524,11 @@ public struct ViewInspectorOverlay: View {
                         }
                     )
                     .ignoresSafeArea()
+                }
 
-                    // Crosshair — only when unfolded
+                // Crosshair — shown when unfolded; when folded it stays visible
+                // unless the user enables "Hide reticule when folded" in Settings.
+                if !folded || !hideReticuleWhenFolded {
                     CrosshairReticle(position: cursorPosition)
                         .ignoresSafeArea()
                 }
