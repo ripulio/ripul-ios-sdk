@@ -124,5 +124,25 @@ public struct RipulSessionsView: View {
         .onReceive(NotificationCenter.default.publisher(for: RemoteMachine.iconsDidChangeNotification)) { _ in
             machineIcons = RemoteMachine.iconsByDisplayName(machines: model.machines, cache: cache)
         }
+        // Screen title lozenge — the SDK session-list equivalent of the native
+        // app's AgentScreen.topBar.titleLozenge. Long-press opens the DevTools
+        // console (ConsoleLogViewer), presented by whoever hosts this view.
+        .safeAreaInset(edge: .top) {
+            Text("Sessions")
+                .font(.caption)
+                .fontWeight(.semibold)
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .padding(.horizontal, 12)
+                .frame(minHeight: 44)
+                .modifier(GlassPillModifier())
+                .simultaneousGesture(
+                    LongPressGesture(minimumDuration: 1.0).onEnded { _ in
+                        NotificationCenter.default.post(name: .ripulShowDevTools, object: nil)
+                    }
+                )
+                .uiKitIdentifier("RipulSessions.topBar.titleLozenge")
+                .padding(.top, 4)
+        }
     }
 }

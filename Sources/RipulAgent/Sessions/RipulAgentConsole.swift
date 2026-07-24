@@ -27,6 +27,9 @@ public struct RipulAgentConsole: View {
     /// (e.g. to use a different account) — forces the sign-in view over the
     /// returning-user reconnect path.
     @State private var forceSignIn = false
+    /// DevTools console sheet (ConsoleLogViewer), opened by long-pressing the
+    /// session list's title lozenge.
+    @State private var showDevTools = false
 
     public init(configuration: RipulSessionsConfiguration) {
         self.configuration = configuration
@@ -100,6 +103,25 @@ public struct RipulAgentConsole: View {
             }
             .onChange(of: authStore.isSignedIn) { _, signedIn in
                 if signedIn { forceSignIn = false }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .ripulShowDevTools)) { _ in
+                showDevTools = true
+            }
+            .sheet(isPresented: $showDevTools) {
+                NavigationStack {
+                    ConsoleLogViewer(bridge: bridge)
+                        .toolbar {
+                            #if os(iOS)
+                            ToolbarItem(placement: .topBarTrailing) {
+                                Button("Done") { showDevTools = false }
+                            }
+                            #else
+                            ToolbarItem(placement: .confirmationAction) {
+                                Button("Done") { showDevTools = false }
+                            }
+                            #endif
+                        }
+                }
             }
             .animation(.easeInOut(duration: 0.25), value: authStore.isSignedIn)
             .animation(.easeInOut(duration: 0.25), value: showingChat)
