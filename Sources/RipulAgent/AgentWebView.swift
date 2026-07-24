@@ -57,6 +57,8 @@ public struct AgentWebView: NSViewRepresentable {
             forMainFrameOnly: true
         )
         config.userContentController.addUserScript(bridgeScript)
+        config.userContentController.addUserScript(Self.installationIdentityScript)
+        config.userContentController.addUserScript(Self.hostPreferencesScript())
         config.userContentController.add(context.coordinator, name: "agentBridge")
         config.userContentController.add(context.coordinator, name: "agentLog")
         config.userContentController.add(context.coordinator, name: "agentNetwork")
@@ -376,6 +378,8 @@ private struct AgentWebViewRepresentable: UIViewRepresentable {
             forMainFrameOnly: true
         )
         config.userContentController.addUserScript(bridgeScript)
+        config.userContentController.addUserScript(AgentWebView.installationIdentityScript)
+        config.userContentController.addUserScript(AgentWebView.hostPreferencesScript())
 
         config.userContentController.add(context.coordinator, name: "agentBridge")
         config.userContentController.add(context.coordinator, name: "agentLog")
@@ -898,6 +902,37 @@ extension AgentWebView {
 // MARK: - Shared Bridge JavaScript & Font CSS (cross-platform)
 
 extension AgentWebView {
+    /// Exposes the stable per-install identity to the web layer before any page
+    /// JS runs. The web relay client uses it as its clientId suffix so an
+    /// install-over reconnects as the SAME relay client (see InstallationIdentity).
+    public static let installationIdentityScript = WKUserScript(
+        source: "window.__ripulInstallationId = \"\(InstallationIdentity.clientIdSegment)\";",
+        injectionTime: .atDocumentStart,
+        forMainFrameOnly: true
+    )
+
+    /// Exposes the native mirror of host-mode prefs (hostEnabled / machineName)
+    /// and the long-lived machine token so the web layer can keep host comms
+    /// alive when the Clerk session is unavailable. Values are refreshed into
+    /// the live page on pageDidFinish and after every `host-prefs:set` write.
+    public static func hostPreferencesScript() -> WKUserScript {
+        let token = MachineTokenStore.token
+        let tokenLiteral: String
+        if let token {
+            let escaped = token
+                .replacingOccurrences(of: "\\", with: "\\\\")
+                .replacingOccurrences(of: "\"", with: "\\\"")
+            tokenLiteral = "\"\(escaped)\""
+        } else {
+            tokenLiteral = "null"
+        }
+        return WKUserScript(
+            source: "window.__ripulHostPrefs = \(HostPreferences.injectionJSON); window.__ripulHostToken = \(tokenLiteral);",
+            injectionTime: .atDocumentStart,
+            forMainFrameOnly: true
+        )
+    }
+
     public static let bridgeJavaScript = """
     (function() {
         // Clear stale host-render-suspended flag before any web JS runs.

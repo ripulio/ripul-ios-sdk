@@ -161,6 +161,24 @@ public indirect enum CmsPageBlocks: Codable, Equatable {
             return f
         }
     }
+
+    /// All blocks in this container, recursively (includes block children).
+    public func allBlocks() -> [CmsBlock] {
+        var result: [CmsBlock] = []
+        func collect(_ container: CmsPageBlocks) {
+            switch container {
+            case .list(let items, _), .canvas(let items, _, _, _), .carousel(let items, _):
+                for block in items {
+                    result.append(block)
+                    if let children = block.children { collect(children) }
+                }
+            case .template(_, let slots, _), .sidebar(_, let slots, _):
+                for slot in slots.values { collect(slot) }
+            }
+        }
+        collect(self)
+        return result
+    }
 }
 
 public struct CmsPage: Codable, Identifiable, Equatable {

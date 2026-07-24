@@ -113,6 +113,40 @@ public final class CmsClient {
         return try JSONDecoder().decode(CmsRenderDefinition.self, from: data)
     }
 
+    /// Full definition PLUS the pages array as raw JSON — the design
+    /// controller edits raw so fields the typed models don't carry
+    /// (scriptIds, exportMode, canvas designWidth, …) round-trip untouched
+    /// through a save.
+    public func fetchDefinitionRaw(cmsId: String) async throws -> (definition: CmsRenderDefinition, rawPages: [CmsJSON]) {
+        let data = try await request(path: "/admin/cms-definitions/\(encode(cmsId))", method: "GET", body: nil)
+        let definition = try JSONDecoder().decode(CmsRenderDefinition.self, from: data)
+        struct PagesOnly: Codable { var pages: [CmsJSON]? }
+        let rawPages = (try? JSONDecoder().decode(PagesOnly.self, from: data).pages) ?? []
+        return (definition, rawPages)
+    }
+
+    /// Owner save path — replaces the pages array wholesale (the web
+    /// designer's admin PATCH). Pages travel as raw JSON so unmodeled
+    /// fields survive.
+    public func patchDefinitionPages(cmsId: String, pages: [CmsJSON]) async throws {
+        _ = try await request(
+            path: "/admin/cms-definitions/\(encode(cmsId))",
+            method: "PATCH",
+            body: ["pages": .array(pages)]
+        )
+    }
+
+    /// Delegated save path — the per-site design endpoint (role-gated
+    /// server-side). `siteKey` is the site key's PUBLISHABLE key, matching
+    /// the web's `updatePortalDesign`.
+    public func patchPortalDesign(cmsId: String, siteKey: String, pages: [CmsJSON]) async throws {
+        _ = try await request(
+            path: "/v1/cms-definitions/\(encode(cmsId))/design",
+            method: "PATCH",
+            body: ["siteKeyId": .string(siteKey), "pages": .array(pages)]
+        )
+    }
+
     /// The current user's membership on a site key (`GET /v1/site-key/me`).
     /// In opaque-portal mode the credential headers identify the user; the
     /// worker resolves their member row (invite-only portals 401 non-members

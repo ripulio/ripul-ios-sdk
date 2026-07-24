@@ -1194,35 +1194,45 @@ struct InspectorTokenSection: View {
                     .foregroundStyle(.gray)
             }
             Spacer(minLength: 6)
-            Menu {
-                // Render sections when the provider has grouped the options (peers / roles /
-                // primitives); fall back to a flat list for ungrouped nil-section options.
-                ForEach(binding.optionGroups) { group in
-                    if let title = group.title {
-                        Section(title) {
+            if binding.options.count == 1, let only = binding.options.first {
+                // A single option is an ACTION, not a choice (e.g. the host's "open a custom
+                // picker" entry) — fire it directly instead of opening a one-item menu.
+                Button { remap(binding, only) } label: { remapLozenge() }
+            } else if !binding.options.isEmpty {
+                Menu {
+                    // Render sections when the provider has grouped the options (peers / roles /
+                    // primitives); fall back to a flat list for ungrouped nil-section options.
+                    ForEach(binding.optionGroups) { group in
+                        if let title = group.title {
+                            Section(title) {
+                                ForEach(group.items) { option in
+                                    Button { remap(binding, option) } label: {
+                                        Label { Text(option.label) } icon: { Image(uiImage: Self.swatchImage(option.swatchHex)) }
+                                    }
+                                }
+                            }
+                        } else {
                             ForEach(group.items) { option in
                                 Button { remap(binding, option) } label: {
                                     Label { Text(option.label) } icon: { Image(uiImage: Self.swatchImage(option.swatchHex)) }
                                 }
                             }
                         }
-                    } else {
-                        ForEach(group.items) { option in
-                            Button { remap(binding, option) } label: {
-                                Label { Text(option.label) } icon: { Image(uiImage: Self.swatchImage(option.swatchHex)) }
-                            }
-                        }
                     }
-                }
-            } label: {
-                Text("remap")
-                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(.black)
-                    .padding(.horizontal, 8).padding(.vertical, 3)
-                    .background(Color.pink.opacity(0.9))
-                    .clipShape(RoundedRectangle(cornerRadius: 5))
+                } label: { remapLozenge() }
             }
+            // options.isEmpty = read-only row (diagnostic) — no remap control at all.
         }
+    }
+
+    /// The pink "remap" button label, shared by the direct-fire button and the options menu.
+    private func remapLozenge() -> some View {
+        Text("remap")
+            .font(.system(size: 10, weight: .semibold, design: .monospaced))
+            .foregroundStyle(.black)
+            .padding(.horizontal, 8).padding(.vertical, 3)
+            .background(Color.pink.opacity(0.9))
+            .clipShape(RoundedRectangle(cornerRadius: 5))
     }
 
     private func swatch(_ hex: String) -> some View {

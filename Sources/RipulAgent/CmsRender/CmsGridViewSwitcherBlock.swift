@@ -95,6 +95,7 @@ struct CmsGridViewSwitcherBlockView: View {
 
     private func apply(_ view: GridView) {
         activeId = view.id
+        runtime.setGridViewActiveId(targetGridId, id: view.id)
         runtime.setGridViewState(targetGridId, state: view.state)
         // Per-view read-query re-bind (web parity): only when `switchesQuery`
         // is on; nil/blank reverts the grid to its base query.
@@ -108,10 +109,18 @@ struct CmsGridViewSwitcherBlockView: View {
         guard !configured else { return }
         configured = true
         let savedId = UserDefaults.standard.string(forKey: persistenceKey)
-        if let saved = views.first(where: { $0.id == savedId }) {
-            apply(saved)
-        } else if let first = views.first {
-            apply(first)
+        let target = savedId.flatMap { id in views.first(where: { $0.id == id }) } ?? views.first
+        guard let view = target else { return }
+        if runtime.gridViewStates[targetGridId] == nil {
+            // No active view state yet — first render. Apply the saved snapshot.
+            apply(view)
+        } else {
+            // The grid already has an active view state (set by a previous
+            // render of this switcher). AnyView wrapping recreates this view on
+            // every parent re-render, which would reset `configured` and
+            // re-apply the original snapshot — wiping any in-flight inspector
+            // edits. Skip the re-apply; just restore the picker's selection.
+            activeId = view.id
         }
     }
 

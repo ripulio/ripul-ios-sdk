@@ -28,8 +28,17 @@ public struct CmsPortalTheme {
     let textSecondary: Color
     let divider: Color
 
-    public init(config: CmsPortalThemeConfig?) {
-        let dark = config?.mode == "dark"
+    public init(config: CmsPortalThemeConfig?, effectiveDark: Bool = false) {
+        let mode = config?.mode
+        let dark: Bool
+        switch mode {
+        case "dark":
+            dark = true
+        case "light":
+            dark = false
+        default:
+            dark = effectiveDark
+        }
         isDark = dark
         let palette = config?.palette
         func color(_ raw: String?, _ fallback: Color) -> Color {

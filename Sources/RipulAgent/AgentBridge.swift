@@ -1397,6 +1397,11 @@ public final class AgentBridge: NSObject, ObservableObject {
         // does not cross the bridge (quiet/cool). Re-pushed on every load so a
         // self-heal reload keeps the setting.
         evaluateJavaScript("window.__ripulNativeLog = \(AgentBridge.verboseBridgeLog)")
+        // Refresh the host-prefs mirror with CURRENT UserDefaults values — the
+        // documentStart script is baked at webview creation, so this is what
+        // keeps reloads of the same webview accurate after host-prefs:set writes.
+        pushHostPrefsToPage()
+        pushHostTokenToPage()
         connectionTimeoutTask?.cancel()
         connectionTimeoutTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 5_000_000_000) // 5s
@@ -1874,18 +1879,47 @@ public final class AgentBridge: NSObject, ObservableObject {
     //   attempt 1 → reload()                     (cheap, fixes transient wedges)
     //   attempt 2 → purgeWebStateAndReload()     (auto "clear sessions data")
     //   attempt 3 → purgeWebStateAndReload()     (network may have settled)
-    //   attempt 4+ → stop (don't loop; a truly-offline device can't be reloaded
-    //               back to life, and a reload loop burns battery)
+    //   attempt 4+ → macOS: keep purging with exponential backoff (host is
+    //               often unattended — giving up leaves it dead). iOS: stop,
+    //               because the user is present and can tap Retry.
     // A short FLOOR between heals prevents a tight loop; the ESCALATION WINDOW
     // resets the ladder so a later, unrelated incident starts cheap again.
 
     private var lastContextHealAt: Date?
     private var healAttempts = 0
     private var healVerifyTask: Task<Void, Never>?
+    private var deferredHealTask: Task<Void, Never>?
     /// Minimum gap between heals — stops a reload storm.
-    private let healFloor: TimeInterval = 10
+    private let baseHealFloor: TimeInterval = 10
+    /// Maximum time between heals on macOS (5 minutes).
+    private let maxHealFloor: TimeInterval = 300
     /// Heals within this window escalate; a heal after it resets the ladder.
     private let healEscalationWindow: TimeInterval = 90
+
+    /// Gap between heals. macOS backs off exponentially after 3 attempts so an
+    /// unattended host keeps retrying without hammering CPU/network/battery.
+    private func healFloor(for attempt: Int) -> TimeInterval {
+        #if os(macOS)
+        if attempt > 3 {
+            let backoff = baseHealFloor * pow(2.0, Double(min(attempt - 3, 5)))
+            return min(backoff, maxHealFloor)
+        }
+        #endif
+        return baseHealFloor
+    }
+
+    private func remainingHealFloor() -> TimeInterval {
+        guard let last = lastContextHealAt else { return 0 }
+        let floor = healFloor(for: healAttempts)
+        let elapsed = Date().timeIntervalSince(last)
+        return max(0, floor - elapsed)
+    }
+
+    /// Set by the host app (macOS) to record web-view self-heal reloads into its
+    /// persistent restart log — a heal reloads the whole web app, which reads as
+    /// "the host restarted". Args: (reason, attempt) where attempt 1 = plain
+    /// reload, 2–3 = purge + reload, 4+ = ladder exhausted.
+    public static var webViewHealRecorder: ((String, Int) -> Void)?
 
     /// Recover a dead/crashed JS context, escalating on repeated failures within
     /// the window. Returns true if a recovery action was triggered.
@@ -1901,16 +1935,24 @@ public final class AgentBridge: NSObject, ObservableObject {
             return false
         }
         let now = Date()
+        let nextAttempt = healAttempts + 1
+        let floor = healFloor(for: nextAttempt)
         if let last = lastContextHealAt {
             let since = now.timeIntervalSince(last)
-            if since < healFloor {
-                handleConsoleLog("WARN: [WEBVIEW_HEAL] skipped, healed \(Int(since))s ago (floor \(Int(healFloor))s) — \(reason)")
+            if since < floor {
+                handleConsoleLog("WARN: [WEBVIEW_HEAL] skipped, healed \(Int(since))s ago (floor \(Int(floor))s) — \(reason)")
+                #if os(macOS)
+                // Unattended host: don't just sit here — schedule a retry once the
+                // floor has elapsed. iOS relies on the user tapping Retry instead.
+                scheduleDeferredHeal(reason: reason)
+                #endif
                 return false
             }
-            if since > healEscalationWindow { healAttempts = 0 } // fresh incident
+            if since > healEscalationWindow { healAttempts = 0 }
         }
         lastContextHealAt = now
         healAttempts += 1
+        Self.webViewHealRecorder?(reason, healAttempts)
 
         switch healAttempts {
         case 1:
@@ -1920,11 +1962,34 @@ public final class AgentBridge: NSObject, ObservableObject {
             handleConsoleLog("ERROR: [WEBVIEW_HEAL] attempt \(healAttempts) (\(reason)) — reload didn't stick; purging session state + reloading")
             recoveryReload(label: "heal purge") { [weak self] in self?.purgeWebStateAndReload() }
         default:
+            #if os(macOS)
+            handleConsoleLog("ERROR: [WEBVIEW_HEAL] attempt \(healAttempts) (\(reason)) — macOS host, continuing purge + reload with \(Int(floor))s floor")
+            recoveryReload(label: "heal purge (macOS persistent)") { [weak self] in self?.purgeWebStateAndReload() }
+            #else
             handleConsoleLog("ERROR: [WEBVIEW_HEAL] attempt \(healAttempts) (\(reason)) — auto-recovery exhausted; relaunch required (device may be offline)")
             return false
+            #endif
         }
         scheduleHealVerification(reason: reason)
         return true
+    }
+
+    /// macOS-only: schedule a heal retry once the current floor has elapsed.
+    /// Cancels any previous deferred heal so floors don't stack.
+    private func scheduleDeferredHeal(reason: String) {
+        deferredHealTask?.cancel()
+        deferredHealTask = Task { [weak self] in
+            guard let self else { return }
+            let delay = self.remainingHealFloor()
+            guard delay > 0 else {
+                await self.healWebContext(reason: "deferred heal floor elapsed — \(reason)")
+                return
+            }
+            self.handleConsoleLog("LOG: [WEBVIEW_HEAL] macOS deferred heal scheduled in \(Int(delay))s")
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            guard !Task.isCancelled, self.isAppActive else { return }
+            await self.healWebContext(reason: "deferred heal fired — \(reason)")
+        }
     }
 
     /// Escalation heal: clear the persisted state that re-poisons a fresh boot
@@ -1969,6 +2034,8 @@ public final class AgentBridge: NSObject, ObservableObject {
             case .healthy:
                 self.handleConsoleLog("LOG: [WEBVIEW_HEAL] post-heal probe healthy — recovered after \(self.healAttempts) attempt(s)")
                 self.healAttempts = 0
+                self.deferredHealTask?.cancel()
+                self.deferredHealTask = nil
             case .contextDead, .webCrashed:
                 self.handleConsoleLog("WARN: [WEBVIEW_HEAL] post-heal probe \(health.rawValue) — escalating")
                 await self.healWebContext(reason: "post-heal still \(health.rawValue)")
@@ -2315,6 +2382,10 @@ public final class AgentBridge: NSObject, ObservableObject {
             handleCapabilityRequest(dict)
         case "capability:ping":
             handleCapabilityPing(dict)
+        case "host-prefs:set":
+            handleHostPrefsSet(dict)
+        case "host-token:set":
+            handleHostTokenSet(dict)
         case "agent:turnStarted":
             handleLifecycleEvent(.running, dict: dict)
         case "agent:turnAwaitingInput":
@@ -3776,12 +3847,23 @@ public final class AgentBridge: NSObject, ObservableObject {
         }
     }
 
-    /// Fetch favorite directories from the remote host via the relay.
+    /// Favourite directories and current working directory from the remote host.
+    @available(iOS 15.0, macOS 13.0, *)
+    public struct FavoriteDirectories {
+        public let directories: [String]
+        public let current: String?
+        public init(directories: [String], current: String?) {
+            self.directories = directories
+            self.current = current
+        }
+    }
+
+    /// Fetch favourite directories from the remote host via the relay.
     /// Retries up to 3 times with 1s delays if the result is empty,
     /// since the relay connection may not be established yet.
     @available(iOS 15.0, macOS 13.0, *)
-    public func getFavoriteDirectories() async -> [String] {
-        guard let webView else { return [] }
+    public func getFavoriteDirectories() async -> FavoriteDirectories {
+        guard let webView else { return FavoriteDirectories(directories: [], current: nil) }
         for attempt in 1...3 {
             do {
                 let result = try await webView.callAsyncJavaScript(
@@ -3790,7 +3872,8 @@ public final class AgentBridge: NSObject, ObservableObject {
                 )
                 if let dict = result as? [String: Any],
                    let dirs = dict["directories"] as? [String], !dirs.isEmpty {
-                    return dirs
+                    let current = dict["current"] as? String
+                    return FavoriteDirectories(directories: dirs, current: current?.isEmpty == false ? current : nil)
                 }
             } catch {
                 NSLog("[AgentBridge] getFavoriteDirectories error (attempt %d): %@", attempt, error.localizedDescription)
@@ -3799,7 +3882,7 @@ public final class AgentBridge: NSObject, ObservableObject {
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
             }
         }
-        return []
+        return FavoriteDirectories(directories: [], current: nil)
     }
 
     /// Discover remote actions available on a specific host machine.
@@ -4163,7 +4246,8 @@ public final class AgentBridge: NSObject, ObservableObject {
                 try await webView.callAsyncJavaScript(
                     """
                     if (!window.__ripulConnectToMachine) return {success:false, error:'not ready'};
-                    return await window.__ripulConnectToMachine(machineId);
+                    var r = await window.__ripulConnectToMachine(machineId);
+                    return JSON.parse(JSON.stringify(r));
                     """,
                     arguments: ["machineId": machineId],
                     contentWorld: .page
@@ -4214,7 +4298,8 @@ public final class AgentBridge: NSObject, ObservableObject {
                 try await webView.callAsyncJavaScript(
                     """
                     if (!window.__ripulConnectToMachineWithProvider) return {success:false, error:'not ready'};
-                    return await window.__ripulConnectToMachineWithProvider(machineId, providerKey);
+                    var r = await window.__ripulConnectToMachineWithProvider(machineId, providerKey);
+                    return JSON.parse(JSON.stringify(r));
                     """,
                     arguments: ["machineId": machineId, "providerKey": providerKey],
                     contentWorld: .page
@@ -5038,6 +5123,58 @@ public final class AgentBridge: NSObject, ObservableObject {
         sessionList.sessionPhases.removeAll()
         sessionLifecycleSequences.removeAll()
         activeSessionId = nil
+    }
+
+    /// Repair the device's relay/connection state.
+    ///
+    /// First tries the web app's graceful reset (`__ripulRepairConnection`), which
+    /// closes tabs, drops relay pairings/session-origin maps, clears persisted seq
+    /// cursors and CLI bookkeeping, then reloads. If the JS context is dead, falls
+    /// back to `purgeWebStateAndReload()` — a scorched-earth localStorage/IndexedDB
+    /// purge that preserves cookies. Host settings and machine identity survive
+    /// either path because they are mirrored natively (HostPreferences) and
+    /// re-injected after the reload.
+    @available(iOS 15.0, macOS 13.0, *)
+    public func repairConnection() async -> (success: Bool, message: String) {
+        guard let webView else {
+            return (false, "webView is nil")
+        }
+
+        // User manually intervened — cancel any automatic heal retries and reset
+        // the ladder so the fresh boot starts cheap.
+        deferredHealTask?.cancel()
+        deferredHealTask = nil
+        healVerifyTask?.cancel()
+        healVerifyTask = nil
+        healAttempts = 0
+
+        // Attempt 1: graceful web-side reset.
+        do {
+            let result = try await webView.callAsyncJavaScript(
+                """
+                if (!window.__ripulRepairConnection) return {success:false, error:'not ready'};
+                return await window.__ripulRepairConnection();
+                """,
+                arguments: [:],
+                contentWorld: .page
+            )
+            if let dict = result as? [String: Any],
+               let success = dict["success"] as? Bool,
+               success {
+                clearLocalSessionState()
+                return (true, "Connection reset requested. The web view is reloading.")
+            }
+            let error = (result as? [String: Any])?["error"] as? String ?? "graceful reset declined"
+            handleConsoleLog("WARN: [REPAIR_CONN] graceful reset failed: \(error); escalating to purge")
+        } catch {
+            let classified = await classifyJsCallFailure(error.localizedDescription, callable: "__ripulRepairConnection")
+            handleConsoleLog("WARN: [REPAIR_CONN] graceful reset threw: \(classified); escalating to purge")
+        }
+
+        // Attempt 2: native fallback — purge web state (cookies preserved) and reload.
+        purgeWebStateAndReload()
+        clearLocalSessionState()
+        return (true, "Connection reset with fallback purge. The web view is reloading.")
     }
 
     /// Open/reconnect to an existing session on a remote machine.
@@ -6307,6 +6444,53 @@ public final class AgentBridge: NSObject, ObservableObject {
                 ])
             }
         }
+    }
+
+    /// Web → native mirror of host-mode preferences (hostEnabled / machineName).
+    /// Mirrored in UserDefaults so a web-data wipe or heal purge can't silently
+    /// disable hosting; the values are re-injected as window.__ripulHostPrefs on
+    /// the next load (AgentWebView.hostPreferencesScript) and refreshed live here.
+    private func handleHostPrefsSet(_ dict: [String: Any]) {
+        if let enabled = dict["hostEnabled"] as? Bool {
+            HostPreferences.hostEnabled = enabled
+        }
+        if let name = dict["machineName"] as? String {
+            HostPreferences.machineName = name
+        }
+        pushHostPrefsToPage()
+    }
+
+    /// Web → native mirror of the long-lived machine token. Stored in the
+    /// keychain so it survives web-data purges and can keep host comms alive
+    /// when the Clerk session expires.
+    private func handleHostTokenSet(_ dict: [String: Any]) {
+        guard let token = dict["token"] as? String,
+              let userId = dict["userId"] as? String,
+              let machineId = dict["machineId"] as? String else {
+            NSLog("[AgentBridge] Ignoring malformed host-token:set")
+            return
+        }
+        let expiry = (dict["expiry"] as? TimeInterval).flatMap { Date(timeIntervalSince1970: $0) }
+        MachineTokenStore.setToken(token, userId: userId, machineId: machineId, expiry: expiry)
+        pushHostTokenToPage()
+    }
+
+    /// Refresh the live page's host token mirror.
+    private func pushHostTokenToPage() {
+        if let token = MachineTokenStore.token {
+            let escaped = token
+                .replacingOccurrences(of: "\\", with: "\\\\")
+                .replacingOccurrences(of: "\"", with: "\\\"")
+            evaluateJavaScript("window.__ripulHostToken = \"\(escaped)\";")
+        } else {
+            evaluateJavaScript("window.__ripulHostToken = null;")
+        }
+    }
+
+    /// Refresh the live page's host-prefs mirror so reloads of THIS webview see
+    /// the latest values (the documentStart script is baked at webview creation).
+    private func pushHostPrefsToPage() {
+        evaluateJavaScript("window.__ripulHostPrefs = \(HostPreferences.injectionJSON);")
     }
 
     private func handleCapabilityPing(_ message: [String: Any]) {

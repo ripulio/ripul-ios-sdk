@@ -5,10 +5,18 @@ import Foundation
 /// Number patterns: `#,##0.00`, `$#,##0`, `0%`, `#,##0 hrs` (prefix/suffix
 /// inline). Date patterns: date-fns tokens (`dd/MM/yyyy`, `d MMM yyyy HH:mm`)
 /// which map 1:1 onto DateFormatter for the token subset the presets use.
+/// Duration patterns: lowercase time tokens only (`mm:ss`, `hh:mm:ss`) applied
+/// to a bare integer treated as total seconds.
 public enum CmsFormatValue {
     /// Any y/M/d/H token marks a date pattern — twin of `isDatePattern`.
     public static func isDatePattern(_ pattern: String) -> Bool {
         pattern.contains(where: { "yMdH".contains($0) })
+    }
+
+    /// Duration pattern: lowercase h/m/s tokens only, no calendar tokens.
+    /// Twin of `isDurationPattern` in formatValue.ts.
+    public static func isDurationPattern(_ pattern: String) -> Bool {
+        !isDatePattern(pattern) && pattern.contains(where: { "hms".contains($0) })
     }
 
     public static func apply(_ value: String, pattern: String) -> String {
@@ -21,6 +29,23 @@ public enum CmsFormatValue {
         }
         guard let number = Double(value.trimmingCharacters(in: .whitespaces)) else {
             return value
+        }
+        // Duration: treat integer as total seconds, format hh/mm/ss components.
+        // Manual substitution mirrors the web's timezone-safe approach so
+        // the displayed hours/minutes/seconds are never offset-shifted.
+        if isDurationPattern(pattern) {
+            let total = Int(abs(number.rounded()))
+            let h = total / 3600
+            let m = (total % 3600) / 60
+            let s = total % 60
+            func pad(_ v: Int) -> String { String(format: "%02d", v) }
+            return pattern
+                .replacingOccurrences(of: "hh", with: pad(h))
+                .replacingOccurrences(of: "h",  with: String(h))
+                .replacingOccurrences(of: "mm", with: pad(m))
+                .replacingOccurrences(of: "m",  with: String(m))
+                .replacingOccurrences(of: "ss", with: pad(s))
+                .replacingOccurrences(of: "s",  with: String(s))
         }
         return applyNumberPattern(number, pattern: pattern)
     }
@@ -51,7 +76,23 @@ public enum CmsFormatValue {
         iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         if let d = iso.date(from: s) { return d }
         iso.formatOptions = [.withInternetDateTime]
-        return iso.date(from: s)
+        if let d = iso.date(from: s) { return d }
+        // Bare integer — mirrors JS `new Date("N")` which parses it as year N,
+        // January 1 (V8 extended-year heuristic). Allows an integer column
+        // formatted with a calendar date/time pattern (e.g. "MM:ss") to match
+        // web output. Duration patterns (mm:ss) are handled before toDate is
+        // called and never reach this path.
+        if let year = Int(s) {
+            var components = DateComponents()
+            components.year = year
+            components.month = 1
+            components.day = 1
+            components.hour = 0
+            components.minute = 0
+            components.second = 0
+            return Calendar.current.date(from: components)
+        }
+        return nil
     }
 
     /// Twin of `applyNumberPattern`: split the pattern into prefix + numeric
@@ -79,6 +120,34 @@ public enum CmsFormatValue {
         let num = isPercent ? n * 100 : n
         let body = formatted(num, minFrac: minFrac, maxFrac: maxFrac, grouping: useGrouping)
         return "\(prefix)\(body)\(suffix)\(isPercent ? "%" : "")"
+    }
+
+    /// Apply a named value transform before format-pattern rendering.
+    /// Twin of `applyTransform` in formatValue.ts.
+    public static func applyTransform(_ value: String, transform: String) -> String {
+        guard let n = Double(value.trimmingCharacters(in: .whitespaces)) else { return value }
+        let result: Double
+        switch transform {
+        case "seconds_to_minutes":      result = n / 60
+        case "seconds_to_hours":        result = n / 3600
+        case "milliseconds_to_seconds": result = n / 1000
+        case "milliseconds_to_minutes": result = n / 60000
+        default:
+            if transform.hasPrefix("divide:"),
+               let d = Double(transform.dropFirst(7)), d != 0 {
+                result = n / d
+            } else if transform.hasPrefix("multiply:"),
+                      let f = Double(transform.dropFirst(9)) {
+                result = n * f
+            } else {
+                return value
+            }
+        }
+        // Preserve integer-ness: 3600/60 = 60, not 60.0
+        if result == result.rounded() && abs(result) < 1e15 {
+            return String(Int64(result))
+        }
+        return String(result)
     }
 
     private static func formatted(_ n: Double, minFrac: Int, maxFrac: Int, grouping: Bool) -> String {

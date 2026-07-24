@@ -16,6 +16,7 @@ public struct CmsPageView: View {
 
     @StateObject private var loader: CmsPageLoader
     @State private var showDiagnostics = false
+    @Environment(\.colorScheme) private var colorScheme
 
     /// Visitor mode: a site key's PUBLISHABLE key. When set, the page loads
     /// as an anonymous portal visitor — the definition comes from the site-key
@@ -97,17 +98,12 @@ public struct CmsPageView: View {
                 }
                 .environmentObject(loader.runtime)
                 .navigationTitle(page.title)
-                .overlay(alignment: .bottomTrailing) {
-                    Button {
-                        showDiagnostics.toggle()
-                    } label: {
-                        Image(systemName: "ladybug")
-                            .font(.footnote)
-                            .padding(8)
-                            .background(Circle().fill(Color.secondary.opacity(0.15)))
-                    }
-                    .buttonStyle(.plain)
-                    .padding(12)
+                .overlay {
+                    CmsDesignFloatingToolbar(
+                        runtime: loader.runtime,
+                        controller: loader.designController,
+                        showDiagnostics: $showDiagnostics
+                    )
                 }
                 .sheet(isPresented: $showDiagnostics) {
                     CmsRuntimeDiagnosticsView(runtime: loader.runtime)
@@ -142,7 +138,13 @@ public struct CmsPageView: View {
                 }
             }
         }
-        .onAppear { loader.load(pageSlug: pageSlug) }
+        .onAppear {
+            loader.runtime.updateEffectiveDark(colorScheme == .dark)
+            loader.load(pageSlug: pageSlug)
+        }
+        .onChange(of: colorScheme) { newScheme in
+            loader.runtime.updateEffectiveDark(newScheme == .dark)
+        }
         // Native routing: nav blocks publish a page slug; the loader swaps
         // the rendered page in place. The runtime (queries, selections,
         // parameters) survives the swap — the web's SPA navigation reading.
@@ -174,6 +176,16 @@ final class CmsPageLoader: ObservableObject {
     private(set) var shellPage: CmsPage?
     let runtime: CmsRuntime
 
+    /// Design-mode store — non-nil when the caller may design (owner fetch,
+    /// or a portal member with `canDesign`). Drives the edit toggle.
+    private(set) var designController: CmsDesignController?
+    /// Definition's designated shell id — kept so design edits can
+    /// re-resolve the shell from the mutated pages tree.
+    private var shellPageId: String?
+    /// Visitor mode membership — kept so design edits re-filter page
+    /// visibility with the same role context.
+    private var membership: CmsPortalMembership?
+
     private let cmsId: String
     private let client: CmsClient
     private let visitorSiteKey: String?
@@ -195,8 +207,10 @@ final class CmsPageLoader: ObservableObject {
                 return
             }
             do {
-                let definition = try await client.fetchDefinition(cmsId: cmsId)
-                self.runtime.theme = CmsPortalTheme(config: definition.theme)
+                let fetched = try await client.fetchDefinitionRaw(cmsId: cmsId)
+                let definition = fetched.definition
+                self.runtime.themeConfig = definition.theme
+                self.runtime.theme = CmsPortalTheme(config: definition.theme, effectiveDark: self.runtime.effectiveDark)
                 // Resolve the RLS site-key context: queries run with the site
                 // key linked to this CMS, matching how the portal runs them.
                 if client.siteKeyId == nil,
@@ -218,7 +232,13 @@ final class CmsPageLoader: ObservableObject {
                 )
                 let pages = definition.pages ?? []
                 self.availablePages = pages
+                self.shellPageId = definition.shellPageId
                 self.shellPage = definition.shellPageId.flatMap { id in pages.first { $0.id == id } }
+                // Design controller: the admin fetch succeeded, so the
+                // caller is the owner — wire the owner save path.
+                self.wireDesignController(CmsDesignController(
+                    cmsId: cmsId, client: client, rawPages: fetched.rawPages
+                ))
                 let landing = definition.landingPageId.flatMap { id in pages.first { $0.id == id } }
                 let page = pageSlug.flatMap { slug in pages.first { $0.slug == slug } } ?? landing ?? pages.first
                 if let page {
@@ -286,6 +306,7 @@ final class CmsPageLoader: ObservableObject {
             // key from the session token's auth context.
             client.siteKeyId = nil
         }
+        self.membership = membership
 
         struct VisitorConfig: Codable {
             struct Cms: Codable {
@@ -305,7 +326,8 @@ final class CmsPageLoader: ObservableObject {
             state = .error("Site key has no embedded CMS config")
             return
         }
-        runtime.theme = CmsPortalTheme(config: cms.theme)
+        runtime.themeConfig = cms.theme
+        runtime.theme = CmsPortalTheme(config: cms.theme, effectiveDark: runtime.effectiveDark)
         runtime.queryDefs = Dictionary(
             uniqueKeysWithValues: (cms.queries ?? []).map { ($0.slug, $0) }
         )
@@ -320,11 +342,27 @@ final class CmsPageLoader: ObservableObject {
         let allPages = cms.pages ?? []
         let visible = allPages.filter { CmsPageVisibility.canView($0, membership: membership) }
         availablePages = visible
+        shellPageId = cms.shellPageId
         // The shell is CHROME, not routable content — resolve it from ALL
         // pages. Its own auth flag doesn't gate it (the web router renders
         // the shell for every visitor and gates only the routed pages;
         // WAC's shell page is auth-defaulted and was silently dropped here).
         shellPage = cms.shellPageId.flatMap { id in allPages.first { $0.id == id } }
+        // Delegated design: a member with canDesign edits through the
+        // per-site design endpoint. The pages go to the controller RAW (the
+        // embedded config is the complete pages array — the save replaces
+        // it wholesale, so nothing the renderer can't see may be dropped).
+        if membership?.canDesign == true {
+            struct RawConfig: Codable {
+                struct Cms: Codable { var pages: [CmsJSON]? }
+                var cms: Cms?
+            }
+            let rawPages = (try? JSONDecoder().decode(RawConfig.self, from: configData))?.cms?.pages ?? []
+            wireDesignController(CmsDesignController(
+                cmsId: cmsId, client: client, rawPages: rawPages,
+                delegatedSiteKey: publishableKey
+            ))
+        }
         let landing = cms.landingPageId.flatMap { id in visible.first { $0.id == id } }
         if let pageSlug {
             if let page = visible.first(where: { $0.slug == pageSlug }) {
@@ -350,6 +388,41 @@ final class CmsPageLoader: ObservableObject {
     func show(pageSlug: String) {
         guard let page = availablePages.first(where: { $0.slug == pageSlug }) else { return }
         present(page, animated: true)
+    }
+
+    // MARK: - Design mode
+
+    private func wireDesignController(_ controller: CmsDesignController) {
+        controller.onPagesDidChange = { [weak self] in self?.designPagesDidChange() }
+        designController = controller
+    }
+
+    /// Re-present the rendered page(s) after a design edit: decode the
+    /// mutated tree, refresh shell + visibility, and swap the loaded page /
+    /// outlet for their updated values so blocks re-render with the new
+    /// props. Identity is stable (same page ids), so scroll position and
+    /// runtime state survive — the web's optimistic local update reading.
+    private func designPagesDidChange() {
+        guard let controller = designController else { return }
+        let typed = controller.typedPages
+        shellPage = shellPageId.flatMap { id in typed.first { $0.id == id } }
+        if visitorSiteKey != nil {
+            availablePages = typed.filter { CmsPageVisibility.canView($0, membership: membership) }
+        } else {
+            availablePages = typed
+        }
+        if let outlet = runtime.outletPage {
+            if let updated = typed.first(where: { $0.id == outlet.id }) {
+                runtime.outletPage = updated
+            }
+            if case .loaded(let shell) = state,
+               let updatedShell = typed.first(where: { $0.id == shell.id }) {
+                state = .loaded(updatedShell)
+            }
+        } else if case .loaded(let current) = state,
+                  let updated = typed.first(where: { $0.id == current.id }) {
+            state = .loaded(updated)
+        }
     }
 
     /// Present a page — the shell pattern's fork. With a designated shell,
@@ -400,6 +473,162 @@ final class CmsPageLoader: ObservableObject {
         runtime.currentPageSlug = page.slug
         runtime.pageSidebarIcon = page.nativeSidebarIcon ?? false
         runtime.pageSidebarEdgeSwipe = page.nativeSidebarEdgeSwipe ?? true
+        // Populate columnDefs registry from this page's columnDefs blocks —
+        // native twin of the web's GridApiRegistry (blocks register at render time).
+        if let blocks = page.blocks {
+            runtime.columnDefs = Dictionary(
+                blocks.allBlocks()
+                    .filter { $0.type == "columnDefs" }
+                    .compactMap { block -> (String, [CmsJSON])? in
+                        guard let slug = block.slug,
+                              case .array(let cols) = block.props["columns"] ?? .null
+                        else { return nil }
+                        return (slug, cols)
+                    },
+                uniquingKeysWith: { first, _ in first }
+            )
+        } else {
+            runtime.columnDefs = [:]
+        }
+    }
+}
+
+/// Outer positioning layer — owns the drag gesture and persisted offset.
+/// Intentionally NOT @ObservedObject on runtime: runtime @Published changes
+/// (selectedBlockId, isDesignMode, etc.) must not re-render this view or
+/// they interfere with @GestureState and cause the pill to flicker during drag.
+private struct CmsDesignFloatingToolbar: View {
+    let runtime: CmsRuntime
+    let controller: CmsDesignController?
+    @Binding var showDiagnostics: Bool
+
+    @AppStorage("io.ripul.cms.toolbar.dx") private var savedDX: Double = 0
+    @AppStorage("io.ripul.cms.toolbar.dy") private var savedDY: Double = 0
+    @GestureState private var liveTranslation: CGSize = .zero
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Spacer()
+            HStack(spacing: 0) {
+                Spacer()
+                CmsDesignPill(runtime: runtime, controller: controller, showDiagnostics: $showDiagnostics)
+                    .padding(16)
+                    .highPriorityGesture(
+                        DragGesture(minimumDistance: 4)
+                            .updating($liveTranslation) { val, state, _ in state = val.translation }
+                            .onEnded { val in
+                                savedDX += Double(val.translation.width)
+                                savedDY += Double(val.translation.height)
+                            }
+                    )
+            }
+        }
+        .offset(x: CGFloat(savedDX) + liveTranslation.width, y: CGFloat(savedDY) + liveTranslation.height)
+    }
+}
+
+/// Inner pill — observes runtime for button state and sheet presentation.
+/// Re-renders here are fine; they don't touch the gesture layer above.
+private struct CmsDesignPill: View {
+    @ObservedObject var runtime: CmsRuntime
+    let controller: CmsDesignController?
+    @Binding var showDiagnostics: Bool
+
+    var body: some View {
+        pillContent
+            .sheet(isPresented: inspectorOpen) {
+                if let blockId = runtime.selectedBlockId, let ctrl = controller {
+                    CmsPropertyInspectorView(blockId: blockId, controller: ctrl)
+                        .environmentObject(runtime)
+                        .inspectorDetents()
+                }
+            }
+    }
+
+    private var inspectorOpen: Binding<Bool> {
+        Binding(
+            get: { controller != nil && runtime.isDesignMode && runtime.selectedBlockId != nil },
+            set: { open in
+                if !open {
+                    runtime.selectedBlockId = nil
+                    Task { await controller?.saveNow() }
+                }
+            }
+        )
+    }
+
+    @ViewBuilder
+    private var pillContent: some View {
+        HStack(spacing: 2) {
+            if controller != nil {
+                pillButton(icon: "pencil", label: "Edit", active: runtime.isDesignMode) {
+                    runtime.isDesignMode = true
+                }
+                pillButton(icon: "eye", label: "Preview", active: !runtime.isDesignMode) {
+                    guard runtime.isDesignMode else { return }
+                    runtime.isDesignMode = false
+                    runtime.selectedBlockId = nil
+                    Task { await controller?.saveNow() }
+                }
+                pillDivider
+            }
+            pillButton(icon: "ladybug", label: nil, active: false) {
+                showDiagnostics = true
+            }
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 6)
+        .background { pillBackground }
+        .clipShape(Capsule())
+        .shadow(color: .black.opacity(0.15), radius: 6, y: 3)
+        .cmsInspectorID("Cms.designToolbar")
+    }
+
+    @ViewBuilder
+    private var pillBackground: some View {
+        if #available(iOS 26, macOS 26, *) {
+            Capsule().glassEffect(.clear)
+        } else {
+            Capsule().fill(.ultraThinMaterial)
+        }
+    }
+
+    private func pillButton(icon: String, label: String?, active: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 3) {
+                Image(systemName: icon)
+                    .font(.system(size: 12, weight: .semibold))
+                if let label {
+                    Text(label)
+                        .font(.system(size: 12, weight: .medium))
+                }
+            }
+            .foregroundStyle(active ? Color.accentColor : Color.secondary)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .background(active ? Color.accentColor.opacity(0.15) : Color.clear, in: Capsule())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var pillDivider: some View {
+        Rectangle()
+            .fill(Color.secondary.opacity(0.25))
+            .frame(width: 1, height: 16)
+            .padding(.horizontal, 2)
+    }
+}
+
+private extension View {
+    /// Inspector sheet sizing — medium/large detents where available, with
+    /// background interaction so tapping another block swaps the sheet's
+    /// subject without dismissing (the web's click-around-the-panel loop).
+    @ViewBuilder
+    func inspectorDetents() -> some View {
+        self
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
+            .presentationBackgroundInteraction(.enabled(upThrough: .medium))
     }
 }
 

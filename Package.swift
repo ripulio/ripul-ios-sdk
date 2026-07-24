@@ -5,8 +5,8 @@ import PackageDescription
 let package = Package(
     name: "RipulAgent",
     platforms: [
-        .iOS(.v15),
-        .macOS(.v13),
+        .iOS(.v17),
+        .macOS(.v14),
     ],
     products: [
         .library(name: "RipulAgent", targets: ["RipulAgent"]),

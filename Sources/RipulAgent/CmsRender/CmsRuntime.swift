@@ -34,8 +34,24 @@ public final class CmsRuntime: ObservableObject {
     /// Shared card views (cardViewRef target), keyed by slug — set by the
     /// loader; the grid's cards projection resolves its `cardViewRef`.
     public var cardViews: [String: CmsCardView] = [:]
+    /// Page-scoped shared column definitions (columnDefsRef target), keyed by
+    /// block slug — populated at page-display time from the page's columnDefs
+    /// blocks. Native twin of the web's GridApiRegistry pub-sub at render time.
+    public var columnDefs: [String: [CmsJSON]] = [:]
     /// Portal theme — `color.*` tokens resolve against it. Set by the loader.
     public var theme = CmsPortalTheme(config: nil)
+    /// Raw portal theme config, kept so the runtime can recompute `theme`
+    /// when the OS color scheme changes (system mode follows `effectiveDark`).
+    public internal(set) var themeConfig: CmsPortalThemeConfig?
+    /// Current effective dark-mode flag (OS color scheme) for system-mode themes.
+    public private(set) var effectiveDark: Bool = false
+
+    /// Recompute the portal theme with the current OS color-scheme.
+    @MainActor
+    public func updateEffectiveDark(_ effectiveDark: Bool) {
+        self.effectiveDark = effectiveDark
+        theme = CmsPortalTheme(config: themeConfig, effectiveDark: effectiveDark)
+    }
 
     /// Resolve a colour value: theme token or CSS literal.
     public func color(_ value: String?) -> Color? {
@@ -52,6 +68,25 @@ public final class CmsRuntime: ObservableObject {
     /// GridApiRegistry channel: a gridViewSwitcher writes a saved view's
     /// state snapshot; the grid block reads and honours what it can.
     @Published public private(set) var gridViewStates: [String: CmsJSON] = [:]
+    /// Active view ID per target grid slug — set by the view switcher when a
+    /// view is applied. The inspector uses this to route edits into the correct
+    /// view definition (so changes persist across view switches).
+    @Published public private(set) var gridViewActiveIds: [String: String] = [:]
+
+    public func setGridViewActiveId(_ gridSlug: String, id: String) {
+        gridViewActiveIds[gridSlug] = id
+    }
+
+    // MARK: - Design mode
+
+    /// Edit/design mode — when true, every block renders selection chrome
+    /// and taps select instead of interacting (the runtime IS the canvas —
+    /// no forked designer surface). Toggled from `CmsPageView` and only
+    /// offered when the loader produced a `CmsDesignController` (the caller
+    /// may design: owner, or a portal member with `canDesign`).
+    @Published public var isDesignMode = false
+    /// The block selected for inspection — drives the inspector sheet.
+    @Published public var selectedBlockId: String?
 
     /// Page-level slide-in drawer request — a sidebar layout's burger opens
     /// its column here; CmsPageView owns the overlay so the drawer covers
@@ -168,6 +203,46 @@ public final class CmsRuntime: ObservableObject {
         }
     }
 
+    /// View-state keys that are applied separately (sort, filter, query override)
+    /// and are NOT merged into the block's visual props — mirrors
+    /// CmsAgGridBlock.viewExcludedKeys.
+    private static let agGridViewExcludedKeys: Set<String> = [
+        "tableSlug", "querySlug", "editMutationSlug", "insertMutationSlug",
+        "deleteMutationSlug", "filterModel", "sortModel", "columnOrder",
+    ]
+
+    /// Effective display props for a block: base props with the active view
+    /// state merged on top, exactly as the renderer sees them. Only agGrid
+    /// blocks carry view state; all others return base props unchanged.
+    public func effectiveDisplayProps(for block: CmsBlock) -> [String: CmsJSON] {
+        guard block.type == "agGrid" else { return block.props }
+        let outputSlug = block.slug ?? block.id
+        guard let viewState = gridViewStates[outputSlug]?.objectValue else { return block.props }
+        var merged = block.props
+        for (key, value) in viewState where !Self.agGridViewExcludedKeys.contains(key) {
+            merged[key] = value
+        }
+        return merged
+    }
+
+    /// True when an agGrid block has an active saved-view override — used by
+    /// the inspector to signal that displayed props reflect the view, not just
+    /// the base block.
+    public func hasActiveViewState(for block: CmsBlock) -> Bool {
+        guard block.type == "agGrid" else { return false }
+        return gridViewStates[block.slug ?? block.id] != nil
+    }
+
+    /// Patch one key in the active view state for the given grid slug — used
+    /// by the inspector to make edits visible immediately when a view is active
+    /// (the view state overrides the base block's prop; without this the edit
+    /// snaps back because the view's old value wins the merge).
+    public func updateViewStateProp(_ slug: String, key: String, value: CmsJSON?) {
+        guard var state = gridViewStates[slug]?.objectValue else { return }
+        if let value { state[key] = value } else { state.removeValue(forKey: key) }
+        gridViewStates[slug] = .object(state)
+    }
+
     /// Active read-query override per target grid slug — the native twin of the
     /// gridViewSwitcher's `queryOverride` channel. Kept separate from
     /// `gridViewStates` so it never leaks into the captured view-state blob;
@@ -205,6 +280,10 @@ public final class CmsRuntime: ObservableObject {
 
     private static func parametersKey(_ cmsId: String) -> String {
         "io.ripul.cms.parameters.\(cmsId)"
+    }
+
+    public func schema(for querySlug: String) -> [CmsQueryResultColumn]? {
+        schemas[querySlug]
     }
 
     public func state(for querySlug: String) -> QueryState {

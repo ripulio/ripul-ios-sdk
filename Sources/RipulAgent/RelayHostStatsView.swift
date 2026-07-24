@@ -24,8 +24,18 @@ public struct RelayHostStatsView: View {
     @State private var bridgeDiagnostics: BridgeDiagnostics = BridgeDiagnostics()
     @State private var commsEntries: [CommsEntry] = []
 
+    /// Optional host-app section rendered right after Bridge diagnostics —
+    /// the macOS app slots its persistent restart log in here.
+    private let topContent: AnyView?
+
     public init(bridge: AgentBridge) {
         self.bridge = bridge
+        self.topContent = nil
+    }
+
+    public init<TopContent: View>(bridge: AgentBridge, @ViewBuilder topContent: () -> TopContent) {
+        self.bridge = bridge
+        self.topContent = AnyView(topContent())
     }
 
     public var body: some View {
@@ -38,6 +48,10 @@ public struct RelayHostStatsView: View {
                 // there's any room data to render below.
                 sectionLabel("Bridge diagnostics")
                 bridgeDiagnosticsCard
+
+                if let topContent {
+                    topContent
+                }
 
                 if let selfHost {
                     sectionLabel("This machine (host self-metrics)")

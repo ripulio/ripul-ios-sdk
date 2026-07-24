@@ -131,11 +131,15 @@ struct CmsAgGridBlockView: View {
         var valueFrom: String
         var label: String
         var format: String?
+        var transform: String?
         var width: CGFloat?
         var rowGroup: Bool
         var aggFunc: String?
         var excludeFromTotals: Bool
         var hideDetailValue: Bool
+        /// Mirrors the web column config's `visible` flag. Hidden columns are
+        /// still tracked so they don't get re-appended from the query schema.
+        var visible: Bool
         /// Frozen columns ('left'/'right') — the author's row-identity signal.
         var pinned: String?
         /// Explicit per-column image config — the cards projection renders it.
@@ -152,21 +156,36 @@ struct CmsAgGridBlockView: View {
     /// CUSTOMISED subset — NOT necessarily every result column. The web only
     /// stores the columns it needs to customise; `resolvedColumns(schema:)`
     /// appends the rest of the query's schema on top (see there).
+    ///
+    /// Web precedence: `columnViewRef` (schema column-view) → `columnDefsRef`
+    /// (page-level columnDefs block) → inline `columns`.
     private var configuredColumns: [Column] {
-        guard case .array(let raw) = props["columns"] ?? .null else { return [] }
-        var all: [Column] = raw.compactMap { entry in
+        let rawColumns: [CmsJSON]
+        if let ref = props.string("columnViewRef"), !ref.isEmpty,
+           let cv = runtime.columnViews[ref], let cvCols = cv.columns {
+            rawColumns = cvCols
+        } else if let ref = props.string("columnDefsRef"), !ref.isEmpty,
+                  let defsColumns = runtime.columnDefs[ref] {
+            rawColumns = defsColumns
+        } else if case .array(let inline) = props["columns"] ?? .null {
+            rawColumns = inline
+        } else {
+            return []
+        }
+        var all: [Column] = rawColumns.compactMap { entry in
             guard let obj = entry.objectValue, let key = obj.string("key") else { return nil }
-            guard obj.bool("visible") != false else { return nil }
             return Column(
                 key: key,
                 valueFrom: obj.string("valueFrom") ?? key,
                 label: obj.string("label") ?? CmsRecordCardsBlockView.humanize(key),
                 format: obj.string("format"),
+                transform: obj.string("transform"),
                 width: obj.double("width").map { CGFloat($0) },
                 rowGroup: obj.bool("rowGroup") ?? false,
                 aggFunc: obj.string("aggFunc"),
                 excludeFromTotals: obj.bool("excludeFromTotals") ?? false,
                 hideDetailValue: obj.bool("hideDetailValue") ?? false,
+                visible: obj.bool("visible") ?? true,
                 pinned: obj.string("pinned"),
                 image: obj.object("image"),
                 drillLink: obj.bool("drillLink") ?? false
@@ -207,8 +226,8 @@ struct CmsAgGridBlockView: View {
                 key: col.name,
                 valueFrom: col.name,
                 label: CmsRecordCardsBlockView.humanize(col.name),
-                format: nil, width: nil, rowGroup: false, aggFunc: nil,
-                excludeFromTotals: false, hideDetailValue: false,
+                format: nil, transform: nil, width: nil, rowGroup: false, aggFunc: nil,
+                excludeFromTotals: false, hideDetailValue: false, visible: true,
                 pinned: nil, image: nil, drillLink: false
             ))
         }
@@ -254,24 +273,25 @@ struct CmsAgGridBlockView: View {
         case .waiting(let reason):
             Label(reason, systemImage: "hourglass")
                 .font(.footnote)
-                .foregroundColor(.secondary)
+                .foregroundColor(runtime.theme.textSecondary)
                 .padding(12)
         case .error(let message):
             Label(message, systemImage: "exclamationmark.triangle")
                 .font(.footnote)
-                .foregroundColor(.red)
+                .foregroundColor(runtime.theme.resolve("color.error") ?? .red)
                 .padding(12)
         case .ok(let result):
             // Configured columns + every unconfigured schema column appended
             // (web parity — see resolvedColumns). No columns configured at all
             // → the full schema, unchanged from before.
             let cols = resolvedColumns(schema: result.schema)
+            let visibleCols = cols.filter { $0.visible }
             let rows = displayRows(result.rows, columns: cols)
             VStack(alignment: .leading, spacing: 8) {
-                toolbar(columns: cols)
+                toolbar(columns: visibleCols)
                 switch presentation {
                 case "cards":
-                    contained { cardsProjection(columns: cols) }
+                    contained { cardsProjection(columns: visibleCols) }
                 case "grid":
                     gridProjection(rows: rows, columns: cols)
                 default:
@@ -279,7 +299,7 @@ struct CmsAgGridBlockView: View {
                 }
                 // Grid renders its own column-aligned pinned total row.
                 if showGrandTotal && presentation != "grid" {
-                    grandTotalRow(columns: cols)
+                    grandTotalRow(columns: visibleCols)
                 }
             }
         }
@@ -309,7 +329,7 @@ struct CmsAgGridBlockView: View {
                     HStack(spacing: 6) {
                         Image(systemName: "magnifyingglass")
                             .font(.caption)
-                            .foregroundColor(.secondary)
+                            .foregroundColor(runtime.theme.textSecondary)
                         TextField("Search", text: $searchText)
                             .font(.subheadline)
                             .textFieldStyle(.plain)
@@ -317,14 +337,14 @@ struct CmsAgGridBlockView: View {
                             Button { searchText = "" } label: {
                                 Image(systemName: "xmark.circle.fill")
                                     .font(.caption)
-                                    .foregroundColor(.secondary)
+                                    .foregroundColor(runtime.theme.textSecondary)
                             }
                             .buttonStyle(.plain)
                         }
                     }
                     .padding(.horizontal, 10)
                     .padding(.vertical, 6)
-                    .background(Capsule().fill(Color.secondary.opacity(0.1)))
+                    .background(Capsule().fill(runtime.theme.divider.opacity(0.15)))
                 }
                 if sortEnabled {
                     Menu {
@@ -346,7 +366,7 @@ struct CmsAgGridBlockView: View {
                     } label: {
                         Image(systemName: "arrow.up.arrow.down")
                             .font(.subheadline)
-                            .foregroundColor(sortKey == nil ? .secondary : .accentColor)
+                            .foregroundColor(sortKey == nil ? runtime.theme.textSecondary : runtime.theme.primary)
                     }
                 }
                 if viewToggleEnabled {
@@ -395,7 +415,7 @@ struct CmsAgGridBlockView: View {
     private func listProjection(rows: [[String: CmsJSON]], columns: [Column]) -> some View {
         // Row composition: first non-group column = title; first numeric/
         // formatted column = trailing value; next two = subtitle line.
-        let bodyCols = columns.filter { !$0.rowGroup }
+        let bodyCols = columns.filter { !$0.rowGroup && $0.visible }
         let titleCol = bodyCols.first
         let trailingCol = bodyCols.dropFirst().first { $0.aggFunc != nil || $0.format != nil }
             ?? bodyCols.dropFirst().first { col in
@@ -423,7 +443,7 @@ struct CmsAgGridBlockView: View {
         }
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color.secondary.opacity(0.05))
+                .fill(runtime.theme.divider.opacity(0.08))
         )
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
@@ -441,7 +461,7 @@ struct CmsAgGridBlockView: View {
     /// Collapsed-group summary row: chevron (unless locked), group value,
     /// count, and the group's aggregates — the web's group row reading.
     private func groupHeader(_ value: String, rows: [[String: CmsJSON]], columns: [Column], expanded: Bool) -> some View {
-        let aggCols = columns.filter { $0.aggFunc != nil }
+        let aggCols = columns.filter { $0.aggFunc != nil && $0.visible }
         let totals = Self.computeTotals(rows: rows, columns: aggCols.map {
             AggColumn(key: $0.key, valueFrom: $0.valueFrom, fn: $0.aggFunc ?? "")
         })
@@ -457,47 +477,48 @@ struct CmsAgGridBlockView: View {
                         Image(systemName: "chevron.right")
                             .font(.caption2.weight(.semibold))
                             .rotationEffect(.degrees(expanded ? 90 : 0))
-                            .foregroundColor(.secondary)
+                            .foregroundColor(runtime.theme.textSecondary)
                     }
                     // Pinned (frozen) fields lead in bold — the author's
                     // row identity — then the group-by value.
                     if let pinned = pinnedSummary(rows: rows, columns: columns) {
                         Text(pinned)
                             .font(.subheadline.weight(.semibold))
-                            .foregroundColor(.primary)
+                            .foregroundColor(runtime.theme.textPrimary)
                             .lineLimit(1)
                         Text(value.isEmpty ? "—" : value)
                             .font(.subheadline)
-                            .foregroundColor(.secondary)
+                            .foregroundColor(runtime.theme.textSecondary)
                             .lineLimit(1)
                     } else {
                         Text(value.isEmpty ? "—" : value)
                             .font(.subheadline.weight(.semibold))
-                            .foregroundColor(.primary)
+                            .foregroundColor(runtime.theme.textPrimary)
                     }
                     Spacer(minLength: 8)
                     Text("\(rows.count)")
                         .font(.caption2.weight(.medium))
-                        .foregroundColor(.secondary)
+                        .foregroundColor(runtime.theme.textSecondary)
                         .padding(.horizontal, 7)
                         .padding(.vertical, 2)
-                        .background(Capsule().fill(Color.secondary.opacity(0.15)))
+                        .background(Capsule().fill(runtime.theme.divider.opacity(0.5)))
                 }
                 if !aggCols.isEmpty {
                     Text(aggCols.map { col -> String in
                         let raw = totals["\(col.key)_\(col.aggFunc ?? "")"]?.displayString ?? ""
-                        let shown = col.format.map { CmsFormatValue.apply(raw, pattern: $0) } ?? raw
+                        let preFormatted = col.transform.map { CmsFormatValue.applyTransform(raw, transform: $0) } ?? raw
+                    let shown = col.format.map { CmsFormatValue.apply(preFormatted, pattern: $0) } ?? preFormatted
                         return "\(col.label) \(shown)"
                     }.joined(separator: "  ·  "))
                         .font(.caption)
-                        .foregroundColor(.secondary)
+                        .foregroundColor(runtime.theme.textSecondary)
                         .lineLimit(2)
                 }
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.secondary.opacity(0.08))
+            .background(runtime.theme.divider.opacity(0.15))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -507,7 +528,7 @@ struct CmsAgGridBlockView: View {
     /// values UNIFORM across the group; a varying value would misrepresent
     /// the group as a whole.
     private func pinnedSummary(rows: [[String: CmsJSON]], columns: [Column]) -> String? {
-        let pinnedCols = columns.filter { $0.pinned != nil && !$0.rowGroup }
+        let pinnedCols = columns.filter { $0.pinned != nil && !$0.rowGroup && $0.visible }
         guard !pinnedCols.isEmpty else { return nil }
         let parts: [String] = pinnedCols.compactMap { col in
             let values = Set(rows.map { cellTextIgnoringDetailFlag($0, col) })
@@ -522,10 +543,11 @@ struct CmsAgGridBlockView: View {
     private func cellTextIgnoringDetailFlag(_ row: [String: CmsJSON], _ column: Column) -> String {
         guard let value = row[column.valueFrom], value != .null else { return "" }
         let s = value.displayString
+        let t = column.transform.map { CmsFormatValue.applyTransform(s, transform: $0) } ?? s
         if let format = column.format, !format.isEmpty {
-            return CmsFormatValue.apply(s, pattern: format)
+            return CmsFormatValue.apply(t, pattern: format)
         }
-        return s
+        return t
     }
 
     private func rowList(_ rows: [[String: CmsJSON]], title: Column?, trailing: Column?, subtitle: [Column]) -> some View {
@@ -552,12 +574,12 @@ struct CmsAgGridBlockView: View {
                     if let title {
                         Text(cellText(row, title))
                             .font(.subheadline.weight(.medium))
-                            .foregroundColor(hasDrillLink ? drillLinkColor : .primary)
+                            .foregroundColor(hasDrillLink ? drillLinkColor : runtime.theme.textPrimary)
                     }
                     if !subtitle.isEmpty {
                         Text(subtitle.map { "\($0.label): \(cellText(row, $0))" }.joined(separator: " · "))
                             .font(.caption)
-                            .foregroundColor(.secondary)
+                            .foregroundColor(runtime.theme.textSecondary)
                             .lineLimit(1)
                     }
                 }
@@ -565,18 +587,18 @@ struct CmsAgGridBlockView: View {
                 if let trailing {
                     Text(cellText(row, trailing))
                         .font(.subheadline.weight(.semibold))
-                        .foregroundColor(.primary)
+                        .foregroundColor(runtime.theme.textPrimary)
                 }
                 // Drill takes the row's tap target — show a disclosure chevron.
                 // Otherwise a selectable grid shows its checkmark.
                 if hasDrillLink {
                     Image(systemName: "chevron.right")
                         .font(.caption.weight(.semibold))
-                        .foregroundColor(.secondary.opacity(0.5))
+                        .foregroundColor(runtime.theme.textSecondary.opacity(0.5))
                 } else if selectionMode != "none" {
                     Image(systemName: selected ? "checkmark.circle.fill" : "circle")
                         .font(.subheadline)
-                        .foregroundColor(selected ? .accentColor : .secondary.opacity(0.4))
+                        .foregroundColor(selected ? runtime.theme.primary : runtime.theme.textSecondary.opacity(0.4))
                 }
             }
             .padding(.horizontal, 12)
@@ -618,7 +640,7 @@ struct CmsAgGridBlockView: View {
             }
         } else {
             // Auto: derive the cards from the grid's own columns.
-            props["fields"] = .array(columns.map { col in
+            props["fields"] = .array(columns.filter { $0.visible }.map { col in
                 var field: [String: CmsJSON] = [
                     "key": .string(col.key),
                     "valueFrom": .string(col.valueFrom),
@@ -649,7 +671,7 @@ struct CmsAgGridBlockView: View {
         let height = CmsCss.points(props.string("height")) ?? 400
         let stripes = props.bool("enableRowStripes") ?? true
         let groupCol = columns.first { $0.rowGroup }
-        let bodyColumns = groupCol == nil ? columns : columns.filter { !$0.rowGroup }
+        let bodyColumns = (groupCol == nil ? columns : columns.filter { !$0.rowGroup }).filter { $0.visible }
         return ScrollView(.horizontal, showsIndicators: true) {
             VStack(alignment: .leading, spacing: 0) {
                 gridHeader(bodyColumns: bodyColumns, groupCol: groupCol)
@@ -693,7 +715,7 @@ struct CmsAgGridBlockView: View {
         .frame(height: height)
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(Color.secondary.opacity(0.2))
+                .strokeBorder(runtime.theme.divider)
         )
     }
 
@@ -704,10 +726,31 @@ struct CmsAgGridBlockView: View {
                 weight: rowWeight(props.string("headerFontWeight")) ?? .semibold)
     }
     private var headerTextColor: Color {
-        runtime.theme.resolve(props.string("headerTextColor")) ?? Color.secondary
+        runtime.theme.resolve(props.string("headerTextColor")) ?? runtime.theme.textSecondary
     }
     private var headerBackground: Color {
-        runtime.theme.resolve(props.string("headerBgColor")) ?? Color.secondary.opacity(0.1)
+        runtime.theme.resolve(props.string("headerBgColor")) ?? runtime.theme.divider.opacity(0.15)
+    }
+
+    // Authored BODY-cell styling — twin of the web's `rows` inspector group
+    // (fontSize / fontWeight / textColor / rowHeight / rowBgColor /
+    // alternateRowColor). Unset props keep the renderer defaults, same as
+    // the web falling back to the AG Grid theme.
+    private var bodyFont: Font {
+        .system(size: props.double("fontSize").map { CGFloat($0) } ?? 12,
+                weight: rowWeight(props.string("fontWeight")) ?? .regular)
+    }
+    private var bodyTextColor: Color {
+        runtime.theme.resolve(props.string("textColor")) ?? runtime.theme.textPrimary
+    }
+    private var bodyRowMinHeight: CGFloat? {
+        props.double("rowHeight").map { CGFloat($0) }
+    }
+    private var rowBackground: Color? {
+        runtime.theme.resolve(props.string("rowBgColor"))
+    }
+    private var alternateRowBackground: Color? {
+        runtime.theme.resolve(props.string("alternateRowColor"))
     }
 
     /// Header — tap a column to sort (native header idiom).
@@ -800,7 +843,7 @@ struct CmsAgGridBlockView: View {
                     // scoping the click-through to this cell (web parity).
                     Button { drill(row) } label: {
                         Text(text)
-                            .font(.caption)
+                            .font(bodyFont)
                             .underline()
                             .lineLimit(1)
                             .foregroundColor(drillLinkColor)
@@ -812,18 +855,20 @@ struct CmsAgGridBlockView: View {
                     .buttonStyle(.plain)
                 } else {
                     Text(text)
-                        .font(.caption)
+                        .font(bodyFont)
                         .lineLimit(1)
+                        .foregroundColor(bodyTextColor)
                         .frame(width: columnWidth(column), alignment: .leading)
                         .padding(.vertical, 7)
                         .padding(.horizontal, 6)
                 }
             }
         }
+        .frame(minHeight: bodyRowMinHeight)
         .background(
-            selected ? Color.accentColor.opacity(0.15)
-                : stripe ? Color.secondary.opacity(0.05)
-                : Color.clear
+            selected ? runtime.theme.primary.opacity(0.15)
+                : stripe ? (alternateRowBackground ?? runtime.theme.divider.opacity(0.08))
+                : (rowBackground ?? Color.clear)
         )
         .contentShape(Rectangle())
         .onTapGesture { toggle(row) }
@@ -848,11 +893,11 @@ struct CmsAgGridBlockView: View {
         let weight = rowWeight(props.string("groupRowFontWeight")) ?? .bold
         return .system(size: size, weight: weight)
     }
-    private var groupRowTextColor: Color? {
-        runtime.theme.resolve(props.string("groupRowTextColor"))
+    private var groupRowTextColor: Color {
+        runtime.theme.resolve(props.string("groupRowTextColor")) ?? runtime.theme.textPrimary
     }
     private var groupRowBackground: Color {
-        runtime.theme.resolve(props.string("groupRowBgColor")) ?? Color.secondary.opacity(0.08)
+        runtime.theme.resolve(props.string("groupRowBgColor")) ?? runtime.theme.divider.opacity(0.15)
     }
 
     private var grandTotalFont: Font {
@@ -862,14 +907,15 @@ struct CmsAgGridBlockView: View {
             ?? rowWeight(props.string("groupRowFontWeight")) ?? .bold
         return .system(size: size, weight: weight)
     }
-    private var grandTotalTextColor: Color? {
+    private var grandTotalTextColor: Color {
         runtime.theme.resolve(props.string("grandTotalTextColor"))
             ?? runtime.theme.resolve(props.string("groupRowTextColor"))
+            ?? runtime.theme.textPrimary
     }
     private var grandTotalBackground: Color {
         runtime.theme.resolve(props.string("grandTotalBgColor"))
             ?? runtime.theme.resolve(props.string("groupRowBgColor"))
-            ?? Color.secondary.opacity(0.08)
+            ?? runtime.theme.divider.opacity(0.15)
     }
 
     /// Column-aligned group summary row: chevron + value + count in the auto
@@ -892,18 +938,18 @@ struct CmsAgGridBlockView: View {
                         Image(systemName: "chevron.right")
                             .font(.caption2.weight(.semibold))
                             .rotationEffect(.degrees(expanded ? 90 : 0))
-                            .foregroundColor(.secondary)
+                            .foregroundColor(runtime.theme.textSecondary)
                     }
                     Text(value.isEmpty ? "—" : value)
                         .font(groupRowFont)
-                        .foregroundColor(groupRowTextColor ?? .primary)
+                        .foregroundColor(groupRowTextColor)
                         .lineLimit(1)
                     Text("\(rows.count)")
                         .font(.caption2.weight(.medium))
-                        .foregroundColor(.secondary)
+                        .foregroundColor(runtime.theme.textSecondary)
                         .padding(.horizontal, 6)
                         .padding(.vertical, 1)
-                        .background(Capsule().fill(Color.secondary.opacity(0.15)))
+                        .background(Capsule().fill(runtime.theme.divider.opacity(0.25)))
                 }
                 .frame(width: Self.autoGroupColumnWidth, alignment: .leading)
                 .padding(.vertical, 7)
@@ -911,7 +957,7 @@ struct CmsAgGridBlockView: View {
                 ForEach(bodyColumns) { column in
                     Text(aggregateText(column, totals: totals))
                         .font(groupRowFont)
-                        .foregroundColor(groupRowTextColor ?? .primary)
+                        .foregroundColor(groupRowTextColor)
                         .lineLimit(1)
                         .frame(width: columnWidth(column), alignment: .leading)
                         .padding(.vertical, 7)
@@ -934,7 +980,7 @@ struct CmsAgGridBlockView: View {
                 if grouped {
                     Text("Total")
                         .font(grandTotalFont)
-                        .foregroundColor(grandTotalTextColor ?? .secondary)
+                        .foregroundColor(grandTotalTextColor)
                         .frame(width: Self.autoGroupColumnWidth, alignment: .leading)
                         .padding(.vertical, 7)
                         .padding(.horizontal, 6)
@@ -945,8 +991,7 @@ struct CmsAgGridBlockView: View {
                     // first column, unless that column carries an aggregate.
                     Text(!value.isEmpty ? value : (!grouped && index == 0 ? "Total" : ""))
                         .font(grandTotalFont)
-                        .foregroundColor(!value.isEmpty ? (grandTotalTextColor ?? .primary)
-                                                        : (grandTotalTextColor ?? .secondary))
+                        .foregroundColor(grandTotalTextColor)
                         .lineLimit(1)
                         .frame(width: columnWidth(column), alignment: .leading)
                         .padding(.vertical, 7)
@@ -961,7 +1006,8 @@ struct CmsAgGridBlockView: View {
         guard let fn = column.aggFunc else { return "" }
         let raw = totals["\(column.key)_\(fn)"]?.displayString ?? ""
         if raw.isEmpty { return "" }
-        return column.format.map { CmsFormatValue.apply(raw, pattern: $0) } ?? raw
+        let preFormatted = column.transform.map { CmsFormatValue.applyTransform(raw, transform: $0) } ?? raw
+        return column.format.map { CmsFormatValue.apply(preFormatted, pattern: $0) } ?? preFormatted
     }
 
     private func columnWidth(_ column: Column) -> CGFloat {
@@ -975,7 +1021,7 @@ struct CmsAgGridBlockView: View {
         if let totals = runtime.selections[outputSlug]?.first {
             // excludeFromTotals hides a column's aggregate in THIS row only —
             // still computed and published for group rows / KPI bindings.
-            let aggCols = columns.filter { $0.aggFunc != nil && !$0.excludeFromTotals }
+            let aggCols = columns.filter { $0.aggFunc != nil && !$0.excludeFromTotals && $0.visible }
             if !aggCols.isEmpty {
                 // No columns to align under — break summaries across rows
                 // as wrapping label/value tiles.
@@ -990,7 +1036,7 @@ struct CmsAgGridBlockView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(Color.secondary.opacity(0.08))
+                        .fill(runtime.theme.divider.opacity(0.15))
                 )
             }
         }
@@ -1001,9 +1047,10 @@ struct CmsAgGridBlockView: View {
         return VStack(alignment: .leading, spacing: 1) {
             Text(column.label)
                 .font(.caption2)
-                .foregroundColor(.secondary)
+                .foregroundColor(runtime.theme.textSecondary)
                 .lineLimit(1)
-            Text(column.format.map { CmsFormatValue.apply(value, pattern: $0) } ?? value)
+            let preFormatted = column.transform.map { CmsFormatValue.applyTransform(value, transform: $0) } ?? value
+            Text(column.format.map { CmsFormatValue.apply(preFormatted, pattern: $0) } ?? preFormatted)
                 .font(.subheadline.weight(.semibold))
         }
     }
@@ -1016,10 +1063,11 @@ struct CmsAgGridBlockView: View {
         if column.hideDetailValue { return "" }
         guard let value = row[column.valueFrom], value != .null else { return "" }
         let s = value.displayString
+        let t = column.transform.map { CmsFormatValue.applyTransform(s, transform: $0) } ?? s
         if let format = column.format, !format.isEmpty {
-            return CmsFormatValue.apply(s, pattern: format)
+            return CmsFormatValue.apply(t, pattern: format)
         }
-        return s
+        return t
     }
 
     private func isSelected(_ row: [String: CmsJSON]) -> Bool {
@@ -1044,7 +1092,7 @@ struct CmsAgGridBlockView: View {
     /// Authored link tint (the web `accentColor` fed to DrillLinkCellRenderer),
     /// falling back to the native accent.
     private var drillLinkColor: Color {
-        runtime.theme.resolve(props.string("accentColor")) ?? .accentColor
+        runtime.theme.resolve(props.string("accentColor")) ?? runtime.theme.primary
     }
 
     /// Drill: publish this row as the query's selection — regardless of

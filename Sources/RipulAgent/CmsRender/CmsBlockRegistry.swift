@@ -79,13 +79,25 @@ public enum CmsBlockRegistry {
 /// Hidden / off-device blocks stay MOUNTED but invisible — same rule as the
 /// web, where they keep feeding block outputs (a hidden AG Grid publishing
 /// aggregates to a KPI strip) and selections.
+///
+/// DESIGN MODE (`runtime.isDesignMode`): the runtime IS the canvas — no
+/// forked designer surface. Every block gets selection chrome (dashed
+/// outline, solid accent when picked) and a HIGH-priority tap that selects
+/// it. High priority beats the block's internal controls (a tap selects
+/// instead of toggling — the web's edit-mode reading) while innermost
+/// resolution still picks the DEEPEST nested block. Hidden/off-device
+/// blocks render visibly but dimmed with a marker chip, mirroring the web
+/// ("fully visible and editable in edit mode").
 struct CmsBlockView: View {
     let block: CmsBlock
     let axis: Axis
     @EnvironmentObject var runtime: CmsRuntime
 
+    private var isSuppressed: Bool { block.hidden == true || excludedOnMobile }
+    private var isSelected: Bool { runtime.selectedBlockId == block.id }
+
     var body: some View {
-        if block.hidden == true || excludedOnMobile {
+        if isSuppressed && !runtime.isDesignMode {
             CmsBlockRegistry.render(block, axis: axis)
                 .frame(height: 0)
                 .clipped()
@@ -93,17 +105,105 @@ struct CmsBlockView: View {
                 .allowsHitTesting(false)
                 .accessibilityHidden(true)
         } else {
-            CmsBlockRegistry.render(block, axis: axis)
+            let content = CmsBlockRegistry.render(block, axis: axis)
                 .modifier(CmsBlockFrameModifier(frame: block.frame, axis: axis, resolve: { runtime.color($0) }))
                 // View Explorer: every block reports `Cms.<type>.<slug>` so the
                 // inspector can name it (the native twin of `data-ui`).
                 .cmsInspectorID("Cms.\(block.type).\(block.slug ?? block.id)")
+            if runtime.isDesignMode {
+                let designContent = content
+                    .opacity(isSuppressed ? 0.45 : 1)
+                    .overlay { designChrome }
+                    .contentShape(Rectangle())
+                if isContainer {
+                    // Containers pass taps through to nested blocks first; empty
+                    // space still selects the container via contentShape.
+                    designContent
+                        .gesture(
+                            TapGesture().onEnded {
+                                runtime.selectedBlockId = isSelected ? nil : block.id
+                            }
+                        )
+                } else {
+                    // Leaf blocks beat their own inner controls in design mode
+                    // (a tap selects instead of toggling).
+                    designContent
+                        .highPriorityGesture(
+                            TapGesture().onEnded {
+                                runtime.selectedBlockId = isSelected ? nil : block.id
+                            }
+                        )
+                }
+            } else {
+                content
+            }
         }
+    }
+
+    @ViewBuilder private var designChrome: some View {
+        ZStack(alignment: .topLeading) {
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .strokeBorder(
+                    isSelected ? Color.accentColor : Color.secondary.opacity(0.4),
+                    style: StrokeStyle(lineWidth: isSelected ? 2 : 1, dash: isSelected ? [] : [5, 4])
+                )
+            if isSelected {
+                Text(block.type)
+                    .font(.caption2.weight(.semibold))
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Capsule().fill(Color.accentColor))
+                    .padding(3)
+            } else if isSuppressed {
+                Image(systemName: suppressionIcon)
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                    .padding(4)
+                    .background(Circle().fill(Color.secondary.opacity(0.12)))
+                    .padding(3)
+            }
+        }
+        .overlay(alignment: .center) {
+            if isSuppressed {
+                HStack(spacing: 4) {
+                    Image(systemName: suppressionIcon)
+                    Text(suppressionLabel)
+                }
+                .font(.caption.weight(.semibold))
+                .foregroundColor(.white)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .background(Capsule().fill(Color.red.opacity(0.85)))
+                .shadow(radius: 2)
+                .padding(8)
+            }
+        }
+        .allowsHitTesting(false)
+    }
+
+    private var suppressionIcon: String {
+        if block.hidden == true { return "eye.slash" }
+        if excludedOnMobile { return "desktopcomputer" }
+        return "eye.slash"
+    }
+    private var suppressionLabel: String {
+        if block.hidden == true { return "Hidden" }
+        if excludedOnMobile { return "Desktop only" }
+        return "Hidden"
     }
 
     private var excludedOnMobile: Bool {
         guard let visibleOn = block.visibleOn, !visibleOn.isEmpty else { return false }
         return !visibleOn.contains("mobile")
+    }
+
+    /// Block types whose native renderer embeds other blocks. For these we
+    /// want taps to reach the deepest nested child first; empty space still
+    /// selects the container itself.
+    private var isContainer: Bool {
+        ["section", "container", "template", "sidebar", "pageOutlet", "modal", "recordNavigator", "trailMap"]
+            .contains(block.type)
     }
 }
 
