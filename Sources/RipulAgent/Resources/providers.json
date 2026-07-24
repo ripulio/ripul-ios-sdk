@@ -1,0 +1,51 @@
+{
+  "providers": [
+    {
+      "id": "ripul",
+      "label": "Agent",
+      "keywords": [],
+      "color": "#60a5fa",
+      "webIcon": "ChatBubbleOutline",
+      "sfSymbol": "message.fill",
+      "modelPrefixes": []
+    },
+    {
+      "id": "claudeCode",
+      "providerKey": "claude-cli",
+      "label": "Claude",
+      "fullLabel": "Claude Code",
+      "keywords": ["claude", "cli"],
+      "color": "#f97316",
+      "webIcon": "Terminal",
+      "sfSymbol": "terminal.fill",
+      "modelPrefixes": ["claude-cli"],
+      "defaultModelId": "claude-cli-raw-sonnet"
+    },
+    {
+      "id": "codex",
+      "providerKey": "codex-cli",
+      "label": "Codex",
+      "fullLabel": "Codex",
+      "keywords": ["codex"],
+      "color": "#22c55e",
+      "webIcon": "Code",
+      "sfSymbol": "chevron.left.forwardslash.chevron.right",
+      "modelPrefixes": ["codex-cli"],
+      "defaultModelId": "codex-cli-raw-default"
+    },
+    {
+      "id": "antigravity",
+      "providerKey": "antigravity-cli",
+      "label": "Antigravity",
+      "fullLabel": "Antigravity",
+      "keywords": ["antigravity", "agy"],
+      "color": "#4285f4",
+      "webIcon": "AutoAwesome",
+      "sfSymbol": "sparkles",
+      "modelPrefixes": ["antigravity-cli"],
+      "defaultModelId": "antigravity-cli-raw-default"
+    }
+  ],
+  "defaultColor": "#94a3b8",
+  "defaultLabel": "Session"
+}

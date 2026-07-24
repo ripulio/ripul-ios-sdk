@@ -19,6 +19,9 @@ let package = Package(
             name: "RipulAgent",
             dependencies: [
                 .product(name: "MarkdownUI", package: "swift-markdown-ui"),
+            ],
+            resources: [
+                .process("Resources/providers.json"),
             ]
         ),
     ]
