@@ -100,6 +100,7 @@ public struct RipulAgentConsole: View {
                     InspectScreenTool(bridge: bridge),
                 ])
                 authStore.startPolling(bridge: bridge)
+                logWebBuildVersion()
             }
             .onChange(of: authStore.isSignedIn) { _, signedIn in
                 if signedIn { forceSignIn = false }
@@ -161,6 +162,39 @@ public struct RipulAgentConsole: View {
         Task { @MainActor in
             await bridge.focusSession(id: session.id)
             showingChat = true
+        }
+    }
+
+    /// Logs the embedded web app's bundle version + the LIVE/STALE verdict
+    /// through the NATIVE log path (bridge.handleConsoleLog), so the DevTools
+    /// console always shows which web build is running. The web app's own
+    /// `[RIPUL] build=` boot line is a console.log, which its ConsoleWrapper
+    /// suppresses in production — it never reaches the native buffer.
+    private func logWebBuildVersion() {
+        Task { @MainActor in
+            for _ in 0..<60 {
+                if bridge.isConnected { break }
+                try? await Task.sleep(nanoseconds: 500_000_000)
+            }
+            guard bridge.isConnected else { return }
+            let running = (try? await bridge.callAsyncJavaScript(
+                "return window.__ripulBuildVersion || 'unknown';"
+            )) as? String ?? "unknown"
+
+            var deployed: String?
+            if let url = URL(string: "version.json", relativeTo: configuration.baseURL),
+               let (data, _) = try? await URLSession.shared.data(from: url),
+               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                deployed = json["version"] as? String
+            }
+
+            let verdict: String
+            if let deployed {
+                verdict = running == deployed ? "LIVE ✓" : "STALE ✗"
+            } else {
+                verdict = "deployed=?"
+            }
+            bridge.handleConsoleLog("[RIPUL] web build=\(running) deployed=\(deployed ?? "?") \(verdict) (native read)")
         }
     }
 
