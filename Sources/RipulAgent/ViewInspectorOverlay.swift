@@ -878,6 +878,7 @@ class ViewInspectorController: UIView {
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard let t = touches.first else { return }
         let loc = t.location(in: self)
+        print("[RipulViewExplorer] touchesBegan loc=(\(loc.x), \(loc.y)) lastTapTime=\(lastTapTime ?? -1) timestamp=\(t.timestamp)")
 
         // Detect a double-tap on the currently highlighted element and hand it to
         // the host app as its default action. Pass the token-anchor view (the
@@ -886,6 +887,9 @@ class ViewInspectorController: UIView {
         if isDoubleTap(at: loc, time: t.timestamp) {
             lastTapTime = nil
             lastTapPosition = nil
+            let anchorClass = currentTokenAnchor.map { String(describing: type(of: $0)) } ?? "nil"
+            let targetClass = currentTarget.map { String(describing: type(of: $0)) } ?? "nil"
+            print("[RipulViewExplorer] double-tap detected anchor=\(anchorClass) target=\(targetClass) onDoubleTap=\(onDoubleTap != nil)")
             if let anchor = currentTokenAnchor ?? currentTarget {
                 onDoubleTap?(anchor)
             }
@@ -900,8 +904,15 @@ class ViewInspectorController: UIView {
 
     /// Two quick taps near each other count as a double-tap on the highlighted element.
     private func isDoubleTap(at loc: CGPoint, time: TimeInterval) -> Bool {
-        guard let lastTime = lastTapTime, let lastPos = lastTapPosition else { return false }
-        return (time - lastTime) <= doubleTapInterval && hypot(loc.x - lastPos.x, loc.y - lastPos.y) <= doubleTapDistance
+        guard let lastTime = lastTapTime, let lastPos = lastTapPosition else {
+            print("[RipulViewExplorer] isDoubleTap false: no prior tap")
+            return false
+        }
+        let dt = time - lastTime
+        let dist = hypot(loc.x - lastPos.x, loc.y - lastPos.y)
+        let ok = dt <= doubleTapInterval && dist <= doubleTapDistance
+        print("[RipulViewExplorer] isDoubleTap dt=\(dt) dist=\(dist) ok=\(ok)")
+        return ok
     }
 
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
