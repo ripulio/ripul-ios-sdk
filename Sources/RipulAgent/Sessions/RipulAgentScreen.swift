@@ -42,6 +42,10 @@ public struct RipulAgentScreenSlots {
     /// `ripul://choose` hand-off state; picking a session returns it to the
     /// calling app instead of opening it.
     public var chooseMode: RipulChooseMode?
+    /// Host chrome rendered in the top bar's trailing edge, AFTER the context
+    /// menu (e.g. WAC's minimize-to-bubble). Style it with `GlassButton` /
+    /// `GlassCircleModifier` to match the bar's own buttons exactly.
+    public var topBarTrailingAccessory: (() -> AnyView)?
 
     public init(
         showingSidebar: Binding<Bool>? = nil,
@@ -49,7 +53,8 @@ public struct RipulAgentScreenSlots {
         onNavigateToCommits: (() -> Void)? = nil,
         onInviteByEmail: ((String) -> Void)? = nil,
         screenTip: ((String) -> AnyView)? = nil,
-        chooseMode: RipulChooseMode? = nil
+        chooseMode: RipulChooseMode? = nil,
+        topBarTrailingAccessory: (() -> AnyView)? = nil
     ) {
         self.showingSidebar = showingSidebar
         self.onNavigateToFiles = onNavigateToFiles
@@ -57,6 +62,7 @@ public struct RipulAgentScreenSlots {
         self.onInviteByEmail = onInviteByEmail
         self.screenTip = screenTip
         self.chooseMode = chooseMode
+        self.topBarTrailingAccessory = topBarTrailingAccessory
     }
 }
 
@@ -584,7 +590,8 @@ public struct RipulAgentScreen: View {
             // Inset so the pill doesn't overlap with buttons on either side.
             // Trailing side can have two buttons (scrollUp 44 + spacing 8 + menu 44 = 96px),
             // so pad symmetrically to the larger side when the scroll button is visible.
-            .padding(.horizontal, (!showingSessionList.wrappedValue && !showingMetadata && bridge.fileViewerTitle == nil) ? 108 : 56)
+            // A host accessory button adds another 52px (44 + 8) of clearance.
+            .padding(.horizontal, ((!showingSessionList.wrappedValue && !showingMetadata && bridge.fileViewerTitle == nil) ? 108 : 56) + (slots.topBarTrailingAccessory != nil ? 52 : 0))
             .simultaneousGesture(
                 LongPressGesture(minimumDuration: 1.0).onEnded { _ in
                     NotificationCenter.default.post(name: .ripulShowDevTools, object: nil)
@@ -674,6 +681,14 @@ public struct RipulAgentScreen: View {
                 Task { await refreshFavoriteDirectories() }
             })
             .uiKitIdentifier("AgentScreen.topBar.trailingMenu")
+
+                // Host chrome (e.g. WAC's minimize button) — sibling of the bar's
+                // own buttons, inside the same GlassEffectContainer.
+                if let accessory = slots.topBarTrailingAccessory {
+                    accessory()
+                        .modifier(GlassEffectIDModifier(id: "accessory", namespace: topBarNS))
+                        .transition(.scale.combined(with: .opacity))
+                }
             } // HStack (buttons)
         } // ZStack
         .padding(.horizontal, 12)

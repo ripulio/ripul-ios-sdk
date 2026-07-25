@@ -40,8 +40,14 @@ public struct RipulAgentConsole: View {
     /// `.ripulShowDevTools` posts.
     @State private var showDevTools = false
 
-    public init(configuration: RipulSessionsConfiguration) {
+    private let slots: RipulAgentScreenSlots
+
+    public init(
+        configuration: RipulSessionsConfiguration,
+        slots: RipulAgentScreenSlots = .init()
+    ) {
         self.configuration = configuration
+        self.slots = slots
         let authStore = RipulClerkAuthStore(cache: configuration.cache)
         _authStore = StateObject(wrappedValue: authStore)
         let bridge = AgentBridge()
@@ -62,7 +68,7 @@ public struct RipulAgentConsole: View {
                 model: listModel,
                 configuration: configuration,
                 tokenProvider: { authStore.token },
-                slots: .init()
+                slots: slots
             )
             .opacity(authStore.isSignedIn ? 1 : 0)
             .allowsHitTesting(authStore.isSignedIn)
