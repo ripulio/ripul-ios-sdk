@@ -724,7 +724,21 @@ public struct GlassSessionsList: View {
     @ViewBuilder
     private var foldersPanelSection: some View {
         if machines.contains(where: { $0.isOnline && !$0.isDisabled(cache: cache) }) {
-            if let foldersSection { foldersSection() }
+            if let foldersSection {
+                foldersSection()
+            } else {
+                // Default: the same FolderTreeSection the app embeds (iOS-only).
+                // The slot exists for hosts that need a custom panel; nil gets
+                // the app's 1:1 files browser.
+                #if os(iOS)
+                FolderTreeSection(
+                    bridge: bridge,
+                    isExpanded: $foldersExpanded,
+                    rootPathOverride: selectedProjectPath,
+                    onFileOpened: onDismissSheet
+                )
+                #endif
+            }
         }
     }
 
