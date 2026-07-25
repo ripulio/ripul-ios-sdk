@@ -79,7 +79,10 @@ public struct RipulAgentScreen: View {
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
-    @State private var fallbackShowingSessionList = false
+    /// Starts on the session LIST, exactly like the app (ContentView seeds
+    /// showingSessionList = true) - landing on an empty chat instead is the
+    /// single most visible 'nothing like Ripul' break for SDK hosts.
+    @State private var fallbackShowingSessionList = true
     /// External owner of the list<->chat visibility (e.g. the app's ContentView,
     /// which drives it from deep links). nil = the screen owns the state.
     private let externalShowingSessionList: Binding<Bool>?
