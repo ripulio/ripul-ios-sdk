@@ -2,28 +2,28 @@ import SwiftUI
 
 // MARK: - JSON Model
 
-struct ProviderDef: Codable {
-    let id: String
-    let providerKey: String?
-    let label: String
-    let fullLabel: String?
-    let keywords: [String]
-    let color: String
-    let sfSymbol: String
-    let modelPrefixes: [String]
-    let defaultModelId: String?
+public struct ProviderDef: Codable {
+    public let id: String
+    public let providerKey: String?
+    public let label: String
+    public let fullLabel: String?
+    public let keywords: [String]
+    public let color: String
+    public let sfSymbol: String
+    public let modelPrefixes: [String]
+    public let defaultModelId: String?
 
     // Not in JSON, but useful downstream
-    let webIcon: String?
+    public let webIcon: String?
 
     /// Whether this provider represents a CLI (has a providerKey).
-    var isCli: Bool { providerKey != nil }
+    public var isCli: Bool { providerKey != nil }
 
     /// Full display label (e.g. "Claude Code"), falling back to short label.
-    var displayLabel: String { fullLabel ?? label }
+    public var displayLabel: String { fullLabel ?? label }
 
     /// Model prefix for filtering (e.g. "claude-cli-raw-"), derived from modelPrefixes.
-    var modelIdPrefix: String? {
+    public var modelIdPrefix: String? {
         guard let first = modelPrefixes.first else { return nil }
         return first + "-raw-"
     }
@@ -32,7 +32,7 @@ struct ProviderDef: Codable {
         case id, providerKey, label, fullLabel, keywords, color, sfSymbol, modelPrefixes, defaultModelId, webIcon
     }
 
-    init(from decoder: Decoder) throws {
+    public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(String.self, forKey: .id)
         providerKey = try c.decodeIfPresent(String.self, forKey: .providerKey)
@@ -60,7 +60,7 @@ private struct ProvidersFile: Codable {
 ///
 /// Loaded from the SDK's own bundle (`Bundle.module`), which packages
 /// `Resources/providers.json`.
-enum ProviderConstants {
+public enum ProviderConstants {
 
     // MARK: Loaded data
 
@@ -79,60 +79,60 @@ enum ProviderConstants {
         return decoded
     }()
 
-    static let providers: [ProviderDef] = data.providers
-    static let defaultLabel: String = data.defaultLabel
+    public static let providers: [ProviderDef] = data.providers
+    public static let defaultLabel: String = data.defaultLabel
 
     // MARK: Well-known providers
 
     /// Resolved definition for Claude Code sessions.
-    static let claude = providers.first(where: { $0.id == "claudeCode" })!
+    public static let claude = providers.first(where: { $0.id == "claudeCode" })!
     /// Resolved definition for Codex sessions.
-    static let codex = providers.first(where: { $0.id == "codex" })!
+    public static let codex = providers.first(where: { $0.id == "codex" })!
     /// Resolved definition for Antigravity sessions.
-    static let antigravity = providers.first(where: { $0.id == "antigravity" })!
+    public static let antigravity = providers.first(where: { $0.id == "antigravity" })!
     /// Resolved definition for Ripul agent sessions.
-    static let ripul = providers.first(where: { $0.id == "ripul" })!
+    public static let ripul = providers.first(where: { $0.id == "ripul" })!
 
     /// Legacy persistence label for Claude Code sessions stored in UserDefaults.
     /// Existing sessions were saved with this value — used for matching, not display.
-    static let claudeCodeLegacyLabel = "Claude Code"
+    public static let claudeCodeLegacyLabel = "Claude Code"
     /// Persistence label for Codex sessions stored in UserDefaults.
-    static let codexLegacyLabel = "Codex"
+    public static let codexLegacyLabel = "Codex"
     /// Persistence label for Antigravity sessions stored in UserDefaults.
-    static let antigravityLegacyLabel = "Antigravity"
+    public static let antigravityLegacyLabel = "Antigravity"
 
     /// All CLI providers (those with a providerKey).
-    static let cliProviders: [ProviderDef] = providers.filter { $0.isCli }
+    public static let cliProviders: [ProviderDef] = providers.filter { $0.isCli }
 
     /// The first CLI provider — used as fallback when no provider is specified.
-    static let defaultCliProvider: ProviderDef = cliProviders[0]
+    public static let defaultCliProvider: ProviderDef = cliProviders[0]
 
     // MARK: CLI Lookup
 
     /// Look up a CLI provider by its providerKey (e.g. "claude-cli").
-    static func byProviderKey(_ key: String) -> ProviderDef? {
+    public static func byProviderKey(_ key: String) -> ProviderDef? {
         cliProviders.first { $0.providerKey == key }
     }
 
     /// Infer CLI provider from a model ID string (e.g. "antigravity-cli-raw-default" → antigravity).
-    static func byModelId(_ modelId: String?) -> ProviderDef? {
+    public static func byModelId(_ modelId: String?) -> ProviderDef? {
         guard let modelId else { return nil }
         return cliProviders.first { $0.modelPrefixes.contains(where: { modelId.hasPrefix($0) }) }
     }
 
     /// Whether a providerKey or provider string refers to a CLI provider.
-    static func isCliProvider(_ key: String?) -> Bool {
+    public static func isCliProvider(_ key: String?) -> Bool {
         guard let key else { return false }
         return cliProviders.contains { $0.providerKey == key }
     }
 
     /// Default model ID for a CLI provider (e.g. "claude-cli" → "claude-cli-raw-sonnet").
-    static func defaultModelId(for providerKey: String) -> String {
+    public static func defaultModelId(for providerKey: String) -> String {
         byProviderKey(providerKey)?.defaultModelId ?? "\(providerKey)-raw-default"
     }
 
     /// Legacy persistence label for a provider key (e.g. "claude-cli" → "Claude Code").
-    static func legacyLabel(for providerKey: String) -> String {
+    public static func legacyLabel(for providerKey: String) -> String {
         byProviderKey(providerKey)?.displayLabel ?? providerKey
     }
 
@@ -140,7 +140,7 @@ enum ProviderConstants {
 
     /// Resolve a provider definition from the raw `provider` / `providerLabel` strings
     /// that come from `RemoteSessionInfo` or `ChatSession`.
-    static func resolve(provider: String?, providerLabel: String?) -> ProviderDef? {
+    public static func resolve(provider: String?, providerLabel: String?) -> ProviderDef? {
         let raw = provider ?? ""
         let label = providerLabel ?? ""
 
@@ -165,25 +165,25 @@ enum ProviderConstants {
 
     // MARK: Convenience accessors
 
-    static func color(for provider: String?, providerLabel: String?) -> Color {
+    public static func color(for provider: String?, providerLabel: String?) -> Color {
         guard let def = resolve(provider: provider, providerLabel: providerLabel) else {
             return Color(hex: data.defaultColor)
         }
         return Color(hex: def.color)
     }
 
-    static func icon(for provider: String?, providerLabel: String?) -> String {
+    public static func icon(for provider: String?, providerLabel: String?) -> String {
         resolve(provider: provider, providerLabel: providerLabel)?.sfSymbol ?? "message.fill"
     }
 
-    static func label(for provider: String?, providerLabel: String?) -> String {
+    public static func label(for provider: String?, providerLabel: String?) -> String {
         resolve(provider: provider, providerLabel: providerLabel)?.label ?? data.defaultLabel
     }
 }
 
 // MARK: - Color hex init
 
-extension Color {
+public extension Color {
     init(hex: String) {
         let cleaned = hex.trimmingCharacters(in: CharacterSet(charactersIn: "#"))
         var rgb: UInt64 = 0

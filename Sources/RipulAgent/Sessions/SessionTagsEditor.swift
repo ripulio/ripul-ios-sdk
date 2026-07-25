@@ -4,7 +4,7 @@ import SwiftUI
 /// context menu. Hands the final, normalized tag list back via `onSave`, which
 /// persists it through `AgentBridge.setSessionTags`.
 @available(iOS 26.0, macOS 26.0, *)
-struct SessionTagsEditor: View {
+public struct SessionTagsEditor: View {
     let session: UnifiedSession
     /// Tags the user has used before, most-recent first — offered as a picker.
     let suggestions: [String]
@@ -21,7 +21,7 @@ struct SessionTagsEditor: View {
     /// Cap the picker so it never floods the sheet.
     private let maxSuggestions = 12
 
-    init(session: UnifiedSession, suggestions: [String] = [], onSave: @escaping ([String]) -> Void) {
+    public init(session: UnifiedSession, suggestions: [String] = [], onSave: @escaping ([String]) -> Void) {
         self.session = session
         self.suggestions = suggestions
         self.onSave = onSave
@@ -66,7 +66,7 @@ struct SessionTagsEditor: View {
         }
     }
 
-    var body: some View {
+    public var body: some View {
         NavigationStack {
             Form {
                 Section("Tags") {

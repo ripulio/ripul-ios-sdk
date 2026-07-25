@@ -36,7 +36,7 @@ struct SessionTitleLozenge: View {
         }
     }
 
-    var body: some View {
+    public var body: some View {
         HStack(spacing: 3) {
             Image(systemName: iconName)
                 .font(.caption2)
@@ -66,7 +66,7 @@ struct SessionTitleLozenge: View {
 @available(iOS 26.0, macOS 26.0, *)
 struct TagLozenge: View {
     let text: String
-    var body: some View {
+    public var body: some View {
         Text(text)
             .font(.caption2.weight(.semibold))
             .lineLimit(1)
@@ -79,7 +79,7 @@ struct TagLozenge: View {
 }
 
 @available(iOS 26.0, macOS 26.0, *)
-struct UnifiedSessionRow: View {
+public struct UnifiedSessionRow: View {
     /// Row observes only the session-list leaf store so body re-runs are
     /// scoped to session-list data changes (activity, phases, todo states).
     @ObservedObject var sessionStore: SessionListStore
@@ -98,6 +98,34 @@ struct UnifiedSessionRow: View {
     var isSelectMode: Bool = false
     var isSelected: Bool = false
     var onSessionAction: ((SessionRowAction) -> Void)? = nil
+
+    public init(
+        sessionStore: SessionListStore,
+        session: UnifiedSession,
+        cachedLastActive: Date? = nil,
+        isOpening: Bool = false,
+        isArchiving: Bool = false,
+        isDeleting: Bool = false,
+        isDeletingFromHost: Bool = false,
+        machineIcon: String? = nil,
+        hideProjectName: Bool = false,
+        isSelectMode: Bool = false,
+        isSelected: Bool = false,
+        onSessionAction: ((SessionRowAction) -> Void)? = nil
+    ) {
+        self.sessionStore = sessionStore
+        self.session = session
+        self.cachedLastActive = cachedLastActive
+        self.isOpening = isOpening
+        self.isArchiving = isArchiving
+        self.isDeleting = isDeleting
+        self.isDeletingFromHost = isDeletingFromHost
+        self.machineIcon = machineIcon
+        self.hideProjectName = hideProjectName
+        self.isSelectMode = isSelectMode
+        self.isSelected = isSelected
+        self.onSessionAction = onSessionAction
+    }
 
     /// Live turn phase for this row. Reads `sessionStore.sessionPhases` at
     /// body-eval time — only sessions that are currently open as a Ripul
@@ -178,7 +206,7 @@ struct UnifiedSessionRow: View {
         ProviderConstants.label(for: session.provider, providerLabel: session.providerLabel)
     }
 
-    var body: some View {
+    public var body: some View {
         HStack(spacing: 12) {
             // Selection checkmark
             if isSelectMode {

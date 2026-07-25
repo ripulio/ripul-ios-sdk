@@ -6,18 +6,32 @@ import UIKit
 
 // MARK: - Shared Callbacks
 
-struct SessionsListCallbacks {
+public struct SessionsListCallbacks {
     var onFocusSession: (ChatSession) -> Void = { _ in }
     var onConnect: (RemoteMachine) -> Void = { _ in }
     var onNewCliSession: ((RemoteMachine, String) -> Void)?
     var onRestart: ((RemoteMachine) -> Void)?
     var onToggleMachineDisabled: ((RemoteMachine) -> Void)?
+
+    public init(
+        onFocusSession: @escaping (ChatSession) -> Void = { _ in },
+        onConnect: @escaping (RemoteMachine) -> Void = { _ in },
+        onNewCliSession: ((RemoteMachine, String) -> Void)? = nil,
+        onRestart: ((RemoteMachine) -> Void)? = nil,
+        onToggleMachineDisabled: ((RemoteMachine) -> Void)? = nil
+    ) {
+        self.onFocusSession = onFocusSession
+        self.onConnect = onConnect
+        self.onNewCliSession = onNewCliSession
+        self.onRestart = onRestart
+        self.onToggleMachineDisabled = onToggleMachineDisabled
+    }
 }
 
 // MARK: - Glass Sessions List (iOS 26+)
 
 @available(iOS 26.0, macOS 26.0, *)
-struct GlassSessionsList: View {
+public struct GlassSessionsList: View {
     @ObservedObject var bridge: AgentBridge
     /// Per-chat activity/phase/action maps, observed so the list re-sorts and
     /// updates live without re-rendering the WKWebView host.
@@ -68,6 +82,12 @@ struct GlassSessionsList: View {
     /// Whether new-Ripul-Agent tiles are allowed on machine rows. Injected by the
     /// host (was an app-side flag).
     var allowRipulAgents: Bool = false
+    /// Quick actions (host-defined machine actions). The owner discovers them
+    /// (onDiscoverActions fires on row expand) and executes them; empty/nil =
+    /// no quick-action UI.
+    var onDiscoverActions: ((RemoteMachine) -> Void)? = nil
+    var remoteActionsByMachine: [String: [RemoteActionDescriptor]] = [:]
+    var onExecuteAction: ((RemoteMachine, RemoteActionDescriptor, [String: Any]) async -> [String: Any])? = nil
     /// Optional invites panel section, rendered where the app's InviteManager UI was.
     var invitesSection: (() -> AnyView)? = nil
     /// Optional folders (file browser) section, rendered where FolderTreeSection was.
@@ -106,7 +126,7 @@ struct GlassSessionsList: View {
     // Folder tree
     @State private var foldersExpanded = false
 
-    init(
+    public init(
         bridge: AgentBridge,
         sessionStore: SessionListStore,
         navigationStore: NavigationStore,
@@ -136,6 +156,9 @@ struct GlassSessionsList: View {
         selectedSessionId: String? = nil,
         onRefresh: (() async -> Void)? = nil,
         allowRipulAgents: Bool = false,
+        onDiscoverActions: ((RemoteMachine) -> Void)? = nil,
+        remoteActionsByMachine: [String: [RemoteActionDescriptor]] = [:],
+        onExecuteAction: ((RemoteMachine, RemoteActionDescriptor, [String: Any]) async -> [String: Any])? = nil,
         invitesSection: (() -> AnyView)? = nil,
         foldersSection: (() -> AnyView)? = nil,
         emptyStateOverride: (() -> AnyView)? = nil,
@@ -173,6 +196,9 @@ struct GlassSessionsList: View {
         self.selectedSessionId = selectedSessionId
         self.onRefresh = onRefresh
         self.allowRipulAgents = allowRipulAgents
+        self.onDiscoverActions = onDiscoverActions
+        self.remoteActionsByMachine = remoteActionsByMachine
+        self.onExecuteAction = onExecuteAction
         self.invitesSection = invitesSection
         self.foldersSection = foldersSection
         self.emptyStateOverride = emptyStateOverride
@@ -233,7 +259,12 @@ struct GlassSessionsList: View {
                     isMachineDisabled: machine.isDisabled(cache: cache),
                     defaultMachineId: defaultMachineId,
                     onSetDefault: { self.defaultMachineId = $0 },
-                    onSetIcon: { RemoteMachine.setIcon($0, for: machine.machineId, cache: cache) }
+                    onSetIcon: { RemoteMachine.setIcon($0, for: machine.machineId, cache: cache) },
+                    onDiscoverActions: onDiscoverActions,
+                    remoteActions: remoteActionsByMachine[machine.machineId] ?? [],
+                    onExecuteAction: onExecuteAction.map { exec in
+                        { action, params in await exec(machine, action, params) }
+                    }
                 )
                 .padding(.horizontal, 16)
                 .padding(.vertical, 4)
@@ -772,7 +803,7 @@ struct GlassSessionsList: View {
             && searchText.trimmingCharacters(in: .whitespaces).isEmpty
     }
 
-    var body: some View {
+    public var body: some View {
         ZStack(alignment: .bottom) {
             if showOnboarding {
                 if let emptyStateOverride {

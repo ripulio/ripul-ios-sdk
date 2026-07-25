@@ -24,6 +24,9 @@ public struct RipulSessionsConfiguration {
     public var theme: AgentTheme
     /// Whether the "New Ripul Agent" tile is offered on online machines.
     public var allowRipulAgents: Bool
+    /// Whether host-defined quick actions are discovered/executed on machine
+    /// rows (the first-party app: on; a dev console: off).
+    public var quickActionsEnabled: Bool
     /// Optional app-injected panels (nil = omitted).
     public var invitesSection: (() -> AnyView)?
     public var foldersSection: (() -> AnyView)?
@@ -36,6 +39,7 @@ public struct RipulSessionsConfiguration {
         websiteDataStore: WKWebsiteDataStore = .default(),
         theme: AgentTheme = .system,
         allowRipulAgents: Bool = false,
+        quickActionsEnabled: Bool = false,
         invitesSection: (() -> AnyView)? = nil,
         foldersSection: (() -> AnyView)? = nil,
         emptyStateOverride: (() -> AnyView)? = nil
@@ -46,6 +50,7 @@ public struct RipulSessionsConfiguration {
         self.websiteDataStore = websiteDataStore
         self.theme = theme
         self.allowRipulAgents = allowRipulAgents
+        self.quickActionsEnabled = quickActionsEnabled
         self.invitesSection = invitesSection
         self.foldersSection = foldersSection
         self.emptyStateOverride = emptyStateOverride

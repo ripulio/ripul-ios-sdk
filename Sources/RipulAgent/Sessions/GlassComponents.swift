@@ -13,7 +13,7 @@ import SwiftUI
 /// On iOS 26+ renders with `.glassEffect`; on older versions uses
 /// `.ultraThinMaterial` with a rounded rect. Works on all iOS versions
 /// so call sites don't need `if #available` branching.
-struct GlassSectionPanel<Content: View, Trailing: View, Center: View>: View {
+public struct GlassSectionPanel<Content: View, Trailing: View, Center: View>: View {
     let title: String
     var subtitle: String? = nil
     @Binding var isExpanded: Bool
@@ -21,7 +21,7 @@ struct GlassSectionPanel<Content: View, Trailing: View, Center: View>: View {
     let trailing: Trailing
     let content: Content
 
-    init(
+    public init(
         title: String,
         subtitle: String? = nil,
         isExpanded: Binding<Bool>,
@@ -37,7 +37,7 @@ struct GlassSectionPanel<Content: View, Trailing: View, Center: View>: View {
         self.content = content()
     }
 
-    var body: some View {
+    public var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
                 Image(systemName: "chevron.right")
@@ -86,17 +86,17 @@ struct GlassSectionPanel<Content: View, Trailing: View, Center: View>: View {
 
 /// Search text field with magnifying glass icon, clear button, and
 /// material background.
-struct GlassSearchField: View {
+public struct GlassSearchField: View {
     let placeholder: String
     @Binding var text: String
     @FocusState private var isFocused: Bool
 
-    init(_ placeholder: String = "Search", text: Binding<String>) {
+    public init(_ placeholder: String = "Search", text: Binding<String>) {
         self.placeholder = placeholder
         self._text = text
     }
 
-    var body: some View {
+    public var body: some View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass")
                 .font(.caption)
@@ -128,11 +128,16 @@ struct GlassSearchField: View {
 // MARK: - Glass Select Button
 
 /// Small pill button for toggling selection mode.
-struct GlassSelectButton: View {
+public struct GlassSelectButton: View {
     let isSelecting: Bool
     let action: () -> Void
 
-    var body: some View {
+    public init(isSelecting: Bool, action: @escaping () -> Void) {
+        self.isSelecting = isSelecting
+        self.action = action
+    }
+
+    public var body: some View {
         Button(action: action) {
             HStack(spacing: 4) {
                 Image(systemName: isSelecting ? "xmark" : "checkmark.circle")
@@ -151,8 +156,9 @@ struct GlassSelectButton: View {
 
 // MARK: - Background modifiers
 
-struct GlassPanelBackground: ViewModifier {
-    func body(content: Content) -> some View {
+public struct GlassPanelBackground: ViewModifier {
+    public init() {}
+    public func body(content: Content) -> some View {
         #if os(iOS)
         if #available(iOS 26.0, *) {
             content.glassEffect(.clear, in: .rect(cornerRadius: 16))
@@ -173,8 +179,9 @@ struct GlassPanelBackground: ViewModifier {
     }
 }
 
-struct GlassCapsuleBackground: ViewModifier {
-    func body(content: Content) -> some View {
+public struct GlassCapsuleBackground: ViewModifier {
+    public init() {}
+    public func body(content: Content) -> some View {
         #if os(iOS)
         if #available(iOS 26.0, *) {
             content.glassEffect(.clear.interactive(), in: .capsule)
@@ -199,7 +206,7 @@ struct GlassCapsuleBackground: ViewModifier {
 
 /// Expandable glass panel hosting a List of rows — used by the metadata
 /// panel's Files/Deployments/Participants sections.
-struct GlassListSection<Data: RandomAccessCollection, ID: Hashable, RowContent: View, Trailing: View>: View {
+public struct GlassListSection<Data: RandomAccessCollection, ID: Hashable, RowContent: View, Trailing: View>: View {
     let title: String
     var subtitle: String? = nil
     @Binding var isExpanded: Bool
@@ -216,7 +223,7 @@ struct GlassListSection<Data: RandomAccessCollection, ID: Hashable, RowContent: 
     /// Approximate height per row (content padding + divider).
     private let rowHeight: CGFloat = 44
 
-    init(
+    public init(
         title: String,
         subtitle: String? = nil,
         isExpanded: Binding<Bool>,
@@ -249,7 +256,7 @@ struct GlassListSection<Data: RandomAccessCollection, ID: Hashable, RowContent: 
         return scrollable
     }
 
-    var body: some View {
+    public var body: some View {
         let panel = GlassSectionPanel(title: title, subtitle: subtitle ?? "\(data.count)", isExpanded: $isExpanded, trailing: { trailing }) {
             if let searchText, let placeholder = searchPlaceholder {
                 GlassSearchField(placeholder, text: searchText)
@@ -303,8 +310,8 @@ struct GlassListSection<Data: RandomAccessCollection, ID: Hashable, RowContent: 
 }
 
 // Convenience for Identifiable data (no explicit id: needed)
-extension GlassListSection where ID == Data.Element.ID, Data.Element: Identifiable {
-    init(
+public extension GlassListSection where ID == Data.Element.ID, Data.Element: Identifiable {
+    public init(
         title: String,
         subtitle: String? = nil,
         isExpanded: Binding<Bool>,
@@ -324,8 +331,8 @@ extension GlassListSection where ID == Data.Element.ID, Data.Element: Identifiab
 // MARK: - File Type Icons (ported from native Shared/GlassComponents.swift for M8)
 
 /// Shared SF Symbol name and colour for file extensions, used in FilesScreen and CommitsScreen.
-enum FileTypeIcon {
-    static func icon(for path: String) -> String {
+public enum FileTypeIcon {
+    public static func icon(for path: String) -> String {
         let ext = pathExtension(path)
         switch ext {
         case "swift": return "swift"
@@ -341,7 +348,7 @@ enum FileTypeIcon {
         }
     }
 
-    static func color(for path: String) -> Color {
+    public static func color(for path: String) -> Color {
         let ext = pathExtension(path)
         switch ext {
         case "swift": return .orange

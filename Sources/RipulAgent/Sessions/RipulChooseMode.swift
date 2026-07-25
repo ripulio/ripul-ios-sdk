@@ -14,6 +14,11 @@ import AppKit
 /// without a choose hand-off pass nil and no banner/interception appears.
 @available(iOS 15.0, macOS 13.0, *)
 public final class RipulChooseMode: ObservableObject {
+    /// Shared instance for hosts that use the `ripul://choose` URL hand-off
+    /// (the first-party app). SDK hosts may instead own an instance and pass
+    /// it via `RipulAgentScreenSlots.chooseMode`.
+    public static let shared = RipulChooseMode()
+
     @Published public private(set) var active = false
     public private(set) var appName: String?
     private var callback: URL?

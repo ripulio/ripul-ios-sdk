@@ -34,11 +34,15 @@ public struct RipulSessionsView: View {
     private let chooseMode: RipulChooseMode?
     private let showsTitleLozenge: Bool
     private let showingSidebar: Binding<Bool>?
+    private let quickActionsEnabled: Bool
 
     @State private var searchText = ""
     @State private var renamingSession: ChatSession?
     @State private var renameText = ""
     @State private var machineIcons: [String: String] = [:]
+    /// Host-defined quick actions per machine — owned here (the app's deleted
+    /// twin kept them in the list). Seeded from cache, refreshed on row expand.
+    @State private var remoteActionsByMachine: [String: [RemoteActionDescriptor]] = [:]
 
     public init(
         bridge: AgentBridge,
@@ -53,7 +57,8 @@ public struct RipulSessionsView: View {
         model: RipulSessionListModel? = nil,
         chooseMode: RipulChooseMode? = nil,
         showsTitleLozenge: Bool = true,
-        showingSidebar: Binding<Bool>? = nil
+        showingSidebar: Binding<Bool>? = nil,
+        quickActionsEnabled: Bool = false
     ) {
         self.bridge = bridge
         self.cache = cache
@@ -66,6 +71,7 @@ public struct RipulSessionsView: View {
         self.chooseMode = chooseMode
         self.showsTitleLozenge = showsTitleLozenge
         self.showingSidebar = showingSidebar
+        self.quickActionsEnabled = quickActionsEnabled
         _model = StateObject(wrappedValue: model ?? RipulSessionListModel(
             bridge: bridge,
             tokenProvider: tokenProvider,
@@ -124,6 +130,20 @@ public struct RipulSessionsView: View {
             selectedSessionId: bridge.activeSessionId,
             onRefresh: { await model.refresh() },
             allowRipulAgents: allowRipulAgents,
+            onDiscoverActions: quickActionsEnabled ? { machine in
+                Task {
+                    let raw = await bridge.discoverRemoteActions(machineId: machine.machineId)
+                    let descriptors = raw.compactMap { RemoteActionDescriptor(from: $0) }
+                    if !descriptors.isEmpty {
+                        remoteActionsByMachine[machine.machineId] = descriptors
+                        RemoteActionDescriptor.saveToCache(machineId: machine.machineId, actions: descriptors, cache: cache)
+                    }
+                }
+            } : nil,
+            remoteActionsByMachine: quickActionsEnabled ? remoteActionsByMachine : [:],
+            onExecuteAction: quickActionsEnabled ? { machine, action, params in
+                await bridge.executeRemoteAction(machineId: machine.machineId, actionId: action.id, params: params)
+            } : nil,
             invitesSection: invitesSection,
             foldersSection: foldersSection,
             emptyStateOverride: emptyStateOverride,
@@ -131,7 +151,12 @@ public struct RipulSessionsView: View {
             renamingSession: $renamingSession,
             renameText: $renameText
         )
-        .task { model.initialLoad() }
+        .task {
+            model.initialLoad()
+            if quickActionsEnabled, remoteActionsByMachine.isEmpty {
+                remoteActionsByMachine = RemoteActionDescriptor.loadAllCached(cache: cache)
+            }
+        }
         .onAppear { machineIcons = RemoteMachine.iconsByDisplayName(machines: model.machines, cache: cache) }
         .onChange(of: model.machines) { _, machines in
             machineIcons = RemoteMachine.iconsByDisplayName(machines: machines, cache: cache)

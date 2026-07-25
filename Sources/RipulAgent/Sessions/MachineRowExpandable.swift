@@ -14,7 +14,7 @@ import SwiftUI
 /// `defaultMachineId`) are resolved by the parent — which owns the
 /// `RipulSessionCache` — and passed in, with `onSetDefault` / `onSetIcon`
 /// callbacks writing back through the same cache.
-struct MachineRowExpandable: View {
+public struct MachineRowExpandable: View {
     let machine: RemoteMachine
     let activeSessions: [ChatSession]
     let isConnecting: Bool
@@ -35,8 +35,60 @@ struct MachineRowExpandable: View {
     var onSetDefault: ((String) -> Void)? = nil
     var onSetIcon: ((String?) -> Void)? = nil
 
+    // Quick actions (host-defined, discovered over the relay). nil/empty = absent.
+    var onDiscoverActions: ((RemoteMachine) -> Void)? = nil
+    var remoteActions: [RemoteActionDescriptor] = []
+    var onExecuteAction: ((RemoteActionDescriptor, [String: Any]) async -> [String: Any])? = nil
+
+    public init(
+        machine: RemoteMachine,
+        activeSessions: [ChatSession],
+        isConnecting: Bool,
+        isExpanded: Binding<Bool>,
+        onConnect: @escaping () -> Void,
+        onFocusSession: ((ChatSession) -> Void)? = nil,
+        onNewCliSession: ((RemoteMachine, String) -> Void)? = nil,
+        onRestart: ((RemoteMachine) -> Void)? = nil,
+        onToggleDisabled: ((RemoteMachine) -> Void)? = nil,
+        isRestarting: Bool = false,
+        isRestartSucceeded: Bool = false,
+        allowRipulAgents: Bool = false,
+        machineIcon: String? = nil,
+        isMachineDisabled: Bool = false,
+        defaultMachineId: String = "",
+        onSetDefault: ((String) -> Void)? = nil,
+        onSetIcon: ((String?) -> Void)? = nil,
+        onDiscoverActions: ((RemoteMachine) -> Void)? = nil,
+        remoteActions: [RemoteActionDescriptor] = [],
+        onExecuteAction: ((RemoteActionDescriptor, [String: Any]) async -> [String: Any])? = nil
+    ) {
+        self.machine = machine
+        self.activeSessions = activeSessions
+        self.isConnecting = isConnecting
+        self._isExpanded = isExpanded
+        self.onConnect = onConnect
+        self.onFocusSession = onFocusSession
+        self.onNewCliSession = onNewCliSession
+        self.onRestart = onRestart
+        self.onToggleDisabled = onToggleDisabled
+        self.isRestarting = isRestarting
+        self.isRestartSucceeded = isRestartSucceeded
+        self.allowRipulAgents = allowRipulAgents
+        self.machineIcon = machineIcon
+        self.isMachineDisabled = isMachineDisabled
+        self.defaultMachineId = defaultMachineId
+        self.onSetDefault = onSetDefault
+        self.onSetIcon = onSetIcon
+        self.onDiscoverActions = onDiscoverActions
+        self.remoteActions = remoteActions
+        self.onExecuteAction = onExecuteAction
+    }
+
     @State private var loadingTile: String?
     @State private var showIconPicker = false
+    @State private var showActionSheet: RemoteActionDescriptor?
+    @State private var showDestructiveConfirm: RemoteActionDescriptor?
+    @State private var showResultSheet: (action: RemoteActionDescriptor, result: [String: Any])?
 
     private var isDefault: Bool { machine.machineId == defaultMachineId }
 
@@ -45,7 +97,15 @@ struct MachineRowExpandable: View {
         GridItem(.flexible(), spacing: 10)
     ]
 
-    var body: some View {
+    private var primaryActions: [RemoteActionDescriptor] {
+        remoteActions.filter { $0.isPrimary }
+    }
+
+    private var secondaryActions: [RemoteActionDescriptor] {
+        remoteActions.filter { !$0.isPrimary }
+    }
+
+    public var body: some View {
         DisclosureGroup(isExpanded: $isExpanded) {
             VStack(spacing: 10) {
                 // === Primary section: square tiles ===
@@ -78,10 +138,39 @@ struct MachineRowExpandable: View {
                             }
                         }
                     }
+
+                    // Primary remote actions (scripts, user-promoted)
+                    if machine.isOnline && !isMachineDisabled {
+                        ForEach(primaryActions, id: \.id) { action in
+                            MachineActionTile(
+                                icon: action.icon ?? "bolt",
+                                label: action.displayName,
+                                subtitle: action.description,
+                                tint: action.destructive ? .red : .cyan,
+                                isLoading: loadingTile == action.id
+                            ) {
+                                handleRemoteAction(action)
+                            }
+                        }
+                    }
                 }
 
                 // === Secondary section: compact rows ===
                 VStack(spacing: 0) {
+                    // Secondary remote actions (intrinsic utilities)
+                    if machine.isOnline && !isMachineDisabled {
+                        ForEach(secondaryActions, id: \.id) { action in
+                            MachineActionRow(
+                                icon: action.icon ?? "bolt",
+                                label: action.displayName,
+                                tint: action.destructive ? .red : .secondary,
+                                isLoading: loadingTile == action.id
+                            ) {
+                                handleRemoteAction(action)
+                            }
+                        }
+                    }
+
                     // Restart Host
                     if (machine.isOnline && !isMachineDisabled && onRestart != nil) || isRestarting || isRestartSucceeded {
                         MachineActionRow(
@@ -222,6 +311,9 @@ struct MachineRowExpandable: View {
             .opacity(machine.isOnline && !isMachineDisabled ? 1 : 0.5)
         }
         .onChange(of: isExpanded) { expanded in
+            if expanded && machine.isOnline && !isMachineDisabled {
+                onDiscoverActions?(machine)
+            }
             if !expanded { loadingTile = nil }
         }
         .onChange(of: activeSessions.count) { _ in
@@ -238,6 +330,73 @@ struct MachineRowExpandable: View {
                 onSetIcon?(icon)
             }
         }
+        .sheet(item: $showActionSheet) { action in
+            RemoteActionSheet(action: action) { params in
+                guard let onExecuteAction else {
+                    return ["status": "error", "error": "Execute not available"]
+                }
+                return await onExecuteAction(action, params)
+            }
+        }
+        .sheet(isPresented: Binding(
+            get: { showResultSheet != nil },
+            set: { if !$0 { showResultSheet = nil } }
+        )) {
+            if let (action, result) = showResultSheet {
+                RemoteActionSheet(action: action, initialResult: result) { params in
+                    guard let onExecuteAction else {
+                        return ["status": "error", "error": "Execute not available"]
+                    }
+                    return await onExecuteAction(action, params)
+                }
+            }
+        }
+        .alert("Confirm Action",
+               isPresented: Binding(
+                   get: { showDestructiveConfirm != nil },
+                   set: { if !$0 { showDestructiveConfirm = nil } }
+               )
+        ) {
+            Button("Cancel", role: .cancel) { showDestructiveConfirm = nil }
+            Button("Execute", role: .destructive) {
+                if let action = showDestructiveConfirm {
+                    executeDirectAction(action)
+                    showDestructiveConfirm = nil
+                }
+            }
+        } message: {
+            if let action = showDestructiveConfirm {
+                Text("Are you sure you want to run \"\(action.displayName)\"?")
+            }
+        }
+    }
+
+    private func handleRemoteAction(_ action: RemoteActionDescriptor) {
+        let hasParams = {
+            guard let props = action.inputSchema["properties"] as? [String: Any] else { return false }
+            return !props.isEmpty
+        }()
+
+        if hasParams {
+            // Open parameter sheet
+            showActionSheet = action
+        } else if action.destructive {
+            // Show confirmation
+            showDestructiveConfirm = action
+        } else {
+            // Execute immediately
+            executeDirectAction(action)
+        }
+    }
+
+    private func executeDirectAction(_ action: RemoteActionDescriptor) {
+        guard let onExecuteAction else { return }
+        loadingTile = action.id
+        Task {
+            let result = await onExecuteAction(action, [:])
+            loadingTile = nil
+            showResultSheet = (action: action, result: result)
+        }
     }
 }
 
@@ -251,7 +410,7 @@ private struct MachineActionTile: View {
     var isLoading: Bool = false
     let action: () -> Void
 
-    var body: some View {
+    public var body: some View {
         Button {
             if !isLoading { action() }
         } label: {
@@ -306,7 +465,7 @@ private struct MachineActionRow: View {
         return label
     }
 
-    var body: some View {
+    public var body: some View {
         Button {
             if !isLoading && !isSucceeded { action() }
         } label: {

@@ -14,8 +14,8 @@ public final class RipulSessionListModel: ObservableObject {
 
     // MARK: - Published (view observes these)
 
-    @Published private(set) var unifiedSessions: [UnifiedSession]
-    @Published private(set) var machines: [RemoteMachine] = []
+    @Published public private(set) var unifiedSessions: [UnifiedSession]
+    @Published public private(set) var machines: [RemoteMachine] = []
     /// True once a machines fetch has SUCCEEDED at least once on this install
     /// (persisted). The embedded first-run onboarding must not appear before
     /// this: an empty list ahead of the first successful fetch means "offline /

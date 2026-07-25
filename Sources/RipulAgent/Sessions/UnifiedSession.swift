@@ -4,45 +4,45 @@ import Foundation
 
 /// A single session entry merging the JSONL scanner (ground truth) with any
 /// matching Ripul web-app tab (decoration / fast-focus path).
-struct UnifiedSession: Identifiable, Codable {
-    let id: String
-    let title: String
+public struct UnifiedSession: Identifiable, Codable {
+    public let id: String
+    public let title: String
     /// Last time any message was written in any app — the canonical sort key.
-    let lastUsed: Date
-    let gitBranch: String?
-    let messageCount: Int?
-    let projectName: String?
+    public let lastUsed: Date
+    public let gitBranch: String?
+    public let messageCount: Int?
+    public let projectName: String?
     /// Absolute working directory of the session, when known — used to re-root
     /// the Folders panel to the selected project.
-    let projectPath: String?
-    let provider: String?
-    let providerLabel: String?
+    public let projectPath: String?
+    public let provider: String?
+    public let providerLabel: String?
     /// The machine this session lives on (for openRemoteSession routing).
-    let machineName: String?
+    public let machineName: String?
     /// Stable machine identifier — survives display-name renames and is the only
     /// safe key for routing archive / delete / open requests to the owning host.
-    let machineId: String?
+    public let machineId: String?
     /// All keys this session can be matched by (id, sourceChatId, hostChatId, etc.).
     /// Persisted so that rematchLocalSessions() can find matches from cache.
-    let matchKeys: [String]
+    public let matchKeys: [String]
     /// Non-nil when this session is already open as a Ripul web-app tab.
     /// Excluded from Codable — re-matched on each rebuild.
-    let ripulSession: ChatSession?
+    public let ripulSession: ChatSession?
     /// Persisted snapshot of whether this session was open in Ripul at cache time.
     /// Allows green dots to show immediately from cache before the web view loads.
-    let cachedIsOpen: Bool
+    public let cachedIsOpen: Bool
     /// User-authored labels, shown as lozenges after the repo/branch on the
     /// subtitle line. Injected at build time from the bulk `getSessionTags()` map.
-    let tags: [String]
+    public let tags: [String]
     /// Canonical key for reading/writing this session's metadata blob (tags,
     /// notes, …) — the bare sourceChatId. Used when the user edits tags.
-    let metadataKey: String
+    public let metadataKey: String
 
-    var isOpenInRipul: Bool { ripulSession != nil || cachedIsOpen }
+    public var isOpenInRipul: Bool { ripulSession != nil || cachedIsOpen }
 
     /// Strip the `cli_` prefix so local (`cli_<uuid>`) and remote (`<uuid>`)
     /// forms of the same session resolve to one canonical key.
-    static func canonicalKey(_ key: String) -> String {
+    public static func canonicalKey(_ key: String) -> String {
         key.hasPrefix("cli_") ? String(key.dropFirst(4)) : key
     }
 
@@ -54,7 +54,7 @@ struct UnifiedSession: Identifiable, Codable {
         case tags, metadataKey
     }
 
-    init(from decoder: Decoder) throws {
+    public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(String.self, forKey: .id)
         title = try c.decode(String.self, forKey: .title)
@@ -74,7 +74,7 @@ struct UnifiedSession: Identifiable, Codable {
         ripulSession = nil
     }
 
-    init(
+    public init(
         id: String, title: String, lastUsed: Date, gitBranch: String?,
         messageCount: Int?, projectName: String?, projectPath: String? = nil,
         provider: String?,
@@ -98,23 +98,23 @@ struct UnifiedSession: Identifiable, Codable {
 
     private static let cacheKey = "ripulUnifiedSessionsCache"
 
-    static func loadCached(cache: RipulSessionCache) -> [UnifiedSession] {
+    public static func loadCached(cache: RipulSessionCache) -> [UnifiedSession] {
         guard let data = cache.data(forKey: cacheKey) else { return [] }
         return (try? JSONDecoder().decode([UnifiedSession].self, from: data)) ?? []
     }
 
-    static func saveToCache(_ sessions: [UnifiedSession], cache: RipulSessionCache) {
+    public static func saveToCache(_ sessions: [UnifiedSession], cache: RipulSessionCache) {
         guard let data = try? JSONEncoder().encode(sessions) else { return }
         cache.set(data, forKey: cacheKey)
     }
 
     /// Resolved provider definition from shared/providers.json.
-    var resolvedProvider: ProviderDef? {
+    public var resolvedProvider: ProviderDef? {
         ProviderConstants.resolve(provider: provider, providerLabel: providerLabel)
     }
 
     /// Whether this session belongs to any CLI provider (Claude Code, Codex, Antigravity, etc.).
-    var isCliSession: Bool { resolvedProvider?.isCli == true }
+    public var isCliSession: Bool { resolvedProvider?.isCli == true }
 
     /// Merge JSONL-sourced remote sessions with live Ripul tab state.
     /// JSONL entries are primary; Ripul tabs that have no JSONL counterpart
@@ -122,7 +122,7 @@ struct UnifiedSession: Identifiable, Codable {
     ///
     /// - Parameter machineNames: Maps remote session ID → machine display name,
     ///   so each session is tagged with the machine it actually lives on.
-    static func build(
+    public static func build(
         from remote: [RemoteSessionInfo],
         localSessions: [ChatSession],
         machineNames: [String: String],
@@ -240,7 +240,7 @@ struct UnifiedSession: Identifiable, Codable {
 // MARK: - Equatable (display-relevant fields only)
 
 extension UnifiedSession: Equatable {
-    static func == (lhs: UnifiedSession, rhs: UnifiedSession) -> Bool {
+    public static func == (lhs: UnifiedSession, rhs: UnifiedSession) -> Bool {
         lhs.id == rhs.id &&
         lhs.title == rhs.title &&
         lhs.lastUsed == rhs.lastUsed &&
@@ -265,8 +265,8 @@ extension UnifiedSession: Equatable {
 /// Shared so the Mac's Agents list and the iPhone run ONE scan path, not copies —
 /// this is what surfaces Claude-Code-only (on-disk) sessions in the list, since the
 /// scan returns every session a host knows about, not just open Ripul tabs.
-enum RemoteSessionScan {
-    static func fetch(
+public enum RemoteSessionScan {
+    public static func fetch(
         machines: [RemoteMachine],
         bridge: AgentBridge,
         cache: RipulSessionCache

@@ -2,7 +2,7 @@ import Foundation
 
 /// Fetches the relay machine registry (the set of host Macs the signed-in
 /// developer can pair with). Extracted from the app's `loadRemoteMachines`.
-enum MachineDirectory {
+public enum MachineDirectory {
     private struct MachinesResponse: Decodable {
         let machines: [RemoteMachine]
         let count: Int
@@ -14,7 +14,7 @@ enum MachineDirectory {
     /// can distinguish "unreachable" from an authoritative empty list —
     /// onboarding and empty-state UI must never treat a failed fetch as
     /// "brand-new account".
-    static func fetch(token: String, baseURL: URL = AgentConfiguration.defaultBaseURL) async -> [RemoteMachine]? {
+    public static func fetch(token: String, baseURL: URL = AgentConfiguration.defaultBaseURL) async -> [RemoteMachine]? {
         do {
             var request = URLRequest(url: baseURL.appendingPathComponent("api/v1/relay/machines"))
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")

@@ -79,7 +79,13 @@ public struct RipulAgentScreen: View {
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
-    @State private var showingSessionList = false
+    @State private var fallbackShowingSessionList = false
+    /// External owner of the list<->chat visibility (e.g. the app's ContentView,
+    /// which drives it from deep links). nil = the screen owns the state.
+    private let externalShowingSessionList: Binding<Bool>?
+    private var showingSessionList: Binding<Bool> {
+        externalShowingSessionList ?? $fallbackShowingSessionList
+    }
     @State private var renamingSession: ChatSession?
     @State private var renameText = ""
     @State private var rawModeSessions: Set<String> = []
@@ -126,13 +132,15 @@ public struct RipulAgentScreen: View {
         model: RipulSessionListModel,
         configuration: RipulSessionsConfiguration,
         tokenProvider: @escaping () -> String?,
-        slots: RipulAgentScreenSlots = .init()
+        slots: RipulAgentScreenSlots = .init(),
+        showingSessionList: Binding<Bool>? = nil
     ) {
         self.bridge = bridge
         self.model = model
         self.configuration = configuration
         self.tokenProvider = tokenProvider
         self.slots = slots
+        self.externalShowingSessionList = showingSessionList
     }
 
     // MARK: - Shared content (used by both the compact slide-over and the regular split)
@@ -188,7 +196,7 @@ public struct RipulAgentScreen: View {
                 // opening it. (Set by a `ripul://choose` hand-off — see RipulChooseMode.)
                 if let chooseMode = slots.chooseMode, chooseMode.active {
                     chooseMode.pick(session)
-                    withAnimation(.easeInOut(duration: 0.28)) { showingSessionList = false }
+                    withAnimation(.easeInOut(duration: 0.28)) { showingSessionList.wrappedValue = false }
                     return
                 }
                 let alreadyActive = bridge.activeSessionId == session.id
@@ -205,7 +213,7 @@ public struct RipulAgentScreen: View {
                     Task { @MainActor in
                         try? await Task.sleep(nanoseconds: 16_000_000)
                         withAnimation(chatOpenAnimation) {
-                            showingSessionList = false
+                            showingSessionList.wrappedValue = false
                         }
                         try? await Task.sleep(nanoseconds: 700_000_000) // just past the 0.625s open slide
                         bridge.scrollToBottom()
@@ -218,7 +226,7 @@ public struct RipulAgentScreen: View {
                     Task { @MainActor in
                         await bridge.focusSession(id: session.id)
                         withAnimation(chatOpenAnimation) {
-                            showingSessionList = false
+                            showingSessionList.wrappedValue = false
                         }
                         // Defer the remaining @Published churn past the open animation.
                         try? await Task.sleep(nanoseconds: 700_000_000) // just past the 0.625s open slide
@@ -235,7 +243,8 @@ public struct RipulAgentScreen: View {
             model: model,
             chooseMode: slots.chooseMode,
             showsTitleLozenge: false,
-            showingSidebar: slots.showingSidebar
+            showingSidebar: slots.showingSidebar,
+            quickActionsEnabled: configuration.quickActionsEnabled
         )
     }
 
@@ -271,7 +280,7 @@ public struct RipulAgentScreen: View {
 
     private var compactBody: some View {
         AgentChatDragContainer(
-            showingSessionList: $showingSessionList,
+            showingSessionList: showingSessionList,
             showingMetadata: showingMetadata,
             bridge: bridge,
             isFileViewerOpen: bridge.fileViewerTitle != nil,
@@ -281,14 +290,14 @@ public struct RipulAgentScreen: View {
             sessionList: {
                 sessionListColumn(dismiss: {
                     withAnimation(.easeInOut(duration: 0.28)) {
-                        showingSessionList = false
+                        showingSessionList.wrappedValue = false
                     }
                 })
             },
             chat: {
                 agentWebView(fillsSafeArea: true)
                     .overlay(alignment: .trailing) {
-                        if !showingSessionList && !showingMetadata {
+                        if !showingSessionList.wrappedValue && !showingMetadata {
                             RightEdgeSwipeView(
                                 onChanged: { offset in
                                     guard bridge.fileViewerTitle == nil else { return }
@@ -409,7 +418,7 @@ public struct RipulAgentScreen: View {
         } message: {
             Text(forkError)
         }
-        .onChange(of: showingSessionList) { showing in
+        .onChange(of: showingSessionList.wrappedValue) { showing in
             if showing {
                 Task { await model.loadMachinesFromAPI() }
             } else {
@@ -429,7 +438,7 @@ public struct RipulAgentScreen: View {
             } else if bridge.fileViewerReturnToSessions {
                 bridge.fileViewerReturnToSessions = false
                 withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
-                    showingSessionList = true
+                    showingSessionList.wrappedValue = true
                 }
             }
         }
@@ -554,7 +563,7 @@ public struct RipulAgentScreen: View {
                         .foregroundColor(.primary)
                         .lineLimit(1)
                         .contentTransition(.interpolate)
-                    if showingSessionList, let screenTip = slots.screenTip {
+                    if showingSessionList.wrappedValue, let screenTip = slots.screenTip {
                         screenTip("agent")
                     }
                 }
@@ -572,7 +581,7 @@ public struct RipulAgentScreen: View {
             // Inset so the pill doesn't overlap with buttons on either side.
             // Trailing side can have two buttons (scrollUp 44 + spacing 8 + menu 44 = 96px),
             // so pad symmetrically to the larger side when the scroll button is visible.
-            .padding(.horizontal, (!showingSessionList && !showingMetadata && bridge.fileViewerTitle == nil) ? 108 : 56)
+            .padding(.horizontal, (!showingSessionList.wrappedValue && !showingMetadata && bridge.fileViewerTitle == nil) ? 108 : 56)
             .simultaneousGesture(
                 LongPressGesture(minimumDuration: 1.0).onEnded { _ in
                     NotificationCenter.default.post(name: .ripulShowDevTools, object: nil)
@@ -590,18 +599,18 @@ public struct RipulAgentScreen: View {
                 // Hidden on regular width: the session list is a pinned sidebar there,
                 // so navigating "back" to it (the burger) is redundant.
                 // Also hidden in list mode when the host has no sidebar to open.
-                if horizontalSizeClass != .regular && (!showingSessionList || slots.showingSidebar != nil) {
+                if horizontalSizeClass != .regular && (!showingSessionList.wrappedValue || slots.showingSidebar != nil) {
                     Button(action: unifiedLeadingAction(session: session)) {
                         // Cross-fade burger<->chevron with plain opacity. contentTransition
                         // (.symbolEffect/.interpolate) ran on its own timeline and would not
                         // lock to the slide; opacity is a plain animatable property, so it is
-                        // governed by the top bar's .animation(value: showingSessionList) and
+                        // governed by the top bar's .animation(value: showingSessionList.wrappedValue) and
                         // travels on the exact same timeline as the panel.
                         ZStack {
                             Image(systemName: "line.3.horizontal")
-                                .opacity(showingSessionList ? 1 : 0)
+                                .opacity(showingSessionList.wrappedValue ? 1 : 0)
                             Image(systemName: "chevron.left")
-                                .opacity(showingSessionList ? 0 : 1)
+                                .opacity(showingSessionList.wrappedValue ? 0 : 1)
                         }
                             .font(.system(size: 18, weight: .semibold))
                             .foregroundStyle(.primary)
@@ -615,7 +624,7 @@ public struct RipulAgentScreen: View {
                 Spacer()
 
                 // Navigate to previous user message (only in chat view)
-                if !showingSessionList && !showingMetadata && bridge.fileViewerTitle == nil {
+                if !showingSessionList.wrappedValue && !showingMetadata && bridge.fileViewerTitle == nil {
                     Button {
                         bridge.scrollToUserMessage(direction: "up")
                     } label: {
@@ -633,7 +642,7 @@ public struct RipulAgentScreen: View {
                 Menu {
                 if showingMetadata {
                     metadataMenuItems
-                } else if showingSessionList {
+                } else if showingSessionList.wrappedValue {
                     sessionListMenuItems
                 } else {
                     if let info = commitViewInfo, session?.id == info.tabId {
@@ -672,7 +681,7 @@ public struct RipulAgentScreen: View {
         // spring (chatSlideSpring) when closing back to the list. The previous
         // fixed 0.6s spring desynced from the (variable) slide duration — e.g. the
         // lozenge settled in 0.6s while the panel was still travelling.
-        .animation(showingSessionList ? chatSlideSpring : chatOpenAnimation, value: showingSessionList)
+        .animation(showingSessionList.wrappedValue ? chatSlideSpring : chatOpenAnimation, value: showingSessionList.wrappedValue)
         .animation(.spring(response: 0.6, dampingFraction: 0.65), value: showingMetadata)
     }
 
@@ -695,7 +704,7 @@ public struct RipulAgentScreen: View {
         if let info = commitViewInfo, session?.id == info.tabId {
             return { dismissCommitView() }
         }
-        if showingSessionList {
+        if showingSessionList.wrappedValue {
             return {
                 if let showingSidebar = slots.showingSidebar {
                     withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) { showingSidebar.wrappedValue = true }
@@ -704,7 +713,7 @@ public struct RipulAgentScreen: View {
         } else {
             return {
                 withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
-                    showingSessionList = true
+                    showingSessionList.wrappedValue = true
                 }
             }
         }
@@ -715,7 +724,7 @@ public struct RipulAgentScreen: View {
         if let info = commitViewInfo, session?.id == info.tabId {
             return info.sessionTitle
         }
-        return showingSessionList ? "Agents" : (session?.displayName ?? "New Chat")
+        return showingSessionList.wrappedValue ? "Agents" : (session?.displayName ?? "New Chat")
     }
 
     private func unifiedSubtitle(session: ChatSession?) -> String? {
@@ -723,7 +732,7 @@ public struct RipulAgentScreen: View {
         if let info = commitViewInfo, session?.id == info.tabId {
             return info.shortSha
         }
-        return showingSessionList ? nil : topBarSubtitle(session: session)
+        return showingSessionList.wrappedValue ? nil : topBarSubtitle(session: session)
     }
 
     @ViewBuilder
@@ -816,7 +825,7 @@ public struct RipulAgentScreen: View {
                     Task {
                         await model.connectWithProvider(provider.providerKey!, to: machine, onSelect: { session in
                             withAnimation(.easeInOut(duration: 0.28)) {
-                                showingSessionList = false
+                                showingSessionList.wrappedValue = false
                             }
                             Task {
                                 await bridge.focusSession(id: session.id)
@@ -824,7 +833,7 @@ public struct RipulAgentScreen: View {
                             }
                         }, onDismiss: {
                             withAnimation(.easeInOut(duration: 0.28)) {
-                                showingSessionList = false
+                                showingSessionList.wrappedValue = false
                             }
                         })
                     }
@@ -1298,7 +1307,7 @@ public struct RipulAgentScreen: View {
             prompt = "Let's discuss `\(filename)`.\n\nPath: `\(path)`"
         }
         withAnimation(.easeInOut(duration: 0.28)) {
-            showingSessionList = false
+            showingSessionList.wrappedValue = false
         }
         Task {
             guard let result = await bridge.startNewChatWithPrompt(prompt) else { return }
