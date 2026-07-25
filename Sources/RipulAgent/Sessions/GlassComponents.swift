@@ -194,3 +194,172 @@ struct GlassCapsuleBackground: ViewModifier {
         #endif
     }
 }
+
+// MARK: - Glass List Section (ported from native Shared/GlassComponents.swift for M8)
+
+/// Expandable glass panel hosting a List of rows — used by the metadata
+/// panel's Files/Deployments/Participants sections.
+struct GlassListSection<Data: RandomAccessCollection, ID: Hashable, RowContent: View, Trailing: View>: View {
+    let title: String
+    var subtitle: String? = nil
+    @Binding var isExpanded: Bool
+    let data: Data
+    let id: KeyPath<Data.Element, ID>
+    var searchPlaceholder: String? = nil
+    var searchText: Binding<String>? = nil
+    var scrollable: Bool = false
+    var maxVisibleItems: Int? = nil
+    var onRefresh: (() async -> Void)? = nil
+    let trailing: Trailing
+    let rowContent: (Data.Element) -> RowContent
+
+    /// Approximate height per row (content padding + divider).
+    private let rowHeight: CGFloat = 44
+
+    init(
+        title: String,
+        subtitle: String? = nil,
+        isExpanded: Binding<Bool>,
+        data: Data,
+        id: KeyPath<Data.Element, ID>,
+        searchPlaceholder: String? = nil,
+        searchText: Binding<String>? = nil,
+        scrollable: Bool = false,
+        maxVisibleItems: Int? = nil,
+        onRefresh: (() async -> Void)? = nil,
+        @ViewBuilder trailing: () -> Trailing = { EmptyView() },
+        @ViewBuilder row: @escaping (Data.Element) -> RowContent
+    ) {
+        self.title = title
+        self.subtitle = subtitle
+        self._isExpanded = isExpanded
+        self.data = data
+        self.id = id
+        self.searchPlaceholder = searchPlaceholder
+        self.searchText = searchText
+        self.scrollable = scrollable
+        self.maxVisibleItems = maxVisibleItems
+        self.onRefresh = onRefresh
+        self.trailing = trailing()
+        self.rowContent = row
+    }
+
+    private var needsScroll: Bool {
+        if let max = maxVisibleItems, data.count > max { return true }
+        return scrollable
+    }
+
+    var body: some View {
+        let panel = GlassSectionPanel(title: title, subtitle: subtitle ?? "\(data.count)", isExpanded: $isExpanded, trailing: { trailing }) {
+            if let searchText, let placeholder = searchPlaceholder {
+                GlassSearchField(placeholder, text: searchText)
+                    .padding(.horizontal, 16)
+                    .padding(.top, 4)
+                    .padding(.bottom, 8)
+            }
+
+            let items = Array(data)
+            let list = List {
+                ForEach(items, id: id) { item in
+                    rowContent(item)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 4)
+                        .listRowInsets(EdgeInsets())
+                        .listRowSeparator(.visible)
+                        .alignmentGuide(.listRowSeparatorLeading) { _ in 44 }
+                        .listRowBackground(Color.clear)
+                }
+            }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+            .environment(\.defaultMinListRowHeight, 0)
+
+            if needsScroll {
+                if let max = maxVisibleItems {
+                    if let onRefresh {
+                        list.frame(height: CGFloat(min(data.count, max)) * rowHeight)
+                            .refreshable { await onRefresh() }
+                    } else {
+                        list.frame(height: CGFloat(min(data.count, max)) * rowHeight)
+                    }
+                } else {
+                    if let onRefresh {
+                        list.refreshable { await onRefresh() }
+                    } else {
+                        list
+                    }
+                }
+            } else {
+                list.frame(height: CGFloat(items.count) * rowHeight)
+            }
+        }
+
+        if scrollable {
+            panel.frame(maxHeight: .infinity, alignment: .top)
+        } else {
+            panel
+        }
+    }
+}
+
+// Convenience for Identifiable data (no explicit id: needed)
+extension GlassListSection where ID == Data.Element.ID, Data.Element: Identifiable {
+    init(
+        title: String,
+        subtitle: String? = nil,
+        isExpanded: Binding<Bool>,
+        data: Data,
+        searchPlaceholder: String? = nil,
+        searchText: Binding<String>? = nil,
+        scrollable: Bool = false,
+        maxVisibleItems: Int? = nil,
+        onRefresh: (() async -> Void)? = nil,
+        @ViewBuilder trailing: () -> Trailing = { EmptyView() },
+        @ViewBuilder row: @escaping (Data.Element) -> RowContent
+    ) {
+        self.init(title: title, subtitle: subtitle, isExpanded: isExpanded, data: data, id: \.id, searchPlaceholder: searchPlaceholder, searchText: searchText, scrollable: scrollable, maxVisibleItems: maxVisibleItems, onRefresh: onRefresh, trailing: trailing, row: row)
+    }
+}
+
+// MARK: - File Type Icons (ported from native Shared/GlassComponents.swift for M8)
+
+/// Shared SF Symbol name and colour for file extensions, used in FilesScreen and CommitsScreen.
+enum FileTypeIcon {
+    static func icon(for path: String) -> String {
+        let ext = pathExtension(path)
+        switch ext {
+        case "swift": return "swift"
+        case "js", "ts", "jsx", "tsx": return "chevron.left.forwardslash.chevron.right"
+        case "py": return "text.word.spacing"
+        case "json", "yaml", "yml", "toml": return "doc.text"
+        case "md", "txt", "rtf": return "doc.plaintext"
+        case "png", "jpg", "jpeg", "gif", "svg", "webp": return "photo"
+        case "css", "scss", "less": return "paintbrush"
+        case "html": return "globe"
+        case "sh", "bash", "zsh": return "terminal"
+        default: return "doc"
+        }
+    }
+
+    static func color(for path: String) -> Color {
+        let ext = pathExtension(path)
+        switch ext {
+        case "swift": return .orange
+        case "js", "jsx": return .yellow
+        case "ts", "tsx": return .blue
+        case "py": return .green
+        case "json": return .yellow
+        case "yaml", "yml", "toml": return .purple
+        case "md", "txt", "rtf": return .gray
+        case "png", "jpg", "jpeg", "gif", "svg", "webp": return .pink
+        case "css", "scss", "less": return .cyan
+        case "html": return .orange
+        case "sh", "bash", "zsh": return .green
+        default: return .secondary
+        }
+    }
+
+    private static func pathExtension(_ path: String) -> String {
+        URL(fileURLWithPath: path).pathExtension.lowercased()
+    }
+}

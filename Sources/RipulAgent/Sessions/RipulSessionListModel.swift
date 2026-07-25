@@ -426,12 +426,27 @@ public final class RipulSessionListModel: ObservableObject {
         onDismiss: @escaping () -> Void
     ) {
         openingUnifiedSessionId = session.id
-        log("debug_timeline \(elapsed()) openSession: '\(session.title)' ripulSession=\(session.ripulSession != nil) cachedIsOpen=\(session.cachedIsOpen) isRemote=\(session.machineName != nil)")
+        let isRemote = session.machineName != nil
+        log("debug_timeline \(elapsed()) openSession: '\(session.title)' ripulSession=\(session.ripulSession != nil) cachedIsOpen=\(session.cachedIsOpen) isRemote=\(isRemote)")
+
+        // The fast paths below (select an already-open / restored web tab
+        // directly) are only safe for sessions whose history the web view can
+        // restore by itself. REMOTE (relay-seeded) sessions can't: their
+        // history lives only in the web view's memory — no DO subscription
+        // (OOM guard), no local persistence — so after an app restart the
+        // restored tab is an empty shell and only the relay open path
+        // (agent:openSession → seed) can refill it. The web's
+        // openRemoteSession has a warm-store check: when the chat is still
+        // live it focuses instantly with NO relay round-trip, and when it's
+        // cold it re-seeds. So remote taps ALWAYS route through it — never
+        // through the tab-select shortcuts. (This was the "stuck spinner /
+        // no history until Remove-from-Ripul" bug: re-entry taps selected
+        // the cold restored tab and the re-seed path never ran.)
 
         // Fast path: session is already live in the web view.
         // Defer via Task so SwiftUI renders the highlighted row + spinner
         // for at least one frame before dismissing.
-        if let ripulTab = session.ripulSession {
+        if !isRemote, let ripulTab = session.ripulSession {
             // Fast path: already live in web view
             Task { @MainActor in
                 try? await Task.sleep(nanoseconds: 150_000_000) // 150ms
@@ -444,7 +459,7 @@ public final class RipulSessionListModel: ObservableObject {
         // Cached-open path: session was open before app restart.
         // Don't try relay-open — the web view will restore it.
         // Dismiss now, focus when the session appears in bridge.sessions.
-        if session.cachedIsOpen {
+        if !isRemote, session.cachedIsOpen {
             log("debug_timeline \(elapsed()) openSession: cachedIsOpen — looking for '\(session.title)' (matchKeys=\(session.matchKeys)), bridge.sessions=\(bridge.sessions.count)")
 
             // Build lookup keys the same way rematchLocalSessions does:
@@ -487,9 +502,22 @@ public final class RipulSessionListModel: ObservableObject {
             return
         }
 
-        // Remote-open path: session not open locally, open via relay
+        // Remote-open path: open (or re-seed) via relay. For remote sessions
+        // this is now ALSO the re-entry path — see the fast-path gating above.
         guard let machine = machines.first(where: { $0.displayName == session.machineName })
                           ?? machines.first(where: { $0.isOnline }) else {
+            // No machine connectable (list still loading, or host offline).
+            // If the web view has a live tab for this session, degrade to the
+            // legacy tab-select so navigation still works — history may be
+            // cold until it's re-tapped with the host reachable.
+            if let ripulTab = session.ripulSession {
+                Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 150_000_000)
+                    openingUnifiedSessionId = nil
+                    onSelect(ripulTab)
+                }
+                return
+            }
             openSessionError = "No connected machine available."
             openingUnifiedSessionId = nil
             return

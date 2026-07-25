@@ -2,6 +2,30 @@
 import SwiftUI
 import UIKit
 
+// MARK: - RipulElementTap
+
+/// An element the user double-tapped under the inspector reticule. The SDK stays
+/// host-agnostic: it detects the gesture and reports WHAT was tapped — what the tap
+/// MEANS (a theme remap, a navigation probe, a debug dump, …) is entirely the host's
+/// call via `RipulViewExplorer.elementTapAction`.
+public struct RipulElementTap {
+    /// The element the action should apply to: the token-anchor (`.uiKitIdentifier`
+    /// stamp) view when the pick resolved to one, else the picked view itself. This is
+    /// the same view the inspector's Edit tab reads design tokens from.
+    public let view: UIView
+    /// The raw picked view under the reticule (deepest hit), before token-anchor
+    /// resolution — same as `view` for plain UIKit elements.
+    public let targetView: UIView
+    /// Where the confirming tap landed, in the overlay's (window) coordinates.
+    public let point: CGPoint
+
+    public init(view: UIView, targetView: UIView, point: CGPoint) {
+        self.view = view
+        self.targetView = targetView
+        self.point = point
+    }
+}
+
 // MARK: - RipulViewExplorer
 //
 // Host-agnostic launcher for the native View Explorer (`ViewInspectorOverlay`).
@@ -34,10 +58,11 @@ public enum RipulViewExplorer {
     public static var isPresented: Bool { host != nil }
 
     /// Optional host-defined action invoked when the user double-taps the element
-    /// currently highlighted by the inspector reticule. Passes the inspected `UIView`
-    /// so the host can present its own default action (e.g. a theme remap).
-    /// When nil, double-taps are ignored. Set before calling `present()`/`toggle()`.
-    public static var doubleTapAction: ((UIView) -> Void)?
+    /// currently highlighted by the inspector reticule. The SDK only reports the tapped
+    /// element (`RipulElementTap`); the host decides what the gesture means (e.g. a
+    /// theme remap). When nil, double-taps are ignored. Set before calling
+    /// `present()`/`toggle()`.
+    public static var elementTapAction: ((RipulElementTap) -> Void)?
 
     /// Optional host-defined action invoked when the user taps the Console button
     /// in the View Explorer HUD. The host decides how to present its console/log
@@ -123,7 +148,7 @@ private struct RipulViewExplorerRoot: View {
 
     var body: some View {
         ViewInspectorOverlay(isActive: $isActive,
-                             doubleTapAction: RipulViewExplorer.doubleTapAction,
+                             elementTapAction: RipulViewExplorer.elementTapAction,
                              consoleAction: RipulViewExplorer.consoleAction)
             .onChange(of: isActive) { active in
                 if !active { onDismiss() }

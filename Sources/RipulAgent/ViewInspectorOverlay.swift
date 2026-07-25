@@ -837,7 +837,7 @@ class ViewInspectorController: UIView {
     var onInspect: ((InspectedView) -> Void)?
     var onCursorMoved: ((CGPoint) -> Void)?
     var onDismiss: (() -> Void)?
-    var onDoubleTap: ((UIView) -> Void)?
+    var onElementTap: ((RipulElementTap) -> Void)?
 
     private let cursorAccel: CGFloat = 1.4
     private var cursorPos: CGPoint
@@ -881,18 +881,21 @@ class ViewInspectorController: UIView {
         NSLog("[RipulViewExplorer] touchesBegan loc=(%.1f, %.1f) lastTapTime=%.3f timestamp=%.3f", loc.x, loc.y, lastTapTime ?? -1, t.timestamp)
 
         // Detect a double-tap on the currently highlighted element and hand it to
-        // the host app as its default action. Pass the token-anchor view (the
-        // .uiKitIdentifier stamp) so the host reads the same design tokens the
-        // Edit tab does.
+        // the host app as an abstract element tap. The payload's `view` is the
+        // token-anchor (the .uiKitIdentifier stamp) when one resolved, so the host
+        // reads the same element the Edit tab does; `targetView` is the raw pick.
         if isDoubleTap(at: loc, time: t.timestamp) {
             lastTapTime = nil
             lastTapPosition = nil
-            let anchorClass = currentTokenAnchor.map { String(describing: type(of: $0)) } ?? "nil"
-            let targetClass = currentTarget.map { String(describing: type(of: $0)) } ?? "nil"
-            NSLog("[RipulViewExplorer] double-tap detected anchor=%@ target=%@ onDoubleTap=%d", anchorClass, targetClass, onDoubleTap != nil)
-            if let anchor = currentTokenAnchor ?? currentTarget {
+            if let element = currentTokenAnchor ?? currentTarget {
+                let tap = RipulElementTap(view: element,
+                                          targetView: currentTarget ?? element,
+                                          point: loc)
+                NSLog("[RipulViewExplorer] element tap anchor=%@ target=%@ action=%d",
+                      String(describing: type(of: element)),
+                      String(describing: type(of: tap.targetView)), onElementTap != nil)
                 UISelectionFeedbackGenerator().selectionChanged()
-                onDoubleTap?(anchor)
+                onElementTap?(tap)
             }
             return
         }
@@ -1103,13 +1106,13 @@ class ViewInspectorController: UIView {
 struct ViewInspectorTouchLayer: UIViewRepresentable {
     let onInspect: (InspectedView) -> Void
     let onCursorMoved: (CGPoint) -> Void
-    let onDoubleTap: ((UIView) -> Void)?
+    let onElementTap: ((RipulElementTap) -> Void)?
 
     func makeUIView(context: Context) -> ViewInspectorController {
         let v = ViewInspectorController(frame: UIScreen.main.bounds)
         v.onInspect = onInspect
         v.onCursorMoved = onCursorMoved
-        v.onDoubleTap = onDoubleTap
+        v.onElementTap = onElementTap
         v.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         return v
     }
@@ -1117,7 +1120,7 @@ struct ViewInspectorTouchLayer: UIViewRepresentable {
     func updateUIView(_ uiView: ViewInspectorController, context: Context) {
         uiView.onInspect = onInspect
         uiView.onCursorMoved = onCursorMoved
-        uiView.onDoubleTap = onDoubleTap
+        uiView.onElementTap = onElementTap
     }
 }
 
@@ -2535,7 +2538,7 @@ struct InspectorHUD: View {
 @available(iOS 16.0, *)
 public struct ViewInspectorOverlay: View {
     @Binding var isActive: Bool
-    let doubleTapAction: ((UIView) -> Void)?
+    let elementTapAction: ((RipulElementTap) -> Void)?
     let consoleAction: (() -> Void)?
     @State private var inspected: InspectedView?
     @State private var cursorPosition: CGPoint = CGPoint(
@@ -2555,9 +2558,9 @@ public struct ViewInspectorOverlay: View {
     /// extending to the screen edges. Persists across sessions like `folded`.
     @AppStorage("viewInspector.rulers") private var showRulers = false
 
-    public init(isActive: Binding<Bool>, doubleTapAction: ((UIView) -> Void)? = nil, consoleAction: (() -> Void)? = nil) {
+    public init(isActive: Binding<Bool>, elementTapAction: ((RipulElementTap) -> Void)? = nil, consoleAction: (() -> Void)? = nil) {
         self._isActive = isActive
-        self.doubleTapAction = doubleTapAction
+        self.elementTapAction = elementTapAction
         self.consoleAction = consoleAction
     }
 
@@ -2580,8 +2583,8 @@ public struct ViewInspectorOverlay: View {
                     onCursorMoved: { pos in
                         cursorPosition = pos
                     },
-                    onDoubleTap: { view in
-                        doubleTapAction?(view)
+                    onElementTap: { tap in
+                        elementTapAction?(tap)
                     }
                 )
                 .ignoresSafeArea()
