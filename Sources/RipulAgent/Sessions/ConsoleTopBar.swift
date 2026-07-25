@@ -54,13 +54,13 @@ struct ConsoleTopBarBackground: View {
 /// - `onBack`: called when the leading chevron is tapped (chat state only)
 /// - `menu`: context-sensitive trailing menu items
 @available(iOS 26.0, macOS 26.0, *)
-struct ConsoleTopBarContent<Menu: View>: View {
+struct ConsoleTopBarContent<TrailingMenu: View>: View {
     @ObservedObject var bridge: AgentBridge
     let showingChat: Bool
     let session: ChatSession?
     let onBack: () -> Void
     var ns: Namespace.ID
-    @ViewBuilder let menu: () -> Menu
+    @ViewBuilder let menu: () -> TrailingMenu
 
     private var isFileViewer: Bool { bridge.fileViewerTitle != nil }
     private var showScrollUp: Bool { showingChat && !isFileViewer }
