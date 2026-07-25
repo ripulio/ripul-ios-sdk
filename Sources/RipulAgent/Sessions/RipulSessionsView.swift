@@ -15,6 +15,11 @@ import SwiftUI
 /// Invites / folders / onboarding are optional injected slots; a host that does
 /// not provide them simply doesn't render them (a built-in empty state is used
 /// when `emptyStateOverride` is nil).
+///
+/// Embedded mode (`RipulAgentScreen`): pass `model:` to share an externally-owned
+/// list model, `showsTitleLozenge: false` when the screen's unified top bar owns
+/// the title (the list then reserves only the 52pt top spacer, exactly like the
+/// native app's SessionListScreen), and optionally `chooseMode:` / `showingSidebar:`.
 @available(iOS 26.0, macOS 26.0, *)
 public struct RipulSessionsView: View {
     @ObservedObject private var bridge: AgentBridge
@@ -26,6 +31,9 @@ public struct RipulSessionsView: View {
     private let invitesSection: (() -> AnyView)?
     private let foldersSection: (() -> AnyView)?
     private let emptyStateOverride: (() -> AnyView)?
+    private let chooseMode: RipulChooseMode?
+    private let showsTitleLozenge: Bool
+    private let showingSidebar: Binding<Bool>?
 
     @State private var searchText = ""
     @State private var renamingSession: ChatSession?
@@ -41,7 +49,11 @@ public struct RipulSessionsView: View {
         allowRipulAgents: Bool = false,
         invitesSection: (() -> AnyView)? = nil,
         foldersSection: (() -> AnyView)? = nil,
-        emptyStateOverride: (() -> AnyView)? = nil
+        emptyStateOverride: (() -> AnyView)? = nil,
+        model: RipulSessionListModel? = nil,
+        chooseMode: RipulChooseMode? = nil,
+        showsTitleLozenge: Bool = true,
+        showingSidebar: Binding<Bool>? = nil
     ) {
         self.bridge = bridge
         self.cache = cache
@@ -51,7 +63,10 @@ public struct RipulSessionsView: View {
         self.invitesSection = invitesSection
         self.foldersSection = foldersSection
         self.emptyStateOverride = emptyStateOverride
-        _model = StateObject(wrappedValue: RipulSessionListModel(
+        self.chooseMode = chooseMode
+        self.showsTitleLozenge = showsTitleLozenge
+        self.showingSidebar = showingSidebar
+        _model = StateObject(wrappedValue: model ?? RipulSessionListModel(
             bridge: bridge,
             tokenProvider: tokenProvider,
             cache: cache
@@ -124,25 +139,86 @@ public struct RipulSessionsView: View {
         .onReceive(NotificationCenter.default.publisher(for: RemoteMachine.iconsDidChangeNotification)) { _ in
             machineIcons = RemoteMachine.iconsByDisplayName(machines: model.machines, cache: cache)
         }
-        // Screen title lozenge — the SDK session-list equivalent of the native
-        // app's AgentScreen.topBar.titleLozenge. Long-press opens the DevTools
-        // console (ConsoleLogViewer), presented by whoever hosts this view.
         .safeAreaInset(edge: .top) {
-            Text("Sessions")
-                .font(.caption)
-                .fontWeight(.semibold)
-                .foregroundStyle(.primary)
-                .lineLimit(1)
-                .padding(.horizontal, 12)
-                .frame(minHeight: 44)
-                .modifier(GlassPillModifier())
-                .simultaneousGesture(
-                    LongPressGesture(minimumDuration: 1.0).onEnded { _ in
-                        NotificationCenter.default.post(name: .ripulShowDevTools, object: nil)
+            if showsTitleLozenge {
+                // Screen title lozenge — standalone mode. Long-press opens the
+                // DevTools console (ConsoleLogViewer), presented by whoever hosts
+                // this view.
+                Text("Sessions")
+                    .font(.caption)
+                    .fontWeight(.semibold)
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .padding(.horizontal, 12)
+                    .frame(minHeight: 44)
+                    .modifier(GlassPillModifier())
+                    .simultaneousGesture(
+                        LongPressGesture(minimumDuration: 1.0).onEnded { _ in
+                            NotificationCenter.default.post(name: .ripulShowDevTools, object: nil)
+                        }
+                    )
+                    .uiKitIdentifier("RipulSessions.topBar.titleLozenge")
+                    .padding(.top, 4)
+            } else {
+                // Embedded mode — mirrors the native app's SessionListScreen: a
+                // transparent 52pt spacer for the screen's floating unified top
+                // bar, with the choose-mode banner below it when active.
+                VStack(spacing: 0) {
+                    Color.clear.frame(height: 52)
+                    if let chooseMode {
+                        ChooseModeBannerHost(chooseMode: chooseMode)
                     }
-                )
-                .uiKitIdentifier("RipulSessions.topBar.titleLozenge")
-                .padding(.top, 4)
+                }
+            }
+        }
+        // Right-drag on the list opens the host's sidebar (native app chrome).
+        // Only attached when the host supplied a sidebar binding.
+        .gesture(
+            DragGesture()
+                .onEnded { value in
+                    guard let showingSidebar else { return }
+                    if value.translation.width > 60 {
+                        withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) { showingSidebar.wrappedValue = true }
+                    }
+                }
+        )
+        .renameSessionAlert(renamingSession: $renamingSession, renameText: $renameText, bridge: bridge)
+        // Open/connect failures get the classified diagnosis sheet (friendly
+        // summary + hint + copyable technical details), mirroring the native
+        // app's SessionListScreen.
+        .connectionDiagnosis(
+            Binding(get: { model.connectError }, set: { model.connectError = $0 }),
+            bridge: bridge
+        )
+        .connectionDiagnosis(
+            Binding(get: { model.openSessionError }, set: { model.openSessionError = $0 }),
+            bridge: bridge
+        )
+    }
+}
+
+/// Observes the injected choose-mode object (an optional on the parent view, so
+/// it can't be an @ObservedObject there) and renders the banner while active.
+/// Mirrors the native SessionListScreen's chooseModeBanner.
+private struct ChooseModeBannerHost: View {
+    @ObservedObject var chooseMode: RipulChooseMode
+
+    var body: some View {
+        if chooseMode.active {
+            HStack(spacing: 8) {
+                Image(systemName: "scope")
+                Text("Select a session to work in \u{201C}\(chooseMode.appName ?? "the app")\u{201D}")
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(2)
+                Spacer()
+                Button("Cancel") { chooseMode.cancel() }
+                    .font(.subheadline.weight(.semibold))
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .frame(maxWidth: .infinity)
+            .background(Color.accentColor)
+            .foregroundStyle(.white)
         }
     }
 }
