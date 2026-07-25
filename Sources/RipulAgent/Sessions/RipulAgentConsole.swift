@@ -30,6 +30,9 @@ public struct RipulAgentConsole: View {
     /// DevTools console sheet (ConsoleLogViewer), opened by long-pressing the
     /// session list's title lozenge.
     @State private var showDevTools = false
+    @Namespace private var topBarNS
+    @State private var renamingSession: ChatSession? = nil
+    @State private var renameText = ""
 
     public init(configuration: RipulSessionsConfiguration) {
         self.configuration = configuration
@@ -71,7 +74,9 @@ public struct RipulAgentConsole: View {
                             foldersSection: configuration.foldersSection,
                             emptyStateOverride: configuration.emptyStateOverride
                         )
-                        .padding(.top, geo.safeAreaInsets.top)
+                        // Extra padding so the list content clears the floating
+                        // top bar (status-bar inset + 58pt bar height + 4pt gap).
+                        .padding(.top, geo.safeAreaInsets.top + 62)
                         .background(.background)
                         .transition(.opacity)
                     }
@@ -124,25 +129,196 @@ public struct RipulAgentConsole: View {
                         }
                 }
             }
+            .sheet(item: $renamingSession) { _ in renameSheet }
             .animation(.easeInOut(duration: 0.25), value: authStore.isSignedIn)
             .animation(.easeInOut(duration: 0.25), value: showingChat)
-            .overlay(alignment: .topLeading) {
-                // Back-to-list control while viewing a chat — padded below the
-                // physical safe area (the host may render the console full-bleed).
-                if authStore.isSignedIn && showingChat {
-                    Button {
-                        showingChat = false
-                    } label: {
-                        Image(systemName: "list.bullet")
-                            .font(.system(size: 16, weight: .semibold))
-                            .foregroundStyle(.primary)
-                            .frame(width: 40, height: 40)
+            .overlay(alignment: .top) {
+                if authStore.isSignedIn {
+                    agentTopBarOverlay
+                }
+            }
+        }
+    }
+
+    // MARK: - Top bar
+
+    /// Full unified top bar — mirrors AgentScreen.topBarOverlay.
+    /// Shown whenever the user is signed in; content morphs between the
+    /// session-list state (!showingChat) and the chat state (showingChat).
+    @ViewBuilder private var agentTopBarOverlay: some View {
+        let showHeader = !showingChat || bridge.currentPageContext.showNativeHeader
+        if showHeader {
+            let session = bridge.sessions.first(where: { $0.id == bridge.activeSessionId })
+            ZStack(alignment: .top) {
+                ConsoleTopBarBackground()
+                #if os(iOS)
+                if #available(iOS 26.0, *) {
+                    GlassEffectContainer {
+                        ConsoleTopBarContent(
+                            bridge: bridge,
+                            showingChat: showingChat,
+                            session: session,
+                            onBack: {
+                                if bridge.fileViewerTitle != nil {
+                                    bridge.requestFileViewerClose()
+                                } else {
+                                    withAnimation(.spring(response: 0.45, dampingFraction: 0.86)) {
+                                        showingChat = false
+                                    }
+                                }
+                            },
+                            ns: topBarNS,
+                            menu: { topBarMenu(session: session) }
+                        )
                     }
-                    .modifier(GlassCircleModifier(glassStyle: "regular"))
-                    .buttonStyle(.plain)
-                    .padding(.top, geo.safeAreaInsets.top + 8)
-                    .padding(.leading, 12)
-                    .uiKitIdentifier("RipulAgentConsole.backToList")
+                } else {
+                    ConsoleTopBarContent(
+                        bridge: bridge,
+                        showingChat: showingChat,
+                        session: session,
+                        onBack: {
+                            if bridge.fileViewerTitle != nil {
+                                bridge.requestFileViewerClose()
+                            } else {
+                                withAnimation(.spring(response: 0.45, dampingFraction: 0.86)) {
+                                    showingChat = false
+                                }
+                            }
+                        },
+                        ns: topBarNS,
+                        menu: { topBarMenu(session: session) }
+                    )
+                }
+                #else
+                ConsoleTopBarContent(
+                    bridge: bridge,
+                    showingChat: showingChat,
+                    session: session,
+                    onBack: {
+                        if bridge.fileViewerTitle != nil {
+                            bridge.requestFileViewerClose()
+                        } else {
+                            withAnimation(.spring(response: 0.45, dampingFraction: 0.86)) {
+                                showingChat = false
+                            }
+                        }
+                    },
+                    ns: topBarNS,
+                    menu: { topBarMenu(session: session) }
+                )
+                #endif
+            }
+        }
+    }
+
+    /// Context-sensitive trailing menu items — mirrors AgentScreen's
+    /// sessionListMenuItems (list) and agentMenuItems (chat).
+    @ViewBuilder private func topBarMenu(session: ChatSession?) -> some View {
+        if showingChat && bridge.fileViewerTitle == nil {
+            // ── Chat menu ──
+            Button {
+                Task {
+                    _ = await bridge.createNewChat()
+                    withAnimation(.spring(response: 0.45, dampingFraction: 0.86)) {
+                        showingChat = false
+                    }
+                }
+            } label: {
+                Label("New Chat", systemImage: "plus.message")
+            }
+            .uiKitIdentifier("AgentScreen.contextMenu.newChatButton")
+
+            if let session {
+                Button {
+                    renameText = session.displayName
+                    renamingSession = session
+                } label: {
+                    Label("Rename", systemImage: "pencil")
+                }
+                .uiKitIdentifier("AgentScreen.contextMenu.renameButton")
+            }
+
+            Button {
+                bridge.clearCacheAndReload()
+            } label: {
+                Label("Refresh", systemImage: "arrow.clockwise")
+            }
+            .uiKitIdentifier("AgentScreen.contextMenu.refreshButton")
+
+            Button {
+                NotificationCenter.default.post(name: .ripulShowDevTools, object: nil)
+            } label: {
+                Label("Console Logs", systemImage: "doc.text.magnifyingglass")
+            }
+            .uiKitIdentifier("AgentScreen.contextMenu.consoleLogsButton")
+
+            Picker(selection: Binding(
+                get: { bridge.navigationStore.showThinkingMode },
+                set: { mode in Task { await bridge.setShowThinking(mode) } }
+            ), label: Label("Thinking", systemImage: "brain.head.profile")) {
+                Text("None").tag("none")
+                Text("Folded").tag("folded")
+                Text("Open").tag("open")
+            }
+            .pickerStyle(.palette)
+            .uiKitIdentifier("AgentScreen.contextMenu.thinkingPicker")
+
+        } else if bridge.fileViewerTitle != nil {
+            // ── File viewer menu ──
+            Button {
+                bridge.fileViewerToggleWordWrap()
+            } label: {
+                Label("Toggle Word Wrap", systemImage: "text.word.spacing")
+            }
+            .uiKitIdentifier("AgentScreen.fileViewer.menu.wordWrapButton")
+
+            if bridge.fileViewerIsMarkdown {
+                Button {
+                    bridge.fileViewerToggleRaw()
+                } label: {
+                    Label("Toggle Raw", systemImage: "doc.plaintext")
+                }
+                .uiKitIdentifier("AgentScreen.fileViewer.menu.toggleRawButton")
+            }
+
+        } else {
+            // ── Session list menu ──
+            Button {
+                NotificationCenter.default.post(name: .ripulShowDevTools, object: nil)
+            } label: {
+                Label("Console Logs", systemImage: "doc.text.magnifyingglass")
+            }
+            .uiKitIdentifier("AgentScreen.listMenu.consoleLogsButton")
+        }
+    }
+
+    /// Rename sheet — shown when `renamingSession` is set from the context menu.
+    @ViewBuilder private var renameSheet: some View {
+        NavigationStack {
+            Form {
+                Section("Session name") {
+                    TextField("Name", text: $renameText)
+                        .autocorrectionDisabled()
+                }
+            }
+            .navigationTitle("Rename")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { renamingSession = nil }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") {
+                        if let session = renamingSession {
+                            bridge.renameSession(
+                                id: session.id,
+                                sourceChatId: session.id,
+                                displayName: renameText
+                            )
+                        }
+                        renamingSession = nil
+                    }
+                    .disabled(renameText.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
             }
         }
