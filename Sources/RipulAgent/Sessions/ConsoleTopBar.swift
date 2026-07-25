@@ -59,7 +59,7 @@ struct ConsoleTopBarContent<Menu: View>: View {
     let showingChat: Bool
     let session: ChatSession?
     let onBack: () -> Void
-    @Namespace var ns
+    var ns: Namespace.ID
     @ViewBuilder let menu: () -> Menu
 
     private var isFileViewer: Bool { bridge.fileViewerTitle != nil }
