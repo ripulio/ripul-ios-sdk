@@ -139,11 +139,14 @@ public struct RipulThemeVocabulary {
     public struct Entry {
         public let name: String
         public let label: String
-        public let group: String
+        /// Hierarchical placement for editors: the token AUTHOR's declared path through the
+        /// theme hub ("Records" → "Row" → "Status"). The hub nests by it; adding a token (or a
+        /// new path branch) needs no editor change. (Replaces the old flat `group`.)
+        public let path: [String]
         /// The reference used when the document has no entry for this token.
         public let defaultReference: String
-        public init(name: String, label: String, group: String, defaultReference: String) {
-            self.name = name; self.label = label; self.group = group
+        public init(name: String, label: String, path: [String], defaultReference: String) {
+            self.name = name; self.label = label; self.path = path
             self.defaultReference = defaultReference
         }
     }
@@ -153,6 +156,26 @@ public struct RipulThemeVocabulary {
     public let components: [Entry]
     public init(primitiveOrder: [String], roles: [Entry], components: [Entry]) {
         self.primitiveOrder = primitiveOrder; self.roles = roles; self.components = components
+    }
+}
+
+/// One knob's editor descriptor: what it is and how to edit it. Registration data — a kind
+/// declares its knobs once and every surface (style editor, future surfaces) renders them.
+public struct RipulStyleKnob: Identifiable {
+    public enum Kind {
+        /// A numeric knob: slider in `range` when set; setting starts at `fallback`.
+        case number(range: ClosedRange<Double>, fallback: Double, format: String = "%.0f")
+        /// A string knob with a closed option set: Inherit (unset) or one of the options.
+        case options([(raw: String, label: String)])
+        /// A boolean knob: Inherit (unset), On, or Off.
+        case bool
+    }
+    public let key: String
+    public let label: String
+    public let kind: Kind
+    public var id: String { key }
+    public init(_ key: String, _ label: String, _ kind: Kind) {
+        self.key = key; self.label = label; self.kind = kind
     }
 }
 
@@ -171,8 +194,9 @@ public struct RipulStyleKind {
 
     public let name: String
     public let scopes: [RipulThemeScope]
-    /// This kind's knob schema (editor/validation metadata; resolution itself is open).
-    public let knobKeys: [String]
+    /// This kind's knob schema — descriptors driving the generic style editor
+    /// (`RipulStyleKindEditorView`) and any future surface. Resolution itself is open.
+    public let knobs: [RipulStyleKnob]
     /// Built-in style LIBRARY — shipped in code, present on every theme; a user style with
     /// the same name shadows the built-in.
     public let builtIns: [String: [String: RipulKnob]]
@@ -182,11 +206,11 @@ public struct RipulStyleKind {
     public let defaultTier: (RipulThemeDocument, _ element: String) -> [String: RipulKnob]
     public let persistedKeys: PersistedKeys?
 
-    public init(name: String, scopes: [RipulThemeScope], knobKeys: [String],
+    public init(name: String, scopes: [RipulThemeScope], knobs: [RipulStyleKnob],
                 builtIns: [String: [String: RipulKnob]] = [:],
                 defaultTier: @escaping (RipulThemeDocument, _ element: String) -> [String: RipulKnob],
                 persistedKeys: PersistedKeys? = nil) {
-        self.name = name; self.scopes = scopes; self.knobKeys = knobKeys
+        self.name = name; self.scopes = scopes; self.knobs = knobs
         self.builtIns = builtIns; self.defaultTier = defaultTier; self.persistedKeys = persistedKeys
     }
 }
@@ -399,6 +423,17 @@ public enum RipulThemeEngine {
             for (key, value) in named { merged[key] = value }
         }
         if let overrides { for (key, value) in overrides { merged[key] = value } }
+        return merged
+    }
+
+    /// Merge a knob dict over a kind's default tier for an element — the preview path when
+    /// EDITING a named style (default tier <- working knobs; no live style lookup, no
+    /// element overrides). Drives the generic style editor's live example.
+    public static func mergedStyle(kind: String, element: String,
+                                   over knobs: [String: RipulKnob]) -> [String: RipulKnob] {
+        guard let k = kindsByName[kind] else { return knobs }
+        var merged = k.defaultTier(current, element)
+        for (key, value) in knobs { merged[key] = value }
         return merged
     }
 
