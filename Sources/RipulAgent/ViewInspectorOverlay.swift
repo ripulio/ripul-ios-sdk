@@ -9,7 +9,7 @@ let ripulViewExplorerOverlayTag = 0x5249_5055   // "RIPU"
 
 /// Marketing version of the RipulAgent SDK, surfaced in the inspector's copy output as `sdk: …`
 /// so we can always tell which build is actually running on the device. Bump on every release.
-let ripulSDKVersion = "0.2.36"
+let ripulSDKVersion = "0.5.5"
 
 // MARK: - View Inspector Overlay
 //
@@ -1025,7 +1025,7 @@ class ViewInspectorController: UIView {
     }
 
     /// True if `v` is part of the inspector's own overlay (the touch layer, the
-    /// crosshair, the draggable HUD's PassthroughRootView, or — for a
+    /// crosshair, the floating HUD panel's root view, or — for a
     /// launcher-presented overlay — the tagged host view). Checks `v` and its
     /// ancestor chain, so any descendant of the overlay is caught too. App views
     /// are never inside this subtree, so their ancestor walk returns false.
@@ -1034,7 +1034,7 @@ class ViewInspectorController: UIView {
         while let c = cur {
             if c === self { return true }
             if c.tag == ripulViewExplorerOverlayTag { return true }
-            if c is PassthroughRootView { return true }
+            if c is RipulFloatingPanelRootView { return true }
             cur = c.superview
         }
         return false
@@ -1831,243 +1831,6 @@ struct TreeNodeRow: View {
     }
 }
 
-// MARK: - Draggable HUD Container (UIKit)
-
-/// Wraps any SwiftUI content in a UIKit container with a UIPanGestureRecognizer.
-/// The pan directly applies `transform` on the hosted content view for 60fps 1:1
-/// tracking, completely bypassing SwiftUI's state/render pipeline during the drag.
-/// On gesture end, persists the final position to UserDefaults.
-///
-/// The container VC uses a PassthroughRootView as its root. This view overrides
-/// `hitTest` so that touches landing outside the actual HUD content fall through
-/// to sibling views below in the ZStack (i.e. the ViewInspectorTouchLayer).
-private struct DraggableHUDWrapper<Content: View>: UIViewControllerRepresentable {
-    let content: Content
-    let posXKey: String
-    let posYKey: String
-    let store: UserDefaults
-
-    func makeUIViewController(context: Context) -> DraggableHUDContainerVC<Content> {
-        DraggableHUDContainerVC(
-            content: content,
-            posXKey: posXKey,
-            posYKey: posYKey,
-            store: store
-        )
-    }
-
-    func updateUIViewController(_ vc: DraggableHUDContainerVC<Content>, context: Context) {
-        vc.updateContent(content)
-    }
-}
-
-/// Pan gesture that requires a minimum translation before activating,
-/// so taps pass through to underlying SwiftUI buttons.
-private class ThresholdPanGesture: UIPanGestureRecognizer {
-    private let threshold: CGFloat = 8
-    private var initialPoint: CGPoint = .zero
-
-    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
-        super.touchesBegan(touches, with: event)
-        initialPoint = touches.first?.location(in: view) ?? .zero
-    }
-
-    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
-        super.touchesMoved(touches, with: event)
-        guard state == .possible, let touch = touches.first else { return }
-        let loc = touch.location(in: view)
-        let dx = abs(loc.x - initialPoint.x)
-        let dy = abs(loc.y - initialPoint.y)
-        if dx + dy < threshold {
-            // Not enough movement — don't transition to .began yet
-            // (UIPanGestureRecognizer handles this internally, but we
-            // need to explicitly fail if the touch ends before threshold)
-        }
-    }
-
-    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
-        if state == .possible {
-            // Never reached threshold — fail so the tap can fire
-            state = .failed
-        }
-        super.touchesEnded(touches, with: event)
-    }
-}
-
-/// A UIView that only claims touches landing within `contentView`'s bounds.
-/// Touches outside pass through (hitTest returns nil), allowing views below
-/// in the SwiftUI ZStack to receive them.
-private class PassthroughRootView: UIView {
-    weak var contentView: UIView?
-
-    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
-        guard let cv = contentView, !cv.isHidden, cv.alpha > 0.01 else { return nil }
-        let cvPoint = cv.convert(point, from: self)
-        guard cv.bounds.contains(cvPoint) else { return nil }
-        return cv.hitTest(cvPoint, with: event)
-    }
-}
-
-/// Container VC with a passthrough root view. Embeds a UIHostingController as
-/// a child VC, sized to its intrinsic content, with a pan gesture for dragging.
-class DraggableHUDContainerVC<Content: View>: UIViewController, UIGestureRecognizerDelegate {
-    private let posXKey: String
-    private let posYKey: String
-    private let store: UserDefaults
-    private var hostingController: UIHostingController<Content>!
-    private var dragStartTransform: CGAffineTransform = .identity
-    private var hasRestoredPosition = false
-    private var isDragging = false
-
-    init(content: Content, posXKey: String, posYKey: String, store: UserDefaults) {
-        self.posXKey = posXKey
-        self.posYKey = posYKey
-        self.store = store
-        super.init(nibName: nil, bundle: nil)
-        self.hostingController = UIHostingController(rootView: content)
-    }
-
-    @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
-
-    override func loadView() {
-        self.view = PassthroughRootView()
-    }
-
-    override func viewDidLoad() {
-        super.viewDidLoad()
-        view.backgroundColor = .clear
-        view.clipsToBounds = false
-
-        // Add hosting controller as proper child VC
-        addChild(hostingController)
-        hostingController.view.backgroundColor = .clear
-        hostingController.view.clipsToBounds = false
-        hostingController.view.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(hostingController.view)
-        hostingController.didMove(toParent: self)
-
-        // Size hosting view to its SwiftUI content
-        if #available(iOS 16.0, *) {
-            hostingController.sizingOptions = .intrinsicContentSize
-        }
-        NSLayoutConstraint.activate([
-            hostingController.view.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            hostingController.view.topAnchor.constraint(equalTo: view.topAnchor),
-        ])
-
-        // Pan gesture on the content-sized hosting view
-        let pan = ThresholdPanGesture(target: self, action: #selector(handlePan(_:)))
-        pan.maximumNumberOfTouches = 1
-        pan.delegate = self
-        hostingController.view.addGestureRecognizer(pan)
-
-        // Saved position is restored + clamped in viewDidLayoutSubviews, once
-        // the view has a window and the HUD has an intrinsic size — that's the
-        // first point at which safe-area insets are real. Clamping here (in
-        // viewDidLoad) would run against zero insets and let the HUD strand
-        // itself under the notch or home indicator.
-
-        // Tell passthrough root which subview to allow hits on
-        (view as? PassthroughRootView)?.contentView = hostingController.view
-    }
-
-    override func viewDidLayoutSubviews() {
-        super.viewDidLayoutSubviews()
-        // Need a real HUD size before we can keep it fully inside the safe area.
-        guard hostingController.view.bounds.width > 0 else { return }
-
-        let proposed: CGPoint
-        if !hasRestoredPosition {
-            // Wait for a window so safe-area insets are real before first place.
-            guard view.window != nil else { return }
-            hasRestoredPosition = true
-            proposed = CGPoint(x: store.double(forKey: posXKey),
-                               y: store.double(forKey: posYKey))
-        } else if !isDragging {
-            // Rotation / content-size change (e.g. unfolding the HUD near an
-            // edge): re-clamp so it can never be stranded inside a safe area.
-            proposed = CGPoint(x: hostingController.view.transform.tx,
-                               y: hostingController.view.transform.ty)
-        } else {
-            return
-        }
-        applyPosition(clampedTranslation(proposed))
-    }
-
-    /// Set the HUD's translation and persist it, skipping redundant writes.
-    private func applyPosition(_ p: CGPoint) {
-        hostingController.view.transform = CGAffineTransform(translationX: p.x, y: p.y)
-        if store.double(forKey: posXKey) != p.x { store.set(p.x, forKey: posXKey) }
-        if store.double(forKey: posYKey) != p.y { store.set(p.y, forKey: posYKey) }
-    }
-
-    /// Clamp a proposed top-left translation so the HUD stays fully within the
-    /// safe area — never under the notch, status bar, home indicator, or a
-    /// landscape sensor housing. The hosting view is pinned to the container's
-    /// top-leading corner and the container fills the whole screen (the wrapper
-    /// uses `.ignoresSafeArea()`), so a translation of (x, y) places the HUD's
-    /// top-left at screen point (x, y). We read the window's safe-area insets
-    /// because SwiftUI can zero out the child controller's own insets under
-    /// `.ignoresSafeArea()`.
-    private func clampedTranslation(_ proposed: CGPoint) -> CGPoint {
-        let margin: CGFloat = 8
-        let insets = view.window?.safeAreaInsets ?? view.safeAreaInsets
-        let bounds = view.bounds.size
-        let hud = hostingController.view.bounds.size
-
-        let minX = insets.left + margin
-        let minY = insets.top + margin
-        // max(minX, …) guards the case where the HUD is wider/taller than the
-        // safe region — keep the top-left anchored just inside it.
-        let maxX = max(minX, bounds.width - insets.right - margin - hud.width)
-        let maxY = max(minY, bounds.height - insets.bottom - margin - hud.height)
-
-        return CGPoint(x: min(max(proposed.x, minX), maxX),
-                       y: min(max(proposed.y, minY), maxY))
-    }
-
-    @objc private func handlePan(_ gesture: UIPanGestureRecognizer) {
-        let hv = hostingController.view!
-        switch gesture.state {
-        case .began:
-            isDragging = true
-            dragStartTransform = hv.transform
-        case .changed:
-            // Clamp live so the HUD hard-stops at the safe-area edge and can't
-            // be dragged under the notch / home indicator in the first place.
-            let t = gesture.translation(in: view)
-            let clamped = clampedTranslation(CGPoint(x: dragStartTransform.tx + t.x,
-                                                     y: dragStartTransform.ty + t.y))
-            hv.transform = CGAffineTransform(translationX: clamped.x, y: clamped.y)
-        case .ended, .cancelled:
-            let t = gesture.translation(in: view)
-            let clamped = clampedTranslation(CGPoint(x: dragStartTransform.tx + t.x,
-                                                     y: dragStartTransform.ty + t.y))
-            hv.transform = CGAffineTransform(translationX: clamped.x, y: clamped.y)
-            store.set(clamped.x, forKey: posXKey)
-            store.set(clamped.y, forKey: posYKey)
-            isDragging = false
-        default:
-            isDragging = false
-        }
-    }
-
-    // Let the SwiftUI resize grip (bottom-right corner of the HUD) win over the
-    // move pan: ignore touches that start in that corner so dragging it resizes
-    // the panel instead of repositioning it.
-    func gestureRecognizer(_ g: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
-        let hv = hostingController.view!
-        let p = touch.location(in: hv)
-        let grip: CGFloat = 44
-        let inResizeCorner = p.x > hv.bounds.width - grip && p.y > hv.bounds.height - grip
-        return !inResizeCorner
-    }
-
-    func updateContent(_ content: Content) {
-        hostingController.rootView = content
-    }
-}
-
 // MARK: - Screen audit (completeness of runtime identity)
 
 /// Walks a screen's live view tree and classifies every interactive/text control by whether it can
@@ -2327,20 +2090,29 @@ struct InspectorHUD: View {
     let onBack: () -> Void
     let onExit: () -> Void
     let onSelectView: (UIView) -> Void
+    /// Panel size, owned by `RipulFloatingPanel` (which also owns the resize grip
+    /// and its gesture). Width is applied directly; height bounds the scroll area,
+    /// so a folded HUD hugs its header instead of stretching to the stored height.
+    let size: CGSize
 
-    @State private var tab: InspectorTab = .properties
-    @State private var size: CGSize = CGSize(
-        width: min(360, UIScreen.main.bounds.width - 16),
-        height: UIScreen.main.bounds.height * 0.3
-    )
-    @State private var resizeBase: CGSize? = nil   // size captured when a resize drag starts
+    @State private var tab: InspectorTab = .edit
 
+    /// Declaration order is tab order.
     enum InspectorTab: String, CaseIterable {
-        case properties = "Properties"
         case edit = "Edit"
+        case properties = "Properties"
         case tree = "Tree"
         case audit = "Audit"
         case settings = "Settings"
+
+        /// SF Symbol for tabs shown as an icon; nil renders the text label.
+        var symbol: String? {
+            switch self {
+            case .properties: return "list.bullet.rectangle"
+            case .settings: return "gearshape"
+            case .edit, .tree, .audit: return nil
+            }
+        }
     }
 
     var body: some View {
@@ -2368,33 +2140,8 @@ struct InspectorHUD: View {
             RoundedRectangle(cornerRadius: 10)
                 .stroke(.white.opacity(0.15), lineWidth: 1)
         )
-        // Bottom-right resize grip. The UIKit move-pan ignores this corner (see
-        // DraggableHUDContainerVC.gestureRecognizer(_:shouldReceive:)) so dragging
-        // it resizes the panel instead of repositioning it.
-        .overlay(alignment: .bottomTrailing) {
-            if !folded { resizeGrip }
-        }
         .shadow(color: .black.opacity(0.4), radius: 10, y: 4)
         .fixedSize()
-    }
-
-    private var resizeGrip: some View {
-        Image(systemName: "arrow.down.right")
-            .font(.system(size: 10, weight: .bold))
-            .foregroundStyle(.white.opacity(0.55))
-            .frame(width: 36, height: 36)
-            .contentShape(Rectangle())
-            .gesture(
-                DragGesture(minimumDistance: 1)
-                    .onChanged { g in
-                        if resizeBase == nil { resizeBase = size }
-                        let base = resizeBase ?? size
-                        let screen = UIScreen.main.bounds
-                        size.width = min(max(220, base.width + g.translation.width), screen.width - 12)
-                        size.height = min(max(180, base.height + g.translation.height), screen.height - 40)
-                    }
-                    .onEnded { _ in resizeBase = nil }
-            )
     }
 
     private var header: some View {
@@ -2405,8 +2152,11 @@ struct InspectorHUD: View {
             } label: {
                 HStack(spacing: 4) {
                     Text(folded ? "▸" : "▾")
-                    Text("View Inspector")
-                        .fontWeight(.bold)
+                    // Icon stands in for the "View Inspector" wordmark — the header
+                    // row is narrow and every point of it is wanted by the buttons.
+                    Image(systemName: "scope")
+                        .font(.system(size: 12, weight: .bold))
+                        .accessibilityLabel("View Inspector")
                     if folded, let info = inspected {
                         let summary = {
                             if let aid = info.accessibilityId, !aid.isEmpty {
@@ -2432,10 +2182,10 @@ struct InspectorHUD: View {
             Spacer()
 
             if let consoleAction {
-                hudButton("Console", tone: .cyan, action: consoleAction)
+                hudIconButton("terminal", label: "Console", tone: .cyan, action: consoleAction)
                     .uiKitIdentifier("InspectorHUD.consoleButton")
             }
-            hudButton("Ruler", tone: .cyan, active: showRulers) { showRulers.toggle() }
+            hudIconButton("ruler", label: "Ruler", tone: .cyan, active: showRulers) { showRulers.toggle() }
                 .uiKitIdentifier("InspectorHUD.rulersButton")
             hudButton("← Back", disabled: history.isEmpty, action: onBack)
                 .uiKitIdentifier("InspectorHUD.backButton")
@@ -2455,18 +2205,26 @@ struct InspectorHUD: View {
                 Button {
                     tab = t
                 } label: {
-                    Text(t.rawValue)
-                        .font(.system(size: 11, weight: tab == t ? .bold : .medium, design: .monospaced))
-                        .foregroundStyle(tab == t ? Color.pink.opacity(0.8) : .gray)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                        .overlay(alignment: .bottom) {
-                            if tab == t {
-                                Rectangle()
-                                    .fill(Color.pink)
-                                    .frame(height: 2)
-                            }
+                    Group {
+                        if let symbol = t.symbol {
+                            Image(systemName: symbol)
+                                .font(.system(size: 12, weight: tab == t ? .bold : .medium))
+                                .accessibilityLabel(t.rawValue)
+                        } else {
+                            Text(t.rawValue)
+                                .font(.system(size: 11, weight: tab == t ? .bold : .medium, design: .monospaced))
                         }
+                    }
+                    .foregroundStyle(tab == t ? Color.pink.opacity(0.8) : .gray)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .overlay(alignment: .bottom) {
+                        if tab == t {
+                            Rectangle()
+                                .fill(Color.pink)
+                                .frame(height: 2)
+                        }
+                    }
                 }
                 .buttonStyle(.plain)
             }
@@ -2509,27 +2267,55 @@ struct InspectorHUD: View {
         Button(action: action) {
             Text(label)
                 .font(.system(size: 11, design: .monospaced))
-                .foregroundStyle(disabled ? .gray.opacity(0.4) : (active ? .black : tone))
-                .padding(.horizontal, 10)
-                .padding(.vertical, 3)
-                .background(
-                    active
-                        ? tone.opacity(0.9)
-                        : (tone == .red ? Color.red.opacity(0.25) : Color.white.opacity(0.12))
-                )
-                .clipShape(RoundedRectangle(cornerRadius: 4))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 4)
-                        .stroke(
-                            active
-                                ? tone
-                                : (tone == .red ? Color.red.opacity(0.4) : Color.white.opacity(0.2)),
-                            lineWidth: 1
-                        )
-                )
+                .modifier(HudButtonChrome(disabled: disabled, tone: tone, active: active))
         }
         .buttonStyle(.plain)
         .disabled(disabled)
+    }
+
+    /// Icon-only variant of `hudButton`, same chrome. `label` is the accessibility
+    /// name — it's also what the View Explorer reports when inspecting itself.
+    private func hudIconButton(_ systemName: String, label: String, disabled: Bool = false, tone: Color = .white, active: Bool = false, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: 12, weight: .medium))
+                .frame(width: 14)   // fixed so icon buttons stay optically even
+                .accessibilityLabel(label)
+                .modifier(HudButtonChrome(disabled: disabled, tone: tone, active: active))
+        }
+        .buttonStyle(.plain)
+        .disabled(disabled)
+    }
+}
+
+/// Shared chrome for the HUD header buttons — the only difference between the text
+/// and icon variants is what sits inside it.
+@available(iOS 16.0, *)
+private struct HudButtonChrome: ViewModifier {
+    let disabled: Bool
+    let tone: Color
+    let active: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .foregroundStyle(disabled ? .gray.opacity(0.4) : (active ? .black : tone))
+            .padding(.horizontal, 10)
+            .padding(.vertical, 3)
+            .background(
+                active
+                    ? tone.opacity(0.9)
+                    : (tone == .red ? Color.red.opacity(0.25) : Color.white.opacity(0.12))
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 4))
+            .overlay(
+                RoundedRectangle(cornerRadius: 4)
+                    .stroke(
+                        active
+                            ? tone
+                            : (tone == .red ? Color.red.opacity(0.4) : Color.white.opacity(0.2)),
+                        lineWidth: 1
+                    )
+            )
     }
 }
 
@@ -2604,9 +2390,17 @@ public struct ViewInspectorOverlay: View {
                         .ignoresSafeArea()
                 }
 
-                // HUD — always visible, wrapped in UIKit container for smooth dragging
-                DraggableHUDWrapper(
-                    content: InspectorHUD(
+                // HUD — always visible. RipulFloatingPanel owns move, resize, safe-area
+                // clamping and the position/size persistence (keys "viewInspector.posX",
+                // ".posY", ".w", ".h"); the grip is hidden while folded.
+                RipulFloatingPanel(
+                    storageKey: "viewInspector",
+                    defaultSize: CGSize(width: min(360, UIScreen.main.bounds.width - 16),
+                                        height: UIScreen.main.bounds.height * 0.3),
+                    minSize: CGSize(width: 220, height: 180),
+                    showsResizeGrip: !folded
+                ) { size in
+                    InspectorHUD(
                         inspected: inspected,
                         history: history,
                         folded: $folded,
@@ -2615,12 +2409,10 @@ public struct ViewInspectorOverlay: View {
                         onUp: navigateUp,
                         onBack: navigateBack,
                         onExit: { isActive = false },
-                        onSelectView: selectView
-                    ),
-                    posXKey: "viewInspector.posX",
-                    posYKey: "viewInspector.posY",
-                    store: .standard
-                )
+                        onSelectView: selectView,
+                        size: size
+                    )
+                }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 .ignoresSafeArea()
             }
