@@ -86,6 +86,11 @@ public enum RipulThemeRemapSheetPresenter {
     /// dependency of its own — the host routes these into its console (e.g. nlog).
     public static var onLog: ((String) -> Void)?
 
+    /// Optional host action fired by the sheet's "Open Theme editor" row — the escape
+    /// hatch from the quick remap sheet into the host's full theme editor. The sheet
+    /// dismisses itself first, then fires. When nil, the row is hidden.
+    public static var editorAction: (() -> Void)?
+
     @MainActor public static func present(targets: [any RipulThemeRemapTarget], tap: RipulElementTap) {
         guard let scene = UIApplication.shared.connectedScenes
                 .first(where: { $0.activationState == .foregroundActive }) as? UIWindowScene,
@@ -137,6 +142,24 @@ public struct RipulThemeRemapSheetView: View {
                         }
                     }
                     .padding(.vertical, 2)
+
+                    // Escape hatch into the host's full theme editor (hidden when the host
+                    // hasn't wired one). Dismisses the sheet first so the editor can present.
+                    if let editorAction = RipulThemeRemapSheetPresenter.editorAction {
+                        Button {
+                            dismiss()
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { editorAction() }
+                        } label: {
+                            HStack {
+                                Label("Open Theme editor", systemImage: "slider.horizontal.3")
+                                Spacer()
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 12, weight: .semibold))
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .tint(.primary)
+                    }
                 }
                 ForEach(sections) { section in
                     SwiftUI.Section(section.title) {
