@@ -34,7 +34,11 @@ public struct ConsoleLogsTool: NativeTool {
             levelsFilter = nil
         }
 
-        var entries = bridge.consoleLogs
+        // Native (RipulLog) + web (bridge) interleaved by timestamp — the tool
+        // promises "logs from all layers", and native logs live in the host-owned
+        // buffer so they survive from launch, before this bridge existed.
+        let allEntries = RipulLog.merged(with: bridge.consoleLogs)
+        var entries = allEntries
 
         if let since {
             let sinceDate = Date(timeIntervalSince1970: since / 1000)
@@ -64,6 +68,6 @@ public struct ConsoleLogsTool: NativeTool {
             return dict
         }
 
-        return ["logs": logs, "count": logs.count, "total": bridge.consoleLogs.count]
+        return ["logs": logs, "count": logs.count, "total": allEntries.count]
     }
 }

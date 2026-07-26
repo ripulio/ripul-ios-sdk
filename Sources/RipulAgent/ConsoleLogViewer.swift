@@ -9,7 +9,10 @@ import SwiftUI
 /// Accessible via the `/rr.` debug menu → "Console Logs".
 @available(iOS 16.0, macOS 13.0, *)
 public struct ConsoleLogViewer: View {
-    @ObservedObject var bridge: AgentBridge
+    /// Optional: the Console tab reads the host-owned `RipulLog` buffer, which exists
+    /// from process launch, so the viewer is useful before any bridge has mounted.
+    /// Network and Tools genuinely need a bridge and are hidden without one.
+    let bridge: AgentBridge?
     @State private var activeTab: Tab = .console
 
     enum Tab: String, CaseIterable {
@@ -18,30 +21,36 @@ public struct ConsoleLogViewer: View {
         case tools = "Tools"
     }
 
-    public init(bridge: AgentBridge) {
+    private var availableTabs: [Tab] {
+        bridge == nil ? [.console] : Tab.allCases
+    }
+
+    public init(bridge: AgentBridge?) {
         self.bridge = bridge
     }
 
     public var body: some View {
         VStack(spacing: 0) {
-            // Tab picker
-            Picker("Tab", selection: $activeTab) {
-                ForEach(Tab.allCases, id: \.self) { tab in
-                    Text(tab.rawValue).tag(tab)
+            // Tab picker — only when there's more than one tab to pick.
+            if availableTabs.count > 1 {
+                Picker("Tab", selection: $activeTab) {
+                    ForEach(availableTabs, id: \.self) { tab in
+                        Text(tab.rawValue).tag(tab)
+                    }
                 }
+                .pickerStyle(.segmented)
+                .padding(.horizontal, 12)
+                .padding(.top, 8)
+                .padding(.bottom, 4)
             }
-            .pickerStyle(.segmented)
-            .padding(.horizontal, 12)
-            .padding(.top, 8)
-            .padding(.bottom, 4)
 
             switch activeTab {
             case .console:
                 ConsoleTabView(bridge: bridge)
             case .network:
-                NetworkTabView(bridge: bridge)
+                if let bridge { NetworkTabView(bridge: bridge) }
             case .tools:
-                ToolsTabView(bridge: bridge)
+                if let bridge { ToolsTabView(bridge: bridge) }
             }
         }
         .navigationTitle("Console Logs")
@@ -106,7 +115,9 @@ private struct ConsoleFilterChipButton: View {
 
 @available(iOS 16.0, macOS 13.0, *)
 private struct ConsoleTabView: View {
-    @ObservedObject var bridge: AgentBridge
+    /// nil before any agent UI has mounted — the native buffer still has content.
+    /// Redraws are driven by the log subjects into `logVersion`, not by @ObservedObject.
+    let bridge: AgentBridge?
     @State private var searchText = ""
     @State private var filter: ConsoleFilterChip = .level("ALL")
     @State private var selectedIDs: Set<UUID> = []
@@ -139,7 +150,8 @@ private struct ConsoleTabView: View {
     }
 
     private var filteredLogs: [ConsoleLogEntry] {
-        bridge.consoleLogs.filter { entry in
+        // Native (RipulLog, from launch) + web (bridge) interleaved by timestamp.
+        RipulLog.merged(with: bridge?.consoleLogs ?? []).filter { entry in
             switch filter {
             case .level("ALL"):
                 break
@@ -209,7 +221,10 @@ private struct ConsoleTabView: View {
 
                 Button {
                     selectedIDs.removeAll()
-                    bridge.clearConsoleLogs()
+                    // Clear both halves of the merged stream, or "clear" leaves the
+                    // native lines on screen and reads as a broken button.
+                    RipulLog.shared.clear()
+                    bridge?.clearConsoleLogs()
                 } label: {
                     Image(systemName: "trash")
                 }
@@ -262,7 +277,11 @@ private struct ConsoleTabView: View {
                 }
             }
         }
-        .onReceive(bridge.consoleLogsSubject) { _ in logVersion += 1 }
+        // Two independent sources feed the merged list; both must poke the version.
+        .onReceive(RipulLog.shared.changed) { _ in logVersion += 1 }
+        .onReceive(bridge?.consoleLogsSubject ?? PassthroughSubject<Void, Never>()) { _ in
+            logVersion += 1
+        }
     }
 
     private func copyLogs() {

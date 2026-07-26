@@ -15,10 +15,10 @@ import UIKit
 //
 //     if #available(iOS 16.0, *) { RipulLogConsole.toggle() }
 //
-// Logs come from `AgentBridge.current`, the same buffer `device_console_logs` /
-// `host_console_logs` read and the one `NativeLogTee` tees native `NSLog` into.
-// A host that has never brought a bridge up yet gets an explanatory placeholder
-// rather than an empty list, so "no logs" is never ambiguous.
+// Native logs come from `RipulLog`, the host-owned buffer that exists from process
+// launch — so this works before anything has mounted, which is exactly when an
+// early failure needs reading. When an `AgentBridge` also exists, its web console
+// output is interleaved and the Network / Tools tabs appear alongside.
 
 @available(iOS 16.0, *)
 @MainActor
@@ -78,41 +78,15 @@ public enum RipulLogConsole {
 private struct RipulLogConsoleRoot: View {
     var body: some View {
         NavigationStack {
-            Group {
-                if let bridge = AgentBridge.current {
-                    ConsoleLogViewer(bridge: bridge)
-                } else {
-                    noBridge
+            // Bridge is optional by design — the native buffer stands alone.
+            ConsoleLogViewer(bridge: AgentBridge.current)
+                .toolbar {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button("Done") { RipulLogConsole.dismiss() }
+                            .uiKitIdentifier("RipulLogConsole.doneButton")
+                    }
                 }
-            }
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") { RipulLogConsole.dismiss() }
-                        .uiKitIdentifier("RipulLogConsole.doneButton")
-                }
-            }
         }
-    }
-
-    /// Nothing has brought an `AgentBridge` up in this process yet, so there is no
-    /// buffer to read. Say so, rather than showing an empty console that reads as
-    /// "the app logged nothing".
-    private var noBridge: some View {
-        VStack(spacing: 8) {
-            Image(systemName: "terminal")
-                .font(.system(size: 28))
-                .foregroundStyle(.secondary)
-            Text("No log buffer yet")
-                .font(.headline)
-            Text("Logs are captured by an AgentBridge. Open the agent console once "
-                 + "in this session and they'll appear here.")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 32)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .navigationTitle("Console Logs")
     }
 }
 #endif

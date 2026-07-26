@@ -5,9 +5,13 @@ import Foundation
 // A module-level shadow of `NSLog`. Because it lives at file scope in the
 // RipulAgent module, every UNQUALIFIED `NSLog(...)` call in the SDK resolves to
 // THIS instead of Foundation's — so all native SDK logging ALSO lands in the
-// `consoleLogs` buffer that `device_console_logs` / `host_console_logs` read,
+// `RipulLog` buffer that `device_console_logs` / `host_console_logs` read,
 // without editing ~200 call sites. The real OS logger is still invoked (via
 // `Foundation.NSLog`), so Xcode / Console output is unchanged.
+//
+// The sink is `RipulLog` (process-lifetime, host-owned), NOT `AgentBridge.current`:
+// a bridge only exists once agent UI mounts, so anything logged on the launch path
+// used to be dropped on the floor. Readers merge the two buffers — see RipulLog.swift.
 //
 // Anything that must NOT be tee'd (to avoid double-append / recursion) calls
 // `Foundation.NSLog(...)` explicitly — see `AgentBridge.handleConsoleLog` and the
@@ -22,7 +26,6 @@ import Foundation
 //    the tee (it uses Foundation.NSLog, but the guard is belt-and-suspenders).
 //  - rate limit: native poll loops can flood; cap tee'd entries/sec so a burst
 //    can't thrash the main actor or buffer. The real NSLog is NEVER dropped.
-//  - tee is best-effort: if no bridge exists yet, only the OS log fires.
 
 private let logTeeLock = NSLock()
 private var logTeeReentrant = false
@@ -55,9 +58,9 @@ func NSLog(_ format: String, _ args: CVarArg...) {
     logTeeLock.unlock()
     if drop { return }
 
-    Task { @MainActor in
-        logTeeLock.lock(); logTeeReentrant = true; logTeeLock.unlock()
-        AgentBridge.current?.handleConsoleLog("LOG: [native] \(message)")
-        logTeeLock.lock(); logTeeReentrant = false; logTeeLock.unlock()
-    }
+    // Synchronous append — no main-actor hop. A line emitted moments before a crash
+    // (or during launch, long before any UI mounts) is in the buffer immediately.
+    logTeeLock.lock(); logTeeReentrant = true; logTeeLock.unlock()
+    RipulLog.shared.append("[native] \(message)")
+    logTeeLock.lock(); logTeeReentrant = false; logTeeLock.unlock()
 }

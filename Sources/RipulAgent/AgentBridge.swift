@@ -2555,7 +2555,10 @@ public final class AgentBridge: NSObject, ObservableObject {
             handleUserInteractionDate(dict)
         case "getConsoleLogs":
             let requestId = dict["requestId"] as? String ?? ""
-            let logs = consoleLogs.map { e -> [String: Any] in
+            // Native logs live in the host-owned RipulLog buffer (so they exist from
+            // launch, before this bridge did); web console lines live here. The relay's
+            // device_console_logs promises both, so merge by timestamp.
+            let logs = RipulLog.merged(with: consoleLogs).map { e -> [String: Any] in
                 var entry: [String: Any] = [
                     "level": e.level,
                     "message": e.message,
