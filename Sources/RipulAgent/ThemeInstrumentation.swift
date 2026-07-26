@@ -103,6 +103,29 @@ extension Notification.Name {
 }
 
 @available(iOS 14.0, *)
+private struct RipulThemeVersionKey: EnvironmentKey {
+    static let defaultValue = 0
+}
+
+@available(iOS 14.0, *)
+public extension EnvironmentValues {
+    /// Monotonic counter bumped at every island root (see `refreshesOnThemeChange()` /
+    /// `ripulThemedHostingController`) each time the host posts `.ripulThemeDidChange`.
+    ///
+    /// THE GENERIC LIVE-THEME CONTRACT for theme-aware components: declare
+    ///     @Environment(\.ripulThemeVersion) private var themeVersion
+    /// and read it at the TOP of body (`let _ = themeVersion`) BEFORE reading theme values
+    /// (`Theme.current…`, resolved styles, tokens). Environment invalidation then re-invokes
+    /// THAT body on every theme change, so the theme read re-runs — at any depth below the
+    /// island root, with no per-view notification plumbing. Reading the key is what registers
+    /// the dependency; declaring the property alone does nothing.
+    var ripulThemeVersion: Int {
+        get { self[RipulThemeVersionKey.self] }
+        set { self[RipulThemeVersionKey.self] = newValue }
+    }
+}
+
+@available(iOS 14.0, *)
 private struct RipulThemeRefreshModifier: ViewModifier {
     @State private var version = 0
     func body(content: Content) -> some View {
@@ -110,34 +133,48 @@ private struct RipulThemeRefreshModifier: ViewModifier {
         // actually read during the last evaluation (dependency tracking). Bumping an
         // unread counter in onReceive registers no dependency and re-renders nothing.
         let _ = version
-        return content.onReceive(NotificationCenter.default.publisher(for: .ripulThemeDidChange)) { _ in
-            version += 1
-        }
+        // Inject as an ENVIRONMENT value rather than relying on subtree re-render: a state
+        // bump here re-runs THIS body, but values consumers already read and baked into the
+        // subtree as plain values stay stale — SwiftUI does not re-invoke their bodies.
+        // Environment invalidation DOES propagate to every descendant that read the key.
+        return content
+            .environment(\.ripulThemeVersion, version)
+            .onReceive(NotificationCenter.default.publisher(for: .ripulThemeDidChange)) { _ in
+                version += 1
+            }
     }
 }
 
 @available(iOS 14.0, *)
 extension View {
     /// Re-render this SwiftUI view whenever the host's theme changes (`.ripulThemeDidChange`),
-    /// so it re-reads its theme tokens live. A SwiftUI view only re-runs `body` on a state
-    /// change, so any token consumer should add this.
+    /// so it re-reads its theme tokens live.
     ///
-    /// PLACEMENT RULE: to refresh a view's OWN theme reads (e.g. `let style = Theme.current…`
-    /// at the top of its body), the modifier must wrap the view FROM OUTSIDE — at the
-    /// hosting-controller root (use `ripulThemedHostingController`) or in a SwiftUI parent.
-    /// Applied INSIDE a view's body it only re-renders the subtree below the attachment
-    /// point: values the body already read and baked into that subtree as plain values
-    /// (a resolved style struct, a colour) stay stale until the body re-runs for another
-    /// reason. In-body use is still worthwhile for nested children — but it is not a
-    /// substitute for the hosting-root wrap.
+    /// HOW CONSUMERS OPT IN: the modifier injects an environment counter
+    /// (`EnvironmentValues.ripulThemeVersion`) that bumps on every theme change. A view that
+    /// reads theme values at the top of its body MUST also read the key there:
+    ///     @Environment(\.ripulThemeVersion) private var themeVersion
+    ///     var body: some View { let _ = themeVersion; let style = Theme.current… }
+    /// Environment invalidation re-invokes exactly the bodies that read the key, at any depth
+    /// below the attachment point. Without that read, the body keeps its stale values: a state
+    /// bump in an ancestor does NOT re-invoke bodies that only baked theme values into the
+    /// subtree as plain lets (measured on device: legend stayed 26.67pt after legendSize 26
+    /// until an unrelated state change forced the body).
+    ///
+    /// PLACEMENT RULE: attach at the hosting-controller root (use `ripulThemedHostingController`)
+    /// or in a SwiftUI ancestor of every consumer — the environment flows DOWN, so consumers
+    /// above the attachment point are never invalidated. In-body use covers only that view's
+    /// descendants.
     public func refreshesOnThemeChange() -> some View { modifier(RipulThemeRefreshModifier()) }
 }
 
 /// Host a SwiftUI island with LIVE theme adoption baked in: wraps `rootView` in
-/// `.refreshesOnThemeChange()` FROM OUTSIDE — the only placement that re-runs the island's
-/// own body on `.ripulThemeDidChange` (see the placement rule above). Use for EVERY
-/// `UIHostingController` that embeds themed SwiftUI inside UIKit. Type-erased to `AnyView`
-/// so host properties need no generic-parameter gymnastics:
+/// `.refreshesOnThemeChange()` at the island root, so the `ripulThemeVersion` environment
+/// counter reaches every descendant. Use for EVERY `UIHostingController` that embeds themed
+/// SwiftUI inside UIKit — and note the consumer half of the contract (documented on
+/// `refreshesOnThemeChange()`): a view only repaints on theme change if it READS
+/// `@Environment(\.ripulThemeVersion)` in its body. Type-erased to `AnyView` so host
+/// properties need no generic-parameter gymnastics:
 ///
 ///     let host = ripulThemedHostingController(rootView: ReceiptView(model: model))
 @available(iOS 14.0, *)
