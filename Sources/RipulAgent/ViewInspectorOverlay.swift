@@ -9,7 +9,7 @@ let ripulViewExplorerOverlayTag = 0x5249_5055   // "RIPU"
 
 /// Marketing version of the RipulAgent SDK, surfaced in the inspector's copy output as `sdk: …`
 /// so we can always tell which build is actually running on the device. Bump on every release.
-let ripulSDKVersion = "0.5.5"
+let ripulSDKVersion = "0.5.6"
 
 // MARK: - View Inspector Overlay
 //
@@ -2292,6 +2292,11 @@ struct InspectorHUD: View {
 /// and icon variants is what sits inside it.
 @available(iOS 16.0, *)
 private struct HudButtonChrome: ViewModifier {
+    /// Fixed content box, so every toolbar button is the same height regardless of
+    /// what it holds. Left to intrinsic sizing, an SF Symbol and a line of
+    /// monospaced text report different heights and the row comes out ragged.
+    static let contentHeight: CGFloat = 15
+
     let disabled: Bool
     let tone: Color
     let active: Bool
@@ -2299,6 +2304,7 @@ private struct HudButtonChrome: ViewModifier {
     func body(content: Content) -> some View {
         content
             .foregroundStyle(disabled ? .gray.opacity(0.4) : (active ? .black : tone))
+            .frame(height: Self.contentHeight)
             .padding(.horizontal, 10)
             .padding(.vertical, 3)
             .background(
