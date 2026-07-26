@@ -176,15 +176,15 @@ public struct RipulStyleKind {
     /// Built-in style LIBRARY — shipped in code, present on every theme; a user style with
     /// the same name shadows the built-in.
     public let builtIns: [String: [String: RipulKnob]]
-    /// The DEFAULT TIER content — host-owned. Called per resolution; keep it fast. It may
-    /// read host state (e.g. a metrics tier the engine doesn't model) — the host must have
-    /// that state current BEFORE calling `RipulThemeEngine.adopt(_:)`.
-    public let defaultTier: (RipulThemeDocument) -> [String: RipulKnob]
+    /// The DEFAULT TIER content — host-owned. Called per resolution with the element id;
+    /// keep it fast. It may read host state (e.g. a metrics tier the engine doesn't model)
+    /// — the host must have that state current BEFORE calling `RipulThemeEngine.adopt(_:)`.
+    public let defaultTier: (RipulThemeDocument, _ element: String) -> [String: RipulKnob]
     public let persistedKeys: PersistedKeys?
 
     public init(name: String, scopes: [RipulThemeScope], knobKeys: [String],
                 builtIns: [String: [String: RipulKnob]] = [:],
-                defaultTier: @escaping (RipulThemeDocument) -> [String: RipulKnob],
+                defaultTier: @escaping (RipulThemeDocument, _ element: String) -> [String: RipulKnob],
                 persistedKeys: PersistedKeys? = nil) {
         self.name = name; self.scopes = scopes; self.knobKeys = knobKeys
         self.builtIns = builtIns; self.defaultTier = defaultTier; self.persistedKeys = persistedKeys
@@ -216,7 +216,7 @@ public struct RipulThemeSpec {
 
 public enum RipulThemeEngine {
 
-    private static var spec: RipulThemeSpec!
+    private static var spec: RipulThemeSpec?
     private static var rolesByName: [String: RipulThemeVocabulary.Entry] = [:]
     private static var componentsByName: [String: RipulThemeVocabulary.Entry] = [:]
     private static var kindsByName: [String: RipulStyleKind] = [:]
@@ -244,24 +244,27 @@ public enum RipulThemeEngine {
 
     private static func decode(_ data: Data) -> RipulThemeDocument? {
         let d = JSONDecoder()
-        d.userInfo[.ripulThemeSpec] = spec
+        if let spec { d.userInfo[.ripulThemeSpec] = spec }
         return try? d.decode(RipulThemeDocument.self, from: data)
     }
 
     private static func loadBundled() -> RipulThemeDocument? {
-        guard let url = Bundle.main.url(forResource: spec.bundleResource, withExtension: "json"),
+        guard let spec,
+              let url = Bundle.main.url(forResource: spec.bundleResource, withExtension: "json"),
               let data = try? Data(contentsOf: url) else { return nil }
         return decode(data)
     }
 
     private static func loadOverride() -> RipulThemeDocument? {
-        guard let json = UserDefaults.standard.string(forKey: spec.overrideDefaultsKey),
+        guard let spec,
+              let json = UserDefaults.standard.string(forKey: spec.overrideDefaultsKey),
               let data = json.data(using: .utf8) else { return nil }
         return decode(data)
     }
 
     public static var hasOverride: Bool {
-        UserDefaults.standard.string(forKey: spec.overrideDefaultsKey) != nil
+        guard let spec else { return false }
+        return UserDefaults.standard.string(forKey: spec.overrideDefaultsKey) != nil
     }
 
     /// Adopt a new live document: set current, broadcast `.ripulThemeDidChange`, and
@@ -276,6 +279,7 @@ public enum RipulThemeEngine {
     /// Drop any override and revert to the bundled theme (removes the host's whole blob —
     /// the one key hosts are required to share).
     public static func resetToBundled() {
+        guard let spec else { return }
         UserDefaults.standard.removeObject(forKey: spec.overrideDefaultsKey)
         adopt(bundled)
     }
@@ -374,7 +378,7 @@ public enum RipulThemeEngine {
     /// `defaultTier`, then the assigned named style (user styles shadow built-ins), then
     /// the element's own overrides.
     public static func resolvedStyle(kind: String, element: String) -> [String: RipulKnob] {
-        resolveStyle(kind: kind,
+        resolveStyle(kind: kind, element: element,
                      styleName: current.styleAssignments[kind]?[element],
                      overrides: current.styleOverrides[kind]?[element])
     }
@@ -382,15 +386,15 @@ public enum RipulThemeEngine {
     /// The resolution the element WOULD get with `styleName` assigned (its own overrides
     /// still applied on top) — drives live style pickers.
     public static func previewStyle(kind: String, element: String, style: String?) -> [String: RipulKnob] {
-        resolveStyle(kind: kind,
+        resolveStyle(kind: kind, element: element,
                      styleName: style,
                      overrides: current.styleOverrides[kind]?[element])
     }
 
-    private static func resolveStyle(kind: String, styleName: String?,
+    private static func resolveStyle(kind: String, element: String, styleName: String?,
                                      overrides: [String: RipulKnob]?) -> [String: RipulKnob] {
         guard let k = kindsByName[kind] else { return overrides ?? [:] }
-        var merged = k.defaultTier(current)
+        var merged = k.defaultTier(current, element)
         if let name = styleName, let named = current.namedStyles[kind]?[name] ?? k.builtIns[name] {
             for (key, value) in named { merged[key] = value }
         }
