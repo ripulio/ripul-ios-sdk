@@ -23,6 +23,9 @@ public struct RipulStyleKindEditorView<Preview: View, Footer: View>: View {
     let onChange: ([String: RipulKnob]) -> Void
     let preview: ([String: RipulKnob]) -> Preview
     let footerSections: () -> Footer
+    /// The component's author-declared namespace (from its scope's `path`), shown as a
+    /// breadcrumb above the preview — where in the app this component logically lives.
+    let namespace: [String]
     @State private var working: [String: RipulKnob]
 
     /// - title: nav title — typically the style name (or "Floating · built-in").
@@ -30,33 +33,50 @@ public struct RipulStyleKindEditorView<Preview: View, Footer: View>: View {
     /// - initial: the style's CURRENT sparse knobs (user style, or the built-in's for CoW).
     /// - onChange: called with the full working dict after every edit.
     /// - preview: host's live example — receives the working dict (merge over the default
-    ///   tier with `RipulThemeEngine.mergedStyle` inside the closure).
+    ///   tier with `RipulThemeEngine.mergedStyle` inside the closure). PINNED: always on
+    ///   screen while the knobs scroll beneath it.
+    /// - namespace: the previewed element's scope path — shown as a breadcrumb.
     /// - footerSections: optional host actions (Reset to built-in / Delete style).
     public init(title: String, knobs: [RipulStyleKnob], initial: [String: RipulKnob],
                 onChange: @escaping ([String: RipulKnob]) -> Void,
                 @ViewBuilder preview: @escaping ([String: RipulKnob]) -> Preview,
+                namespace: [String] = [],
                 @ViewBuilder footerSections: @escaping () -> Footer = { EmptyView() }) {
         self.title = title
         self.knobs = knobs
         self.onChange = onChange
         self.preview = preview
+        self.namespace = namespace
         self.footerSections = footerSections
         _working = State(initialValue: initial)
     }
 
     public var body: some View {
-        Form {
-            Section("Preview") {
+        VStack(spacing: 0) {
+            // PINNED preview header — the example stays on screen while the knobs scroll.
+            VStack(alignment: .leading, spacing: 6) {
+                if !namespace.isEmpty {
+                    Text(namespace.joined(separator: " › "))
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 16)
+                }
                 preview(working)
                     .frame(maxWidth: .infinity)
-                    .listRowInsets(EdgeInsets())
             }
-            Section {
-                ForEach(knobs) { knob in row(knob) }
-            } footer: {
-                Text("Every knob starts on Inherit — set only what this style changes.")
+            .padding(.vertical, 10)
+            .frame(maxWidth: .infinity)
+            .background(.bar)
+            Divider()
+            // Scrolling knobs beneath.
+            Form {
+                Section {
+                    ForEach(knobs) { knob in row(knob) }
+                } footer: {
+                    Text("Every knob starts on Inherit — set only what this style changes.")
+                }
+                footerSections()
             }
-            footerSections()
         }
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)

@@ -66,6 +66,12 @@ public struct ChatSession: Identifiable, Equatable, Codable {
     /// `custom-title`. Older host versions don't send this field; nil is treated
     /// as "user" for backwards compatibility (preserves prior rename behaviour).
     public var displayNameSource: String?
+    /// Rename-event timestamp (epoch ms) for displayName when its source is a
+    /// user rename ("cli"). Carried unchanged into `onCliSessionRenamed` so the
+    /// CLI server's stale-stamp guard can reject late echoes — a wire value
+    /// observed here must never be re-stamped as a fresh rename. nil =
+    /// unversioned; unversioned writebacks can't overwrite a versioned title.
+    public var displayNameRenamedAt: Double?
 
     public init(
         id: String,
@@ -77,7 +83,8 @@ public struct ChatSession: Identifiable, Equatable, Codable {
         providerLabel: String? = nil,
         hostChatId: String? = nil,
         sizeBytes: Int? = nil,
-        displayNameSource: String? = nil
+        displayNameSource: String? = nil,
+        displayNameRenamedAt: Double? = nil
     ) {
         self.id = id
         self.sourceChatId = sourceChatId
@@ -89,6 +96,7 @@ public struct ChatSession: Identifiable, Equatable, Codable {
         self.hostChatId = hostChatId
         self.sizeBytes = sizeBytes
         self.displayNameSource = displayNameSource
+        self.displayNameRenamedAt = displayNameRenamedAt
     }
 
     // MARK: - Cache
@@ -1274,7 +1282,7 @@ public final class AgentBridge: NSObject, ObservableObject {
 
     /// Called when a CLI-provider session is successfully renamed.
     /// Parameters are (sourceChatId, confirmedDisplayName).
-    public var onCliSessionRenamed: ((_ sessionId: String, _ displayName: String) -> Void)?
+    public var onCliSessionRenamed: ((_ sessionId: String, _ displayName: String, _ renamedAt: Double?) -> Void)?
 
     /// Called when the user toggles plan mode in the native chat input.
     /// The host app should use this to set plan mode on the CLI server directly.
@@ -3260,13 +3268,15 @@ public final class AgentBridge: NSObject, ObservableObject {
                 let hostChatId = item["hostChatId"] as? String
                 let sizeBytes = (item["sizeBytes"] as? NSNumber)?.intValue
                 let displayNameSource = item["displayNameSource"] as? String
+                let displayNameRenamedAt = (item["displayNameRenamedAt"] as? NSNumber)?.doubleValue
                 return ChatSession(id: id, sourceChatId: sourceChatId,
                                    displayName: displayName, createdAt: createdAt,
                                    remoteMachineName: remoteMachineName,
                                    provider: provider, providerLabel: providerLabel,
                                    hostChatId: hostChatId,
                                    sizeBytes: sizeBytes,
-                                   displayNameSource: displayNameSource)
+                                   displayNameSource: displayNameSource,
+                                   displayNameRenamedAt: displayNameRenamedAt)
             }
 
             // Filter out ephemeral commit-viewer sessions (tracked explicitly
@@ -3301,10 +3311,10 @@ public final class AgentBridge: NSObject, ObservableObject {
                             } else if isInitialLoad {
                                 // Sync all CLI session names on first load so reconnects pick up renames
                                 renameLog += " INITIAL_SYNC"
-                                self.onCliSessionRenamed?(session.sourceChatId, session.displayName)
+                                self.onCliSessionRenamed?(session.sourceChatId, session.displayName, session.displayNameRenamedAt)
                             } else if let old = oldByID[session.id], old.displayName != session.displayName {
                                 renameLog += " RENAME_DETECTED"
-                                self.onCliSessionRenamed?(session.sourceChatId, session.displayName)
+                                self.onCliSessionRenamed?(session.sourceChatId, session.displayName, session.displayNameRenamedAt)
                             }
                         }
                     }
@@ -5302,14 +5312,19 @@ public final class AgentBridge: NSObject, ObservableObject {
                 if let dict = result as? [String: Any],
                    let success = dict["success"] as? Bool, success,
                    let confirmedName = dict["displayName"] as? String {
+                    // Web mints the rename-event stamp; carry it into the JSONL
+                    // write so the CLI server's stale-stamp guard sees the true
+                    // event time.
+                    let confirmedRenamedAt = (dict["renamedAt"] as? NSNumber)?.doubleValue
                     if let index = sessions.firstIndex(where: { $0.id == id }) {
                         sessions[index].displayName = confirmedName
+                        sessions[index].displayNameRenamedAt = confirmedRenamedAt ?? sessions[index].displayNameRenamedAt
                     }
                     NSLog("[AgentBridge] renameSession confirmed: %@", confirmedName)
                     // Propagate to CLI session file if this is a CLI-provider session
                     if let session = self.sessions.first(where: { $0.id == id }),
                        session.provider == "claude-cli" {
-                        self.onCliSessionRenamed?(sourceChatId, confirmedName)
+                        self.onCliSessionRenamed?(sourceChatId, confirmedName, confirmedRenamedAt)
                     }
                 } else {
                     NSLog("[AgentBridge] renameSession: web did not confirm, result: %@", String(describing: result))
@@ -6231,12 +6246,14 @@ public final class AgentBridge: NSObject, ObservableObject {
             let hostChatId = dict["hostChatId"] as? String
             let sizeBytes = (dict["sizeBytes"] as? NSNumber)?.intValue
             let displayNameSource = dict["displayNameSource"] as? String
+            let displayNameRenamedAt = (dict["displayNameRenamedAt"] as? NSNumber)?.doubleValue
             return ChatSession(id: id, sourceChatId: sourceChatId, displayName: displayName, createdAt: createdAt,
                                remoteMachineName: remoteMachineName,
                                provider: provider, providerLabel: providerLabel,
                                hostChatId: hostChatId,
                                sizeBytes: sizeBytes,
-                               displayNameSource: displayNameSource)
+                               displayNameSource: displayNameSource,
+                               displayNameRenamedAt: displayNameRenamedAt)
         }
 
         // Filter out ephemeral commit-viewer sessions (tracked explicitly
@@ -6263,10 +6280,10 @@ public final class AgentBridge: NSObject, ObservableObject {
                             Self.debugLog("[AgentBridge] handleSessionsListResponse: SKIP_AUTO '\(session.displayName)' (sourceChatId=\(session.sourceChatId))")
                         } else if isInitialLoad {
                             Self.debugLog("[AgentBridge] handleSessionsListResponse: INITIAL_SYNC '\(session.displayName)' src=\(source) (sourceChatId=\(session.sourceChatId))")
-                            self.onCliSessionRenamed?(session.sourceChatId, session.displayName)
+                            self.onCliSessionRenamed?(session.sourceChatId, session.displayName, session.displayNameRenamedAt)
                         } else if let old = oldByID[session.id], old.displayName != session.displayName {
                             Self.debugLog("[AgentBridge] handleSessionsListResponse: CLI rename detected '\(old.displayName)' → '\(session.displayName)' src=\(source) (sourceChatId=\(session.sourceChatId))")
-                            self.onCliSessionRenamed?(session.sourceChatId, session.displayName)
+                            self.onCliSessionRenamed?(session.sourceChatId, session.displayName, session.displayNameRenamedAt)
                         }
                     }
                 }

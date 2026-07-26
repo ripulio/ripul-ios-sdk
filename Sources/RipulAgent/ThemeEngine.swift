@@ -128,11 +128,17 @@ extension RipulThemeDocument: Codable {
 // MARK: Vocabulary + style kinds (host registration)
 
 /// A themeable scope (one element that can carry a style assignment), for editors and the
-/// View Explorer providers. `id` = the element's View-Explorer identifier.
+/// View Explorer providers. `id` = the element's View-Explorer identifier. `path` = the
+/// AUTHOR-declared namespace that places the component logically in the theme hierarchy
+/// (["Add Shift", "Earnings panel"]) — hubs nest by it, editors breadcrumb it. Theme
+/// metadata like the vocabulary paths, not a derived label.
 public struct RipulThemeScope: Identifiable, Equatable {
     public let id: String
     public let label: String
-    public init(id: String, label: String) { self.id = id; self.label = label }
+    public let path: [String]
+    public init(id: String, label: String, path: [String] = []) {
+        self.id = id; self.label = label; self.path = path
+    }
 }
 
 public struct RipulThemeVocabulary {
