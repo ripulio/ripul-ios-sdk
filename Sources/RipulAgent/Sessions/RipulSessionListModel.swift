@@ -965,12 +965,26 @@ public final class RipulSessionListModel: ObservableObject {
             return
         }
 
-        // Poll every 3s for up to 60s waiting for the machine to come back online.
+        // The WebSocket killAck is sent by the guardian only AFTER the process
+        // death is confirmed — with it, "online again" proves a real restart.
+        // The KV path (httpKill) merely ENQUEUES a signal, so on that path a
+        // host that never went down would immediately read as "online" and the
+        // old code showed "Restarted" for a restart that never happened (a
+        // stale guardian silently dropping kills). Without a confirmed kill,
+        // require an observed offline→online transition before claiming success.
+        let killConfirmed = webResult.success
         let deadline = Date().addingTimeInterval(60)
+        var wentOffline = false
         while Date() < deadline {
             try? await Task.sleep(nanoseconds: 3_000_000_000)
             await refresh()
-            if let updated = machines.first(where: { $0.machineId == machine.machineId }), updated.isOnline {
+            guard let updated = machines.first(where: { $0.machineId == machine.machineId }) else {
+                wentOffline = true // vanished from the list = down
+                continue
+            }
+            if !updated.isOnline {
+                wentOffline = true
+            } else if killConfirmed || wentOffline {
                 restartingMachineId = nil
                 restartSucceededId = machine.machineId
                 Task {
@@ -982,7 +996,9 @@ public final class RipulSessionListModel: ObservableObject {
         }
 
         restartingMachineId = nil
-        connectError = "Host didn't come back online within 60 seconds."
+        connectError = wentOffline
+            ? "Host went down but didn't come back online within 60 seconds."
+            : "Host never went offline — the restart likely didn't execute (host guardian may be stale). Try again after relaunching the host app."
     }
 
     // MARK: - Rebuild (imperative — no .onChange)

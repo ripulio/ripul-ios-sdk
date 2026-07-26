@@ -27,6 +27,18 @@ public struct RipulSessionsConfiguration {
     /// Whether host-defined quick actions are discovered/executed on machine
     /// rows (the first-party app: on; a dev console: off).
     public var quickActionsEnabled: Bool
+    /// HOST-CONTRIBUTED DEV TOOLS for the console's agent.
+    ///
+    /// The console registers its own built-ins (`console_logs`, `network_logs`,
+    /// `inspect_screen`) so the developer driving from here can SEE the running app.
+    /// These are the host app's contribution — tools that let that agent also ACT on it
+    /// (set a theme knob, report the running build, tap a control).
+    ///
+    /// They are registered ADDITIVELY, so they neither replace nor are replaced by the
+    /// console's built-ins. Note this is the DEV-assistant surface: it is deliberately
+    /// separate from the host's end-user agent panel and its tools, which live on a
+    /// different bridge. A host that wants a tool in both places passes it to both.
+    public var devTools: [NativeTool]
     /// Optional app-injected panels (nil = omitted).
     public var invitesSection: (() -> AnyView)?
     public var foldersSection: (() -> AnyView)?
@@ -40,6 +52,7 @@ public struct RipulSessionsConfiguration {
         theme: AgentTheme = .system,
         allowRipulAgents: Bool = false,
         quickActionsEnabled: Bool = false,
+        devTools: [NativeTool] = [],
         invitesSection: (() -> AnyView)? = nil,
         foldersSection: (() -> AnyView)? = nil,
         emptyStateOverride: (() -> AnyView)? = nil
@@ -51,6 +64,7 @@ public struct RipulSessionsConfiguration {
         self.theme = theme
         self.allowRipulAgents = allowRipulAgents
         self.quickActionsEnabled = quickActionsEnabled
+        self.devTools = devTools
         self.invitesSection = invitesSection
         self.foldersSection = foldersSection
         self.emptyStateOverride = emptyStateOverride

@@ -99,6 +99,16 @@ public struct RipulAgentConsole: View {
                 NetworkLogsTool(bridge: bridge),
                 InspectScreenTool(bridge: bridge),
             ])
+            // Host-contributed dev tools, registered ADDITIVELY via `register` rather than
+            // `registerBuiltInTools` — the latter REPLACES the built-in list, which is how
+            // `.ripulDevTools()` used to clobber InspectScreenTool.
+            //
+            // Without this slot a host app has no way to give the dev assistant tools: its
+            // own registry goes to the end-user agent panel, which is a DIFFERENT bridge.
+            // That gap is easy to miss, because both surfaces are "the app's tools".
+            if !configuration.devTools.isEmpty {
+                bridge.register(configuration.devTools)
+            }
             authStore.startPolling(bridge: bridge)
             logWebBuildVersion()
         }
