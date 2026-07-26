@@ -54,6 +54,10 @@ public struct RipulStyleKindEditorView<Preview: View, Footer: View>: View {
     public var body: some View {
         VStack(spacing: 0) {
             // PINNED preview header — the example stays on screen while the knobs scroll.
+            // fixedSize(vertical:) pins it to the content's IDEAL height: previewed
+            // components (the DisclosurePanel especially) often carry maxHeight: .infinity
+            // for their in-app layout context, which would otherwise balloon the header to
+            // half the screen. The header hugs the component; the Form gets the rest.
             VStack(alignment: .leading, spacing: 6) {
                 if !namespace.isEmpty {
                     Text(namespace.joined(separator: " › "))
@@ -63,6 +67,7 @@ public struct RipulStyleKindEditorView<Preview: View, Footer: View>: View {
                 }
                 preview(working)
                     .frame(maxWidth: .infinity)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             .padding(.vertical, 10)
             .frame(maxWidth: .infinity)
