@@ -17,6 +17,11 @@ public struct UnifiedSession: Identifiable, Codable {
     public let projectPath: String?
     public let provider: String?
     public let providerLabel: String?
+    /// Model of the most recent assistant message in the session JSONL
+    /// (e.g. "claude-opus-4-6"), resolved by the host scanner. Session rows
+    /// show this in place of the harness label — the leading icon already
+    /// identifies the harness, so the text slot carries the model in use.
+    public let model: String?
     /// The machine this session lives on (for openRemoteSession routing).
     public let machineName: String?
     /// Stable machine identifier — survives display-name renames and is the only
@@ -50,7 +55,7 @@ public struct UnifiedSession: Identifiable, Codable {
 
     enum CodingKeys: String, CodingKey {
         case id, title, lastUsed, gitBranch, messageCount, projectName, projectPath
-        case provider, providerLabel, machineName, machineId, matchKeys, cachedIsOpen
+        case provider, providerLabel, model, machineName, machineId, matchKeys, cachedIsOpen
         case tags, metadataKey
     }
 
@@ -65,6 +70,7 @@ public struct UnifiedSession: Identifiable, Codable {
         projectPath = try c.decodeIfPresent(String.self, forKey: .projectPath)
         provider = try c.decodeIfPresent(String.self, forKey: .provider)
         providerLabel = try c.decodeIfPresent(String.self, forKey: .providerLabel)
+        model = try c.decodeIfPresent(String.self, forKey: .model)
         machineName = try c.decodeIfPresent(String.self, forKey: .machineName)
         machineId = try c.decodeIfPresent(String.self, forKey: .machineId)
         matchKeys = try c.decodeIfPresent([String].self, forKey: .matchKeys) ?? []
@@ -78,7 +84,7 @@ public struct UnifiedSession: Identifiable, Codable {
         id: String, title: String, lastUsed: Date, gitBranch: String?,
         messageCount: Int?, projectName: String?, projectPath: String? = nil,
         provider: String?,
-        providerLabel: String?, machineName: String?, machineId: String? = nil,
+        providerLabel: String?, model: String? = nil, machineName: String?, machineId: String? = nil,
         matchKeys: [String] = [], tags: [String] = [], metadataKey: String? = nil,
         ripulSession: ChatSession?
     ) {
@@ -86,7 +92,7 @@ public struct UnifiedSession: Identifiable, Codable {
         self.gitBranch = gitBranch; self.messageCount = messageCount
         self.projectName = projectName; self.projectPath = projectPath
         self.provider = provider
-        self.providerLabel = providerLabel; self.machineName = machineName
+        self.providerLabel = providerLabel; self.model = model; self.machineName = machineName
         self.machineId = machineId
         self.matchKeys = matchKeys; self.ripulSession = ripulSession
         self.cachedIsOpen = ripulSession != nil
@@ -115,6 +121,28 @@ public struct UnifiedSession: Identifiable, Codable {
 
     /// Whether this session belongs to any CLI provider (Claude Code, Codex, Antigravity, etc.).
     public var isCliSession: Bool { resolvedProvider?.isCli == true }
+
+    /// Human-readable model name for the session row, e.g. "Opus 4.6" from
+    /// "claude-opus-4-6". Non-Claude ids (e.g. a Kimi alias) pass through
+    /// unchanged. nil when the host couldn't resolve a model.
+    public var modelDisplayName: String? {
+        guard let model, !model.isEmpty else { return nil }
+        return UnifiedSession.prettifyModelId(model)
+    }
+
+    /// "claude-opus-4-6" → "Opus 4.6", "claude-haiku-4-5-20251001" → "Haiku 4.5",
+    /// "claude-sonnet-5" → "Sonnet 5". Anything not matching the Claude
+    /// family-version shape (custom aliases, other providers) is returned raw.
+    public static func prettifyModelId(_ raw: String) -> String {
+        guard raw.hasPrefix("claude-") else { return raw }
+        let tokens = String(raw.dropFirst("claude-".count)).split(separator: "-").map(String.init)
+        guard let family = tokens.first, family.allSatisfy({ $0.isLetter }) else { return raw }
+        // Keep leading short numeric tokens as the version; an 8-digit token
+        // is a date stamp and stops the run (never rendered).
+        let versionTokens = tokens.dropFirst().prefix(while: { $0.allSatisfy(\.isNumber) && $0.count <= 2 })
+        let version = versionTokens.joined(separator: ".")
+        return version.isEmpty ? family.capitalized : "\(family.capitalized) \(version)"
+    }
 
     /// Merge JSONL-sourced remote sessions with live Ripul tab state.
     /// JSONL entries are primary; Ripul tabs that have no JSONL counterpart
@@ -198,6 +226,7 @@ public struct UnifiedSession: Identifiable, Codable {
                 projectPath: r.cwd,
                 provider: r.provider ?? ripulMatch?.provider,
                 providerLabel: r.providerLabel ?? ripulMatch?.providerLabel,
+                model: r.model,
                 machineName: machineNames[r.id] ?? machineNames[r.sourceChatId],
                 machineId: r.machineId,
                 matchKeys: rowKeys,
@@ -247,6 +276,7 @@ extension UnifiedSession: Equatable {
         lhs.machineName == rhs.machineName &&
         lhs.provider == rhs.provider &&
         lhs.providerLabel == rhs.providerLabel &&
+        lhs.model == rhs.model &&
         lhs.messageCount == rhs.messageCount &&
         lhs.projectName == rhs.projectName &&
         lhs.gitBranch == rhs.gitBranch &&

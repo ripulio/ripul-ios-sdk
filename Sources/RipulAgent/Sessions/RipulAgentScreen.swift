@@ -1050,6 +1050,7 @@ public struct RipulAgentScreen: View {
             Menu {
                 ForEach(rawModels) { model in
                     Button {
+                        bridge.handleConsoleLog("LOG: [MODELSW] native.contextMenu.tap surface=AgentScreen.rawModelMenu sessionId=\(session.id.suffix(12)) sourceChatId=\(session.sourceChatId.suffix(12)) from=\(currentModelId) to=\(model.id)")
                         sessionModelIds[session.id] = model.id
                         cache.set(sessionModelIds, forKey: "ripulSessionModelIds")
                         Task { await bridge.setChatModel(chatId: session.sourceChatId, modelId: model.id) }
@@ -1069,6 +1070,7 @@ public struct RipulAgentScreen: View {
         } else {
             Menu {
                 Button {
+                    bridge.handleConsoleLog("LOG: [MODELSW] native.contextMenu.tap surface=AgentScreen.globalModelMenu to=default")
                     Task { await bridge.setModel(nil) }
                 } label: {
                     HStack {
@@ -1083,6 +1085,7 @@ public struct RipulAgentScreen: View {
                     Menu(group.group) {
                         ForEach(group.models) { model in
                             Button {
+                                bridge.handleConsoleLog("LOG: [MODELSW] native.contextMenu.tap surface=AgentScreen.globalModelMenu from=\(bridge.selectedModelId ?? "default") to=\(model.id)")
                                 Task { await bridge.setModel(model.id) }
                             } label: {
                                 HStack {

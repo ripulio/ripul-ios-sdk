@@ -208,6 +208,10 @@ public struct RemoteSessionInfo: Identifiable, Equatable {
     public let messageCount: Int?
     public let provider: String?
     public let providerLabel: String?
+    /// Model of the most recent assistant message in the session JSONL
+    /// (e.g. "claude-opus-4-6"), resolved by the host scanner. Session rows
+    /// render this in place of the harness label.
+    public let model: String?
     /// Host-side Ripul tab ID when this session is also open as a tab on the host.
     /// Used by clients to dedup remote rows against their local tabs via pairing `hostChatId`.
     public let hostChatId: String?
@@ -824,6 +828,11 @@ public final class AgentBridge: NSObject, ObservableObject {
         didSet {
             guard activeSessionId != oldValue else { return }
             markActiveSessionTodoViewedInList()
+            // Opening a chat is "seeing" it — clears its unseen-completion hand
+            // in the sessions list (mirrors the plan viewed-marker above).
+            if let chatId = activeSourceChatId {
+                sessionList.markChatViewed(chatId)
+            }
             // The pause/play buttons are a projection of the ACTIVE chat's
             // phase — any change of active session must re-derive them.
             refreshActiveAgentFlags()
@@ -1040,7 +1049,8 @@ public final class AgentBridge: NSObject, ObservableObject {
     private func applySessionPhase(
         _ phase: AgentTurnPhase,
         chatId: String?,
-        sequence: Int?
+        sequence: Int?,
+        timestamp: Any? = nil
     ) {
         guard let chatId, !chatId.isEmpty else { return }
         if let sequence, let last = sessionLifecycleSequences[chatId], sequence < last {
@@ -1049,14 +1059,21 @@ public final class AgentBridge: NSObject, ObservableObject {
         if let sequence {
             sessionLifecycleSequences[chatId] = sequence
         }
+        let phaseDate = Self.parseEpochMs(timestamp) ?? Date()
         switch phase {
-        case .running, .awaitingInput:
+        case .running, .awaitingInput, .completed, .failed:
+            // Stored RAW — turnPhase(for:) collapses at read time so completed
+            // can be filtered against the viewed stamp (unseen-completion hand).
             sessionList.sessionPhases[chatId] = phase
-        case .completed, .failed:
-            // Collapse onto awaitingInput so the UI only has two glyphs to worry about.
-            sessionList.sessionPhases[chatId] = .awaitingInput
+            sessionList.phaseTimestampByChatId[chatId] = phaseDate
         case .idle:
             sessionList.sessionPhases.removeValue(forKey: chatId)
+            sessionList.phaseTimestampByChatId.removeValue(forKey: chatId)
+        }
+        // Watching the active chat finish counts as seeing it — the row should
+        // not grow a hand for a completion that streamed in front of you.
+        if (phase == .completed || phase == .failed), chatId == activeSourceChatId {
+            sessionList.markChatViewed(chatId, at: max(phaseDate, Date()))
         }
         // The raw phase map keeps completed/failed distinct — the chat box must
         // NOT show the paused/play state for a finished turn.
@@ -1088,7 +1105,7 @@ public final class AgentBridge: NSObject, ObservableObject {
             Self.debugLog("[AgentBridge] Dropping lifecycle event without chatId (phase=\(phase.rawValue))")
             return
         }
-        applySessionPhase(phase, chatId: chatId, sequence: dict["sequence"] as? Int)
+        applySessionPhase(phase, chatId: chatId, sequence: dict["sequence"] as? Int, timestamp: dict["timestamp"])
         // Stamp last-active time for session list sort order — but NOT on
         // snapshots, which fire for every session on connect and would
         // reset all timestamps to "just now".
@@ -1109,6 +1126,13 @@ public final class AgentBridge: NSObject, ObservableObject {
     /// When no parseable timestamp is present we fall back to Date() but
     /// only *advance* — this prevents a missing-timestamp event from
     /// overwriting a known-good older value.
+    /// Parse an epoch-milliseconds wire timestamp into a Date, or nil.
+    private static func parseEpochMs(_ raw: Any?) -> Date? {
+        if let ms = raw as? TimeInterval, ms > 0 { return Date(timeIntervalSince1970: ms / 1000) }
+        if let ms = raw as? Int, ms > 0 { return Date(timeIntervalSince1970: TimeInterval(ms) / 1000) }
+        return nil
+    }
+
     private func advanceLastActive(chatId: String, eventTimestamp: Any?) {
         if let ms = eventTimestamp as? TimeInterval, ms > 0 {
             sessionList.lastActiveTimeByChatId[chatId] = Date(timeIntervalSince1970: ms / 1000)
@@ -2526,10 +2550,10 @@ public final class AgentBridge: NSObject, ObservableObject {
                     Task { await syncAgentStatus(chatId: chatId) }
                 }
             } else if running || paused {
-                applySessionPhase(paused ? .awaitingInput : .running, chatId: chatId, sequence: nil)
+                applySessionPhase(paused ? .awaitingInput : .running, chatId: chatId, sequence: nil, timestamp: dict["timestamp"])
             } else if chatTurnPhases[chatId] == .running || chatTurnPhases[chatId] == .awaitingInput {
                 // Status-only chat whose last status said running — clear it.
-                applySessionPhase(.completed, chatId: chatId, sequence: nil)
+                applySessionPhase(.completed, chatId: chatId, sequence: nil, timestamp: dict["timestamp"])
             }
         case "agent:activity":
             if let eventDict = dict["event"] as? [String: Any],
@@ -3279,7 +3303,7 @@ public final class AgentBridge: NSObject, ObservableObject {
                 if let rawPhase = dict["phase"] as? String,
                    let phase = AgentTurnPhase(rawValue: rawPhase) {
                     if let respChatId, !respChatId.isEmpty {
-                        applySessionPhase(phase, chatId: respChatId, sequence: dict["sequence"] as? Int)
+                        applySessionPhase(phase, chatId: respChatId, sequence: dict["sequence"] as? Int, timestamp: dict["timestamp"])
                     }
                     return (isAgentRunning, isAgentPaused)
                 }
@@ -3288,9 +3312,9 @@ public final class AgentBridge: NSObject, ObservableObject {
                 let paused = dict["isPaused"] as? Bool ?? false
                 if let respChatId, !respChatId.isEmpty {
                     if running || paused {
-                        applySessionPhase(paused ? .awaitingInput : .running, chatId: respChatId, sequence: nil)
+                        applySessionPhase(paused ? .awaitingInput : .running, chatId: respChatId, sequence: nil, timestamp: dict["timestamp"])
                     } else if chatTurnPhases[respChatId] != nil {
-                        applySessionPhase(.completed, chatId: respChatId, sequence: nil)
+                        applySessionPhase(.completed, chatId: respChatId, sequence: nil, timestamp: dict["timestamp"])
                     }
                 }
                 return (isAgentRunning, isAgentPaused)
@@ -3689,7 +3713,11 @@ public final class AgentBridge: NSObject, ObservableObject {
     @available(iOS 15.0, macOS 13.0, *)
     @discardableResult
     public func setModel(_ modelId: String?) async -> Bool {
-        guard let webView else { return false }
+        handleConsoleLog("LOG: [MODELSW] native.setModel (global) modelId=\(modelId ?? "default")")
+        guard let webView else {
+            handleConsoleLog("LOG: [MODELSW] native.setModel ABORT webView=nil")
+            return false
+        }
         do {
             let result = try await webView.callAsyncJavaScript(
                 "return await window.__ripulSetModel?.(modelId) ?? {success:false};",
@@ -3699,12 +3727,13 @@ public final class AgentBridge: NSObject, ObservableObject {
             if let dict = result as? [String: Any],
                let success = dict["success"] as? Bool, success {
                 self.selectedModelId = modelId
-                NSLog("[AgentBridge] setModel: %@", modelId ?? "default")
+                handleConsoleLog("LOG: [MODELSW] native.setModel OK modelId=\(modelId ?? "default") readBack=\(dict["readBack"] as? String ?? "none")")
                 return true
             }
+            handleConsoleLog("LOG: [MODELSW] native.setModel FAILED modelId=\(modelId ?? "default") result=\(String(describing: result))")
             return false
         } catch {
-            NSLog("[AgentBridge] setModel error: %@", error.localizedDescription)
+            handleConsoleLog("LOG: [MODELSW] native.setModel ERROR \(error.localizedDescription)")
             return false
         }
     }
@@ -3823,7 +3852,11 @@ public final class AgentBridge: NSObject, ObservableObject {
     @available(iOS 15.0, macOS 13.0, *)
     @discardableResult
     public func setChatModel(chatId: String, modelId: String) async -> Bool {
-        guard let webView else { return false }
+        handleConsoleLog("LOG: [MODELSW] native.setChatModel enter chatId=\(chatId.suffix(12)) modelId=\(modelId)")
+        guard let webView else {
+            handleConsoleLog("LOG: [MODELSW] native.setChatModel ABORT webView=nil")
+            return false
+        }
         do {
             let result = try await webView.callAsyncJavaScript(
                 "return await window.__ripulSetChatModel?.(chatId, modelId) ?? {success:false};",
@@ -3832,12 +3865,15 @@ public final class AgentBridge: NSObject, ObservableObject {
             )
             if let dict = result as? [String: Any],
                let success = dict["success"] as? Bool, success {
-                NSLog("[AgentBridge] setChatModel: chatId=%@, modelId=%@", chatId, modelId)
+                let reason = dict["reason"] as? String ?? "unknown"
+                let applied = dict["descriptorModelOverride"] as? String ?? "none"
+                handleConsoleLog("LOG: [MODELSW] native.setChatModel OK chatId=\(chatId.suffix(12)) modelId=\(modelId) reason=\(reason) descriptorNowHas=\(applied)")
                 return true
             }
+            handleConsoleLog("LOG: [MODELSW] native.setChatModel FAILED chatId=\(chatId.suffix(12)) modelId=\(modelId) result=\(String(describing: result))")
             return false
         } catch {
-            NSLog("[AgentBridge] setChatModel error: %@", error.localizedDescription)
+            handleConsoleLog("LOG: [MODELSW] native.setChatModel ERROR \(error.localizedDescription)")
             return false
         }
     }
@@ -4583,6 +4619,7 @@ public final class AgentBridge: NSObject, ObservableObject {
                     messageCount: item["messageCount"] as? Int,
                     provider: item["provider"] as? String,
                     providerLabel: item["providerLabel"] as? String,
+                    model: item["model"] as? String,
                     hostChatId: item["hostChatId"] as? String,
                     machineId: machineId
                 )
@@ -5708,6 +5745,14 @@ public final class AgentBridge: NSObject, ObservableObject {
         // Auto-request sessions for native UI
         requestSessions()
 
+        // A handshake means a FRESH web page (first load, reload, or a heal
+        // reload after a crash). Its lifecycle store restarts at sequence 0, so
+        // sequences recorded against the previous page are meaningless — keeping
+        // them makes the ordering gate in applySessionPhase drop every snapshot
+        // the new page sends, freezing the pause button on pre-reload state.
+        // Phases are deliberately kept so the UI doesn't blank while resyncing.
+        sessionLifecycleSequences.removeAll()
+
         // Sync agent button state then start accepting agent:status pushes.
         // The delay allows the web app to finish initializing before we query.
         Task {
@@ -6663,6 +6708,10 @@ public final class AgentBridge: NSObject, ObservableObject {
             jsErrorMessages = []
             jsErrorDebounce?.cancel()
             NSLog("[AgentBridge] Bridge connected via capability:ping")
+
+            // Fresh web page — drop stale per-chat sequences (see the matching
+            // note in the handshake path above).
+            sessionLifecycleSequences.removeAll()
 
             // Broadcast MCP tools if any are registered
             if !allTools.isEmpty {

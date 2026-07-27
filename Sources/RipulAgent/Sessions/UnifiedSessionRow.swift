@@ -202,8 +202,13 @@ public struct UnifiedSessionRow: View {
         ProviderConstants.color(for: session.provider, providerLabel: session.providerLabel)
     }
 
-    private var providerName: String {
-        ProviderConstants.label(for: session.provider, providerLabel: session.providerLabel)
+    /// Text for the leading slot of the idle detail row: the model in use
+    /// (e.g. "Opus 4.6") when the host resolved one, else the harness label.
+    /// The leading icon already identifies the harness, so repeating the
+    /// harness name in text was redundant — the slot now carries the model.
+    private var modelOrProviderName: String {
+        session.modelDisplayName
+            ?? ProviderConstants.label(for: session.provider, providerLabel: session.providerLabel)
     }
 
     public var body: some View {
@@ -335,7 +340,7 @@ public struct UnifiedSessionRow: View {
                                     .foregroundStyle(.secondary)
                                     .uiKitIdentifier("UnifiedSessionRow.subtitle.machineIcon")
                             }
-                            Text(providerName)
+                            Text(modelOrProviderName)
                                 .font(.caption)
                                 .foregroundStyle(providerColor)
                                 .uiKitIdentifier("UnifiedSessionRow.subtitle.providerName")

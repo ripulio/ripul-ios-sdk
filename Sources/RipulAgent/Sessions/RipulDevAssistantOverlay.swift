@@ -464,6 +464,10 @@ final class RipulDevOverlayRootVC: UIViewController {
             (view.window as? RipulDevOverlayWindow)?.isPassthrough = true
             return
         }
+        // Drop the keyboard FIRST: if the chat composer has focus, collapsing
+        // with it up would leave the keyboard floating over the compact bar /
+        // bubble. Resign editing so it animates down alongside the morph.
+        panel.endEditing(true)
         // Springboard close, matching iOS's app-minimize: the panel stays
         // OPAQUE while it collapses into the bubble's frame (overdamped spring,
         // corner radius climbing to the icon circle), fading only in the last
