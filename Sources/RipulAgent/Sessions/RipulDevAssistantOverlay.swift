@@ -91,6 +91,7 @@ public final class RipulDevAssistantOverlay {
     private static let visibleKey = "ripul.devAssistantOverlay.visible"
     private static let bubbleXKey = "ripul.devAssistantOverlay.bubbleX"
     private static let bubbleYKey = "ripul.devAssistantOverlay.bubbleY"
+    private static let compactYKey = "ripul.devAssistantOverlay.compactY"
 
     private var cache: RipulSessionCache? { configuration?.cache }
 
@@ -115,6 +116,18 @@ public final class RipulDevAssistantOverlay {
         win.rootViewController = root
         win.isHidden = false
         window = win
+    }
+
+    fileprivate func saveCompactY(_ y: CGFloat) {
+        cache?.set(Double(y), forKey: Self.compactYKey)
+    }
+
+    /// The persisted bar Y, clamped into the view's current safe region.
+    fileprivate func savedCompactY(in view: UIView) -> CGFloat? {
+        guard let raw = cache?.object(forKey: Self.compactYKey) as? Double else { return nil }
+        let minY = view.safeAreaInsets.top + 8
+        let maxY = view.bounds.height - view.safeAreaInsets.bottom - 8 - 64
+        return min(max(CGFloat(raw), minY), maxY)
     }
 
     fileprivate func saveBubblePosition(_ point: CGPoint) {
@@ -165,10 +178,13 @@ final class RipulDevOverlayRootVC: UIViewController {
     /// means the relay comes online before the first panel expand.
     private var sharedBridge: AgentBridge?
 
-    /// The compact bar's docked frame (bottom edge, mini-player idiom).
+    /// The compact bar's frame: bottom-docked by default (mini-player idiom),
+    /// or the user's dragged-to Y (persisted per host in the cache suite).
     private var compactFrame: CGRect {
         let bottom = view.safeAreaInsets.bottom
-        return CGRect(x: 12, y: view.bounds.height - bottom - 72, width: view.bounds.width - 24, height: 64)
+        let defaultY = view.bounds.height - bottom - 72
+        let y = overlay?.savedCompactY(in: view) ?? defaultY
+        return CGRect(x: 12, y: y, width: view.bounds.width - 24, height: 64)
     }
 
     override func viewDidLoad() {
@@ -228,6 +244,9 @@ final class RipulDevOverlayRootVC: UIViewController {
             }
         }
         panelHost?.view.frame = view.bounds
+        if let compactHost, !compactHost.view.isHidden, compactHost.view.transform == .identity {
+            compactHost.view.frame = compactFrame
+        }
         updateInteractiveFrame()
     }
 
@@ -269,6 +288,24 @@ final class RipulDevOverlayRootVC: UIViewController {
     /// total); raise (e.g. 5.36 ≈ 3s) to evaluate the motion stage-by-stage.
     private let collapseTimeScale: CGFloat = 1.0
 
+    /// Drag the compact bar vertically; the Y persists (per host cache suite).
+    /// The SwiftUI bar's tap-to-expand still fires on a plain tap (pan only
+    /// engages on an actual drag).
+    @objc private func compactPanned(_ g: UIPanGestureRecognizer) {
+        guard let host = compactHost else { return }
+        let t = g.translation(in: view)
+        g.setTranslation(.zero, in: view)
+        let minY = view.safeAreaInsets.top + 8
+        let maxY = view.bounds.height - view.safeAreaInsets.bottom - 8 - host.view.bounds.height
+        let newY = min(max(host.view.frame.minY + t.y, minY), maxY)
+        host.view.frame = CGRect(x: host.view.frame.minX, y: newY,
+                                 width: host.view.frame.width, height: host.view.frame.height)
+        updateInteractiveFrame()
+        if g.state == .ended || g.state == .cancelled {
+            overlay?.saveCompactY(newY)
+        }
+    }
+
     /// Circle → compact bar: the live session-row toolbar (active chat's
     /// title, tool updates, hand when the agent awaits input). Morphs out of
     /// the bubble's frame; the bar's expand button (or a bar tap) opens the
@@ -289,6 +326,7 @@ final class RipulDevOverlayRootVC: UIViewController {
             view.addSubview(host.view)
             host.didMove(toParent: self)
             compactHost = host
+            host.view.addGestureRecognizer(UIPanGestureRecognizer(target: self, action: #selector(compactPanned(_:))))
         }
         guard let host = compactHost else { return }
 
@@ -537,21 +575,45 @@ private struct CompactAgentBarView: View {
         return bridge.sessionList.turnPhase(for: s.sourceChatId)
     }
     private var activity: AgentActivityEvent? {
-        guard let s = activeSession else { return nil }
-        return bridge.sessionList.latestToolActivityForList(for: s.id)
+        guard let ripul = activeSession else { return nil }
+        if let byTab = bridge.sessionList.latestToolActivityForList(for: ripul.id) { return byTab }
+        return bridge.sessionList.latestToolActivityForList(for: ripul.sourceChatId)
+    }
+    private var activePlan: TodoState? {
+        guard let ripul = activeSession else { return nil }
+        if let byTab = bridge.sessionList.visibleTodoState(for: ripul.id) { return byTab }
+        return bridge.sessionList.visibleTodoState(for: ripul.sourceChatId)
+    }
+    private var listPlan: TodoState? {
+        guard let ripul = activeSession else { return nil }
+        if let byTab = bridge.sessionList.visibleTodoStateForList(for: ripul.id) { return byTab }
+        return bridge.sessionList.visibleTodoStateForList(for: ripul.sourceChatId)
     }
 
+    /// Mirrors `UnifiedSessionRow`'s subtitle exactly: plan-in-progress wins,
+    /// then live tool activity, then plan-done, then idle/phase text.
     private var subtitle: String {
-        if let a = activity, let label = a.displayName {
+        let state = SessionSubtitleState.resolve(
+            activePlan: activePlan, listPlan: listPlan, latestToolActivity: activity
+        )
+        switch state {
+        case .planInProgress(let plan):
+            let done = plan.todos.filter { $0.status == "completed" }.count
+            return "\(done)/\(plan.todos.count) · \(SessionSubtitleState.planDetailText(plan: plan))"
+        case .toolActivity(let a):
+            let label = a.displayName ?? "Working…"
             if let detail = a.detail, !detail.isEmpty { return "\(label) · \(detail)" }
             return label
-        }
-        switch phase {
-        case .running: return "Working…"
-        case .awaitingInput: return "Waiting for you"
-        case .completed: return "Done"
-        case .failed: return "Failed"
-        default: return "Ready"
+        case .planCompleted(let plan):
+            return "Plan done · \(plan.todos.count)/\(plan.todos.count)"
+        case .idle:
+            switch phase {
+            case .running: return "Working…"
+            case .awaitingInput: return "Waiting for you"
+            case .completed: return "Done"
+            case .failed: return "Failed"
+            default: return "Ready"
+            }
         }
     }
 
