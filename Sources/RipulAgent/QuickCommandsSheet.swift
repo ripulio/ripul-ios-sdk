@@ -245,6 +245,42 @@ public struct QuickCommandsSheet: View {
 /// Type "/rr." into the chat input to activate.
 public let debugCommandTrigger = "/rr."
 
+// MARK: - SlashCommandInfo Icon
+
+extension SlashCommandInfo {
+    /// SF Symbol matching the web app's FontAwesome icon name.
+    /// Shared by QuickCommandsSheet and the native inline slash menu.
+    var sfSymbol: String {
+        guard let fa = icon else { return "terminal" }
+        switch fa {
+        case "fa-magnifying-glass-chart": return "magnifyingglass"
+        case "fa-sitemap": return "map"
+        case "fa-book": return "book"
+        case "fa-asterisk": return "asterisk"
+        case "fa-code": return "chevron.left.forwardslash.chevron.right"
+        case "fa-camera": return "camera"
+        case "fa-cloud-arrow-up": return "icloud.and.arrow.up"
+        case "fa-wrench": return "wrench"
+        case "fa-circle-question": return "questionmark.circle"
+        case "fa-palette": return "paintpalette"
+        case "fa-trash-can": return "trash"
+        case "fa-layer-group": return "square.3.layers.3d"
+        case "fa-rotate-right": return "arrow.clockwise"
+        case "fa-flask": return "flask"
+        case "fa-plug": return "link"
+        case "fa-file-lines": return "doc.text"
+        case "fa-bug": return "ant"
+        case "fa-globe": return "globe"
+        case "fa-gear": return "gear"
+        case "fa-timeline": return "timeline.selection"
+        case "fa-window-restore": return "macwindow"
+        case "fa-database": return "cylinder"
+        case "fa-arrows-rotate": return "arrow.triangle.2.circlepath"
+        default: return "terminal"
+        }
+    }
+}
+
 // MARK: - Command Options View
 
 @available(iOS 16.0, macOS 13.0, *)
@@ -288,7 +324,7 @@ private struct CommandRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            Image(systemName: sfSymbol(for: command.icon))
+            Image(systemName: command.sfSymbol)
                 .font(.system(size: 16))
                 .foregroundStyle(.tint)
                 .frame(width: 28)
@@ -313,35 +349,5 @@ private struct CommandRow: View {
             }
         }
         .padding(.vertical, 4)
-    }
-
-    private func sfSymbol(for faIcon: String?) -> String {
-        guard let fa = faIcon else { return "terminal" }
-        switch fa {
-        case "fa-magnifying-glass-chart": return "magnifyingglass"
-        case "fa-sitemap": return "map"
-        case "fa-book": return "book"
-        case "fa-asterisk": return "asterisk"
-        case "fa-code": return "chevron.left.forwardslash.chevron.right"
-        case "fa-camera": return "camera"
-        case "fa-cloud-arrow-up": return "icloud.and.arrow.up"
-        case "fa-wrench": return "wrench"
-        case "fa-circle-question": return "questionmark.circle"
-        case "fa-palette": return "paintpalette"
-        case "fa-trash-can": return "trash"
-        case "fa-layer-group": return "square.3.layers.3d"
-        case "fa-rotate-right": return "arrow.clockwise"
-        case "fa-flask": return "flask"
-        case "fa-plug": return "link"
-        case "fa-file-lines": return "doc.text"
-        case "fa-bug": return "ant"
-        case "fa-globe": return "globe"
-        case "fa-gear": return "gear"
-        case "fa-timeline": return "timeline.selection"
-        case "fa-window-restore": return "macwindow"
-        case "fa-database": return "cylinder"
-        case "fa-arrows-rotate": return "arrow.triangle.2.circlepath"
-        default: return "terminal"
-        }
     }
 }

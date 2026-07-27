@@ -140,6 +140,13 @@ public struct NativeChatInput: View {
     var onFocusChanged: ((Bool) -> Void)?
     /// Hidden debug shortcut: long-press on the "+" button.
     var onPlusLongPress: (() -> Void)?
+    /// Fetches slash commands when the user types "/" as the first character.
+    /// When provided (with onSubmitSlashCommand), a native slash menu opens —
+    /// the native counterpart of the web composer's SlashCommandMenuReact.
+    var onQuerySlashCommands: (() async -> [SlashCommandInfo])?
+    /// Submits a slash command message ("/cmd" or "/cmd option") picked from
+    /// the slash menu. The menu clears the input text before calling.
+    var onSubmitSlashCommand: ((String) -> Void)?
     @State private var showPhotoPicker = false
     @State private var showCamera = false
     @State private var textHeight: CGFloat = 36
@@ -156,6 +163,11 @@ public struct NativeChatInput: View {
     @State private var showHistorySheet = false
     @State private var showTodoPicker = false
     @State private var glowPhase: Bool = false
+    @State private var showSlashMenu = false
+    @State private var slashFilter = ""
+    @State private var slashCommands: [SlashCommandInfo] = []
+    @State private var slashCommandsLoaded = false
+    @State private var slashDrillCommand: SlashCommandInfo?
 
     private var isTwoRow: Bool { chatInputLayout == "twoRow" }
     private var resolvedChatInputGlassStyle: String { chatInputGlassStyle ?? "clear" }
@@ -183,7 +195,9 @@ public struct NativeChatInput: View {
         onQueryParticipants: (() async -> [ParticipantSuggestion])? = nil,
         addressedParticipants: Binding<[String]> = .constant([]),
         onFocusChanged: ((Bool) -> Void)? = nil,
-        onPlusLongPress: (() -> Void)? = nil
+        onPlusLongPress: (() -> Void)? = nil,
+        onQuerySlashCommands: (() async -> [SlashCommandInfo])? = nil,
+        onSubmitSlashCommand: ((String) -> Void)? = nil
     ) {
         self._text = text
         self._imageAttachments = imageAttachments
@@ -208,6 +222,8 @@ public struct NativeChatInput: View {
         self._addressedParticipants = addressedParticipants
         self.onFocusChanged = onFocusChanged
         self.onPlusLongPress = onPlusLongPress
+        self.onQuerySlashCommands = onQuerySlashCommands
+        self.onSubmitSlashCommand = onSubmitSlashCommand
     }
 
     private func dismissKeyboard() {
@@ -218,6 +234,10 @@ public struct NativeChatInput: View {
         VStack(spacing: 4) {
             if showAtSuggestions {
                 unifiedSuggestionsOverlay
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+            if showSlashMenu {
+                slashCommandsOverlay
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
 
@@ -233,6 +253,7 @@ public struct NativeChatInput: View {
         .animation(.easeInOut(duration: 0.2), value: imageAttachments.count)
         .animation(.easeInOut(duration: 0.2), value: isTwoRow)
         .animation(.easeInOut(duration: 0.15), value: showAtSuggestions)
+        .animation(.easeInOut(duration: 0.15), value: showSlashMenu)
         .onChange(of: text) { newValue in
             if newValue.isEmpty {
                 textHeight = 36 // minHeight — snap immediately when text is cleared
@@ -561,6 +582,205 @@ public struct NativeChatInput: View {
         .buttonStyle(.plain)
     }
 
+    // MARK: - / Slash Command Menu
+
+    /// Detect "/" as the first character and show the native slash menu.
+    /// Mirrors the web composer's semantics (ChatInputContainer.handleInputChange):
+    /// opens only when the whole text is exactly "/", stays open while the text
+    /// starts with "/" and contains no space, closes on the first space.
+    private func handleSlashDetection(_ value: String) {
+        guard onQuerySlashCommands != nil, onSubmitSlashCommand != nil else { return }
+
+        if showSlashMenu {
+            if !value.hasPrefix("/") || value.contains(" ") {
+                dismissSlashOverlay()
+            } else {
+                slashFilter = String(value.dropFirst())
+            }
+        } else if value == "/" {
+            slashFilter = ""
+            slashDrillCommand = nil
+            showSlashMenu = true
+            fetchSlashCommands()
+        }
+    }
+
+    private func fetchSlashCommands() {
+        guard let query = onQuerySlashCommands else { return }
+        slashCommandsLoaded = false
+        Task {
+            let results = await query()
+            await MainActor.run {
+                slashCommands = results
+                slashCommandsLoaded = true
+            }
+        }
+    }
+
+    private func dismissSlashOverlay() {
+        showSlashMenu = false
+        slashFilter = ""
+        slashDrillCommand = nil
+    }
+
+    private var filteredSlashCommands: [SlashCommandInfo] {
+        if slashFilter.isEmpty { return slashCommands }
+        let query = slashFilter.lowercased()
+        return slashCommands.filter {
+            $0.command.lowercased().contains(query) ||
+            $0.description.lowercased().contains(query)
+        }
+    }
+
+    /// Tapping a command: options drill down in place (same as QuickCommandsSheet);
+    /// anything else submits immediately.
+    private func selectSlashCommand(_ command: SlashCommandInfo) {
+        if command.options.isEmpty {
+            submitSlashMessage("/\(command.command)")
+        } else {
+            slashDrillCommand = command
+        }
+    }
+
+    private func selectSlashOption(_ option: SlashCommandOption) {
+        guard let command = slashDrillCommand else { return }
+        submitSlashMessage("/\(command.command) \(option.value)")
+    }
+
+    private func submitSlashMessage(_ message: String) {
+        text = ""
+        dismissSlashOverlay()
+        onSubmitSlashCommand?(message)
+    }
+
+    private var slashCommandsOverlay: some View {
+        VStack(spacing: 0) {
+            if let drilled = slashDrillCommand {
+                slashOptionsList(drilled)
+            } else if filteredSlashCommands.isEmpty {
+                HStack(spacing: 8) {
+                    Image(systemName: "slash.square")
+                        .foregroundStyle(.secondary)
+                        .frame(width: 20)
+                    Text(slashCommandsLoaded
+                         ? (slashFilter.isEmpty ? "No commands available" : "No commands matching \u{201C}\(slashFilter)\u{201D}")
+                         : "Loading commands…")
+                        .font(.system(size: 14))
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 12)
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        suggestionSectionHeader("Commands")
+                        ForEach(filteredSlashCommands) { command in
+                            slashCommandRow(command)
+                            if command.id != filteredSlashCommands.last?.id {
+                                Divider().padding(.leading, 40)
+                            }
+                        }
+                    }
+                }
+                .frame(maxHeight: 280)
+            }
+        }
+        .background(.ultraThinMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .shadow(color: .black.opacity(0.15), radius: 8, y: -2)
+        .padding(.horizontal, 16)
+    }
+
+    private func slashOptionsList(_ command: SlashCommandInfo) -> some View {
+        ScrollView {
+            LazyVStack(spacing: 0) {
+                Button {
+                    slashDrillCommand = nil
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "chevron.left")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 20)
+                        Text("/\(command.command)")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(.primary)
+                        Spacer()
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+
+                ForEach(command.options) { option in
+                    Divider().padding(.leading, 40)
+                    Button {
+                        selectSlashOption(option)
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 12))
+                                .foregroundStyle(.secondary)
+                                .frame(width: 20)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(option.label)
+                                    .font(.system(size: 14, weight: .medium))
+                                    .foregroundStyle(.primary)
+                                    .lineLimit(1)
+                                if let desc = option.description, !desc.isEmpty {
+                                    Text(desc)
+                                        .font(.system(size: 11))
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                }
+                            }
+                            Spacer()
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+        .frame(maxHeight: 280)
+    }
+
+    private func slashCommandRow(_ command: SlashCommandInfo) -> some View {
+        Button {
+            selectSlashCommand(command)
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: command.sfSymbol)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 20)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("/\(command.command)")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                    Text(command.description)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                Spacer()
+                if !command.options.isEmpty {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
     // MARK: - Single Row Layout (default)
 
     private var singleRowBody: some View {
@@ -753,8 +973,10 @@ public struct NativeChatInput: View {
             onTextChange: { newText in
                 if newText.isEmpty {
                     dismissAtOverlay()
+                    dismissSlashOverlay()
                 } else {
                     handleAtDetection(newText)
+                    handleSlashDetection(newText)
                 }
             },
             onFocusChanged: onFocusChanged

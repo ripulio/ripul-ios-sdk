@@ -583,7 +583,9 @@ private struct ChatComposer: View {
             onFocusChanged: { focused in
                 bridge.nativeChatInputFocused = focused
             },
-            onPlusLongPress: { onShowConsoleLogs() }
+            onPlusLongPress: { onShowConsoleLogs() },
+            onQuerySlashCommands: bridge.chatInputShowQuickCommands ? { await bridge.getSlashCommands() } : nil,
+            onSubmitSlashCommand: bridge.chatInputShowQuickCommands ? { message in handleSlashSubmit(message) } : nil
         )
         .onChange(of: planMode) { newValue in
             Task { await bridge.setCliPlanMode(newValue) }
@@ -692,6 +694,17 @@ private struct ChatComposer: View {
         recordHistory(message)
         chatMessage = ""
         Task { await bridge.submitNote(message) }
+        #if os(iOS)
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+        #endif
+    }
+
+    /// Submit a slash command picked from the native slash menu ("/cmd" or
+    /// "/cmd option"). Same path as QuickCommandsSheet — the web app executes it.
+    private func handleSlashSubmit(_ message: String) {
+        recordHistory(message)
+        chatMessage = ""
+        Task { await bridge.submitMessage(message) }
         #if os(iOS)
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
         #endif

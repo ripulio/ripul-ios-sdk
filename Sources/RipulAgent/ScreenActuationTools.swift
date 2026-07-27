@@ -14,12 +14,18 @@ import UIKit
 ///
 /// Actuation order for taps (all public API first):
 /// 1. `UIControl.sendActions(for: .touchUpInside)` — UIKit buttons/controls.
-/// 2. `accessibilityActivate()` up the superview chain — the sanctioned
-///    "perform the default action" hook (VoiceOver's mechanism).
-/// 3. Fire an attached `UITapGestureRecognizer`'s targets via KVC on the
-///    private `_targets` array — the only route that reaches SwiftUI Buttons
-///    (they attach tap gestures to hosting views). DEV-ONLY: a private
-///    property name as a string, used purely as a dev affordance.
+/// 2. `accessibilityActivate()` on the matching accessibility ELEMENT inside
+///    the matched view — SwiftUI Buttons/rows expose their press on the
+///    element (an `AccessibilityNode`), never on any UIView, so this is the
+///    sanctioned route that presses them.
+/// 3. `accessibilityActivate()` up the superview chain — the same hook for
+///    UIKit views that implement it directly.
+/// 4. Fire an attached `UITapGestureRecognizer`'s targets, read via the ObjC
+///    runtime (`class_getInstanceVariable` + ivar loads). DEV-ONLY private
+///    introspection — but NEVER via KVC: `UIGestureRecognizerTarget` is not
+///    KVC-compliant for its SEL-typed `_action` ivar, and `value(forKey:)`
+///    throws `NSUnknownKeyException` straight through Swift, killing the
+///    host app. Runtime ivar reads return nil instead of throwing.
 #if canImport(UIKit)
 
 // MARK: - Element lookup (shared walker)
@@ -117,7 +123,15 @@ public struct TapElementTool: NativeTool {
             return ["success": true, "via": "uicontrol", "matched": matches.count, "element": ScreenElementFinder.describe(target)]
         }
 
-        // 2. accessibilityActivate up the chain (VoiceOver's sanctioned hook).
+        // 2. Activate the matching accessibility ELEMENT inside the matched view.
+        //    SwiftUI Buttons/rows carry their press on the element (an
+        //    AccessibilityNode) — no UIView, control, or UITapGestureRecognizer
+        //    is involved — so this is the route that presses them.
+        if Self.activateAccessibilityElement(in: target.view, id: id, text: text) {
+            return ["success": true, "via": "accessibilityElement", "matched": matches.count, "element": ScreenElementFinder.describe(target)]
+        }
+
+        // 3. accessibilityActivate up the chain (VoiceOver's sanctioned hook).
         var v: UIView? = target.view
         while let cur = v {
             if cur.responds(to: #selector(UIResponder.accessibilityActivate)), cur.accessibilityActivate() {
@@ -126,9 +140,10 @@ public struct TapElementTool: NativeTool {
             v = cur.superview
         }
 
-        // 3. Fire an attached UITapGestureRecognizer's targets (reaches SwiftUI
-        //    Buttons, which attach tap gestures to hosting views). DEV-ONLY:
-        //    KVC on the private `_targets` property, as a dev affordance.
+        // 4. Fire an attached UITapGestureRecognizer's targets — UIKit views
+        //    that use gestures instead of controls. DEV-ONLY runtime ivar
+        //    reads (never KVC — see the header comment: KVC on the SEL-typed
+        //    `_action` throws NSUnknownKeyException and crashes the host).
         var g: UIView? = target.view
         while let cur = g {
             for gr in cur.gestureRecognizers ?? [] where gr.isEnabled {
@@ -141,20 +156,79 @@ public struct TapElementTool: NativeTool {
         }
 
         return ["success": false, "matched": matches.count, "element": ScreenElementFinder.describe(target),
-                "error": "Element found but not tappable by any path (not a control, no accessibilityActivate, no tap gesture)."]
+                "error": "Element found but not tappable by any path (not a control, no activatable accessibility element, no tap gesture)."]
+    }
+
+    /// Walk the accessibility tree under `view` (elements array / container
+    /// protocol / subviews — same traversal as the inspector) and activate the
+    /// element matching the requested id or text. Only presses something it can
+    /// NAME: the matched element, or the single element the view exposes —
+    /// never "the first of many".
+    private static func activateAccessibilityElement(in view: UIView, id: String?, text: String?) -> Bool {
+        var matched: [NSObject] = []
+        var all: [NSObject] = []
+        func leafMatches(_ el: NSObject) -> Bool {
+            if let id, !id.isEmpty,
+               let eid = InspectedView.objectAccessibilityIdentifier(el),
+               eid.caseInsensitiveCompare(id) == .orderedSame { return true }
+            if let text, !text.isEmpty {
+                let hay = [el.accessibilityLabel, el.accessibilityValue].compactMap { $0 }.joined(separator: " ")
+                if hay.range(of: text, options: .caseInsensitive) != nil { return true }
+            }
+            return false
+        }
+        func visit(_ obj: NSObject, depth: Int) {
+            if depth > 60 || all.count > 300 { return }
+            var children: [NSObject] = []
+            if let els = obj.accessibilityElements as? [NSObject] {
+                children = els
+            } else {
+                let n = obj.accessibilityElementCount()
+                if n > 0 && n != NSNotFound {
+                    for i in 0..<n { if let e = obj.accessibilityElement(at: i) as? NSObject { children.append(e) } }
+                }
+            }
+            if !children.isEmpty {
+                for c in children { visit(c, depth: depth + 1) }
+                return
+            }
+            if obj.isAccessibilityElement {
+                all.append(obj)
+                if leafMatches(obj) { matched.append(obj) }
+                return
+            }
+            if let v = obj as? UIView {
+                for sub in v.subviews where !sub.isHidden && sub.alpha > 0.01 { visit(sub, depth: depth + 1) }
+            }
+        }
+        visit(view, depth: 0)
+        guard let el = matched.first ?? (all.count == 1 ? all.first : nil) else { return false }
+        return el.accessibilityActivate()
     }
 
     /// Invoke a tap gesture recognizer's registered target/action pairs with the
     /// recognizer as the argument — indistinguishable from a real finger tap to
     /// the receiving code. Returns false if the private introspection fails.
+    ///
+    /// Reads `_targets` / `_target` / `_action` via the ObjC runtime, NOT KVC:
+    /// `UIGestureRecognizerTarget` raises `NSUnknownKeyException` for
+    /// `value(forKey: "action")` (KVC cannot box a SEL ivar), and an ObjC
+    /// exception through Swift terminates the app. Runtime lookups return nil
+    /// on any mismatch instead of throwing. Verified on the iOS 26 SDK.
     private static func fireTapTargets(of gesture: UITapGestureRecognizer) -> Bool {
-        guard let records = gesture.value(forKey: "_targets") as? [NSObject], !records.isEmpty else { return false }
+        guard let targetsIvar = class_getInstanceVariable(UIGestureRecognizer.self, "_targets"),
+              let records = object_getIvar(gesture, targetsIvar) as? [NSObject], !records.isEmpty else { return false }
         var fired = false
         for record in records {
-            guard let target = record.value(forKey: "target") as? NSObject else { continue }
-            let actionName = String(describing: record.value(forKey: "action") ?? "")
-            guard !actionName.isEmpty else { continue }
-            _ = target.perform(NSSelectorFromString(actionName), with: gesture)
+            guard let targetIvar = class_getInstanceVariable(type(of: record), "_target"),
+                  let target = object_getIvar(record, targetIvar) as? NSObject,
+                  let actionIvar = class_getInstanceVariable(type(of: record), "_action") else { continue }
+            // SEL ivar: raw pointer-sized load at the ivar's offset — object_getIvar
+            // would treat the SEL as an object and over-release garbage.
+            let base = UnsafeRawPointer(Unmanaged.passUnretained(record).toOpaque())
+            guard let rawSel = base.load(fromByteOffset: ivar_getOffset(actionIvar), as: Optional<UnsafeRawPointer>.self) else { continue }
+            let action = unsafeBitCast(rawSel, to: Selector.self)
+            _ = target.perform(action, with: gesture)
             fired = true
         }
         return fired
