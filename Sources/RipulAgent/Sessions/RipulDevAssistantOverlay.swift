@@ -183,6 +183,12 @@ final class RipulDevOverlayRootVC: UIViewController {
     /// means the relay comes online before the first panel expand.
     private var sharedBridge: AgentBridge?
 
+    /// True while a bubble<->compact morph is animating. viewDidLayoutSubviews
+    /// must NOT re-assert compactFrame mid-morph (it snapped the bar to the
+    /// docked position instantly, so the grow-from-the-bubble animation
+    /// appeared to start from "nowhere near" the FAB).
+    private var compactMorphInFlight = false
+
     /// The compact bar's frame: bottom-docked by default (mini-player idiom),
     /// or the user's dragged-to Y (persisted per host in the cache suite).
     private var compactFrame: CGRect {
@@ -249,7 +255,7 @@ final class RipulDevOverlayRootVC: UIViewController {
             }
         }
         panelHost?.view.frame = view.bounds
-        if let compactHost, !compactHost.view.isHidden, compactHost.view.transform == .identity {
+        if let compactHost, !compactHost.view.isHidden, !compactMorphInFlight {
             compactHost.view.frame = compactFrame
         }
         updateInteractiveFrame()
@@ -340,6 +346,7 @@ final class RipulDevOverlayRootVC: UIViewController {
         // grows out of the bubble's exact frame (right-to-left, the reverse
         // of the collapse) with the corner radius opening from circle to 20,
         // while the bubble zoom-fades into it.
+        compactMorphInFlight = true
         host.view.isHidden = false
         bubble.isHidden = false
         let fromFrame = bubble.frame
@@ -358,6 +365,11 @@ final class RipulDevOverlayRootVC: UIViewController {
             self.bubble.isHidden = true
             self.bubble.transform = .identity
             self.bubble.alpha = 1
+            self.compactMorphInFlight = false
+            // Re-assert the interactive region at the FINAL frame — the
+            // start-of-morph update pointed it at the bubble's frame, leaving
+            // the docked bar untappable (the lockout bug).
+            self.updateInteractiveFrame()
         }
         updateInteractiveFrame()
     }
@@ -388,10 +400,16 @@ final class RipulDevOverlayRootVC: UIViewController {
             self.bubble.alpha = 1
             self.bubble.transform = .identity
         }
+        compactMorphInFlight = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.56 * ts) {
             barView.isHidden = true
             barView.alpha = 1
             barView.layer.cornerRadius = 0
+            self.compactMorphInFlight = false
+            // Interactive region now falls back to the bubble's frame — the
+            // start-of-morph update left it on the bar's old strip, which is
+            // what made the bubble untappable/undraggable after collapse.
+            self.updateInteractiveFrame()
         }
         updateInteractiveFrame()
     }
