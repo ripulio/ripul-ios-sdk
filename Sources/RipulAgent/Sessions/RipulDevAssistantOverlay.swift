@@ -274,29 +274,30 @@ final class RipulDevOverlayRootVC: UIViewController {
     /// the bubble's frame; the bar's expand button (or a bar tap) opens the
     /// panel, its minus returns to the bubble.
     func showCompact() {
-        guard compactHost == nil else {
-            compactHost?.view.isHidden = false
-            bubble.isHidden = true
-            updateInteractiveFrame()
-            return
+        if compactHost == nil {
+            if sharedBridge == nil { sharedBridge = AgentBridge() }
+            let bar = CompactAgentBarView(
+                bridge: sharedBridge!,
+                onExpand: { [weak self] in self?.overlay?.expand() },
+                onMinimize: { [weak self] in self?.hideCompactToBubble() }
+            )
+            let host = UIHostingController(rootView: bar)
+            host.view.backgroundColor = .clear
+            addChild(host)
+            host.view.frame = compactFrame
+            host.view.autoresizingMask = [.flexibleWidth, .flexibleTopMargin]
+            view.addSubview(host.view)
+            host.didMove(toParent: self)
+            compactHost = host
         }
-        if sharedBridge == nil { sharedBridge = AgentBridge() }
-        let bar = CompactAgentBarView(
-            bridge: sharedBridge!,
-            onExpand: { [weak self] in self?.overlay?.expand() },
-            onMinimize: { [weak self] in self?.hideCompactToBubble() }
-        )
-        let host = UIHostingController(rootView: bar)
-        host.view.backgroundColor = .clear
-        addChild(host)
-        host.view.frame = compactFrame
-        host.view.autoresizingMask = [.flexibleWidth, .flexibleTopMargin]
-        view.addSubview(host.view)
-        host.didMove(toParent: self)
-        compactHost = host
+        guard let host = compactHost else { return }
 
-        // Morph: bar grows from the bubble's frame (scale + radius + fade),
-        // bubble zoom-fades — same family as the panel's Springboard morph.
+        // Always re-run the appear morph (circle -> bar) — the hide animation
+        // leaves the bar at alpha 0 centered on the bubble, so a plain
+        // isHidden flip would show it invisible and off-frame (the
+        // tap-then-tap-again "compact is gone" bug).
+        host.view.isHidden = false
+        bubble.isHidden = false
         let fromFrame = bubble.frame
         let toFrame = compactFrame
         let sx = fromFrame.width / toFrame.width
