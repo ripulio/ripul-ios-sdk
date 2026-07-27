@@ -158,7 +158,18 @@ final class RipulDevOverlayRootVC: UIViewController {
     var configuration: RipulSessionsConfiguration!
     private var bubble: UIView!
     private var panelHost: UIHostingController<AnyView>?
+    private var compactHost: UIHostingController<CompactAgentBarView>?
     private var didPositionBubble = false
+    /// The console's bridge, created lazily on first use and shared with the
+    /// compact bar (which mirrors the active chat off it). Owning it here also
+    /// means the relay comes online before the first panel expand.
+    private var sharedBridge: AgentBridge?
+
+    /// The compact bar's docked frame (bottom edge, mini-player idiom).
+    private var compactFrame: CGRect {
+        let bottom = view.safeAreaInsets.bottom
+        return CGRect(x: 12, y: view.bounds.height - bottom - 72, width: view.bounds.width - 24, height: 64)
+    }
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -220,7 +231,8 @@ final class RipulDevOverlayRootVC: UIViewController {
         updateInteractiveFrame()
     }
 
-    @objc private func bubbleTapped() { overlay?.expand() }
+    /// bubble tap → compact bar (the two-state model: circle ⇄ bar ⇄ panel).
+    @objc private func bubbleTapped() { showCompact() }
 
     @objc private func bubblePanned(_ g: UIPanGestureRecognizer) {
         let t = g.translation(in: view)
@@ -245,12 +257,93 @@ final class RipulDevOverlayRootVC: UIViewController {
     }
 
     private func updateInteractiveFrame() {
-        (view.window as? RipulDevOverlayWindow)?.interactiveFrame = bubble?.frame ?? .zero
+        let win = view.window as? RipulDevOverlayWindow
+        if let compactHost, !compactHost.view.isHidden {
+            win?.interactiveFrame = compactHost.view.frame
+        } else {
+            win?.interactiveFrame = bubble?.frame ?? .zero
+        }
     }
 
     /// DEBUG: collapse animation time-scale. 1.0 = production timing (~0.56s
     /// total); raise (e.g. 5.36 ≈ 3s) to evaluate the motion stage-by-stage.
     private let collapseTimeScale: CGFloat = 1.0
+
+    /// Circle → compact bar: the live session-row toolbar (active chat's
+    /// title, tool updates, hand when the agent awaits input). Morphs out of
+    /// the bubble's frame; the bar's expand button (or a bar tap) opens the
+    /// panel, its minus returns to the bubble.
+    func showCompact() {
+        guard compactHost == nil else {
+            compactHost?.view.isHidden = false
+            bubble.isHidden = true
+            updateInteractiveFrame()
+            return
+        }
+        if sharedBridge == nil { sharedBridge = AgentBridge() }
+        let bar = CompactAgentBarView(
+            bridge: sharedBridge!,
+            onExpand: { [weak self] in self?.overlay?.expand() },
+            onMinimize: { [weak self] in self?.hideCompactToBubble() }
+        )
+        let host = UIHostingController(rootView: bar)
+        host.view.backgroundColor = .clear
+        addChild(host)
+        host.view.frame = compactFrame
+        host.view.autoresizingMask = [.flexibleWidth, .flexibleTopMargin]
+        view.addSubview(host.view)
+        host.didMove(toParent: self)
+        compactHost = host
+
+        // Morph: bar grows from the bubble's frame (scale + radius + fade),
+        // bubble zoom-fades — same family as the panel's Springboard morph.
+        let fromFrame = bubble.frame
+        let toFrame = compactFrame
+        let sx = fromFrame.width / toFrame.width
+        let sy = fromFrame.height / toFrame.height
+        host.view.alpha = 0
+        host.view.center = bubble.center
+        host.view.transform = CGAffineTransform(scaleX: sx, y: sy)
+        UIView.animate(withDuration: 0.38, delay: 0, usingSpringWithDamping: 0.85, initialSpringVelocity: 0, options: [.curveEaseOut, .beginFromCurrentState]) {
+            host.view.transform = .identity
+            host.view.frame = toFrame
+            host.view.alpha = 1
+            self.bubble.alpha = 0
+            self.bubble.transform = CGAffineTransform(scaleX: 1.3, y: 1.3)
+        } completion: { _ in
+            self.bubble.isHidden = true
+            self.bubble.transform = .identity
+            self.bubble.alpha = 1
+        }
+        updateInteractiveFrame()
+    }
+
+    /// Compact bar → circle (the bar's minus button).
+    private func hideCompactToBubble() {
+        guard let host = compactHost else { return }
+        bubble.isHidden = false
+        bubble.alpha = 0
+        bubble.transform = CGAffineTransform(scaleX: 1.15, y: 1.15)
+        UIView.animate(withDuration: 0.32, delay: 0, options: [.curveEaseIn, .beginFromCurrentState]) {
+            host.view.alpha = 0
+            host.view.center = self.bubble.center
+            host.view.transform = CGAffineTransform(scaleX: 0.2, y: 0.2)
+            self.bubble.alpha = 1
+            self.bubble.transform = .identity
+        } completion: { _ in
+            host.view.isHidden = true
+            host.view.transform = .identity
+        }
+        updateInteractiveFrame()
+    }
+
+    /// Compact bar → panel (expand button / bar tap): hide the bar and run the
+    /// usual panel morph. The bar STAYS alive behind the panel (console state
+    /// preserved); it comes back on the next collapse.
+    private func hideCompactForPanel() {
+        compactHost?.view.isHidden = true
+        updateInteractiveFrame()
+    }
 
     func showBubble() {
         // Keep the console ALIVE — hide, don't destroy. Tearing the hosting
@@ -353,6 +446,7 @@ final class RipulDevOverlayRootVC: UIViewController {
     }
 
     func showPanel() {
+        hideCompactForPanel()
         if panelHost == nil {
             // First open: mount the console (cold boot — web app load + Clerk
             // poll + list fetch). No .ignoresSafeArea(): that flag zeroes
@@ -362,6 +456,7 @@ final class RipulDevOverlayRootVC: UIViewController {
             // swipe (the showingSidebar slot — a host app has no sidebar, the
             // bubble IS the console's off-screen home) and the glass minus
             // button in the top bar's trailing accessory slot.
+            if sharedBridge == nil { sharedBridge = AgentBridge() }
             let console = AnyView(RipulAgentConsole(
                 configuration: configuration,
                 slots: RipulAgentScreenSlots(
@@ -379,7 +474,8 @@ final class RipulDevOverlayRootVC: UIViewController {
                             .uiKitIdentifier("RipulDevConsole.minimizeButton")
                         )
                     }
-                )
+                ),
+                bridge: sharedBridge
             ))
             let host = UIHostingController(rootView: console)
             host.view.backgroundColor = .systemBackground
@@ -417,6 +513,109 @@ final class RipulDevOverlayRootVC: UIViewController {
             self.bubble.transform = .identity
             self.bubble.alpha = 1
         }
+    }
+}
+
+// MARK: - Compact agent bar (live session-row toolbar)
+
+/// The compact state's content: mirrors a session row for the ACTIVE chat —
+/// status glyph, title, live tool subtitle, and a raised hand when the agent
+/// awaits input ("ready"). Expand opens the panel; minus returns to the
+/// bubble; a tap anywhere on the bar expands too (the mini-player idiom).
+@available(iOS 26.0, *)
+private struct CompactAgentBarView: View {
+    @ObservedObject var bridge: AgentBridge
+    let onExpand: () -> Void
+    let onMinimize: () -> Void
+
+    private var activeSession: ChatSession? {
+        bridge.sessions.first(where: { $0.id == bridge.activeSessionId })
+    }
+    private var phase: AgentTurnPhase? {
+        guard let s = activeSession else { return nil }
+        return bridge.sessionList.turnPhase(for: s.sourceChatId)
+    }
+    private var activity: AgentActivityEvent? {
+        guard let s = activeSession else { return nil }
+        return bridge.sessionList.latestToolActivityForList(for: s.id)
+    }
+
+    private var subtitle: String {
+        if let a = activity, let label = a.displayName {
+            if let detail = a.detail, !detail.isEmpty { return "\(label) · \(detail)" }
+            return label
+        }
+        switch phase {
+        case .running: return "Working…"
+        case .awaitingInput: return "Waiting for you"
+        case .completed: return "Done"
+        case .failed: return "Failed"
+        default: return "Ready"
+        }
+    }
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Group {
+                switch phase {
+                case .running:
+                    ProgressView().controlSize(.small)
+                case .awaitingInput:
+                    Image(systemName: "hand.raised.fill")
+                        .foregroundStyle(.orange)
+                case .completed:
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                case .failed:
+                    Image(systemName: "exclamationmark.circle.fill")
+                        .foregroundStyle(.red)
+                default:
+                    Image(systemName: "terminal.fill")
+                        .foregroundStyle(.blue)
+                }
+            }
+            .frame(width: 28, height: 28)
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(activeSession?.displayName ?? "Agent")
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                Text(subtitle)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+
+            Spacer()
+
+            Button(action: onMinimize) {
+                Image(systemName: "minus")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .frame(width: 36, height: 36)
+                    .modifier(GlassCircleModifier(glassStyle: "regular"))
+            }
+            .uiKitIdentifier("RipulDevConsole.compact.minimizeButton")
+
+            Button(action: onExpand) {
+                Image(systemName: "arrow.up.left.and.arrow.down.right")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .frame(width: 36, height: 36)
+                    .modifier(GlassCircleModifier(glassStyle: "regular"))
+            }
+            .uiKitIdentifier("RipulDevConsole.compact.expandButton")
+        }
+        .padding(.leading, 12)
+        .padding(.trailing, 8)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background {
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(.clear)
+                .glassEffect(.clear, in: .rect(cornerRadius: 20))
+        }
+        .contentShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .onTapGesture { onExpand() }
     }
 }
 #endif

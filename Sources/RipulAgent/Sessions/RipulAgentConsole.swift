@@ -42,15 +42,20 @@ public struct RipulAgentConsole: View {
 
     private let slots: RipulAgentScreenSlots
 
+    /// - Parameter bridge: optional externally-owned bridge. Pass one when the
+    ///   host needs the same connection elsewhere (e.g. the dev-assistant
+    ///   overlay's compact bar, which mirrors the active chat). Default: the
+    ///   console creates and owns its bridge.
     public init(
         configuration: RipulSessionsConfiguration,
-        slots: RipulAgentScreenSlots = .init()
+        slots: RipulAgentScreenSlots = .init(),
+        bridge: AgentBridge? = nil
     ) {
         self.configuration = configuration
         self.slots = slots
         let authStore = RipulClerkAuthStore(cache: configuration.cache)
         _authStore = StateObject(wrappedValue: authStore)
-        let bridge = AgentBridge()
+        let bridge = bridge ?? AgentBridge()
         _bridge = StateObject(wrappedValue: bridge)
         _listModel = StateObject(wrappedValue: RipulSessionListModel(
             bridge: bridge,
