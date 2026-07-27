@@ -172,6 +172,11 @@ final class RipulDevOverlayRootVC: UIViewController {
     private var bubble: UIView!
     private var panelHost: UIHostingController<AnyView>?
     private var compactHost: UIHostingController<CompactAgentBarView>?
+    /// Where the panel returns on minimize: the state you expanded FROM
+    /// (compact bar or circle). expand() preserves it; showCompact /
+    /// hideCompactToBubble set it.
+    private enum MinimizedState { case bubble, compact }
+    private var minimizedState: MinimizedState = .bubble
     private var didPositionBubble = false
     /// The console's bridge, created lazily on first use and shared with the
     /// compact bar (which mirrors the active chat off it). Owning it here also
@@ -311,6 +316,7 @@ final class RipulDevOverlayRootVC: UIViewController {
     /// the bubble's frame; the bar's expand button (or a bar tap) opens the
     /// panel, its minus returns to the bubble.
     func showCompact() {
+        minimizedState = .compact
         if compactHost == nil {
             if sharedBridge == nil { sharedBridge = AgentBridge() }
             let bar = CompactAgentBarView(
@@ -359,6 +365,7 @@ final class RipulDevOverlayRootVC: UIViewController {
 
     /// Compact bar → circle (the bar's minus button).
     private func hideCompactToBubble() {
+        minimizedState = .bubble
         guard let host = compactHost else { return }
         bubble.isHidden = false
         bubble.alpha = 0
@@ -385,6 +392,18 @@ final class RipulDevOverlayRootVC: UIViewController {
     }
 
     func showBubble() {
+        // Minimize returns to WHERE YOU EXPANDED FROM: the compact bar when
+        // the panel came from compact, the circle when it came from the bubble.
+        if minimizedState == .compact, compactHost?.view != nil {
+            collapseToMinimized(targetFrame: compactFrame, cornerRadius: 20, reveal: .compact)
+        } else {
+            collapseToMinimized(targetFrame: bubble.frame, cornerRadius: bubble.frame.width / 2, reveal: .bubble)
+        }
+    }
+
+    private enum MinimizedReveal { case bubble, compact }
+
+    private func collapseToMinimized(targetFrame: CGRect, cornerRadius: CGFloat, reveal: MinimizedReveal) {
         // Keep the console ALIVE — hide, don't destroy. Tearing the hosting
         // controller down here killed the AgentBridge + WKWebView + relay +
         // auth poller, so every re-entry paid a full cold boot (web app fetch,
@@ -392,8 +411,12 @@ final class RipulDevOverlayRootVC: UIViewController {
         // happens via dismiss().
         guard let panel = panelHost?.view, !panel.isHidden else {
             panelHost?.view.isHidden = true
-            bubble.isHidden = false
-            updateInteractiveFrame()
+            if reveal == .compact {
+                showCompact()
+            } else {
+                bubble.isHidden = false
+                updateInteractiveFrame()
+            }
             (view.window as? RipulDevOverlayWindow)?.isPassthrough = true
             return
         }
@@ -412,9 +435,16 @@ final class RipulDevOverlayRootVC: UIViewController {
         // 2. The reveal behind the shrink is WAC's mostly-white UI, so the
         //    collapse needs a dim scrim as its backdrop (SpringBoard closes
         //    against a dimmed wallpaper) or it reads as a dissolve into void.
-        bubble.isHidden = false
-        bubble.alpha = 0
-        bubble.transform = CGAffineTransform(scaleX: 1.1, y: 1.1)
+        switch reveal {
+        case .bubble:
+            bubble.isHidden = false
+            bubble.alpha = 0
+            bubble.transform = CGAffineTransform(scaleX: 1.1, y: 1.1)
+        case .compact:
+            compactHost?.view.isHidden = false
+            compactHost?.view.alpha = 0
+            compactHost?.view.transform = CGAffineTransform(scaleX: 1.05, y: 1.05)
+        }
 
         let scrim = UIView(frame: view.bounds)
         scrim.backgroundColor = UIColor.black.withAlphaComponent(0.3)
@@ -428,7 +458,7 @@ final class RipulDevOverlayRootVC: UIViewController {
         // clip it — the iOS-close mask behavior — while Liquid Glass
         // materializes under the dissolving content, so what merges with the
         // (glass) bubble is an identical glass droplet.
-        let bubbleFrame = bubble.frame
+        let targetFrame = targetFrame
         let morph = UIView(frame: panel.frame)
         morph.backgroundColor = .clear
         morph.layer.masksToBounds = true
@@ -450,13 +480,13 @@ final class RipulDevOverlayRootVC: UIViewController {
         view.addSubview(morph)
         panel.isHidden = true
 
-        let s = bubbleFrame.width / panel.bounds.width
+        let s = targetFrame.width / panel.bounds.width
         let ts = collapseTimeScale
         UIView.animate(withDuration: 0.36 * ts, delay: 0, usingSpringWithDamping: 0.92, initialSpringVelocity: 0, options: [.beginFromCurrentState]) {
-            morph.frame = bubbleFrame
-            morph.layer.cornerRadius = bubbleFrame.width / 2
+            morph.frame = targetFrame
+            morph.layer.cornerRadius = cornerRadius
             snapshot.transform = CGAffineTransform(scaleX: s, y: s)
-            snapshot.center = CGPoint(x: bubbleFrame.width / 2, y: bubbleFrame.height / 2)
+            snapshot.center = CGPoint(x: targetFrame.width / 2, y: targetFrame.height / 2)
         }
         UIView.animate(withDuration: 0.14 * ts, delay: 0.20 * ts, options: [.curveEaseIn]) {
             snapshot.alpha = 0
@@ -469,8 +499,14 @@ final class RipulDevOverlayRootVC: UIViewController {
             scrim.alpha = 0
         }
         UIView.animate(withDuration: 0.42 * ts, delay: 0.12 * ts, usingSpringWithDamping: 0.72, initialSpringVelocity: 0, options: [.beginFromCurrentState]) {
-            self.bubble.alpha = 1
-            self.bubble.transform = .identity
+            switch reveal {
+            case .bubble:
+                self.bubble.alpha = 1
+                self.bubble.transform = .identity
+            case .compact:
+                self.compactHost?.view.alpha = 1
+                self.compactHost?.view.transform = .identity
+            }
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.56 * ts) {
             morph.removeFromSuperview()
