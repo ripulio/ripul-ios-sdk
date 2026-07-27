@@ -31,16 +31,41 @@ public struct ConnectionDiagnosis {
         }
 
         // Classified codes from AgentBridge.classifyJsCallFailure and the web
-        // callables' errorCode field — match these BEFORE the keyword sniffs so
-        // e.g. "web-context-dead (was: ... timed out)" lands on the right case.
-        if lower.contains("web-context-dead") || lower.contains("unsupported type") {
+        // callables' errorCode field are a STABLE PREFIX on the raw string, and
+        // the raw text they wrap routinely contains keywords belonging to a
+        // DIFFERENT case — "not-ready: … (was: …unsupported type)" is the common
+        // one. Substring-sniffing that string picked the wrong case and told the
+        // user the app had reloaded itself when the code path had deliberately
+        // NOT reloaded it. So: match prefixes first and return; only genuinely
+        // unclassified errors reach the keyword sniffs further down.
+        func code(_ prefix: String) -> Bool { lower.hasPrefix(prefix + ":") }
+
+        if code("web-context-dead") {
             return d("The app stopped responding and reloaded itself",
                      "Wait a few seconds for it to come back, then try again. If this keeps happening, copy the details below and send them to us.")
         }
-        if lower.contains("web-crashed") {
+        if code("web-crashed") {
             return d("The app hit an internal error and reloaded itself",
                      "Wait a few seconds, then try again. The crash details below tell us exactly what broke — please send them to us.")
         }
+        if code("callables-absent") {
+            return d("The app loaded without its connection bridge",
+                     "It's been reloaded automatically — try again in a few seconds. This one is a bug on our side: please copy the details below and send them to us.")
+        }
+        if code("not-ready") {
+            return d("Ripul is still starting up",
+                     "Give it a moment, then try again.")
+        }
+        if code("no-web-view") {
+            return d("The app view isn't ready yet",
+                     "Give it a moment, then try again. If it persists, restart Ripul.")
+        }
+        if code("machine-offline") {
+            return d("That machine looks offline",
+                     "Its Ripul app hasn't checked in recently. Make sure Ripul is open and awake on it (and the machine isn't asleep), then try again.")
+        }
+
+        // Unclassified — fall back to keyword sniffing on the raw text.
         if lower.contains("machine-offline") {
             return d("That machine looks offline",
                      "Its Ripul app hasn't checked in recently. Make sure Ripul is open and awake on it (and the machine isn't asleep), then try again.")
@@ -60,6 +85,11 @@ public struct ConnectionDiagnosis {
         if lower.contains("not ready") || lower.contains("bridge") || lower.contains("starting") {
             return d("Ripul is still starting up",
                      "Give it a moment, then try again.")
+        }
+        // Last resort: a bare WKError#5 that never went through classifyJsCallFailure.
+        if lower.contains("unsupported type") {
+            return d("The app stopped responding",
+                     "Wait a few seconds, then try again. If this keeps happening, copy the details below and send them to us.")
         }
         return d("Couldn’t connect",
                  "Try again. If it keeps happening, expand the details below and send them to us.")

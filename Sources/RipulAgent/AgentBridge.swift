@@ -1823,8 +1823,17 @@ public final class AgentBridge: NSObject, ObservableObject {
         /// JS runs, but the React tree crashed (window.__ripulWebAppCrashed set) —
         /// remote-session providers are gone until the page reloads.
         case webCrashed
-        /// JS runs, but the __ripul* callables aren't installed yet (boot race).
+        /// JS runs, but the __ripul* callables aren't installed YET and the page
+        /// is plausibly still booting (young document / not `complete`).
+        /// Retrying genuinely can succeed.
         case callablesMissing
+        /// JS runs, the page has SETTLED (or its boot beacon says the boot chain
+        /// finished or failed), and the callables still aren't there. Retrying will
+        /// never fix this — the web boot chain broke. Distinct from
+        /// `callablesMissing` so we stop telling the user to "try again in a
+        /// moment" about a page that is done trying.
+        case callablesAbsent
+
         /// Even a string-literal eval fails — the context is wedged or the
         /// content process is gone. Only a reload recovers this.
         case contextDead
@@ -1846,14 +1855,93 @@ public final class AgentBridge: NSObject, ObservableObject {
         return "\(ns.domain)#\(ns.code) \(name)"
     }
 
+    /// Everything the probe canary could see, gathered from PLAIN BROWSER APIs.
+    ///
+    /// Deliberately does not touch `window.__ripulDiagnostics`: that callable is
+    /// installed by `registerNativeCallables()`, the very thing that is missing
+    /// in the state we most need to explain — so the old forensic path went dark
+    /// exactly when it mattered and every report came back empty.
+    public struct WebContextProbe {
+        public var health: WebContextHealth
+        /// `document.readyState` at probe time.
+        public var readyState: String?
+        /// Age of the current document — separates a boot race from a dead boot.
+        public var docAgeMs: Int?
+        /// Which page is actually loaded (a non-app shell has no callables by design).
+        public var path: String?
+        /// `navigation` timing type: navigate / reload / back_forward.
+        public var navType: String?
+        /// Does the UA carry `RipulNative`? If false, `isNativeAppMode()` said no
+        /// and the callables were never even attempted.
+        public var uaNative: Bool?
+        /// How many `__ripul*` globals exist. 0 = the boot chain never got there;
+        /// many-but-not-ours = partial/foreign registration.
+        public var ripulGlobals: Int?
+        /// Last phase recorded by the web boot beacon, plus its error if it threw.
+        public var bootPhase: String?
+        public var bootError: String?
+        public var build: String?
+        /// The canary's raw JSON, for the copyable technical details.
+        public var raw: String?
+
+        /// One-line digest for logs and the user-visible error string. This is
+        /// what turns "it flapped again" into a diagnosable event.
+        public var digest: String {
+            var parts: [String] = []
+            if let path { parts.append("path=\(path)") }
+            if let readyState { parts.append("ready=\(readyState)") }
+            if let docAgeMs { parts.append("age=\(docAgeMs / 1000)s") }
+            if let navType { parts.append("nav=\(navType)") }
+            if let ripulGlobals { parts.append("globals=\(ripulGlobals)") }
+            if let uaNative { parts.append("uaNative=\(uaNative)") }
+            if let bootPhase { parts.append("boot=\(bootPhase)") }
+            if let bootError { parts.append("bootErr=\(bootError.prefix(120))") }
+            if let build { parts.append("build=\(build)") }
+            return parts.joined(separator: " ")
+        }
+    }
+
+    /// A document younger than this is given the benefit of the doubt as a boot
+    /// race; past it, absent callables are treated as a broken boot, not a slow one.
+    private static let callableInstallGraceMs = 8_000
+
+    /// Back-compat shim for call sites that only need the verdict.
+    public func probeWebContextHealth() async -> WebContextHealth {
+        await probeWebContext().health
+    }
+
     /// Probe the JS context with a canary that returns a plain string (always
     /// bridgeable — a probe must never itself fail with "unsupported type").
     /// A canary failure is captured with its WKError code so `.contextDead`
     /// carries WHY (process gone vs suspended vs unbridgeable).
-    public func probeWebContextHealth() async -> WebContextHealth {
-        guard let webView else { return .noWebView }
+    public func probeWebContext() async -> WebContextProbe {
+        guard let webView else { return WebContextProbe(health: .noWebView) }
         let canary = """
-        JSON.stringify({callables: !!window.__ripulOpenRemoteSession, crashed: !!window.__ripulWebAppCrashed});
+        (function () {
+          try {
+            var w = window, keys = [];
+            try { keys = Object.keys(w).filter(function (k) { return k.indexOf('__ripul') === 0; }); } catch (e) {}
+            var nav = null;
+            try { var n = performance.getEntriesByType('navigation')[0]; if (n) nav = n.type; } catch (e) {}
+            var boot = null;
+            try { boot = w.__ripulBoot || null; } catch (e) {}
+            return JSON.stringify({
+              callables: !!w.__ripulOpenRemoteSession,
+              crashed: !!w.__ripulWebAppCrashed,
+              globals: keys.length,
+              globalNames: keys.slice(0, 12),
+              readyState: document.readyState,
+              docAgeMs: Math.round(performance.now()),
+              path: location.pathname,
+              nav: nav,
+              uaNative: (navigator.userAgent || '').indexOf('RipulNative') >= 0,
+              bootPhase: boot ? boot.phase : null,
+              bootError: boot ? (boot.error || null) : null,
+              bootHistory: boot ? boot.history : null,
+              build: boot ? boot.build : null
+            });
+          } catch (e) { return JSON.stringify({ probeError: String(e) }); }
+        })();
         """
         let raw: String? = await withCheckedContinuation { (cont: CheckedContinuation<String?, Never>) in
             webView.evaluateJavaScript(canary) { [weak self] value, error in
@@ -1870,11 +1958,35 @@ public final class AgentBridge: NSObject, ObservableObject {
         guard let raw,
               let data = raw.data(using: .utf8),
               let dict = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
-            return .contextDead
+            return WebContextProbe(health: .contextDead, raw: raw)
         }
-        if (dict["crashed"] as? Bool) == true { return .webCrashed }
-        if (dict["callables"] as? Bool) != true { return .callablesMissing }
-        return .healthy
+
+        var probe = WebContextProbe(health: .healthy)
+        probe.readyState = dict["readyState"] as? String
+        probe.docAgeMs = dict["docAgeMs"] as? Int
+        probe.path = dict["path"] as? String
+        probe.navType = dict["nav"] as? String
+        probe.uaNative = dict["uaNative"] as? Bool
+        probe.ripulGlobals = dict["globals"] as? Int
+        probe.bootPhase = dict["bootPhase"] as? String
+        probe.bootError = dict["bootError"] as? String
+        probe.build = dict["build"] as? String
+        probe.raw = raw
+
+        if (dict["crashed"] as? Bool) == true {
+            probe.health = .webCrashed
+        } else if (dict["callables"] as? Bool) != true {
+            // Booting, or broken? The boot beacon answers directly when present:
+            // a terminal phase means the chain ran to its end WITHOUT registering.
+            // Without a beacon (old bundle, or a shell that never loads the app),
+            // fall back to document age + readyState.
+            let terminalPhases = ["boot-complete", "boot-failed", "native-mode-false", "sidepanel-initialized"]
+            let bootSettled = probe.bootPhase.map { terminalPhases.contains($0) } ?? false
+            let ageSettled = (probe.docAgeMs ?? 0) >= Self.callableInstallGraceMs
+                && (probe.readyState ?? "") == "complete"
+            probe.health = (bootSettled || ageSettled) ? .callablesAbsent : .callablesMissing
+        }
+        return probe
     }
 
     // MARK: Escalating self-heal ladder
@@ -2044,7 +2156,9 @@ public final class AgentBridge: NSObject, ObservableObject {
                 self.healAttempts = 0
                 self.deferredHealTask?.cancel()
                 self.deferredHealTask = nil
-            case .contextDead, .webCrashed:
+            case .contextDead, .webCrashed, .callablesAbsent:
+                // callablesAbsent post-heal means the RELOAD came back without a
+                // native bridge too — escalating to the purge rung is the point.
                 self.handleConsoleLog("WARN: [WEBVIEW_HEAL] post-heal probe \(health.rawValue) — escalating")
                 await self.healWebContext(reason: "post-heal still \(health.rawValue)")
             case .callablesMissing, .noWebView:
@@ -2075,21 +2189,40 @@ public final class AgentBridge: NSObject, ObservableObject {
     @available(iOS 15.0, macOS 13.0, *)
     private func classifyJsCallFailure(_ rawDescription: String, callable: String) async -> String {
         handleConsoleLog("ERROR: [CONN_DIAG] \(callable) failed: \(rawDescription) — probing web context")
-        switch await probeWebContextHealth() {
+        let probe = await probeWebContext()
+        // Log the FULL probe every time. This failure flaps, and a flapping
+        // failure is only diagnosable from a trail of snapshots — one screenshot
+        // of an alert is not enough to tell a boot race from a broken boot.
+        handleConsoleLog("WARN: [CONN_DIAG] \(callable) probe=\(probe.health.rawValue) \(probe.digest)")
+        if let raw = probe.raw {
+            handleConsoleLog("WARN: [CONN_DIAG] \(callable) probe raw: \(raw)")
+        }
+        let digest = probe.digest.isEmpty ? rawDescription : "\(probe.digest) | was: \(rawDescription)"
+
+        switch probe.health {
         case .contextDead:
             let healed = await healWebContext(reason: "\(callable): \(rawDescription)")
             return healed
-                ? "web-context-dead: the app's web layer stopped responding and was reloaded automatically — try again in a few seconds. (was: \(rawDescription))"
-                : "web-context-dead: the app's web layer is not responding; a reload was already attempted recently. (was: \(rawDescription))"
+                ? "web-context-dead: the app's web layer stopped responding and was reloaded automatically — try again in a few seconds. (\(digest))"
+                : "web-context-dead: the app's web layer is not responding; a reload was already attempted recently. (\(digest))"
         case .webCrashed:
             let healed = await healWebContext(reason: "\(callable): web app crashed")
             return healed
-                ? "web-crashed: the app hit an internal error and was reloaded automatically — try again in a few seconds. (was: \(rawDescription))"
-                : "web-crashed: the app hit an internal error; a reload was already attempted recently. (was: \(rawDescription))"
+                ? "web-crashed: the app hit an internal error and was reloaded automatically — try again in a few seconds. (\(digest))"
+                : "web-crashed: the app hit an internal error; a reload was already attempted recently. (\(digest))"
         case .callablesMissing:
-            return "not ready: the app is still starting up — try again in a moment. (was: \(rawDescription))"
+            // Genuinely mid-boot: young document, boot chain still running.
+            // "Try again in a moment" is honest here and only here.
+            return "not-ready: the app's web layer is still starting up — try again in a moment. (\(digest))"
+        case .callablesAbsent:
+            // The page finished loading WITHOUT its native bridge. Retrying
+            // cannot fix this, so heal rather than telling the user to wait.
+            let healed = await healWebContext(reason: "\(callable): callables absent after boot — \(probe.digest)")
+            return healed
+                ? "callables-absent: the app's web layer loaded without its native bridge and was reloaded automatically — try again in a few seconds. (\(digest))"
+                : "callables-absent: the app's web layer loaded without its native bridge; a reload was already attempted recently. (\(digest))"
         case .noWebView:
-            return "no web view attached. (was: \(rawDescription))"
+            return "no-web-view: no web view is attached. (\(digest))"
         case .healthy:
             // The context is fine — the failure is in the call itself. Attach
             // the web diagnostics snapshot to the console log for forensics.

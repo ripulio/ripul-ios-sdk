@@ -239,9 +239,8 @@ final class RipulDevOverlayRootVC: UIViewController {
     }
 
     /// DEBUG: collapse animation time-scale. 1.0 = production timing (~0.56s
-    /// total); 5.36 stretches it to ~3s so the motion can be evaluated.
-    /// Set back to 1 when the timings are signed off.
-    private let collapseTimeScale: CGFloat = 5.36
+    /// total); raise (e.g. 5.36 ≈ 3s) to evaluate the motion stage-by-stage.
+    private let collapseTimeScale: CGFloat = 1.0
 
     func showBubble() {
         // Keep the console ALIVE — hide, don't destroy. Tearing the hosting
@@ -261,34 +260,69 @@ final class RipulDevOverlayRootVC: UIViewController {
         // corner radius climbing to the icon circle), fading only in the last
         // beat; the bubble pops in LATE from slightly-large with a gentle
         // overshoot — the icon "catches" the app.
+        //
+        // Two on-device lessons baked in (see docs/dev-console-minimize-morph-handover.md):
+        // 1. NEVER transform the live panel — its WKWebView composites out of
+        //    process and blanks to systemBackground white mid-transform (the
+        //    freeze-overlay precedent in SlidePanelOverlay). Morph a
+        //    render-server snapshot instead; the live panel is hidden under it
+        //    untouched, so keep-alive is unaffected.
+        // 2. The reveal behind the shrink is WAC's mostly-white UI, so the
+        //    collapse needs a dim scrim as its backdrop (SpringBoard closes
+        //    against a dimmed wallpaper) or it reads as a dissolve into void.
         bubble.isHidden = false
         bubble.alpha = 0
         bubble.transform = CGAffineTransform(scaleX: 1.1, y: 1.1)
+
+        let scrim = UIView(frame: view.bounds)
+        scrim.backgroundColor = UIColor.black.withAlphaComponent(0.3)
+        scrim.isUserInteractionEnabled = false
+        view.insertSubview(scrim, at: 0)
+
+        let morph = UIView(frame: panel.frame)
+        morph.backgroundColor = .systemBackground
+        morph.layer.masksToBounds = true
+        morph.isUserInteractionEnabled = false
+        let snapshot = panel.snapshotView(afterScreenUpdates: false) ?? {
+            // Fallback: rasterize the hierarchy. Blank web tiles here are no
+            // worse than what snapshotView failing would have given us.
+            let image = UIGraphicsImageRenderer(bounds: panel.bounds).image { _ in
+                panel.drawHierarchy(in: panel.bounds, afterScreenUpdates: false)
+            }
+            return UIImageView(image: image)
+        }()
+        snapshot.frame = morph.bounds
+        morph.addSubview(snapshot)
+        view.addSubview(morph)
+        panel.isHidden = true
+
         let s = bubble.bounds.width / view.bounds.width
         let endRadius = (bubble.bounds.width / 2) / s
-        panel.layer.masksToBounds = true
         let ts = collapseTimeScale
         UIView.animate(withDuration: 0.36 * ts, delay: 0, usingSpringWithDamping: 0.92, initialSpringVelocity: 0, options: [.beginFromCurrentState]) {
-            panel.transform = CGAffineTransform(scaleX: s, y: s)
-            panel.center = self.bubble.center
-            panel.layer.cornerRadius = endRadius
+            morph.transform = CGAffineTransform(scaleX: s, y: s)
+            morph.center = self.bubble.center
+            morph.layer.cornerRadius = endRadius
         }
         UIView.animate(withDuration: 0.09 * ts, delay: 0.26 * ts, options: [.curveEaseIn]) {
-            panel.alpha = 0
+            morph.alpha = 0
+        }
+        UIView.animate(withDuration: 0.26 * ts, delay: 0.24 * ts, options: [.curveEaseOut]) {
+            scrim.alpha = 0
         }
         UIView.animate(withDuration: 0.42 * ts, delay: 0.12 * ts, usingSpringWithDamping: 0.72, initialSpringVelocity: 0, options: [.beginFromCurrentState]) {
             self.bubble.alpha = 1
             self.bubble.transform = .identity
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.56 * ts) {
-            panel.isHidden = true
-            panel.transform = .identity
-            panel.center = CGPoint(x: self.view.bounds.midX, y: self.view.bounds.midY)
-            panel.layer.cornerRadius = 0
-            panel.alpha = 1
-            panel.layer.masksToBounds = false
+            morph.removeFromSuperview()
+            scrim.removeFromSuperview()
             self.updateInteractiveFrame()
-            (self.view.window as? RipulDevOverlayWindow)?.isPassthrough = true
+            // Skip the passthrough flip if the user re-expanded mid-collapse —
+            // a live panel behind a bubble-only hit region would be untappable.
+            if self.panelHost?.view.isHidden == true {
+                (self.view.window as? RipulDevOverlayWindow)?.isPassthrough = true
+            }
         }
     }
 
