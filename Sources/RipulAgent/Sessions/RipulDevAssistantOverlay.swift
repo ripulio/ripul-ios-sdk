@@ -72,9 +72,10 @@ public final class RipulDevAssistantOverlay {
         (window?.rootViewController as? RipulDevOverlayRootVC)?.showPanel()
     }
 
-    /// Minimize to the bubble (console stays warm).
+    /// Minimize to the bubble (console stays warm). The panel shrinks back
+    /// into the bubble — the pass-through flip happens when that animation
+    /// completes so the panel stays interactive while shrinking.
     public func collapse() {
-        window?.isPassthrough = true
         (window?.rootViewController as? RipulDevOverlayRootVC)?.showBubble()
     }
 
@@ -243,13 +244,41 @@ final class RipulDevOverlayRootVC: UIViewController {
         // auth poller, so every re-entry paid a full cold boot (web app fetch,
         // Clerk re-poll, machines/sessions refetch). A real teardown still
         // happens via dismiss().
-        panelHost?.view.isHidden = true
+        guard let panel = panelHost?.view, !panel.isHidden else {
+            panelHost?.view.isHidden = true
+            bubble.isHidden = false
+            updateInteractiveFrame()
+            (view.window as? RipulDevOverlayWindow)?.isPassthrough = true
+            return
+        }
+        // Springboard close: the panel shrinks back into the bubble (scale +
+        // corner radius + fade), the bubble fades/scales in to receive it.
         bubble.isHidden = false
-        updateInteractiveFrame()
+        bubble.alpha = 0
+        bubble.transform = CGAffineTransform(scaleX: 0.85, y: 0.85)
+        let s = bubble.bounds.width / view.bounds.width
+        let endRadius = (bubble.bounds.width / 2) / s
+        panel.layer.masksToBounds = true
+        UIView.animate(withDuration: 0.38, delay: 0, options: [.curveEaseIn, .beginFromCurrentState]) {
+            panel.transform = CGAffineTransform(scaleX: s, y: s)
+            panel.center = self.bubble.center
+            panel.layer.cornerRadius = endRadius
+            panel.alpha = 0
+            self.bubble.alpha = 1
+            self.bubble.transform = .identity
+        } completion: { _ in
+            panel.isHidden = true
+            panel.transform = .identity
+            panel.center = CGPoint(x: self.view.bounds.midX, y: self.view.bounds.midY)
+            panel.layer.cornerRadius = 0
+            panel.alpha = 1
+            panel.layer.masksToBounds = false
+            self.updateInteractiveFrame()
+            (self.view.window as? RipulDevOverlayWindow)?.isPassthrough = true
+        }
     }
 
     func showPanel() {
-        bubble.isHidden = true
         if panelHost == nil {
             // First open: mount the console (cold boot — web app load + Clerk
             // poll + list fetch). No .ignoresSafeArea(): that flag zeroes
@@ -289,6 +318,30 @@ final class RipulDevOverlayRootVC: UIViewController {
         } else {
             // Re-open: console is already warm (web view + relay + auth) — just show it.
             panelHost?.view.isHidden = false
+        }
+        // Springboard launch: the panel grows out of the bubble (scale +
+        // corner radius + fade from the bubble's frame to fullscreen) while
+        // the bubble zoom-fades away into it.
+        guard let panel = panelHost?.view else { return }
+        let s = bubble.bounds.width / view.bounds.width
+        let startRadius = (bubble.bounds.width / 2) / s
+        panel.layer.masksToBounds = true
+        panel.alpha = 0
+        panel.center = bubble.center
+        panel.transform = CGAffineTransform(scaleX: s, y: s)
+        panel.layer.cornerRadius = startRadius
+        UIView.animate(withDuration: 0.45, delay: 0, usingSpringWithDamping: 0.85, initialSpringVelocity: 0, options: [.curveEaseOut, .beginFromCurrentState]) {
+            panel.transform = .identity
+            panel.center = CGPoint(x: self.view.bounds.midX, y: self.view.bounds.midY)
+            panel.layer.cornerRadius = 0
+            panel.alpha = 1
+            self.bubble.transform = CGAffineTransform(scaleX: 1.4, y: 1.4)
+            self.bubble.alpha = 0
+        } completion: { _ in
+            panel.layer.masksToBounds = false
+            self.bubble.isHidden = true
+            self.bubble.transform = .identity
+            self.bubble.alpha = 1
         }
     }
 }
