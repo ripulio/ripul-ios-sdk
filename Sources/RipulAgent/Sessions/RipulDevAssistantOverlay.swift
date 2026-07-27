@@ -238,6 +238,11 @@ final class RipulDevOverlayRootVC: UIViewController {
         (view.window as? RipulDevOverlayWindow)?.interactiveFrame = bubble?.frame ?? .zero
     }
 
+    /// DEBUG: collapse animation time-scale. 1.0 = production timing (~0.56s
+    /// total); 5.36 stretches it to ~3s so the motion can be evaluated.
+    /// Set back to 1 when the timings are signed off.
+    private let collapseTimeScale: CGFloat = 5.36
+
     func showBubble() {
         // Keep the console ALIVE — hide, don't destroy. Tearing the hosting
         // controller down here killed the AgentBridge + WKWebView + relay +
@@ -262,19 +267,20 @@ final class RipulDevOverlayRootVC: UIViewController {
         let s = bubble.bounds.width / view.bounds.width
         let endRadius = (bubble.bounds.width / 2) / s
         panel.layer.masksToBounds = true
-        UIView.animate(withDuration: 0.36, delay: 0, usingSpringWithDamping: 0.92, initialSpringVelocity: 0, options: [.beginFromCurrentState]) {
+        let ts = collapseTimeScale
+        UIView.animate(withDuration: 0.36 * ts, delay: 0, usingSpringWithDamping: 0.92, initialSpringVelocity: 0, options: [.beginFromCurrentState]) {
             panel.transform = CGAffineTransform(scaleX: s, y: s)
             panel.center = self.bubble.center
             panel.layer.cornerRadius = endRadius
         }
-        UIView.animate(withDuration: 0.09, delay: 0.26, options: [.curveEaseIn]) {
+        UIView.animate(withDuration: 0.09 * ts, delay: 0.26 * ts, options: [.curveEaseIn]) {
             panel.alpha = 0
         }
-        UIView.animate(withDuration: 0.42, delay: 0.12, usingSpringWithDamping: 0.72, initialSpringVelocity: 0, options: [.beginFromCurrentState]) {
+        UIView.animate(withDuration: 0.42 * ts, delay: 0.12 * ts, usingSpringWithDamping: 0.72, initialSpringVelocity: 0, options: [.beginFromCurrentState]) {
             self.bubble.alpha = 1
             self.bubble.transform = .identity
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.56) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.56 * ts) {
             panel.isHidden = true
             panel.transform = .identity
             panel.center = CGPoint(x: self.view.bounds.midX, y: self.view.bounds.midY)
