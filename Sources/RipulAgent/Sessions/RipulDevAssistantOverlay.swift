@@ -336,22 +336,21 @@ final class RipulDevOverlayRootVC: UIViewController {
         }
         guard let host = compactHost else { return }
 
-        // Always re-run the appear morph (circle -> bar) — the hide animation
-        // leaves the bar at alpha 0 centered on the bubble, so a plain
-        // isHidden flip would show it invisible and off-frame (the
-        // tap-then-tap-again "compact is gone" bug).
+        // Always re-run the appear morph (circle -> bar): the bar's frame
+        // grows out of the bubble's exact frame (right-to-left, the reverse
+        // of the collapse) with the corner radius opening from circle to 20,
+        // while the bubble zoom-fades into it.
         host.view.isHidden = false
         bubble.isHidden = false
         let fromFrame = bubble.frame
         let toFrame = compactFrame
-        let sx = fromFrame.width / toFrame.width
-        let sy = fromFrame.height / toFrame.height
+        host.view.frame = fromFrame
+        host.view.layer.cornerRadius = fromFrame.width / 2
+        host.view.layer.masksToBounds = true
         host.view.alpha = 0
-        host.view.center = bubble.center
-        host.view.transform = CGAffineTransform(scaleX: sx, y: sy)
         UIView.animate(withDuration: 0.38, delay: 0, usingSpringWithDamping: 0.85, initialSpringVelocity: 0, options: [.curveEaseOut, .beginFromCurrentState]) {
-            host.view.transform = .identity
             host.view.frame = toFrame
+            host.view.layer.cornerRadius = 20
             host.view.alpha = 1
             self.bubble.alpha = 0
             self.bubble.transform = CGAffineTransform(scaleX: 1.3, y: 1.3)
@@ -363,22 +362,36 @@ final class RipulDevOverlayRootVC: UIViewController {
         updateInteractiveFrame()
     }
 
-    /// Compact bar → circle (the bar's minus button).
+    /// Compact bar → circle (the bar's minus button). The bar collapses
+    /// LEFT TO RIGHT: its frame converges onto the bubble's exact frame while
+    /// the corner radius climbs to the circle — same frame-convergence family
+    /// as the panel collapse — then the glass FAB pops in to receive it.
     private func hideCompactToBubble() {
         minimizedState = .bubble
-        guard let host = compactHost else { return }
+        guard let host = compactHost, let barView = host.view else { return }
+        let ts = collapseTimeScale
+        let target = bubble.frame
         bubble.isHidden = false
         bubble.alpha = 0
-        bubble.transform = CGAffineTransform(scaleX: 1.15, y: 1.15)
-        UIView.animate(withDuration: 0.32, delay: 0, options: [.curveEaseIn, .beginFromCurrentState]) {
-            host.view.alpha = 0
-            host.view.center = self.bubble.center
-            host.view.transform = CGAffineTransform(scaleX: 0.2, y: 0.2)
+        bubble.transform = CGAffineTransform(scaleX: 1.1, y: 1.1)
+        barView.layer.masksToBounds = true
+        UIView.animate(withDuration: 0.36 * ts, delay: 0, usingSpringWithDamping: 0.92, initialSpringVelocity: 0, options: [.beginFromCurrentState]) {
+            barView.frame = target
+            barView.layer.cornerRadius = target.width / 2
+        }
+        // Content fades out mid-collapse so the squash never reads.
+        UIView.animate(withDuration: 0.12 * ts, delay: 0.18 * ts, options: [.curveEaseIn]) {
+            barView.alpha = 0
+        }
+        // The glass FAB pops in late with a gentle overshoot.
+        UIView.animate(withDuration: 0.42 * ts, delay: 0.12 * ts, usingSpringWithDamping: 0.72, initialSpringVelocity: 0, options: [.beginFromCurrentState]) {
             self.bubble.alpha = 1
             self.bubble.transform = .identity
-        } completion: { _ in
-            host.view.isHidden = true
-            host.view.transform = .identity
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.56 * ts) {
+            barView.isHidden = true
+            barView.alpha = 1
+            barView.layer.cornerRadius = 0
         }
         updateInteractiveFrame()
     }
@@ -654,14 +667,6 @@ private struct CompactAgentBarView: View {
             }
             .uiKitIdentifier("RipulDevConsole.compact.minimizeButton")
 
-            Button(action: onExpand) {
-                Image(systemName: "arrow.up.left.and.arrow.down.right")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(.primary)
-                    .frame(width: 36, height: 36)
-                    .modifier(GlassCircleModifier(glassStyle: "regular"))
-            }
-            .uiKitIdentifier("RipulDevConsole.compact.expandButton")
         }
         .padding(.leading, 12)
         .padding(.trailing, 8)
