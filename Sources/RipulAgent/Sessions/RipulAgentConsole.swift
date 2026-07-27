@@ -98,6 +98,9 @@ public struct RipulAgentConsole: View {
                 ConsoleLogsTool(bridge: bridge),
                 NetworkLogsTool(bridge: bridge),
                 InspectScreenTool(bridge: bridge),
+                TapElementTool(),
+                TypeTextTool(),
+                ScrollElementTool(),
             ])
             // Host-contributed dev tools, registered ADDITIVELY via `register` rather than
             // `registerBuiltInTools` — the latter REPLACES the built-in list, which is how
