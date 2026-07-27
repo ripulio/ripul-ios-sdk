@@ -606,82 +606,40 @@ private struct CompactAgentBarView: View {
     private var activeSession: ChatSession? {
         bridge.sessions.first(where: { $0.id == bridge.activeSessionId })
     }
-    private var phase: AgentTurnPhase? {
-        guard let s = activeSession else { return nil }
-        return bridge.sessionList.turnPhase(for: s.sourceChatId)
-    }
-    private var activity: AgentActivityEvent? {
-        guard let ripul = activeSession else { return nil }
-        if let byTab = bridge.sessionList.latestToolActivityForList(for: ripul.id) { return byTab }
-        return bridge.sessionList.latestToolActivityForList(for: ripul.sourceChatId)
-    }
-    private var activePlan: TodoState? {
-        guard let ripul = activeSession else { return nil }
-        if let byTab = bridge.sessionList.visibleTodoState(for: ripul.id) { return byTab }
-        return bridge.sessionList.visibleTodoState(for: ripul.sourceChatId)
-    }
-    private var listPlan: TodoState? {
-        guard let ripul = activeSession else { return nil }
-        if let byTab = bridge.sessionList.visibleTodoStateForList(for: ripul.id) { return byTab }
-        return bridge.sessionList.visibleTodoStateForList(for: ripul.sourceChatId)
-    }
 
-    /// Mirrors `UnifiedSessionRow`'s subtitle exactly: plan-in-progress wins,
-    /// then live tool activity, then plan-done, then idle/phase text.
-    private var subtitle: String {
-        let state = SessionSubtitleState.resolve(
-            activePlan: activePlan, listPlan: listPlan, latestToolActivity: activity
+    /// The active chat as a UnifiedSession — the same shape the list's own
+    /// builder produces for a local session, so the shared row renders
+    /// byte-identical readout (icon swap, plan/tool/done/idle lozenge, detail).
+    private var rowSession: UnifiedSession? {
+        guard let s = activeSession else { return nil }
+        return UnifiedSession(
+            id: s.id, title: s.displayName, lastUsed: s.createdAt,
+            gitBranch: nil, messageCount: nil, projectName: nil, projectPath: nil,
+            provider: s.provider, providerLabel: s.providerLabel,
+            machineName: s.remoteMachineName, machineId: nil,
+            matchKeys: [s.id, s.sourceChatId],
+            tags: [], metadataKey: UnifiedSession.canonicalKey(s.sourceChatId),
+            ripulSession: s
         )
-        switch state {
-        case .planInProgress(let plan):
-            let done = plan.todos.filter { $0.status == "completed" }.count
-            return "\(done)/\(plan.todos.count) · \(SessionSubtitleState.planDetailText(plan: plan))"
-        case .toolActivity(let a):
-            let label = a.displayName ?? "Working…"
-            if let detail = a.detail, !detail.isEmpty { return "\(label) · \(detail)" }
-            return label
-        case .planCompleted(let plan):
-            return "Plan done · \(plan.todos.count)/\(plan.todos.count)"
-        case .idle:
-            switch phase {
-            case .running: return "Working…"
-            case .awaitingInput: return "Waiting for you"
-            case .completed: return "Done"
-            case .failed: return "Failed"
-            default: return "Ready"
-            }
-        }
     }
 
     var body: some View {
         HStack(spacing: 10) {
-            Group {
-                switch phase {
-                case .running:
-                    ProgressView().controlSize(.small)
-                case .awaitingInput:
-                    Image(systemName: "hand.raised.fill")
-                        .foregroundStyle(.orange)
-                case .completed:
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundStyle(.green)
-                case .failed:
-                    Image(systemName: "exclamationmark.circle.fill")
-                        .foregroundStyle(.red)
-                default:
-                    Image(systemName: "terminal.fill")
-                        .foregroundStyle(.blue)
-                }
-            }
-            .frame(width: 28, height: 28)
-
-            VStack(alignment: .leading, spacing: 1) {
-                Text(activeSession?.displayName ?? "Agent")
+            // The ACTUAL session-list row component — no emulation. Every
+            // readout behavior (plan progress, live tool line, provider icon,
+            // subtitle priority) is whatever the console's list would show.
+            if let session = rowSession {
+                UnifiedSessionRow(
+                    sessionStore: bridge.sessionList,
+                    session: session,
+                    onSessionAction: { _ in onExpand() }
+                )
+            } else {
+                Image(systemName: "terminal.fill")
+                    .foregroundStyle(.blue)
+                    .frame(width: 28, height: 28)
+                Text("Agent")
                     .font(.subheadline.weight(.semibold))
-                    .lineLimit(1)
-                Text(subtitle)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
 
