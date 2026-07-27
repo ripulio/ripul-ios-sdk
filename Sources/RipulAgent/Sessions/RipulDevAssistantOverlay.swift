@@ -672,18 +672,12 @@ private struct CompactAgentBarView: View {
         .padding(.leading, 12)
         .padding(.trailing, 8)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background {
-            // Regular (adaptive) glass — Apple's variant for floating chrome
-            // over content you DON'T control (any host-app screen): it blurs,
-            // adjusts luminosity, and flips light/dark with the backdrop
-            // automatically. `.clear` is the special case for media-rich
-            // backdrops and needs a dimming layer + bold content above —
-            // wrong for an arbitrary host app. Foregrounds stay semantic
-            // (.primary/.secondary); the system applies vibrancy inside glass.
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .fill(.clear)
-                .glassEffect(.regular, in: .rect(cornerRadius: 20))
-        }
+        // Regular (adaptive) glass applied to the CONTAINER, not a background
+        // sibling — only content INSIDE the glass effect gets the system's
+        // vibrant/adaptive foreground (text flips light/dark with the
+        // backdrop per Apple's guidance). Regular is the variant for floating
+        // chrome over content you don't control; foregrounds stay semantic.
+        .glassEffect(.regular, in: .rect(cornerRadius: 20))
         .contentShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
         .onTapGesture { onExpand() }
     }
