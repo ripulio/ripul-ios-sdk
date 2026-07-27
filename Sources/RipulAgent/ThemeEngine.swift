@@ -27,6 +27,15 @@ import UIKit
 /// dictionaries. This replaces closed per-kind structs (which would cost an SDK release
 /// per new knob). JSON shape is raw (`12`, `"glass"`, `true`) for hand-editable documents.
 public enum RipulKnob: Codable, Equatable {
+    /// JSON-friendly unwrap for tool responses.
+    public var jsonValue: Any {
+        switch self {
+        case .number(let n): return n
+        case .string(let s): return s
+        case .bool(let b): return b
+        }
+    }
+
     case number(Double)
     case string(String)
     case bool(Bool)
@@ -312,6 +321,43 @@ public enum RipulThemeEngine {
         guard let spec else { return }
         UserDefaults.standard.removeObject(forKey: spec.overrideDefaultsKey)
         adopt(bundled)
+    }
+
+    // MARK: - Mutation (agent/dev tools write path)
+
+    /// The registered style kinds (panel/field/etc., each with scopes + knob schema).
+    public static var styleKinds: [RipulStyleKind] { spec?.styleKinds ?? [] }
+
+    /// Resolve a scope id (View-Explorer element id) to its kind.
+    public static func kind(containingScope element: String) -> RipulStyleKind? {
+        spec?.styleKinds.first { $0.scopes.contains { $0.id == element } }
+    }
+
+    /// Host-provided write path, called after `setOverride`/`clearOverrides` mutate the
+    /// document. The host should persist the document's slice (its own blob) and run its
+    /// apply path (which broadcasts via `adopt`). When nil, the engine adopts the
+    /// mutation itself (still broadcasts `.ripulThemeDidChange`).
+    public static var persistMutation: ((RipulThemeDocument) -> Void)?
+
+    /// Set one knob as a per-element override, beating any assigned named style.
+    /// Broadcasts via the host's `persistMutation` (or `adopt` as fallback).
+    public static func setOverride(element: String, knob: String, value: RipulKnob) throws {
+        guard let kind = kind(containingScope: element) else {
+            throw NSError(domain: "theme", code: 2, userInfo: [NSLocalizedDescriptionKey:
+                "Unknown scope '\(element)'. Call list_theme_scopes for valid ids."])
+        }
+        current.styleOverrides[kind.name, default: [:]][element, default: [:]][knob] = value
+        if let persistMutation { persistMutation(current) } else { adopt(current) }
+    }
+
+    /// Clear every per-element override on a scope (returns it to its assigned style).
+    public static func clearOverrides(element: String) throws {
+        guard let kind = kind(containingScope: element) else {
+            throw NSError(domain: "theme", code: 2, userInfo: [NSLocalizedDescriptionKey:
+                "Unknown scope '\(element)'."])
+        }
+        current.styleOverrides[kind.name]?[element] = nil
+        if let persistMutation { persistMutation(current) } else { adopt(current) }
     }
 
     // MARK: colour resolution (tagged at the chokepoints)
