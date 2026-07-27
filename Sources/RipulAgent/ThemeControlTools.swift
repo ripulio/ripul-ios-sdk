@@ -83,10 +83,18 @@ public struct RipulGetThemeStyleTool: NativeTool {
                     "Unknown scope '\(id)'. Call list_theme_scopes for valid ids."])
             }
             let overrides = RipulThemeEngine.current.styleOverrides[kind.name]?[id] ?? [:]
-            let resolved = RipulThemeEngine.resolvedStyle(kind: kind.name, element: id)
-            return ["scope": id, "kind": kind.name,
-                    "overrides": overrides.mapValues { $0.jsonValue },
-                    "resolved": resolved.mapValues { $0.jsonValue }]
+            let resolved = RipulThemeEngine.resolved(kind: kind.name, element: id)
+            var payload: [String: Any] = ["scope": id, "kind": kind.name,
+                                          "overrides": overrides.mapValues { $0.jsonValue },
+                                          "resolved": resolved.knobs.mapValues { $0.jsonValue }]
+            // Composite kinds: each part's own resolution, addressable as "<scope>.<part>"
+            // (those child ids are themselves scopes — set_theme_knob works on them).
+            if !resolved.slots.isEmpty {
+                payload["slots"] = resolved.slots.mapValues { part in
+                    ["resolved": part.knobs.mapValues { $0.jsonValue }]
+                }
+            }
+            return payload
         }
     }
 }

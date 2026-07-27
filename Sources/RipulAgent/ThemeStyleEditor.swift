@@ -20,6 +20,10 @@ import SwiftUI
 public struct RipulStyleKindEditorView<Preview: View, Footer: View>: View {
     let title: String
     let knobs: [RipulStyleKnob]
+    /// The kind's slots (composite kinds). Each renders as a style picker in a "Parts"
+    /// section — Inherit, or a named style of the slot's kind — stored in the working dict
+    /// as a string knob keyed by the slot's name (the document's slot-reference shape).
+    let slots: [RipulStyleSlot]
     let onChange: ([String: RipulKnob]) -> Void
     let preview: ([String: RipulKnob]) -> Preview
     let footerSections: () -> Footer
@@ -30,20 +34,23 @@ public struct RipulStyleKindEditorView<Preview: View, Footer: View>: View {
 
     /// - title: nav title — typically the style name (or "Floating · built-in").
     /// - knobs: the kind's knob schema (from registration).
+    /// - slots: the kind's slots (from registration); default none.
     /// - initial: the style's CURRENT sparse knobs (user style, or the built-in's for CoW).
     /// - onChange: called with the full working dict after every edit.
     /// - preview: host's live example — receives the working dict (merge over the default
-    ///   tier with `RipulThemeEngine.mergedStyle` inside the closure). PINNED: always on
-    ///   screen while the knobs scroll beneath it.
+    ///   tier with `RipulThemeEngine.mergedStyle` — or `mergedResolved` for composites —
+    ///   inside the closure). PINNED: always on screen while the knobs scroll beneath it.
     /// - namespace: the previewed element's scope path — shown as a breadcrumb.
     /// - footerSections: optional host actions (Reset to built-in / Delete style).
-    public init(title: String, knobs: [RipulStyleKnob], initial: [String: RipulKnob],
+    public init(title: String, knobs: [RipulStyleKnob], slots: [RipulStyleSlot] = [],
+                initial: [String: RipulKnob],
                 onChange: @escaping ([String: RipulKnob]) -> Void,
                 @ViewBuilder preview: @escaping ([String: RipulKnob]) -> Preview,
                 namespace: [String] = [],
                 @ViewBuilder footerSections: @escaping () -> Footer = { EmptyView() }) {
         self.title = title
         self.knobs = knobs
+        self.slots = slots
         self.onChange = onChange
         self.preview = preview
         self.namespace = namespace
@@ -75,6 +82,11 @@ public struct RipulStyleKindEditorView<Preview: View, Footer: View>: View {
             Divider()
             // Scrolling knobs beneath.
             Form {
+                if !slots.isEmpty {
+                    Section("Parts") {
+                        ForEach(slots) { slot in slotRow(slot) }
+                    }
+                }
                 Section {
                     ForEach(knobs) { knob in row(knob) }
                 } footer: {
@@ -85,6 +97,21 @@ public struct RipulStyleKindEditorView<Preview: View, Footer: View>: View {
         }
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
+    }
+
+    // MARK: slot rows (composite parts — a pointer into another kind's style library)
+
+    /// One slot = one picker over the target kind's style library. "Inherit" leaves the
+    /// pointer unset (the element cascade or the slot's registered default decides).
+    private func slotRow(_ slot: RipulStyleSlot) -> some View {
+        Picker(slot.label, selection: Binding<String?>(
+            get: { working[slot.name]?.string },
+            set: { set(slot.name, $0.map { .string($0) }) })) {
+            Text("Inherit").tag(String?.none)
+            ForEach(RipulThemeEngine.allStyleNames(kind: slot.kind), id: \.self) { name in
+                Text(name).tag(String?.some(name))
+            }
+        }
     }
 
     // MARK: knob rows (Inherit/Set semantics — sparse by construction)

@@ -169,6 +169,32 @@ public struct RelayHostStatsView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
+            // Recovery is automatic now, but the ladder has a floor and a
+            // backstop grace — when someone is actually looking at this panel
+            // they shouldn't have to wait it out.
+            if bridgeDiagnostics.hostStatusAvailable == false {
+                HStack(spacing: 12) {
+                    Button {
+                        Task { await bridge.healWebContext(reason: "manual heal from Relay Host Stats") }
+                    } label: {
+                        Label("Heal now", systemImage: "bandage")
+                    }
+                    .font(.caption)
+                    .buttonStyle(.borderless)
+                    .help("Run the self-heal ladder (reload, escalating to a state purge). Respects the 10s floor between heals.")
+
+                    Button {
+                        bridge.purgeWebStateAndReload()
+                    } label: {
+                        Label("Purge + reload", systemImage: "trash")
+                    }
+                    .font(.caption)
+                    .buttonStyle(.borderless)
+                    .tint(.red)
+                    .help("Clear localStorage/IndexedDB/caches (cookies kept, so you stay signed in) and fresh-load. This is the manual recovery, unconditional — no floor.")
+                }
+            }
+
             Divider()
 
             VStack(alignment: .leading, spacing: 4) {
@@ -176,6 +202,12 @@ public struct RelayHostStatsView: View {
                         color: (bridgeDiagnostics.hostStatusAvailable == false) ? .red : nil)
                 if let err = bridgeDiagnostics.hostStatusError {
                     diagRow("getHostStatus.error", value: err, color: .red, mono: true)
+                }
+                if let health = bridgeDiagnostics.probeHealth {
+                    diagRow("jsContext.probe", value: health, color: health == "healthy" ? nil : .red, mono: true)
+                }
+                if let digest = bridgeDiagnostics.probeDigest {
+                    diagRow("jsContext.detail", value: digest, mono: true)
                 }
                 diagRow("hostEnabled", value: bridgeDiagnostics.hostEnabled.map { $0 ? "true" : "false" } ?? "—",
                         color: (bridgeDiagnostics.hostEnabled == false) ? .orange : nil)
@@ -728,8 +760,33 @@ public struct RelayHostStatsView: View {
     private func pollLoop() async {
         var previousRooms: [String: RoomStats] = [:]
         var previousSelf: RoomStats?
+        // Probe every 5th poll, not every poll: the probe is an extra eval and
+        // logs a warning line each time it fails, and this view polls at 1Hz.
+        var pollTick = 0
+        var lastProbe: (health: String, digest: String)?
         while !Task.isCancelled {
-            let (nextRooms, nextSelf, diag, comms) = await fetch(previousRooms: previousRooms, previousSelf: previousSelf)
+            let shouldProbe = pollTick % 5 == 0
+            pollTick += 1
+            let fetched = await fetch(
+                previousRooms: previousRooms,
+                previousSelf: previousSelf,
+                probeContext: shouldProbe
+            )
+            let nextRooms = fetched.0
+            let nextSelf = fetched.1
+            var diag = fetched.2
+            let comms = fetched.3
+            // Carry the last probe forward between probes so the diagnosis text
+            // doesn't blink in and out on the four polls that don't probe.
+            if let health = diag.probeHealth, let digest = diag.probeDigest {
+                lastProbe = (health, digest)
+            } else if diag.hostStatusAvailable == false, let lastProbe {
+                diag.probeHealth = lastProbe.health
+                diag.probeDigest = lastProbe.digest
+                diag.compute()
+            } else if diag.hostStatusAvailable == true {
+                lastProbe = nil
+            }
             if let nextRooms {
                 previousRooms = Dictionary(uniqueKeysWithValues: nextRooms.map { ($0.roomId, $0) })
             }
@@ -790,7 +847,8 @@ public struct RelayHostStatsView: View {
 
     private func fetch(
         previousRooms: [String: RoomStats],
-        previousSelf: RoomStats?
+        previousSelf: RoomStats?,
+        probeContext: Bool
     ) async -> ([RoomStats]?, RoomStats?, BridgeDiagnostics, [CommsEntry]) {
         let bridge = self.bridge
         async let diagRace = raceTimeout(seconds: 5) { await bridge.getRelayDiagnostics(roomId: nil) }
@@ -880,6 +938,15 @@ public struct RelayHostStatsView: View {
                     chatId: e["chatId"] as? String
                 )
             }
+        }
+
+        // Probe the JS context only when the host bridge is reporting failure —
+        // it's the one datum that says whether the callables exist at all, and
+        // therefore which of the two very different failures this is.
+        if probeContext, diagnostics.hostStatusAvailable == false {
+            let probe = await bridge.probeWebContext()
+            diagnostics.probeHealth = probe.health.rawValue
+            diagnostics.probeDigest = probe.digest
         }
 
         diagnostics.compute()
@@ -1223,6 +1290,13 @@ fileprivate struct BridgeDiagnostics {
     var diagError: String? = nil
     var diagRoomsCount: Int = 0
 
+    /// JS-context probe, run only while the host bridge reports unavailable.
+    /// This is what separates "no callables at all" (broken boot) from
+    /// "callables present, React provider unregistered" — two states the panel
+    /// used to describe with the same, usually-wrong, sentence.
+    var probeHealth: String? = nil
+    var probeDigest: String? = nil
+
     var diagnosis: String = ""
     var statusLabel: String = "Initialising…"
     var statusColor: Color = .secondary
@@ -1240,16 +1314,25 @@ fileprivate struct BridgeDiagnostics {
         }
 
         if hostStatusAvailable == false {
-            // The serverHostBridge singleton has no provider — the React
-            // tree that mounts RemoteHostBridgeProvider didn't run, OR
-            // the JS callable itself failed.
-            statusLabel = "BRIDGE NOT MOUNTED"
             statusColor = .red
             statusIcon = "exclamationmark.triangle.fill"
-            if let err = hostStatusError, !err.isEmpty {
-                diagnosis = "__ripulGetHostStatus reports unavailable: \(err). The host-bridge React provider has not registered with the singleton — usually a startup module-load failure. Check the Web Inspector console (Develop → Web Content) for 'Importing a module script failed' or other startup errors."
+            let probeSuffix = probeDigest.map { " Probe: \(probeHealth ?? "?") — \($0)." } ?? ""
+
+            if hostStatusError == AgentBridge.callableMissingError {
+                // window.__ripulGetHostStatus does not EXIST. This is not a
+                // provider problem — registerNativeCallables() runs first in the
+                // boot chain, before any await, so if the callables are absent
+                // the entry bundle itself never evaluated.
+                statusLabel = "NO NATIVE CALLABLES"
+                diagnosis = "window.__ripulGetHostStatus does not exist, so the web app never registered its native bridge — this is a BROKEN BOOT, not an unmounted React provider. registerNativeCallables() runs before any await in the boot chain, so an absent callable means the entry bundle failed to load or evaluate (a chunk 404 from a deploy landing mid-boot is the usual cause). The native side now probes and heals this automatically; `boot=` below names the phase the chain reached.\(probeSuffix)"
+            } else if let err = hostStatusError, !err.isEmpty {
+                // The callable answered, so the JS bridge is installed and it is
+                // the React subtree behind serverHostBridge that didn't register.
+                statusLabel = "BRIDGE NOT MOUNTED"
+                diagnosis = "__ripulGetHostStatus reports unavailable: \(err). The callables ARE installed, so this is the host-bridge React provider failing to register with the serverHostBridge singleton — its subtree didn't mount. A reload won't fix an accurate report; check the Web Inspector console (Develop → Web Content) for the mount error.\(probeSuffix)"
             } else {
-                diagnosis = "__ripulGetHostStatus returned available=false. The RemoteHostBridgeProvider has not registered with the serverHostBridge singleton — its React subtree probably failed to mount. Check the Web Inspector console for startup errors."
+                statusLabel = "BRIDGE NOT MOUNTED"
+                diagnosis = "__ripulGetHostStatus returned available=false with no error. The RemoteHostBridgeProvider has not registered with the serverHostBridge singleton — its React subtree probably failed to mount. Check the Web Inspector console for startup errors.\(probeSuffix)"
             }
             return
         }

@@ -2154,6 +2154,84 @@ public final class AgentBridge: NSObject, ObservableObject {
         }
     }
 
+    // MARK: Host-bridge unavailability backstop
+    //
+    // The host-status callable can report total failure in a way that LOOKS like
+    // a successful call: `{available:false}` is a well-formed dictionary, so the
+    // eval-failure counter never arms, `classifyJsCallFailure` is never reached,
+    // and a permanently dead web boot is indistinguishable from an idle host.
+    // That is precisely how the "BRIDGE NOT MOUNTED / not ready" state became
+    // unrecoverable without a manual relaunch: every recovery mechanism in this
+    // file keys off an *exception*, and this state produces none.
+    //
+    // Every caller of getHostStatus() feeds this tracker. Once the bridge has
+    // been continuously unavailable for `hostBridgeUnavailableGrace`, we probe
+    // the JS context and hand an unhealthy verdict to the same heal ladder the
+    // callable paths use. A HEALTHY probe is deliberately left alone: the
+    // callables exist and the page is accurately reporting an unregistered
+    // provider, which a reload wouldn't fix.
+
+    /// Sentinel returned by the callable-presence guards below. Distinct from
+    /// every web-side error string, so "the bridge said no" and "there is no
+    /// bridge at all" can never be conflated again — they have different causes
+    /// and different fixes.
+    public static let callableMissingError = "callable-missing"
+
+    private var hostBridgeUnavailableSince: Date?
+    private var lastHostBridgeProbeAt: Date?
+    /// Continuous unavailability tolerated before probing. Comfortably longer
+    /// than `callableInstallGraceMs` so an ordinary cold boot never trips it.
+    private let hostBridgeUnavailableGrace: TimeInterval = 15
+    /// Minimum gap between backstop probes — callers poll as fast as 1Hz.
+    private let hostBridgeProbeInterval: TimeInterval = 15
+
+    /// Record that the host bridge answered normally. Disarms the backstop.
+    public func noteHostBridgeAvailable() {
+        if hostBridgeUnavailableSince != nil {
+            handleConsoleLog("LOG: [HOST_BRIDGE] available again — clearing unavailability backstop")
+        }
+        hostBridgeUnavailableSince = nil
+        lastHostBridgeProbeAt = nil
+    }
+
+    /// Record that the host bridge is unavailable, and heal if it stays that
+    /// way. Safe to call at any cadence, from any number of callers.
+    public func noteHostBridgeUnavailable(reason: String) {
+        let now = Date()
+        guard let since = hostBridgeUnavailableSince else {
+            hostBridgeUnavailableSince = now
+            handleConsoleLog("WARN: [HOST_BRIDGE] unavailable (\(reason)) — backstop armed; probing in \(Int(hostBridgeUnavailableGrace))s if it persists")
+            return
+        }
+        guard now.timeIntervalSince(since) >= hostBridgeUnavailableGrace else { return }
+        if let last = lastHostBridgeProbeAt, now.timeIntervalSince(last) < hostBridgeProbeInterval { return }
+        lastHostBridgeProbeAt = now
+
+        Task { [weak self] in
+            guard let self else { return }
+            let probe = await self.probeWebContext()
+            let elapsed = Int(Date().timeIntervalSince(since))
+            self.handleConsoleLog("WARN: [HOST_BRIDGE] unavailable \(elapsed)s (\(reason)) — probe=\(probe.health.rawValue) \(probe.digest)")
+            switch probe.health {
+            case .contextDead, .webCrashed, .callablesAbsent:
+                await self.healWebContext(
+                    reason: "host bridge unavailable \(elapsed)s: \(reason) — \(probe.health.rawValue)"
+                )
+            case .callablesMissing:
+                // Genuinely mid-boot (young document). The next tick re-probes.
+                break
+            case .healthy:
+                // Callables ARE installed, so the page is answering and telling
+                // us the provider isn't registered. That's a web-side mount
+                // failure with its own error boundary + auto-remount; reloading
+                // over the top of an accurate report doesn't help. Stay loud.
+                self.handleConsoleLog("WARN: [HOST_BRIDGE] context healthy but bridge unavailable \(elapsed)s — web-side provider problem, not healing")
+            case .noWebView:
+                break
+            }
+        }
+    }
+
     /// Fetch the web app's one-shot connection diagnostics snapshot
     /// (`__ripulDiagnostics`) as a JSON string, or nil if unreachable.
     @available(iOS 15.0, macOS 13.0, *)
@@ -5530,16 +5608,33 @@ public final class AgentBridge: NSObject, ObservableObject {
     public func getHostStatus() async -> [String: Any]? {
         guard let webView else { return nil }
         do {
+            // The guard reports `callable-missing`, NOT a generic "not ready":
+            // an absent callable means the web app's boot chain never registered
+            // its native bridge, which is a broken boot — categorically different
+            // from a mounted bridge reporting itself unavailable, and it is the
+            // one the caller must be able to act on.
             let result = try await webView.callAsyncJavaScript(
                 """
-                if (!window.__ripulGetHostStatus) return {available:false, error:'not ready'};
+                if (!window.__ripulGetHostStatus) return {available:false, error:'\(Self.callableMissingError)'};
                 return await window.__ripulGetHostStatus();
                 """,
                 contentWorld: .page
             )
-            return result as? [String: Any]
+            let dict = result as? [String: Any]
+            // Feed the unavailability backstop. A `{available:false}` reply is a
+            // SUCCESSFUL eval, so without this nothing else in the recovery
+            // system ever learns that the host bridge is dead.
+            if let dict {
+                if (dict["available"] as? Bool) == true {
+                    noteHostBridgeAvailable()
+                } else {
+                    noteHostBridgeUnavailable(reason: dict["error"] as? String ?? "available=false")
+                }
+            }
+            return dict
         } catch {
             NSLog("[AgentBridge] getHostStatus error: %@", error.localizedDescription)
+            noteHostBridgeUnavailable(reason: "eval failed: \(AgentBridge.describeEvalError(error))")
             return nil
         }
     }
@@ -5553,7 +5648,7 @@ public final class AgentBridge: NSObject, ObservableObject {
         do {
             let result = try await webView.callAsyncJavaScript(
                 """
-                if (!window.__ripulGetRelayDiagnostics) return {available:false, error:'not ready'};
+                if (!window.__ripulGetRelayDiagnostics) return {available:false, error:'\(Self.callableMissingError)'};
                 return await window.__ripulGetRelayDiagnostics(roomId);
                 """,
                 arguments: ["roomId": roomId.map { $0 as Any } ?? NSNull()],

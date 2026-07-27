@@ -194,6 +194,30 @@ public struct RipulStyleKnob: Identifiable {
     }
 }
 
+/// A named sub-part of a COMPOSITE style kind, typed by another registered kind — the
+/// styles-layer analogue of a component-token alias. A disclosure panel declares
+/// `card: surface` and `lozenge: lozenge`; a style of the composite kind then POINTS each
+/// slot at a named style in the slot's kind (the slot's value in a style/override dict is
+/// a plain string knob keyed by the slot's name — no new document shape).
+///
+/// Each composite scope `X` implies a child scope `X.<slot name>` in the slot's kind
+/// (synthesized at `configure()`), so one panel's lozenge can be re-pointed (a child
+/// assignment) or forked (child overrides) without touching the library style.
+public struct RipulStyleSlot: Identifiable {
+    /// Knob key in the composite's style dicts AND the child-scope id suffix.
+    public let name: String
+    public let label: String
+    /// The target kind — the slot's type. The kind graph must be a DAG.
+    public let kind: String
+    /// Named style in the target kind used when nothing points anywhere; nil = the target
+    /// kind's default tier alone.
+    public let defaultStyle: String?
+    public var id: String { name }
+    public init(name: String, label: String, kind: String, defaultStyle: String? = nil) {
+        self.name = name; self.label = label; self.kind = kind; self.defaultStyle = defaultStyle
+    }
+}
+
 public struct RipulStyleKind {
     /// The host's persisted key names for this kind's three maps in the theme blob —
     /// legacy formats stay byte-compatible (e.g. "fieldButtonStyles" / "...Names" /
@@ -212,6 +236,9 @@ public struct RipulStyleKind {
     /// This kind's knob schema — descriptors driving the generic style editor
     /// (`RipulStyleKindEditorView`) and any future surface. Resolution itself is open.
     public let knobs: [RipulStyleKnob]
+    /// Typed sub-parts. Non-empty makes this a composite kind: `resolved(kind:element:)`
+    /// nests a resolved style per slot. Slot names must not collide with knob keys.
+    public let slots: [RipulStyleSlot]
     /// Built-in style LIBRARY — shipped in code, present on every theme; a user style with
     /// the same name shadows the built-in.
     public let builtIns: [String: [String: RipulKnob]]
@@ -222,11 +249,29 @@ public struct RipulStyleKind {
     public let persistedKeys: PersistedKeys?
 
     public init(name: String, scopes: [RipulThemeScope], knobs: [RipulStyleKnob],
+                slots: [RipulStyleSlot] = [],
                 builtIns: [String: [String: RipulKnob]] = [:],
                 defaultTier: @escaping (RipulThemeDocument, _ element: String) -> [String: RipulKnob],
                 persistedKeys: PersistedKeys? = nil) {
-        self.name = name; self.scopes = scopes; self.knobs = knobs
+        self.name = name; self.scopes = scopes; self.knobs = knobs; self.slots = slots
         self.builtIns = builtIns; self.defaultTier = defaultTier; self.persistedKeys = persistedKeys
+    }
+}
+
+/// A kind's style after full resolution. `knobs` = the kind's OWN cascade result (slot
+/// references included, as string knobs); `slots` = a resolved style per declared slot.
+/// Kinds without slots resolve with `slots` empty — the flat API is unchanged for them.
+public struct RipulResolvedStyle {
+    public let knobs: [String: RipulKnob]
+    public let slots: [String: RipulResolvedStyle]
+    public init(knobs: [String: RipulKnob], slots: [String: RipulResolvedStyle] = [:]) {
+        self.knobs = knobs; self.slots = slots
+    }
+    public subscript(_ key: String) -> RipulKnob? { knobs[key] }
+    /// A slot's resolved style; empty (never nil) for undeclared names, so host mapping
+    /// code can read `style.slot("lozenge")["chipPadX"]` without optional gymnastics.
+    public func slot(_ name: String) -> RipulResolvedStyle {
+        slots[name] ?? RipulResolvedStyle(knobs: [:])
     }
 }
 
@@ -259,6 +304,9 @@ public enum RipulThemeEngine {
     private static var rolesByName: [String: RipulThemeVocabulary.Entry] = [:]
     private static var componentsByName: [String: RipulThemeVocabulary.Entry] = [:]
     private static var kindsByName: [String: RipulStyleKind] = [:]
+    /// The registered kinds AFTER child-scope synthesis, in spec order — what `styleKinds`
+    /// and `kind(containingScope:)` read.
+    private static var registeredKinds: [RipulStyleKind] = []
 
     /// The live document slice (override if present, else bundled). Set via `adopt(_:)`.
     public private(set) static var current = RipulThemeDocument()
@@ -274,9 +322,83 @@ public enum RipulThemeEngine {
         self.spec = spec
         rolesByName = Dictionary(uniqueKeysWithValues: spec.vocabulary.roles.map { ($0.name, $0) })
         componentsByName = Dictionary(uniqueKeysWithValues: spec.vocabulary.components.map { ($0.name, $0) })
-        kindsByName = Dictionary(uniqueKeysWithValues: spec.styleKinds.map { ($0.name, $0) })
+        registeredKinds = synthesizeChildScopes(validateSlots(spec.styleKinds))
+        kindsByName = Dictionary(uniqueKeysWithValues: registeredKinds.map { ($0.name, $0) })
         bundled = loadBundled() ?? RipulThemeDocument()
         current = loadOverride() ?? bundled
+    }
+
+    // MARK: slot registration (validation + child-scope synthesis)
+
+    /// Registration-time invariants for composite kinds: every slot targets a registered
+    /// kind, slot names don't collide with the kind's own knob keys, and the kind → slot
+    /// graph is a DAG. Violations are programmer errors — assert in debug, and drop the
+    /// offending slot so release resolution stays total.
+    private static func validateSlots(_ kinds: [RipulStyleKind]) -> [RipulStyleKind] {
+        let byName = Dictionary(uniqueKeysWithValues: kinds.map { ($0.name, $0) })
+
+        func reaches(_ target: String, from kindName: String, seen: inout Set<String>) -> Bool {
+            guard seen.insert(kindName).inserted else { return false }
+            guard let k = byName[kindName] else { return false }
+            return k.slots.contains { $0.kind == target || reaches(target, from: $0.kind, seen: &seen) }
+        }
+
+        return kinds.map { kind in
+            let kept = kind.slots.filter { slot in
+                guard byName[slot.kind] != nil else {
+                    assertionFailure("Slot '\(kind.name).\(slot.name)' targets unregistered kind '\(slot.kind)'")
+                    return false
+                }
+                guard !kind.knobs.contains(where: { $0.key == slot.name }) else {
+                    assertionFailure("Slot '\(kind.name).\(slot.name)' collides with a knob key")
+                    return false
+                }
+                var seen: Set<String> = []
+                guard slot.kind != kind.name, !reaches(kind.name, from: slot.kind, seen: &seen) else {
+                    assertionFailure("Slot '\(kind.name).\(slot.name)' closes a kind cycle via '\(slot.kind)'")
+                    return false
+                }
+                return true
+            }
+            guard kept.count != kind.slots.count else { return kind }
+            return RipulStyleKind(name: kind.name, scopes: kind.scopes, knobs: kind.knobs,
+                                  slots: kept, builtIns: kind.builtIns,
+                                  defaultTier: kind.defaultTier, persistedKeys: kind.persistedKeys)
+        }
+    }
+
+    /// Every composite scope `X` implies a scope `X.<slot name>` in the slot's kind — the
+    /// element the child part's assignments/overrides key on, and what editors and the
+    /// View Explorer resolve a tapped sub-part to. Synthesized transitively (a slot kind
+    /// may itself be composite); the DAG guarantee makes the walk finite. The host never
+    /// hand-registers these.
+    private static func synthesizeChildScopes(_ kinds: [RipulStyleKind]) -> [RipulStyleKind] {
+        let byName = Dictionary(uniqueKeysWithValues: kinds.map { ($0.name, $0) })
+        var extra: [String: [RipulThemeScope]] = [:]
+        var seenIds: [String: Set<String>] = Dictionary(uniqueKeysWithValues:
+            kinds.map { ($0.name, Set($0.scopes.map(\.id))) })
+
+        var queue: [(scope: RipulThemeScope, kind: String)] =
+            kinds.flatMap { k in k.scopes.map { ($0, k.name) } }
+        while !queue.isEmpty {
+            let (scope, kindName) = queue.removeFirst()
+            guard let k = byName[kindName] else { continue }
+            for slot in k.slots {
+                let child = RipulThemeScope(id: "\(scope.id).\(slot.name)",
+                                            label: "\(scope.label) · \(slot.label)",
+                                            path: scope.path + [slot.label])
+                guard seenIds[slot.kind, default: []].insert(child.id).inserted else { continue }
+                extra[slot.kind, default: []].append(child)
+                queue.append((child, slot.kind))
+            }
+        }
+
+        return kinds.map { kind in
+            guard let add = extra[kind.name], !add.isEmpty else { return kind }
+            return RipulStyleKind(name: kind.name, scopes: kind.scopes + add, knobs: kind.knobs,
+                                  slots: kind.slots, builtIns: kind.builtIns,
+                                  defaultTier: kind.defaultTier, persistedKeys: kind.persistedKeys)
+        }
     }
 
     // MARK: persistence (read-only for the engine; the host owns blob writes)
@@ -325,12 +447,14 @@ public enum RipulThemeEngine {
 
     // MARK: - Mutation (agent/dev tools write path)
 
-    /// The registered style kinds (panel/field/etc., each with scopes + knob schema).
-    public static var styleKinds: [RipulStyleKind] { spec?.styleKinds ?? [] }
+    /// The registered style kinds (panel/field/etc., each with scopes + knob schema),
+    /// including synthesized child scopes for slots.
+    public static var styleKinds: [RipulStyleKind] { registeredKinds }
 
-    /// Resolve a scope id (View-Explorer element id) to its kind.
+    /// Resolve a scope id (View-Explorer element id) to its kind. Synthesized child scopes
+    /// resolve to the SLOT's kind — tapping a panel's lozenge edits lozenge styles.
     public static func kind(containingScope element: String) -> RipulStyleKind? {
-        spec?.styleKinds.first { $0.scopes.contains { $0.id == element } }
+        registeredKinds.first { $0.scopes.contains { $0.id == element } }
     }
 
     /// Host-provided write path, called after `setOverride`/`clearOverrides` mutate the
@@ -476,6 +600,76 @@ public enum RipulThemeEngine {
         }
         if let overrides { for (key, value) in overrides { merged[key] = value } }
         return merged
+    }
+
+    // MARK: nested resolution (composite kinds)
+
+    /// The FULL resolved style for an element: the kind's own cascade plus a resolved style
+    /// per declared slot. Kinds without slots return `slots` empty — identical content to
+    /// `resolvedStyle(kind:element:)`.
+    ///
+    /// Per slot, the pointer cascade is:
+    ///   child assignment (styleAssignments[slot.kind]["<element>.<slot>"])  — re-point ONE
+    ///   ?? the composite's resolved slot reference (a string knob keyed by the slot name,
+    ///      so a named style, the composite's default tier, or a per-element override can
+    ///      all set it)
+    ///   ?? slot.defaultStyle
+    /// and the child's own overrides apply on top of whichever style that names — fork ONE
+    /// without touching the library.
+    public static func resolved(kind: String, element: String) -> RipulResolvedStyle {
+        nestedStyle(kind: kind, element: element,
+                    styleName: current.styleAssignments[kind]?[element],
+                    overrides: current.styleOverrides[kind]?[element],
+                    chain: [kind])
+    }
+
+    /// The nested resolution the element WOULD get with `style` assigned (its overrides and
+    /// its parts' own re-points/forks still applied) — drives live style pickers.
+    public static func previewResolved(kind: String, element: String, style: String?) -> RipulResolvedStyle {
+        nestedStyle(kind: kind, element: element, styleName: style,
+                    overrides: current.styleOverrides[kind]?[element],
+                    chain: [kind])
+    }
+
+    /// Nested preview while EDITING a named style of a composite kind: the working knobs
+    /// merge over the kind's default tier, and slots resolve from the WORKING slot
+    /// references (no element assignment/overrides — the style itself is on the bench).
+    public static func mergedResolved(kind kindName: String, element: String,
+                                      over working: [String: RipulKnob]) -> RipulResolvedStyle {
+        let own = mergedStyle(kind: kindName, element: element, over: working)
+        guard let k = kindsByName[kindName], !k.slots.isEmpty else {
+            return RipulResolvedStyle(knobs: own)
+        }
+        var parts: [String: RipulResolvedStyle] = [:]
+        for slot in k.slots {
+            parts[slot.name] = nestedStyle(kind: slot.kind, element: "\(element).\(slot.name)",
+                                           styleName: own[slot.name]?.string ?? slot.defaultStyle,
+                                           overrides: nil,
+                                           chain: [kindName, slot.kind])
+        }
+        return RipulResolvedStyle(knobs: own, slots: parts)
+    }
+
+    private static func nestedStyle(kind kindName: String, element: String, styleName: String?,
+                                    overrides: [String: RipulKnob]?, chain: Set<String>) -> RipulResolvedStyle {
+        let own = resolveStyle(kind: kindName, element: element, styleName: styleName, overrides: overrides)
+        guard let k = kindsByName[kindName], !k.slots.isEmpty else {
+            return RipulResolvedStyle(knobs: own)
+        }
+        var parts: [String: RipulResolvedStyle] = [:]
+        for slot in k.slots {
+            // Belt-and-braces recursion guard; `validateSlots` already enforces the DAG.
+            guard !chain.contains(slot.kind) else { continue }
+            let childId = "\(element).\(slot.name)"
+            let ref = current.styleAssignments[slot.kind]?[childId]
+                ?? own[slot.name]?.string
+                ?? slot.defaultStyle
+            parts[slot.name] = nestedStyle(kind: slot.kind, element: childId,
+                                           styleName: ref,
+                                           overrides: current.styleOverrides[slot.kind]?[childId],
+                                           chain: chain.union([slot.kind]))
+        }
+        return RipulResolvedStyle(knobs: own, slots: parts)
     }
 
     /// Merge a knob dict over a kind's default tier for an element — the preview path when
