@@ -90,6 +90,11 @@ public final class RipulDevAssistantOverlay {
     private static var restoreHookInstalled = false
     private static let visibleKey = "ripul.devAssistantOverlay.visible"
     private static let bubbleXKey = "ripul.devAssistantOverlay.bubbleX"
+    /// ONE remembered vertical position for the whole component: the circle
+    /// docks at (edgeX, restingY), the bar spans full-width at restingY, and
+    /// both morphs happen at that Y — no jump between states.
+    private static let restingYKey = "ripul.devAssistantOverlay.restingY"
+    // Legacy keys, read once as fallbacks (pre-unification builds).
     private static let bubbleYKey = "ripul.devAssistantOverlay.bubbleY"
     private static let compactYKey = "ripul.devAssistantOverlay.compactY"
 
@@ -119,12 +124,13 @@ public final class RipulDevAssistantOverlay {
     }
 
     fileprivate func saveCompactY(_ y: CGFloat) {
-        cache?.set(Double(y), forKey: Self.compactYKey)
+        cache?.set(Double(y), forKey: Self.restingYKey)
     }
 
-    /// The persisted bar Y, clamped into the view's current safe region.
+    /// The shared resting Y, clamped into the view's current safe region.
     fileprivate func savedCompactY(in view: UIView) -> CGFloat? {
-        guard let raw = cache?.object(forKey: Self.compactYKey) as? Double else { return nil }
+        guard let raw = (cache?.object(forKey: Self.restingYKey) as? Double)
+            ?? (cache?.object(forKey: Self.compactYKey) as? Double) else { return nil }
         let minY = view.safeAreaInsets.top + 8
         let maxY = view.bounds.height - view.safeAreaInsets.bottom - 8 - 64
         return min(max(CGFloat(raw), minY), maxY)
@@ -132,13 +138,15 @@ public final class RipulDevAssistantOverlay {
 
     fileprivate func saveBubblePosition(_ point: CGPoint) {
         cache?.set(Double(point.x), forKey: Self.bubbleXKey)
-        cache?.set(Double(point.y), forKey: Self.bubbleYKey)
+        // The circle's Y IS the shared resting Y.
+        cache?.set(Double(point.y), forKey: Self.restingYKey)
     }
 
     fileprivate func savedBubblePosition() -> CGPoint? {
         guard let cache, cache.object(forKey: Self.bubbleXKey) != nil else { return nil }
-        return CGPoint(x: cache.object(forKey: Self.bubbleXKey) as? Double ?? 0,
-                       y: cache.object(forKey: Self.bubbleYKey) as? Double ?? 0)
+        let y = (cache.object(forKey: Self.restingYKey) as? Double)
+            ?? (cache.object(forKey: Self.bubbleYKey) as? Double ?? 0)
+        return CGPoint(x: cache.object(forKey: Self.bubbleXKey) as? Double ?? 0, y: y)
     }
 
     private static func activeWindowScene() -> UIWindowScene? {
@@ -382,7 +390,11 @@ final class RipulDevOverlayRootVC: UIViewController {
         minimizedState = .bubble
         guard let host = compactHost, let barView = host.view else { return }
         let ts = collapseTimeScale
-        let target = bubble.frame
+        // The circle lands at the BAR's current Y (one shared resting Y —
+        // collapsing must not jump vertically), keeping its edge X.
+        let target = CGRect(origin: CGPoint(x: bubble.frame.minX, y: barView.frame.minY),
+                            size: bubble.frame.size)
+        bubble.center = CGPoint(x: target.midX, y: target.midY)
         bubble.isHidden = false
         bubble.alpha = 0
         bubble.transform = CGAffineTransform(scaleX: 1.1, y: 1.1)
@@ -405,6 +417,7 @@ final class RipulDevOverlayRootVC: UIViewController {
             barView.isHidden = true
             barView.alpha = 1
             barView.layer.cornerRadius = 0
+            self.overlay?.saveBubblePosition(self.bubble.center)
             self.compactMorphInFlight = false
             // Interactive region now falls back to the bubble's frame — the
             // start-of-morph update left it on the bar's old strip, which is

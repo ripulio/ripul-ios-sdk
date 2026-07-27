@@ -824,6 +824,9 @@ public final class AgentBridge: NSObject, ObservableObject {
         didSet {
             guard activeSessionId != oldValue else { return }
             markActiveSessionTodoViewedInList()
+            // The pause/play buttons are a projection of the ACTIVE chat's
+            // phase — any change of active session must re-derive them.
+            refreshActiveAgentFlags()
         }
     }
 
@@ -899,8 +902,9 @@ public final class AgentBridge: NSObject, ObservableObject {
     /// Used to gate the keyboard-avoidance offset so that web inputs inside
     /// the WKWebView (e.g. metadata panel) don't shift the whole view up.
     @Published public var nativeChatInputFocused: Bool = false
-    /// Per-chat lifecycle sequence, used to drop out-of-order phase events on a
-    /// per-session basis (mirrors the global `latestLifecycleSequence`).
+    /// Per-chat lifecycle sequence, used to drop out-of-order phase events.
+    /// Sequences are per-chat monotonic counters on the web side — they must
+    /// never be compared across chats.
     private var sessionLifecycleSequences: [String: Int] = [:]
     /// Tracks whether we've logged the first stateSnapshot batch for startup diagnostics.
     private var hasLoggedFirstSnapshotBatch = false
@@ -909,71 +913,53 @@ public final class AgentBridge: NSObject, ObservableObject {
     /// pattern above — used by LiveActivityManager without forcing every
     /// observer of AgentBridge to re-render.
     public let todoStateSubject = PassthroughSubject<(String, TodoState?), Never>()
-    /// Authoritative lifecycle phase for the active chat turn.
+    /// Authoritative lifecycle phase for the active chat turn. Derived — see
+    /// `refreshActiveAgentFlags()`, the only writer.
     @Published public var agentTurnPhase: AgentTurnPhase = .idle
     /// Whether the agent is currently running (processing) for the active session.
+    /// Derived from `chatTurnPhases[activeSourceChatId]` — never set directly.
     @Published public var isAgentRunning = false
     /// Whether the agent is paused (awaiting user input) for the active session.
+    /// Derived from `chatTurnPhases[activeSourceChatId]` — never set directly.
     @Published public var isAgentPaused = false
+    /// Raw (uncollapsed) turn phase per chat, keyed by sourceChatId. This is the
+    /// single source of truth for the chat-box pause/play buttons; the collapsed
+    /// `sessionList.sessionPhases` variant (completed/failed → awaitingInput) is
+    /// only for session-row hand icons. Entries are removed on `.idle`.
+    private var chatTurnPhases: [String: AgentTurnPhase] = [:]
+    /// sourceChatId of a just-created chat that isn't in `sessions` yet. Bridges
+    /// the gap between `__ripulCreateChat` returning and the sessions push
+    /// landing, so `activeSourceChatId` (and therefore the pause button) points
+    /// at the new chat immediately instead of the previous one. Cleared once the
+    /// active session resolves to the same sourceChatId.
+    private var pendingActiveSourceChatId: String?
     /// How thinking is displayed in LLM panels: "none", "folded", or "open".
     /// Lives on navigationStore so writes don't fire bridge.objectWillChange.
     public var showThinkingMode: String {
         get { navigationStore.showThinkingMode }
         set { navigationStore.showThinkingMode = newValue }
     }
-    /// Whether the web app has sent lifecycle events/snapshots for the active session.
-    private var hasLifecycleAuthority = false
-    /// Monotonic lifecycle sequence used to ignore stale/replayed events.
-    private var latestLifecycleSequence = -1
     /// Guard against stale agent:status pushes during web app initialization.
     /// Set to true after the first syncAgentStatus completes post-connection.
     private var initialStatusSyncComplete = false
     /// Polling task that periodically syncs agent status while the agent is running.
     /// Ensures the button clears even if push notifications are lost.
     private var statusPollingTask: Task<Void, Never>?
-    /// Start polling agent status. Clears the pause button when:
-    /// 1. isPaused=true (reliable signal), OR
-    /// 2. isRunning=false for 2+ consecutive polls (fallback)
+    /// Start polling agent status while the active chat is running. The pull
+    /// result is applied per-chat by `syncAgentStatus`, so a poll can never
+    /// poison another chat's state — it only corrects the chat it's about.
     private func startStatusPolling() {
         statusPollingTask?.cancel()
         statusPollingTask = Task { [weak self] in
             // Wait 5s before first poll
             try? await Task.sleep(nanoseconds: 5_000_000_000)
-            var consecutiveNotRunning = 0
-            for _ in 0..<100 { // max 5 min
+            for _ in 0..<100 { // max ~5 min
                 guard let self, !Task.isCancelled else { return }
-                let (running, paused) = await self.syncAgentStatus()
-                
-                let shouldExit = await MainActor.run { [weak self] () -> Bool in
-                    guard let self else { return true }
-                    if paused {
-                        // Agent done and awaiting input — clear button
-                        self.isAgentRunning = false
-                        self.isAgentPaused = true
-                        return true
-                    }
-                    if !running {
-                        consecutiveNotRunning += 1
-                        // After 2 consecutive polls showing !running, trust it
-                        if consecutiveNotRunning >= 2 {
-                            self.isAgentRunning = false
-                            return true
-                        }
-                        // First !running poll — might be premature, keep pause showing
-                        self.isAgentRunning = true
-                    } else {
-                        consecutiveNotRunning = 0
-                    }
-                    return false
-                }
-                
-                if shouldExit {
-                    await MainActor.run { [weak self] in
-                        self?.stopStatusPolling()
-                    }
+                let (running, _) = await self.syncAgentStatus()
+                if !running {
+                    self.stopStatusPolling()
                     return
                 }
-                
                 try? await Task.sleep(nanoseconds: 3_000_000_000)
             }
         }
@@ -985,29 +971,57 @@ public final class AgentBridge: NSObject, ObservableObject {
     }
 
     private func resetLifecycleState() {
-        resetActiveLifecycleState()
+        pendingActiveSourceChatId = nil
+        stopStatusPolling()
+        chatTurnPhases = [:]
         sessionList.sessionPhases = [:]
         sessionLifecycleSequences = [:]
+        refreshActiveAgentFlags()
     }
 
-    /// Reset only the *active chat's* lifecycle state (global pause button,
-    /// running/paused flags, status polling). Leaves the per-session
-    /// `sessionList.sessionPhases` map intact so indicators for other chats survive a
-    /// focus/createNewChat transition.
-    private func resetActiveLifecycleState() {
-        hasLifecycleAuthority = false
-        latestLifecycleSequence = -1
-        agentTurnPhase = .idle
-        isAgentRunning = false
-        isAgentPaused = false
-        stopStatusPolling()
+    /// Recompute the active-chat button state (`agentTurnPhase`, `isAgentRunning`,
+    /// `isAgentPaused`) as a projection of `chatTurnPhases[activeSourceChatId]`.
+    /// This is the ONLY writer of those flags — events from background chats can
+    /// never leak into the active chat's UI, and switching sessions immediately
+    /// shows the target chat's true state (no reset-then-resync gap).
+    private func refreshActiveAgentFlags() {
+        // Hand off the pending new-chat override once the sessions list has
+        // caught up and resolves the active session to the same chat.
+        if let pending = pendingActiveSourceChatId,
+           let activeSessionId,
+           sessions.first(where: { $0.id == activeSessionId })?.sourceChatId == pending {
+            pendingActiveSourceChatId = nil
+        }
+
+        let phase: AgentTurnPhase
+        if let chatId = activeSourceChatId, let current = chatTurnPhases[chatId] {
+            phase = current
+        } else {
+            phase = .idle
+        }
+        let running: Bool
+        let paused: Bool
+        switch phase {
+        case .running:       running = true;  paused = false
+        case .awaitingInput: running = true;  paused = true
+        case .idle, .completed, .failed: running = false; paused = false
+        }
+        if agentTurnPhase != phase { agentTurnPhase = phase }
+        if isAgentRunning != running { isAgentRunning = running }
+        if isAgentPaused != paused { isAgentPaused = paused }
+        if phase == .running {
+            if statusPollingTask == nil { startStatusPolling() }
+        } else {
+            stopStatusPolling()
+        }
     }
 
-    /// The `sourceChatId` of the currently-active session, used to gate which
-    /// lifecycle events update the global `agentTurnPhase` (and therefore the
-    /// pause button / Live Activity). Background chats still update
-    /// `sessionList.sessionPhases` for the sessions-list indicators.
+    /// The `sourceChatId` of the currently-active session — the chat whose
+    /// per-chat phase drives the pause/play buttons via
+    /// `refreshActiveAgentFlags()`. A just-created chat that hasn't landed in
+    /// `sessions` yet is covered by `pendingActiveSourceChatId`.
     private var activeSourceChatId: String? {
+        if let pending = pendingActiveSourceChatId { return pending }
         guard let activeSessionId else { return nil }
         return sessions.first(where: { $0.id == activeSessionId })?.sourceChatId
     }
@@ -1044,6 +1058,13 @@ public final class AgentBridge: NSObject, ObservableObject {
         case .idle:
             sessionList.sessionPhases.removeValue(forKey: chatId)
         }
+        // The raw phase map keeps completed/failed distinct — the chat box must
+        // NOT show the paused/play state for a finished turn.
+        if phase == .idle {
+            chatTurnPhases.removeValue(forKey: chatId)
+        } else {
+            chatTurnPhases[chatId] = phase
+        }
         // Drop any stale per-chat tool-call subtitle when the session
         // goes idle OR the turn completes/fails. We keep the label across
         // running ↔ awaitingInput transitions (CLI sessions frequently
@@ -1053,86 +1074,26 @@ public final class AgentBridge: NSObject, ObservableObject {
         if phase == .idle || phase == .completed || phase == .failed {
             sessionList.latestActivityByChatId.removeValue(forKey: chatId)
         }
+        refreshActiveAgentFlags()
     }
 
-    /// Counts genuine agentTurnPhase transitions (thermal instrumentation, audit N3).
-    private var turnPhaseChangeCount = 0
-
-    private func applyTurnPhase(
-        _ phase: AgentTurnPhase,
-        sequence: Int? = nil,
-        reason: String? = nil,
-        error: String? = nil
-    ) {
-        if let sequence {
-            // Safeguard against sequence number pollution (e.g., if latestLifecycleSequence
-            // was set to a huge epoch millisecond timestamp, but we receive a monotonic integer).
-            if latestLifecycleSequence > 1_000_000_000_000 && sequence < 1_000_000_000_000 {
-                latestLifecycleSequence = sequence
-            } else if sequence < latestLifecycleSequence {
-                return
-            } else {
-                latestLifecycleSequence = sequence
-            }
-        }
-
-        hasLifecycleAuthority = true
-        
-        Task { @MainActor in
-            let running: Bool
-            let paused: Bool
-            switch phase {
-            case .running:       running = true;  paused = false
-            case .awaitingInput: running = true;  paused = true
-            case .idle, .completed, .failed: running = false; paused = false
-            }
-            // Only assign when the value actually changes. @Published fires
-            // objectWillChange on EVERY assignment, even to the same value, and
-            // the CLI re-emits lifecycle phases around each tool call — otherwise
-            // every view observing the bridge (the session list AND the WKWebView
-            // host) re-renders on every tool, even when nothing changed.
-            if self.agentTurnPhase != phase {
-                // Thermal instrumentation (audit N3): if this climbs by hundreds
-                // during one turn, the phase oscillates per tool and the
-                // turn-state leaf-isolation is worth building; a handful per
-                // turn means N3 is a non-issue.
-                self.turnPhaseChangeCount += 1
-                if self.turnPhaseChangeCount % 25 == 0 {
-                    Self.debugLog("[AgentBridge] turn-phase changes this session: \(self.turnPhaseChangeCount) (\(self.agentTurnPhase) → \(phase))")
-                }
-                self.agentTurnPhase = phase
-            }
-            if self.isAgentRunning != running { self.isAgentRunning = running }
-            if self.isAgentPaused != paused { self.isAgentPaused = paused }
-            if phase == .running {
-                self.startStatusPolling()
-            } else {
-                self.stopStatusPolling()
-            }
-        }
-    }
-
-    /// Route a lifecycle turn event to both the per-session phase map and, when
-    /// the event targets the active chat, the global `agentTurnPhase` / pause
-    /// button state. Events without a `chatId` fall back to updating global
-    /// state only (back-compat with older senders).
+    /// Route a lifecycle turn event into the per-chat phase maps. The active
+    /// chat's buttons update as a side effect (`applySessionPhase` →
+    /// `refreshActiveAgentFlags`); events for background chats only touch their
+    /// own row indicators. Events without a `chatId` are dropped — attributing
+    /// them to the active chat is exactly how another chat's state used to leak
+    /// into a fresh session's pause button.
     private func handleLifecycleEvent(_ phase: AgentTurnPhase, dict: [String: Any], isSnapshot: Bool = false) {
-        let chatId = dict["chatId"] as? String
-        let sequence = dict["sequence"] as? Int
-        applySessionPhase(phase, chatId: chatId, sequence: sequence)
+        guard let chatId = dict["chatId"] as? String, !chatId.isEmpty else {
+            Self.debugLog("[AgentBridge] Dropping lifecycle event without chatId (phase=\(phase.rawValue))")
+            return
+        }
+        applySessionPhase(phase, chatId: chatId, sequence: dict["sequence"] as? Int)
         // Stamp last-active time for session list sort order — but NOT on
         // snapshots, which fire for every session on connect and would
         // reset all timestamps to "just now".
-        if !isSnapshot, let chatId, !chatId.isEmpty {
+        if !isSnapshot {
             advanceLastActive(chatId: chatId, eventTimestamp: dict["timestamp"])
-        }
-        if chatId == nil || chatId == activeSourceChatId {
-            applyTurnPhase(
-                phase,
-                sequence: sequence,
-                reason: dict["reason"] as? String,
-                error: dict["error"] as? String
-            )
         }
     }
 
@@ -2540,31 +2501,35 @@ public final class AgentBridge: NSObject, ObservableObject {
         case "agent:stateSnapshot":
             handleLifecycleSnapshot(dict)
         case "agent:status":
-            let running = dict["isRunning"] as? Bool
-            let paused = dict["isPaused"] as? Bool
             // Ignore stale pushes during web app initialization — the pull-based
             // syncAgentStatus (run after connection) is the authoritative source.
             guard initialStatusSyncComplete else {
                 return
             }
-            if hasLifecycleAuthority {
-                // Lifecycle events are the primary source of truth, but if
-                // agent:status disagrees (e.g. web says not-running while we
-                // still show running), the final lifecycle message may have been
-                // lost. Arbitrate via a pull-based sync instead of silently
-                // dropping the signal.
-                let statusSaysNotRunning = running == false && isAgentRunning
-                let statusSaysPaused = paused == true && !isAgentPaused
-                if statusSaysNotRunning || statusSaysPaused {
-                    Task { await syncAgentStatus() }
-                }
+            // The push carries the chatId it is ABOUT (the web's active chat,
+            // which may not be ours) — apply it per-chat, never to the active
+            // chat's flags directly.
+            guard let chatId = dict["chatId"] as? String, !chatId.isEmpty else {
                 return
             }
-            if let running {
-                Task { @MainActor in self.isAgentRunning = running }
-            }
-            if let paused {
-                Task { @MainActor in self.isAgentPaused = paused }
+            let running = dict["isRunning"] as? Bool ?? false
+            let paused = dict["isPaused"] as? Bool ?? false
+            if sessionLifecycleSequences[chatId] != nil {
+                // This chat has lifecycle-event history — events are the primary
+                // source of truth, but if agent:status disagrees (e.g. web says
+                // not-running while we still show running), the final lifecycle
+                // message may have been lost. Arbitrate via a chat-scoped pull.
+                let current = chatTurnPhases[chatId]
+                let statusSaysNotRunning = !running && current == .running
+                let statusSaysPaused = paused && current != .awaitingInput
+                if statusSaysNotRunning || statusSaysPaused {
+                    Task { await syncAgentStatus(chatId: chatId) }
+                }
+            } else if running || paused {
+                applySessionPhase(paused ? .awaitingInput : .running, chatId: chatId, sequence: nil)
+            } else if chatTurnPhases[chatId] == .running || chatTurnPhases[chatId] == .awaitingInput {
+                // Status-only chat whose last status said running — clear it.
+                applySessionPhase(.completed, chatId: chatId, sequence: nil)
             }
         case "agent:activity":
             if let eventDict = dict["event"] as? [String: Any],
@@ -3052,6 +3017,12 @@ public final class AgentBridge: NSObject, ObservableObject {
             if let dict = result as? [String: Any],
                let chatId = dict["chatId"] as? String {
                 NSLog("[AgentBridge] New chat created: %@", chatId)
+                // Point the button projection at the new chat immediately —
+                // without this, a running previous chat's pause button carries
+                // over onto the brand-new (idle) chat until the sessions push
+                // catches up.
+                pendingActiveSourceChatId = chatId
+                refreshActiveAgentFlags()
                 if let prompt {
                     _ = try? await webView.callAsyncJavaScript(
                         "return await window.__ripulSubmitMessage?.(text) ?? { success: false }",
@@ -3169,23 +3140,24 @@ public final class AgentBridge: NSObject, ObservableObject {
     @discardableResult
     public func interruptAgent() async -> Bool {
         guard let webView else { return false }
+        // Interrupt the chat the NATIVE UI is showing — the web's own notion of
+        // "active chat" can lag ours, and interrupting whatever it happens to be
+        // on is how a pause tap used to no-op against an empty chat while the
+        // genuinely-running one kept going.
+        let target = activeSourceChatId
         do {
             let result = try await webView.callAsyncJavaScript(
-                "return await window.__ripulInterruptAgent?.() ?? { success: false }",
+                "return await window.__ripulInterruptAgent?.(targetChatId) ?? { success: false }",
+                arguments: ["targetChatId": target.map { $0 as Any } ?? NSNull()],
                 contentWorld: .page
             )
             if let dict = result as? [String: Any] {
                 let success = dict["success"] as? Bool ?? false
-                if success {
-                    // Optimistically clear native state so the pause button disappears
-                    // immediately. The web side updates agentSessionStore and the
-                    // lifecycle store, but the agent:status push is ignored when
-                    // hasLifecycleAuthority is true, and the lifecycle event from the
-                    // remote host may arrive late (or never if the connection is lost).
-                    isAgentRunning = false
-                    isAgentPaused = false
-                    agentTurnPhase = .completed
-                    stopStatusPolling()
+                if success, let target {
+                    // Optimistically mark the turn over so the button clears
+                    // immediately — the web's lifecycle event may lag, or never
+                    // arrive if a remote host's connection is lost.
+                    applySessionPhase(.completed, chatId: target, sequence: nil)
                 }
                 return success
             }
@@ -3243,13 +3215,17 @@ public final class AgentBridge: NSObject, ObservableObject {
     public func resumeAgent(context: String? = nil) async -> Bool {
         guard let webView else { return false }
         do {
+            // Scope the resume to the native active chat (same reasoning as
+            // interruptAgent — the web's active chat may differ from ours).
+            var args: [String: Any] = [
+                "targetChatId": activeSourceChatId.map { $0 as Any } ?? NSNull(),
+            ]
             let script: String
-            var args: [String: Any] = [:]
             if let ctx = context, !ctx.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 args["ctx"] = ctx
-                script = "return await window.__ripulResumeAgent?.(ctx) ?? { success: false }"
+                script = "return await window.__ripulResumeAgent?.(ctx, targetChatId) ?? { success: false }"
             } else {
-                script = "return await window.__ripulResumeAgent?.() ?? { success: false }"
+                script = "return await window.__ripulResumeAgent?.(undefined, targetChatId) ?? { success: false }"
             }
             let result = try await webView.callAsyncJavaScript(
                 script,
@@ -3271,50 +3247,58 @@ public final class AgentBridge: NSObject, ObservableObject {
         }
     }
 
-    /// Interrogate the web app for the current agent status of the active session.
-    /// Updates `isAgentRunning` and `isAgentPaused` to match. Call this after
-    /// session transitions (focusSession, createNewChat) to avoid stale button state.
+    /// Interrogate the web app for the current agent status of a chat (the
+    /// native active chat by default) and apply the answer per-chat. The active
+    /// chat's `isAgentRunning`/`isAgentPaused` update as a side effect when the
+    /// answer concerns it. Call after session transitions to correct stale state.
     @available(iOS 15.0, macOS 13.0, *)
     @discardableResult
-    public func syncAgentStatus() async -> (isRunning: Bool, isPaused: Bool) {
+    public func syncAgentStatus(chatId: String? = nil) async -> (isRunning: Bool, isPaused: Bool) {
         guard let webView else {
-            resetActiveLifecycleState()
             return (false, false)
         }
+        let target = chatId ?? activeSourceChatId
         do {
             let result = try await webView.callAsyncJavaScript(
                 """
                 if (window.__ripulGetAgentLifecycleSnapshot) {
-                    return await window.__ripulGetAgentLifecycleSnapshot();
+                    return await window.__ripulGetAgentLifecycleSnapshot(targetChatId);
                 }
-                return await window.__ripulGetAgentStatus?.() ?? { isRunning: false, isPaused: false };
+                return await window.__ripulGetAgentStatus?.(targetChatId) ?? { isRunning: false, isPaused: false };
                 """,
+                arguments: ["targetChatId": target.map { $0 as Any } ?? NSNull()],
                 contentWorld: .page
             )
             if let dict = result as? [String: Any] {
+                // Trust the chatId STAMPED ON THE RESPONSE, never assume it's
+                // the chat we asked about — an older web build ignores the
+                // argument and answers for its own active tab. Keyed application
+                // makes a mismatched answer harmless: it updates that chat's
+                // row, not the active chat's buttons.
+                let respChatId = dict["chatId"] as? String
                 if let rawPhase = dict["phase"] as? String,
                    let phase = AgentTurnPhase(rawValue: rawPhase) {
-                    applyTurnPhase(
-                        phase,
-                        sequence: dict["sequence"] as? Int,
-                        reason: dict["reason"] as? String,
-                        error: dict["error"] as? String
-                    )
+                    if let respChatId, !respChatId.isEmpty {
+                        applySessionPhase(phase, chatId: respChatId, sequence: dict["sequence"] as? Int)
+                    }
                     return (isAgentRunning, isAgentPaused)
                 }
+                // Legacy status shape ({ isRunning, isPaused, chatId }).
                 let running = dict["isRunning"] as? Bool ?? false
                 let paused = dict["isPaused"] as? Bool ?? false
-                await MainActor.run {
-                    self.isAgentRunning = running
-                    self.isAgentPaused = paused
+                if let respChatId, !respChatId.isEmpty {
+                    if running || paused {
+                        applySessionPhase(paused ? .awaitingInput : .running, chatId: respChatId, sequence: nil)
+                    } else if chatTurnPhases[respChatId] != nil {
+                        applySessionPhase(.completed, chatId: respChatId, sequence: nil)
+                    }
                 }
-                return (running, paused)
+                return (isAgentRunning, isAgentPaused)
             }
         } catch {
             NSLog("[AgentBridge] syncAgentStatus error: %@", error.localizedDescription)
         }
-        resetActiveLifecycleState()
-        return (false, false)
+        return (isAgentRunning, isAgentPaused)
     }
 
     /// Apply the active-session id reported by a sessions-list response, but let
@@ -3325,8 +3309,11 @@ public final class AgentBridge: NSObject, ObservableObject {
     /// (cleared after the slide settles), it is the authoritative target.
     private func applyActiveSessionIdFromResponse(_ activeId: String?) {
         let target = navigatingToSessionId ?? activeId
-        guard let target else { return }
-        if activeSessionId != target { activeSessionId = target }
+        if let target, activeSessionId != target { activeSessionId = target }
+        // Refresh even when the id didn't change: the sessions list content may
+        // have (a just-created chat becoming resolvable), which changes what
+        // `activeSourceChatId` maps to and hands off the pending override.
+        refreshActiveAgentFlags()
     }
 
     /// Whether an `agent:activity` event is fresh enough to drive a LIVE "what's
@@ -3521,8 +3508,12 @@ public final class AgentBridge: NSObject, ObservableObject {
         }
         let focusStart = CFAbsoluteTimeGetCurrent()
         handleConsoleLog("LOG: [STARTUP] focusSession START id=\(id.suffix(8))")
+        // Clear any new-chat override, then let the activeSessionId didSet
+        // re-derive the buttons from the target chat's known phase — switching
+        // into a running chat shows its pause button immediately, and a chat
+        // with no phase entry shows none.
+        pendingActiveSourceChatId = nil
         activeSessionId = id
-        resetActiveLifecycleState()
         do {
             _ = try await webView.callAsyncJavaScript(
                 "if (window.__ripulFocusSession) await window.__ripulFocusSession(sessionId);",
@@ -5383,10 +5374,6 @@ public final class AgentBridge: NSObject, ObservableObject {
             return nil
         }
 
-        // A new chat never has an active agent — reset active-chat state
-        // immediately. Don't touch `sessionList.sessionPhases`; other chats retain theirs.
-        resetActiveLifecycleState()
-
         do {
             logSessionStartMarker("ios.bridge_js_call_start")
             let wdArgument: Any = pendingNewChatWorkingDirectory ?? NSNull()
@@ -5408,6 +5395,11 @@ public final class AgentBridge: NSObject, ObservableObject {
                 return nil
             }
             NSLog("[AgentBridge] createNewChat: created %@", chatId)
+            // A brand-new chat has no agent turn — point the button projection
+            // at it immediately (the sessions push that makes it resolvable in
+            // `sessions` lags this call by hundreds of ms).
+            pendingActiveSourceChatId = chatId
+            refreshActiveAgentFlags()
             logSessionStartMarker("ios.bridge_js_call_end", chatId: chatId)
             return chatId
         } catch {
@@ -6198,6 +6190,9 @@ public final class AgentBridge: NSObject, ObservableObject {
                let chatId = dict["chatId"] as? String,
                let tabId = dict["tabId"] as? String {
                 let machineId = dict["machineId"] as? String
+                // Same new-chat handoff as createNewChat/startNewChat.
+                pendingActiveSourceChatId = chatId
+                refreshActiveAgentFlags()
                 return NewChatResult(chatId: chatId, tabId: tabId, machineId: machineId)
             }
             if let err = dict["error"] as? String {
