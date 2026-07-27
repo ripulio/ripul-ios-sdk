@@ -251,22 +251,30 @@ final class RipulDevOverlayRootVC: UIViewController {
             (view.window as? RipulDevOverlayWindow)?.isPassthrough = true
             return
         }
-        // Springboard close: the panel shrinks back into the bubble (scale +
-        // corner radius + fade), the bubble fades/scales in to receive it.
+        // Springboard close, matching iOS's app-minimize: the panel stays
+        // OPAQUE while it collapses into the bubble's frame (overdamped spring,
+        // corner radius climbing to the icon circle), fading only in the last
+        // beat; the bubble pops in LATE from slightly-large with a gentle
+        // overshoot — the icon "catches" the app.
         bubble.isHidden = false
         bubble.alpha = 0
-        bubble.transform = CGAffineTransform(scaleX: 0.85, y: 0.85)
+        bubble.transform = CGAffineTransform(scaleX: 1.1, y: 1.1)
         let s = bubble.bounds.width / view.bounds.width
         let endRadius = (bubble.bounds.width / 2) / s
         panel.layer.masksToBounds = true
-        UIView.animate(withDuration: 0.38, delay: 0, options: [.curveEaseIn, .beginFromCurrentState]) {
+        UIView.animate(withDuration: 0.36, delay: 0, usingSpringWithDamping: 0.92, initialSpringVelocity: 0, options: [.beginFromCurrentState]) {
             panel.transform = CGAffineTransform(scaleX: s, y: s)
             panel.center = self.bubble.center
             panel.layer.cornerRadius = endRadius
+        }
+        UIView.animate(withDuration: 0.09, delay: 0.26, options: [.curveEaseIn]) {
             panel.alpha = 0
+        }
+        UIView.animate(withDuration: 0.42, delay: 0.12, usingSpringWithDamping: 0.72, initialSpringVelocity: 0, options: [.beginFromCurrentState]) {
             self.bubble.alpha = 1
             self.bubble.transform = .identity
-        } completion: { _ in
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.56) {
             panel.isHidden = true
             panel.transform = .identity
             panel.center = CGPoint(x: self.view.bounds.midX, y: self.view.bounds.midY)
