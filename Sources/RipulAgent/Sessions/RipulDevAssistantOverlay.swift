@@ -169,18 +169,28 @@ final class RipulDevOverlayRootVC: UIViewController {
     private func setupBubble() {
         let size: CGFloat = 56
         let b = UIView(frame: CGRect(x: 0, y: 0, width: size, height: size))
-        b.backgroundColor = .systemBlue
-        b.layer.cornerRadius = size / 2
+        b.backgroundColor = .clear
         b.layer.shadowColor = UIColor.black.cgColor
         b.layer.shadowOpacity = 0.25
         b.layer.shadowRadius = 8
         b.layer.shadowOffset = CGSize(width: 0, height: 3)
+        // Liquid Glass bubble — the minimize morph's landing shape is a glass
+        // droplet, so the bubble must be glass too or the hand-off pops.
+        let glassEffect = UIGlassEffect()
+        glassEffect.isInteractive = true
+        glassEffect.tintColor = .systemBlue
+        let glass = UIVisualEffectView(effect: glassEffect)
+        glass.frame = b.bounds
+        glass.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        glass.layer.cornerRadius = size / 2
+        glass.layer.masksToBounds = true
+        b.addSubview(glass)
         let icon = UIImageView(image: UIImage(systemName: "terminal.fill"))
         icon.tintColor = .white
         icon.contentMode = .center
         icon.frame = b.bounds
         icon.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        b.addSubview(icon)
+        glass.contentView.addSubview(icon)
         b.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(bubbleTapped)))
         b.addGestureRecognizer(UIPanGestureRecognizer(target: self, action: #selector(bubblePanned(_:))))
         view.addSubview(b)
@@ -279,10 +289,22 @@ final class RipulDevOverlayRootVC: UIViewController {
         scrim.isUserInteractionEnabled = false
         view.insertSubview(scrim, at: 0)
 
+        // The morph container animates its FRAME to the bubble's exact circle
+        // (not a uniform transform: the panel isn't square, so pure scaling
+        // lands on a 56×121 pill and the final fade to the round bubble reads
+        // as a snap). The snapshot scales inside and the collapsing bounds
+        // clip it — the iOS-close mask behavior — while Liquid Glass
+        // materializes under the dissolving content, so what merges with the
+        // (glass) bubble is an identical glass droplet.
+        let bubbleFrame = bubble.frame
         let morph = UIView(frame: panel.frame)
-        morph.backgroundColor = .systemBackground
+        morph.backgroundColor = .clear
         morph.layer.masksToBounds = true
         morph.isUserInteractionEnabled = false
+        let glass = UIVisualEffectView(effect: nil)
+        glass.frame = morph.bounds
+        glass.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        morph.addSubview(glass)
         let snapshot = panel.snapshotView(afterScreenUpdates: false) ?? {
             // Fallback: rasterize the hierarchy. Blank web tiles here are no
             // worse than what snapshotView failing would have given us.
@@ -296,15 +318,19 @@ final class RipulDevOverlayRootVC: UIViewController {
         view.addSubview(morph)
         panel.isHidden = true
 
-        let s = bubble.bounds.width / view.bounds.width
-        let endRadius = (bubble.bounds.width / 2) / s
+        let s = bubbleFrame.width / panel.bounds.width
         let ts = collapseTimeScale
         UIView.animate(withDuration: 0.36 * ts, delay: 0, usingSpringWithDamping: 0.92, initialSpringVelocity: 0, options: [.beginFromCurrentState]) {
-            morph.transform = CGAffineTransform(scaleX: s, y: s)
-            morph.center = self.bubble.center
-            morph.layer.cornerRadius = endRadius
+            morph.frame = bubbleFrame
+            morph.layer.cornerRadius = bubbleFrame.width / 2
+            snapshot.transform = CGAffineTransform(scaleX: s, y: s)
+            snapshot.center = CGPoint(x: bubbleFrame.width / 2, y: bubbleFrame.height / 2)
         }
-        UIView.animate(withDuration: 0.09 * ts, delay: 0.26 * ts, options: [.curveEaseIn]) {
+        UIView.animate(withDuration: 0.14 * ts, delay: 0.20 * ts, options: [.curveEaseIn]) {
+            snapshot.alpha = 0
+            glass.effect = UIGlassEffect()
+        }
+        UIView.animate(withDuration: 0.12 * ts, delay: 0.36 * ts, options: [.curveEaseOut]) {
             morph.alpha = 0
         }
         UIView.animate(withDuration: 0.26 * ts, delay: 0.24 * ts, options: [.curveEaseOut]) {
