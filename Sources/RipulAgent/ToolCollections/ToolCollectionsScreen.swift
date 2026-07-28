@@ -25,8 +25,15 @@ public final class RipulToolCollectionsModel: ObservableObject {
     @Published public private(set) var collections: [RipulToolCollection] = []
     @Published public private(set) var isLoading = false
     @Published public var errorMessage: String?
-    /// Set after any successful write. Drives the restart notice.
+    /// Latest successful write, shown transiently.
     @Published public var savedNotice: String?
+    /// Sticky once anything has been written. Drag-and-drop produces a write
+    /// per drop, so the restart requirement is a persistent banner rather than
+    /// a modal per action — but it still has to be said, or a working save is
+    /// indistinguishable from a failed one.
+    @Published public var needsRestart = false
+    /// In-flight writes, for a progress affordance during rapid drops.
+    @Published public var savingCount = 0
 
     private let client: RipulToolCollectionsClient
 
@@ -78,11 +85,66 @@ public final class RipulToolCollectionsModel: ObservableObject {
         }
     }
 
+    /// Move a tool between collections, or out of one entirely.
+    ///
+    /// Applied optimistically so the list reorders under the finger, then
+    /// persisted. A failed write reloads from the server rather than leaving
+    /// the screen showing an edit that didn't land.
+    ///
+    /// Only ever adjusts `explicitTools`. Pattern-derived membership is not
+    /// removable this way — the pattern would just re-capture the tool — which
+    /// is why the UI does not offer those rows for dragging.
+    /// Internal, not public: `RipulToolDragItem` is a detail of the drag
+    /// implementation and isn't part of the SDK's surface.
+    func move(_ item: RipulToolDragItem, to targetId: String?) async {
+        guard item.sourceCollectionId != targetId else { return }
+
+        let snapshot = collections
+        var edits: [(id: String, tools: [String])] = []
+
+        if let sourceId = item.sourceCollectionId,
+           let index = collections.firstIndex(where: { $0.id == sourceId }) {
+            var tools = collections[index].explicitTools
+            tools.removeAll { RipulToolCollectionMatcher.canonicalName($0) == RipulToolCollectionMatcher.canonicalName(item.toolName) }
+            collections[index].explicitTools = tools
+            edits.append((sourceId, tools))
+        }
+
+        if let targetId, let index = collections.firstIndex(where: { $0.id == targetId }) {
+            var tools = collections[index].explicitTools
+            let canonical = RipulToolCollectionMatcher.canonicalName(item.toolName)
+            if !tools.contains(where: { RipulToolCollectionMatcher.canonicalName($0) == canonical }) {
+                tools.append(item.toolName)
+                collections[index].explicitTools = tools
+                edits.append((targetId, tools))
+            }
+        }
+
+        guard !edits.isEmpty else { return }
+
+        errorMessage = nil
+        savingCount += 1
+        defer { savingCount -= 1 }
+        do {
+            for edit in edits {
+                _ = try await client.update(
+                    id: edit.id,
+                    edit: RipulToolCollectionEdit(explicitTools: edit.tools)
+                )
+            }
+            needsRestart = true
+        } catch {
+            collections = snapshot
+            errorMessage = error.localizedDescription
+        }
+    }
+
     /// Runs a write, surfacing either the restart notice or the server's error.
     private func write(_ operation: @escaping () async throws -> String) async -> Bool {
         errorMessage = nil
         do {
             savedNotice = try await operation()
+            needsRestart = true
             return true
         } catch {
             errorMessage = error.localizedDescription
@@ -108,12 +170,20 @@ public final class RipulToolCollectionsModel: ObservableObject {
 
 // MARK: - Screen
 
-/// Browse and edit the account's tool collections against this build's tools.
+/// Browse and reorganise the account's tool collections against this build's tools.
+///
+/// Membership is edited by dragging: collections expand in place, and a tool
+/// dragged onto a collection joins it, dragged to Ungrouped leaves it. Only
+/// hand-picked members are draggable — see `memberRow`.
 @available(iOS 16.0, *)
 public struct RipulToolCollectionsScreen: View {
     @ObservedObject private var bridge: AgentBridge
     @StateObject private var model: RipulToolCollectionsModel
     @State private var creating = false
+    @State private var expanded: Set<String> = []
+    @State private var editing: RipulToolCollection?
+    /// Collection currently under the finger, for a drop highlight.
+    @State private var dropTarget: String?
 
     public init(bridge: AgentBridge, tokenProvider: @escaping () -> String?) {
         self.bridge = bridge
@@ -123,6 +193,15 @@ public struct RipulToolCollectionsScreen: View {
     }
 
     private var tools: [RipulRegisteredTool] { bridge.registeredToolSummaries }
+    private var toolNames: [String] { tools.map(\.name) }
+
+    private func matcher(for collection: RipulToolCollection) -> RipulToolCollectionMatcher {
+        RipulToolCollectionMatcher(
+            explicitTools: collection.explicitTools,
+            toolPatterns: collection.toolPatterns,
+            toolNames: toolNames
+        )
+    }
 
     public var body: some View {
         List {
@@ -134,27 +213,27 @@ public struct RipulToolCollectionsScreen: View {
                 }
             }
 
-            Section {
-                if model.categories.isEmpty && !model.isLoading {
+            if model.needsRestart {
+                Section {
+                    Label(
+                        "Saved. Restart the app to apply — collections are read at launch.",
+                        systemImage: "arrow.clockwise.circle"
+                    )
+                    .font(.footnote)
+                    .foregroundStyle(.orange)
+                }
+            }
+
+            if model.categories.isEmpty && !model.isLoading {
+                Section {
                     Text("No collections yet. Every tool is passed to the agent individually.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
-                ForEach(model.categories) { collection in
-                    NavigationLink {
-                        RipulToolCollectionEditorView(
-                            model: model,
-                            tools: tools,
-                            existing: collection
-                        )
-                    } label: {
-                        row(for: collection)
-                    }
-                }
-            } header: {
-                Text("Collections")
-            } footer: {
-                Text("Each collection is shown to the agent as ONE tool it expands on demand.")
+            }
+
+            ForEach(model.categories) { collection in
+                collectionSection(collection)
             }
 
             ungroupedSection
@@ -163,12 +242,16 @@ public struct RipulToolCollectionsScreen: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    creating = true
-                } label: {
-                    Image(systemName: "plus")
+                if model.savingCount > 0 {
+                    ProgressView()
+                } else {
+                    Button {
+                        creating = true
+                    } label: {
+                        Image(systemName: "plus")
+                    }
+                    .accessibilityIdentifier("ripul.toolCollections.add")
                 }
-                .accessibilityIdentifier("ripul.toolCollections.add")
             }
         }
         .sheet(isPresented: $creating) {
@@ -176,56 +259,156 @@ public struct RipulToolCollectionsScreen: View {
                 RipulToolCollectionEditorView(model: model, tools: tools, existing: nil)
             }
         }
+        .sheet(item: $editing) { collection in
+            NavigationStack {
+                RipulToolCollectionEditorView(model: model, tools: tools, existing: collection)
+            }
+        }
         .task { await model.load() }
         .refreshable { await model.load() }
-        .alert(
-            "Restart to apply",
-            isPresented: Binding(
-                get: { model.savedNotice != nil },
-                set: { if !$0 { model.savedNotice = nil } }
-            )
-        ) {
-            Button("OK", role: .cancel) { model.savedNotice = nil }
-        } message: {
-            // Without this the developer checks the agent, sees the old
-            // grouping, and concludes the save failed.
-            Text("\(model.savedNotice ?? "Saved").\n\nCollections are read when the app starts. Restart to see the new grouping take effect.")
+    }
+
+    // MARK: - Collection section
+
+    @ViewBuilder
+    private func collectionSection(_ collection: RipulToolCollection) -> some View {
+        let m = matcher(for: collection)
+        let isOpen = expanded.contains(collection.id)
+
+        Section {
+            if isOpen {
+                ForEach(m.explicitMatches, id: \.self) { name in
+                    memberRow(name, in: collection, kind: .picked)
+                }
+                ForEach(m.patternMatches, id: \.self) { name in
+                    memberRow(name, in: collection, kind: .pattern)
+                }
+                ForEach(m.absentMembers, id: \.self) { name in
+                    memberRow(name, in: collection, kind: .absent)
+                }
+                if m.memberCount == 0 {
+                    Text("Empty — drag a tool here, or add a name pattern.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+                Button {
+                    editing = collection
+                } label: {
+                    Label("Edit patterns, mode, label…", systemImage: "slider.horizontal.3")
+                        .font(.footnote)
+                }
+            }
+        } header: {
+            header(collection, matcher: m, isOpen: isOpen)
+        }
+        // The header alone is a thin target, and List section headers pin
+        // while scrolling, which moves the target mid-drag. Accepting drops on
+        // the whole section means anywhere in an expanded group works.
+        .dropDestination(for: String.self) { payloads, _ in
+            handleDrop(payloads, into: collection.id)
+        } isTargeted: { targeted in
+            dropTarget = targeted ? collection.id : (dropTarget == collection.id ? nil : dropTarget)
         }
     }
 
-    private func row(for collection: RipulToolCollection) -> some View {
-        let matcher = RipulToolCollectionMatcher(
-            explicitTools: collection.explicitTools,
-            toolPatterns: collection.toolPatterns,
-            toolNames: tools.map(\.name)
-        )
-        return VStack(alignment: .leading, spacing: 3) {
-            HStack(spacing: 6) {
-                Text(collection.displayLabel).font(.body)
-                if collection.isIsolate {
-                    Text("isolate")
-                        .font(.caption2)
-                        .padding(.horizontal, 5).padding(.vertical, 1)
-                        .background(Color.secondary.opacity(0.15), in: Capsule())
-                }
-            }
-            Text(summary(matcher: matcher, collection: collection))
-                .font(.caption)
+    private func header(
+        _ collection: RipulToolCollection,
+        matcher m: RipulToolCollectionMatcher,
+        isOpen: Bool
+    ) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: "chevron.right")
+                .font(.caption2)
+                .rotationEffect(.degrees(isOpen ? 90 : 0))
                 .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text(collection.displayLabel)
+                        .font(.subheadline.weight(.semibold))
+                        .textCase(nil)
+                    if collection.isIsolate {
+                        Text("isolate")
+                            .font(.caption2)
+                            .padding(.horizontal, 5).padding(.vertical, 1)
+                            .background(Color.secondary.opacity(0.15), in: Capsule())
+                    }
+                }
+                Text(summary(matcher: m, collection: collection))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .textCase(nil)
+            }
+            Spacer()
+        }
+        .padding(.vertical, 4)
+        .contentShape(Rectangle())
+        .background(
+            dropTarget == collection.id
+                ? Color.accentColor.opacity(0.15)
+                : Color.clear
+        )
+        .onTapGesture {
+            withAnimation(.easeInOut(duration: 0.18)) {
+                if isOpen { expanded.remove(collection.id) } else { expanded.insert(collection.id) }
+            }
+        }
+        .dropDestination(for: String.self) { payloads, _ in
+            handleDrop(payloads, into: collection.id)
+        } isTargeted: { targeted in
+            dropTarget = targeted ? collection.id : (dropTarget == collection.id ? nil : dropTarget)
+        }
+        .accessibilityIdentifier("ripul.toolCollections.header")
+    }
+
+    private enum MemberKind { case picked, pattern, absent }
+
+    /// One member row. Only `.picked` members are draggable: a `.pattern`
+    /// member cannot be removed by editing `explicitTools` (the pattern would
+    /// re-capture it immediately), and an `.absent` member isn't registered
+    /// here at all. Offering a drag that silently reverts is worse than
+    /// offering none, so both are shown inert with the reason.
+    @ViewBuilder
+    private func memberRow(_ name: String, in collection: RipulToolCollection, kind: MemberKind) -> some View {
+        let row = HStack {
+            Image(systemName: kind == .picked ? "line.3.horizontal" : "circle.dotted")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            Text(name)
+                .font(.system(.footnote, design: .monospaced))
+                .foregroundStyle(kind == .picked ? .primary : .secondary)
+            Spacer()
+            switch kind {
+            case .picked:
+                EmptyView()
+            case .pattern:
+                Text("pattern").font(.caption2).foregroundStyle(.secondary)
+            case .absent:
+                Text("not in this app").font(.caption2).foregroundStyle(.secondary)
+            }
+        }
+
+        if kind == .picked {
+            row.draggable(
+                RipulToolDragItem(toolName: name, sourceCollectionId: collection.id).encoded
+            )
+        } else {
+            row
         }
     }
 
     /// Curated size first, local presence second. A collection of web app
     /// tools is fully populated and still matches nothing in this build —
     /// reporting only the local count would render it as empty.
-    private func summary(matcher: RipulToolCollectionMatcher, collection: RipulToolCollection) -> String {
-        var parts = ["\(matcher.memberCount) member\(matcher.memberCount == 1 ? "" : "s")"]
-        parts.append("\(matcher.presentCount) in this app")
+    private func summary(matcher m: RipulToolCollectionMatcher, collection: RipulToolCollection) -> String {
+        var parts = ["\(m.memberCount) member\(m.memberCount == 1 ? "" : "s")"]
+        parts.append("\(m.presentCount) in this app")
         if !collection.toolPatterns.isEmpty {
             parts.append("\(collection.toolPatterns.count) pattern\(collection.toolPatterns.count == 1 ? "" : "s")")
         }
         return parts.joined(separator: " · ")
     }
+
+    // MARK: - Ungrouped
 
     @ViewBuilder
     private var ungroupedSection: some View {
@@ -235,8 +418,12 @@ public struct RipulToolCollectionsScreen: View {
                 Text("Every registered tool belongs to a collection.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
-            } else {
-                ForEach(ungrouped) { tool in
+            }
+            ForEach(ungrouped) { tool in
+                HStack {
+                    Image(systemName: "line.3.horizontal")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(tool.name).font(.system(.footnote, design: .monospaced))
                         if !tool.description.isEmpty {
@@ -247,12 +434,48 @@ public struct RipulToolCollectionsScreen: View {
                         }
                     }
                 }
+                .draggable(
+                    RipulToolDragItem(toolName: tool.name, sourceCollectionId: nil).encoded
+                )
             }
         } header: {
-            Text("Ungrouped (\(ungrouped.count))")
+            HStack {
+                Text("Ungrouped (\(ungrouped.count))").textCase(nil)
+                Spacer()
+            }
+            .padding(.vertical, 4)
+            .contentShape(Rectangle())
+            .background(dropTarget == ungroupedDropId ? Color.accentColor.opacity(0.15) : Color.clear)
+            .dropDestination(for: String.self) { payloads, _ in
+                handleDrop(payloads, into: nil)
+            } isTargeted: { targeted in
+                dropTarget = targeted ? ungroupedDropId : (dropTarget == ungroupedDropId ? nil : dropTarget)
+            }
         } footer: {
-            Text("Passed to the agent individually, costing tokens on every turn.")
+            Text("Passed to the agent individually, costing tokens on every turn. Drag one onto a collection above to group it.")
         }
+    }
+
+    private var ungroupedDropId: String { "__ungrouped__" }
+
+    // MARK: - Drop handling
+
+    /// Returns true only when at least one payload was ours — an unrecognised
+    /// drop (text from another app) is rejected rather than parsed.
+    private func handleDrop(_ payloads: [String], into targetId: String?) -> Bool {
+        let items = payloads.compactMap(RipulToolDragItem.decode)
+        guard !items.isEmpty else { return false }
+        dropTarget = nil
+        Task {
+            for item in items {
+                await model.move(item, to: targetId)
+            }
+            // Reveal the destination so the moved tool is visible where it landed.
+            if let targetId {
+                withAnimation { _ = expanded.insert(targetId) }
+            }
+        }
+        return true
     }
 }
 #endif
