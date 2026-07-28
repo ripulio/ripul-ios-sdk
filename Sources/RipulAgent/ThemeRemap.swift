@@ -235,5 +235,15 @@ extension UIColor {
                   blue: CGFloat(rgb & 0x0000FF) / 255.0,
                   alpha: 1.0)
     }
+
+    /// `#RRGGBB` for this colour — what a colour-picker edit writes back into the document.
+    /// Resolved in the extended-sRGB space first so P3 picks (the system picker's default
+    /// gamut) clamp to a valid sRGB hex instead of producing out-of-range components.
+    var ripulHexString: String {
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        guard getRed(&r, green: &g, blue: &b, alpha: &a) else { return "#000000" }
+        let clamp = { (v: CGFloat) in Int((max(0, min(1, v)) * 255).rounded()) }
+        return String(format: "#%02X%02X%02X", clamp(r), clamp(g), clamp(b))
+    }
 }
 #endif

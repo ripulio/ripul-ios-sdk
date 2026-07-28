@@ -165,13 +165,20 @@ public struct RipulThemeVocabulary {
             self.defaultReference = defaultReference
         }
     }
-    /// Palette names in display order (editors iterate this).
-    public let primitiveOrder: [String]
+    /// The primitive palette as labelled, PATHED entries — the bottom tier gets the same
+    /// treatment as the tiers above it, so a generic palette screen groups and titles them
+    /// from registration ("Brand", "Purples", "Status") instead of the host hand-writing a
+    /// section per group. `defaultReference` is the seed hex used when the document has no
+    /// entry for the primitive.
+    public let primitives: [Entry]
     public let roles: [Entry]
     public let components: [Entry]
-    public init(primitiveOrder: [String], roles: [Entry], components: [Entry]) {
-        self.primitiveOrder = primitiveOrder; self.roles = roles; self.components = components
+    public init(primitives: [Entry], roles: [Entry], components: [Entry]) {
+        self.primitives = primitives; self.roles = roles; self.components = components
     }
+
+    /// Palette names in registration order.
+    public var primitiveOrder: [String] { primitives.map(\.name) }
 }
 
 /// One knob's editor descriptor: what it is and how to edit it. Registration data — a kind
@@ -512,6 +519,56 @@ public enum RipulThemeEngine {
         if let persistMutation { persistMutation(current) } else { adopt(current) }
     }
 
+    // MARK: - Colour-tier mutation (the SDK-owned colour screens' write path)
+    //
+    // Same contract as the style mutators: mutate the live document, then hand it to the
+    // host's `persistMutation` (blob write + adopt + broadcast), falling back to `adopt`
+    // when no host hook is set. Every colour edit is therefore live AND durable.
+
+    /// Point a component token at a reference — another component (alias), a semantic
+    /// label, a primitive name, or a literal hex.
+    public static func setReference(component name: String, to reference: String) {
+        current.components[name] = reference
+        commit()
+    }
+
+    /// Point a semantic label at a reference — a primitive name, another label (alias), or
+    /// a literal hex.
+    public static func setReference(label name: String, to reference: String) {
+        current.semantic[name] = reference
+        commit()
+    }
+
+    /// Set a primitive's hex — the bottom tier; cascades to every role and token that
+    /// references it.
+    public static func setPrimitive(_ name: String, hex: String) {
+        current.primitives[name] = hex
+        commit()
+    }
+
+    /// Add a user-defined semantic label pointing at `reference`.
+    public static func addSemanticLabel(_ name: String, reference: String) {
+        current.semantic[name] = reference
+        commit()
+    }
+
+    /// Remove a user-defined semantic label. Built-in roles can't be removed — they fall
+    /// back to their vocabulary default, so removing the entry just resets it.
+    public static func removeSemanticLabel(_ name: String) {
+        current.semantic[name] = nil
+        commit()
+    }
+
+    /// The hex a primitive currently holds (document entry, else its registered seed).
+    public static func primitiveHex(_ name: String) -> String? {
+        current.primitives[name]
+            ?? spec?.vocabulary.primitives.first { $0.name == name }?.defaultReference
+    }
+
+    private static func commit() {
+        if let persistMutation { persistMutation(current) } else { adopt(current) }
+    }
+
     // MARK: colour resolution (tagged at the chokepoints)
 
     /// The raw reference a component token points at — the document's entry, else the
@@ -530,6 +587,42 @@ public enum RipulThemeEngine {
     /// True if `name` is a known semantic label (a vocabulary role or a user-added key).
     public static func isSemanticLabel(_ name: String) -> Bool {
         rolesByName[name] != nil || current.semantic[name] != nil
+    }
+
+    // MARK: vocabulary access (what generic token screens read)
+
+    /// The registered vocabulary — primitives, roles and component tokens with their
+    /// labels and hub paths.
+    public static var vocabulary: RipulThemeVocabulary? { spec?.vocabulary }
+
+    /// True if `name` is a registered component token.
+    public static func isComponentToken(_ name: String) -> Bool { componentsByName[name] != nil }
+
+    /// Every semantic label: built-in roles (registration order) then user-added keys.
+    public static var semanticLabels: [String] {
+        (spec?.vocabulary.roles.map(\.name) ?? []) + customSemanticLabels
+    }
+
+    /// Just the user-added semantic labels (document keys that aren't registered roles).
+    public static var customSemanticLabels: [String] {
+        current.semantic.keys.filter { rolesByName[$0] == nil }.sorted()
+    }
+
+    /// Display label for a semantic name — the registered role's label, else the key
+    /// prettified ("paymentPositive" -> "Payment positive") for user-added labels.
+    public static func displayLabel(forLabel name: String) -> String {
+        rolesByName[name]?.label ?? prettify(name)
+    }
+
+    /// Display label for a component token name.
+    public static func displayLabel(forComponent name: String) -> String {
+        componentsByName[name]?.label ?? prettify(name)
+    }
+
+    static func prettify(_ s: String) -> String {
+        var out = ""
+        for ch in s { if ch.isUppercase || ch.isNumber { out += " " }; out.append(ch) }
+        return out.prefix(1).uppercased() + out.dropFirst()
     }
 
     /// True if pointing component `name` at `target` would close an alias cycle.
