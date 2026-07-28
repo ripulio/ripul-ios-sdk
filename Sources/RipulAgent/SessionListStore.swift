@@ -74,45 +74,24 @@ public final class SessionListStore: ObservableObject {
     public var sessionPhases: [String: AgentTurnPhase] = [:] { willSet { notify() } }
 
     /// When the phase above was established (from the event's own timestamp).
-    /// Compared against `lastViewedByChatId` to decide whether a completed
-    /// turn still deserves the hand.
+    /// Not used for display gating — kept because the session list sorts and
+    /// debugs against "when did this last change phase".
     public var phaseTimestampByChatId: [String: Date] = [:] { willSet { notify() } }
-
-    /// Last time the user opened/watched each chat. Persisted — this is the
-    /// half of "unseen completion" that must survive restarts locally (the
-    /// completion timestamps come back from the web/host on reconnect).
-    public var lastViewedByChatId: [String: Date] =
-        (UserDefaults.standard.dictionary(forKey: SessionListStore.lastViewedKey) as? [String: Double])?
-            .mapValues { Date(timeIntervalSince1970: $0) } ?? [:] {
-        willSet { notify() }
-    }
-
-    private static let lastViewedKey = "ripulChatLastViewedAt"
-    private static let maxLastViewedEntries = 300
-
-    /// Record that the user has seen this chat (opened it, or watched a turn
-    /// finish while it was the active chat). Clears its unseen-completion hand.
-    public func markChatViewed(_ chatId: String, at date: Date = Date()) {
-        if let existing = lastViewedByChatId[chatId], existing >= date { return }
-        lastViewedByChatId[chatId] = date
-        var toStore = lastViewedByChatId
-        if toStore.count > Self.maxLastViewedEntries {
-            let keep = toStore.sorted { $0.value > $1.value }.prefix(Self.maxLastViewedEntries)
-            toStore = Dictionary(uniqueKeysWithValues: Array(keep))
-            lastViewedByChatId = toStore
-        }
-        UserDefaults.standard.set(toStore.mapValues { $0.timeIntervalSince1970 }, forKey: Self.lastViewedKey)
-    }
 
     /// Gated read — returns nil when updates are suppressed so rows that
     /// re-render from AgentBridge.objectWillChange don't show live phase changes.
     ///
     /// Collapse rules:
-    /// - `.running` → spinner, always (live state).
-    /// - `.awaitingInput` → hand, always — the agent is BLOCKED on you
-    ///   (permission / ask_user); looking at it doesn't unblock it.
-    /// - `.completed` / `.failed` → hand only while the completion is newer
-    ///   than your last view of the chat; afterwards the row goes quiet.
+    /// - `.running` → spinner (live state).
+    /// - `.awaitingInput` → hand: the agent is BLOCKED on you.
+    /// - `.completed` / `.failed` → hand: the turn finished and it's your move.
+    ///
+    /// The hand deliberately does NOT clear when you merely LOOK at the chat.
+    /// It clears when you ACT — your next message starts a turn, which moves
+    /// the phase off completed. An earlier build cleared on view; that stamped
+    /// "viewed" on session restore and on completions that landed while the app
+    /// was backgrounded, which silently ate the hand in the one case that
+    /// matters most: a long task finishing while you were away.
     public func turnPhase(for chatId: String) -> AgentTurnPhase? {
         guard !updatesSuppressed else { return nil }
         guard let raw = sessionPhases[chatId] else { return nil }
@@ -120,9 +99,6 @@ public final class SessionListStore: ObservableObject {
         case .running, .awaitingInput:
             return raw
         case .completed, .failed:
-            // No timestamp (older sender) — keep the legacy always-hand behavior.
-            guard let completedAt = phaseTimestampByChatId[chatId] else { return .awaitingInput }
-            if let viewed = lastViewedByChatId[chatId], viewed >= completedAt { return nil }
             return .awaitingInput
         case .idle:
             return nil

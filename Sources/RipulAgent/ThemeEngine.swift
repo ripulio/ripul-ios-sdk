@@ -498,6 +498,13 @@ public enum RipulThemeEngine {
     /// mutation itself (still broadcasts `.ripulThemeDidChange`).
     public static var persistMutation: ((RipulThemeDocument) -> Void)?
 
+    /// Replace an element's whole per-element override dict (empty clears it) — the write
+    /// path for the generic override rows on a scope screen.
+    public static func setOverrides(kind: String, element: String, knobs: [String: RipulKnob]) {
+        current.styleOverrides[kind, default: [:]][element] = knobs.isEmpty ? nil : knobs
+        commit()
+    }
+
     /// Set one knob as a per-element override, beating any assigned named style.
     /// Broadcasts via the host's `persistMutation` (or `adopt` as fallback).
     public static func setOverride(element: String, knob: String, value: RipulKnob) throws {
@@ -811,6 +818,43 @@ public enum RipulThemeEngine {
         let userNames = (current.namedStyles[kind] ?? [:]).keys
             .filter { kindsByName[kind]?.builtIns[$0] == nil }.sorted()
         return builtInNames + userNames
+    }
+
+    // MARK: named-style library (the SDK-owned library screen's read/write path)
+
+    /// A named style's sparse knobs — the user's copy shadows a same-named built-in.
+    public static func namedStyle(kind: String, name: String) -> [String: RipulKnob]? {
+        current.namedStyles[kind]?[name] ?? kindsByName[kind]?.builtIns[name]
+    }
+
+    /// True if `name` is a built-in of this kind (shipped in code, present on every theme).
+    public static func isBuiltInStyle(kind: String, name: String) -> Bool {
+        kindsByName[kind]?.builtIns[name] != nil
+    }
+
+    /// True if a USER style with this name exists — for a built-in name that means a
+    /// copy-on-write copy is shadowing stock, so "Reset to built-in" is offered.
+    public static func hasUserStyle(kind: String, name: String) -> Bool {
+        current.namedStyles[kind]?[name] != nil
+    }
+
+    /// Create or replace a named style. Editing a BUILT-IN through this writes a user copy
+    /// that shadows it (copy-on-write); `removeNamedStyle` restores stock.
+    public static func setNamedStyle(kind: String, name: String, knobs: [String: RipulKnob]) {
+        current.namedStyles[kind, default: [:]][name] = knobs
+        commit()
+    }
+
+    /// Remove a user style. For a built-in name this restores stock; for a user-authored
+    /// one it deletes the style AND drops every assignment pointing at it, so no element is
+    /// left referencing a style that no longer exists.
+    public static func removeNamedStyle(kind: String, name: String) {
+        current.namedStyles[kind]?[name] = nil
+        if !isBuiltInStyle(kind: kind, name: name) {
+            current.styleAssignments[kind] = (current.styleAssignments[kind] ?? [:])
+                .filter { $0.value != name }
+        }
+        commit()
     }
 
     /// Assign (or clear, with nil) the named style for an element. Routed through the

@@ -828,11 +828,6 @@ public final class AgentBridge: NSObject, ObservableObject {
         didSet {
             guard activeSessionId != oldValue else { return }
             markActiveSessionTodoViewedInList()
-            // Opening a chat is "seeing" it — clears its unseen-completion hand
-            // in the sessions list (mirrors the plan viewed-marker above).
-            if let chatId = activeSourceChatId {
-                sessionList.markChatViewed(chatId)
-            }
             // The pause/play buttons are a projection of the ACTIVE chat's
             // phase — any change of active session must re-derive them.
             refreshActiveAgentFlags()
@@ -1069,11 +1064,6 @@ public final class AgentBridge: NSObject, ObservableObject {
         case .idle:
             sessionList.sessionPhases.removeValue(forKey: chatId)
             sessionList.phaseTimestampByChatId.removeValue(forKey: chatId)
-        }
-        // Watching the active chat finish counts as seeing it — the row should
-        // not grow a hand for a completion that streamed in front of you.
-        if (phase == .completed || phase == .failed), chatId == activeSourceChatId {
-            sessionList.markChatViewed(chatId, at: max(phaseDate, Date()))
         }
         // The raw phase map keeps completed/failed distinct — the chat box must
         // NOT show the paused/play state for a finished turn.
