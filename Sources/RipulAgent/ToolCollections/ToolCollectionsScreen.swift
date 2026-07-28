@@ -179,8 +179,14 @@ public final class RipulToolCollectionsModel: ObservableObject {
 /// about which agent's context they are economising. The picker and the
 /// purpose line under it are what keep that unambiguous; see `RipulToolCatalog`.
 ///
-/// Membership is edited by dragging: collections expand in place, and a tool
-/// dragged onto a collection joins it, dragged to Ungrouped leaves it.
+/// **Built on ScrollView + LazyVStack, deliberately not List.** Membership is
+/// edited by dragging, and `List` will not deliver drops: its rows are
+/// collection-view cells, and a drop target inside one never joins the drag
+/// session. Instrumentation proved it — `onDrag` fired and produced a payload,
+/// while `isTargeted` and the drop handler never ran once, on any of a Section,
+/// a Section header, or a row, with both the `dropDestination` and `onDrop`
+/// APIs. Plain views in a ScrollView receive drops without any of that.
+/// Do not "tidy" this back into a List.
 @available(iOS 16.0, *)
 public struct RipulToolCollectionsScreen: View {
     @StateObject private var model: RipulToolCollectionsModel
@@ -190,6 +196,7 @@ public struct RipulToolCollectionsScreen: View {
     @State private var creating = false
     @State private var expanded: Set<String> = []
     @State private var editing: RipulToolCollection?
+    @State private var showingOthers = false
     /// Collection currently under the finger, for a drop highlight.
     @State private var dropTarget: String?
 
@@ -235,17 +242,10 @@ public struct RipulToolCollectionsScreen: View {
             && collection.explicitTools.allSatisfy { $0.hasPrefix("group://") }
     }
 
-    /// Collections worth showing while organising this surface: those holding
-    /// at least one of its tools, plus unpopulated ones.
     private var inScopeCollections: [RipulToolCollection] {
         model.categories.filter { memberCount($0, in: catalog) > 0 || isUnpopulated($0) }
     }
 
-    /// Everything else — collections belonging to another surface, and the
-    /// Ripul platform's own seeded collections (Automation Tools, Page
-    /// Interaction Tools …) which contain only web app tools and are not this
-    /// app's concern. Kept behind a disclosure rather than hidden: they are
-    /// real, and silently dropping them would be its own confusion.
     private var otherCollections: [RipulToolCollection] {
         let shown = Set(inScopeCollections.map(\.id))
         return model.categories.filter { !shown.contains($0.id) }
@@ -260,44 +260,34 @@ public struct RipulToolCollectionsScreen: View {
         return "no tools from this app"
     }
 
+    // MARK: - Body
+
     public var body: some View {
-        List {
-            catalogSection
-
-            if let errorMessage = model.errorMessage {
-                Section {
-                    Label(errorMessage, systemImage: "exclamationmark.triangle")
-                        .foregroundStyle(.red)
-                        .font(.footnote)
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 14) {
+                catalogCard
+                if let errorMessage = model.errorMessage { noticeCard(errorMessage, isError: true) }
+                if model.needsRestart {
+                    noticeCard("Saved. Restart the app to apply — collections are read at launch.", isError: false)
                 }
-            }
 
-            if model.needsRestart {
-                Section {
-                    Label(
-                        "Saved. Restart the app to apply — collections are read at launch.",
-                        systemImage: "arrow.clockwise.circle"
-                    )
-                    .font(.footnote)
-                    .foregroundStyle(.orange)
-                }
-            }
-
-            if inScopeCollections.isEmpty && !model.isLoading {
-                Section {
+                if inScopeCollections.isEmpty && !model.isLoading {
                     Text("No collections group \(catalog.name) yet. Every one of these tools is passed to the agent individually.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
+                        .padding(.horizontal, 4)
                 }
-            }
 
-            ForEach(inScopeCollections) { collection in
-                collectionSection(collection)
-            }
+                ForEach(inScopeCollections) { collection in
+                    collectionCard(collection)
+                }
 
-            ungroupedSection
-            otherCollectionsSection
+                ungroupedCard
+                otherCollectionsCard
+            }
+            .padding(16)
         }
+        .background(Color(.systemGroupedBackground))
         .navigationTitle("Tool Collections")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -305,12 +295,8 @@ public struct RipulToolCollectionsScreen: View {
                 if model.savingCount > 0 {
                     ProgressView()
                 } else {
-                    Button {
-                        creating = true
-                    } label: {
-                        Image(systemName: "plus")
-                    }
-                    .accessibilityIdentifier("ripul.toolCollections.add")
+                    Button { creating = true } label: { Image(systemName: "plus") }
+                        .accessibilityIdentifier("ripul.toolCollections.add")
                 }
             }
         }
@@ -325,173 +311,147 @@ public struct RipulToolCollectionsScreen: View {
             }
         }
         .task { await model.load() }
-        .refreshable { await model.load() }
     }
 
-    // MARK: - Catalog picker
+    // MARK: - Cards
 
-    /// The context header. Without this a developer cannot tell whose tools
-    /// they are looking at — which is precisely how this screen first shipped,
-    /// silently scoped to the dev agent's own tools.
-    @ViewBuilder
-    private var catalogSection: some View {
-        Section {
+    private func card<Content: View>(
+        highlighted: Bool = false,
+        @ViewBuilder _ content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8, content: content)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(12)
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(highlighted
+                          ? Color.accentColor.opacity(0.22)
+                          : Color(.secondarySystemGroupedBackground))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(highlighted ? Color.accentColor : .clear, lineWidth: 2)
+            )
+            .contentShape(RoundedRectangle(cornerRadius: 12))
+    }
+
+    private var catalogCard: some View {
+        card {
+            Text("ORGANISING").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
             if catalogs.count > 1 {
                 Picker("Tool surface", selection: $selectedCatalogId) {
-                    ForEach(catalogs) { entry in
-                        Text(entry.name).tag(entry.id)
-                    }
+                    ForEach(catalogs) { entry in Text(entry.name).tag(entry.id) }
                 }
                 .pickerStyle(.segmented)
                 .accessibilityIdentifier("ripul.toolCollections.catalogPicker")
             } else {
                 Text(catalog.name).font(.subheadline.weight(.semibold))
             }
-            Text(catalog.purpose)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            Text(catalog.purpose).font(.caption).foregroundStyle(.secondary)
             Text("\(catalog.tools.count) tool\(catalog.tools.count == 1 ? "" : "s") registered")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-        } header: {
-            Text("Organising")
+                .font(.caption2).foregroundStyle(.secondary)
         }
     }
 
-    // MARK: - Collection section
+    private func noticeCard(_ message: String, isError: Bool) -> some View {
+        card {
+            Label(message, systemImage: isError ? "exclamationmark.triangle" : "arrow.clockwise.circle")
+                .font(.footnote)
+                .foregroundStyle(isError ? .red : .orange)
+        }
+    }
 
-    /// A collection renders as a Section whose FIRST ROW is its header.
-    ///
-    /// The header is deliberately a row rather than SwiftUI's `header:` slot: a
-    /// `Section` is not a hit-testable view — `List` interprets it as a
-    /// container — so a drop modifier attached to a Section or its header never
-    /// participates in drag hit-testing. Drags lifted fine and nothing ever
-    /// accepted them, with no highlight, because the destination was never live.
-    /// Drop targets must be real rows.
-    @ViewBuilder
-    private func collectionSection(_ collection: RipulToolCollection) -> some View {
+    /// A collection. The WHOLE card is the drop target — a plain view in a
+    /// ScrollView, which is the only arrangement that reliably receives drops.
+    private func collectionCard(_ collection: RipulToolCollection) -> some View {
         let m = matcher(for: collection)
         let isOpen = expanded.contains(collection.id)
 
-        Section {
-            headerRow(collection, matcher: m, isOpen: isOpen)
-                .listRowBackground(dropHighlight(for: collection.id))
-                .onDrop(of: dropTypes, isTargeted: targetBinding(for: collection.id)) { providers in
-                    acceptDrop(providers, into: collection.id)
+        return card(highlighted: dropTarget == collection.id) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.18)) {
+                    if isOpen { expanded.remove(collection.id) } else { expanded.insert(collection.id) }
                 }
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "chevron.right")
+                        .font(.caption)
+                        .rotationEffect(.degrees(isOpen ? 90 : 0))
+                        .foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: 6) {
+                            Text(collection.displayLabel)
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(.primary)
+                            if collection.isIsolate {
+                                Text("isolate")
+                                    .font(.caption2)
+                                    .padding(.horizontal, 5).padding(.vertical, 1)
+                                    .background(Color.secondary.opacity(0.15), in: Capsule())
+                            }
+                        }
+                        Text(summary(matcher: m, collection: collection))
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("ripul.toolCollections.header")
 
             if isOpen {
-                // Picked rows are drag SOURCES and deliberately not drop
-                // targets. A row that is both confuses the drag session — the
-                // failing case was a drag started from one of these — so
-                // source and target are kept strictly disjoint. The header
-                // above is the target for this collection.
+                Divider()
                 ForEach(m.explicitMatches, id: \.self) { name in
                     memberRow(name, in: collection, kind: .picked)
                 }
-                // These carry no drag, so they can safely widen the target.
                 ForEach(m.patternMatches, id: \.self) { name in
                     memberRow(name, in: collection, kind: .pattern)
-                        .listRowBackground(dropHighlight(for: collection.id))
-                        .onDrop(of: dropTypes, isTargeted: targetBinding(for: collection.id)) { providers in
-                            acceptDrop(providers, into: collection.id)
-                        }
                 }
                 ForEach(m.absentMembers, id: \.self) { name in
                     memberRow(name, in: collection, kind: .elsewhere)
-                        .listRowBackground(dropHighlight(for: collection.id))
-                        .onDrop(of: dropTypes, isTargeted: targetBinding(for: collection.id)) { providers in
-                            acceptDrop(providers, into: collection.id)
-                        }
                 }
                 if m.memberCount == 0 {
                     Text("Empty — drag a tool here, or add a name pattern.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .listRowBackground(dropHighlight(for: collection.id))
-                        .onDrop(of: dropTypes, isTargeted: targetBinding(for: collection.id)) { providers in
-                            acceptDrop(providers, into: collection.id)
-                        }
+                        .font(.footnote).foregroundStyle(.secondary)
                 }
-                Button {
-                    editing = collection
-                } label: {
+                Button { editing = collection } label: {
                     Label("Edit patterns, mode, label…", systemImage: "slider.horizontal.3")
                         .font(.footnote)
                 }
+                .buttonStyle(.plain)
+                .foregroundStyle(Color.accentColor)
             }
         }
-    }
-
-    private func headerRow(
-        _ collection: RipulToolCollection,
-        matcher m: RipulToolCollectionMatcher,
-        isOpen: Bool
-    ) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: "chevron.right")
-                .font(.caption)
-                .rotationEffect(.degrees(isOpen ? 90 : 0))
-                .foregroundStyle(.secondary)
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) {
-                    Text(collection.displayLabel)
-                        .font(.subheadline.weight(.semibold))
-                    if collection.isIsolate {
-                        Text("isolate")
-                            .font(.caption2)
-                            .padding(.horizontal, 5).padding(.vertical, 1)
-                            .background(Color.secondary.opacity(0.15), in: Capsule())
-                    }
-                }
-                Text(summary(matcher: m, collection: collection))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            Spacer()
+        .onDrop(of: dropTypes, isTargeted: targetBinding(for: collection.id)) { providers in
+            acceptDrop(providers, into: collection.id)
         }
-        .contentShape(Rectangle())
-        .onTapGesture {
-            withAnimation(.easeInOut(duration: 0.18)) {
-                if isOpen { expanded.remove(collection.id) } else { expanded.insert(collection.id) }
-            }
-        }
-        .accessibilityIdentifier("ripul.toolCollections.header")
     }
 
     private enum MemberKind { case picked, pattern, elsewhere }
 
-    /// One member row. Only `.picked` members are draggable: a `.pattern`
-    /// member cannot be removed by editing `explicitTools` (the pattern would
-    /// re-capture it immediately), and an `.elsewhere` member is not registered
-    /// in the catalog on screen. Offering a drag that silently reverts is worse
-    /// than offering none, so both are shown inert with the reason.
+    /// Only `.picked` members drag: a `.pattern` member cannot be removed by
+    /// editing `explicitTools` (the pattern re-captures it immediately), and an
+    /// `.elsewhere` member is not registered in the catalog on screen.
     @ViewBuilder
     private func memberRow(_ name: String, in collection: RipulToolCollection, kind: MemberKind) -> some View {
-        let row = HStack {
+        let row = HStack(spacing: 8) {
             Image(systemName: kind == .picked ? "line.3.horizontal" : "circle.dotted")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
+                .font(.caption2).foregroundStyle(.secondary)
             Text(name)
                 .font(.system(.footnote, design: .monospaced))
                 .foregroundStyle(kind == .picked ? .primary : .secondary)
             Spacer()
             switch kind {
-            case .picked:
-                EmptyView()
-            case .pattern:
-                Text("pattern").font(.caption2).foregroundStyle(.secondary)
-            case .elsewhere:
-                Text(originLabel(for: name)).font(.caption2).foregroundStyle(.secondary)
+            case .picked: EmptyView()
+            case .pattern: Text("pattern").font(.caption2).foregroundStyle(.secondary)
+            case .elsewhere: Text(originLabel(for: name)).font(.caption2).foregroundStyle(.secondary)
             }
         }
+        .padding(.vertical, 3)
         .contentShape(Rectangle())
 
         if kind == .picked {
-            // `onDrag` rather than `draggable`, to match `onDrop` on the
-            // receiving side. Mixing the Transferable API with the
-            // NSItemProvider one relies on a bridge that is one more thing to
-            // be wrong when a drop silently fails.
             row.onDrag {
                 RipulLog.log("[toolDrag] start tool=\(name) source=\(collection.id)")
                 return NSItemProvider(
@@ -504,16 +464,11 @@ public struct RipulToolCollectionsScreen: View {
         }
     }
 
-    /// Says WHERE a member lives rather than merely that it is missing.
-    /// "in End-user tools" is actionable; "not in this app" was false.
     private func originLabel(for name: String) -> String {
         switch RipulMemberAttribution.origin(of: name, viewing: catalog, allCatalogs: catalogs) {
-        case .thisCatalog:
-            return ""
-        case .otherCatalog(let catalogName):
-            return "in \(catalogName)"
-        case .notNative:
-            return "web app or other device"
+        case .thisCatalog: return ""
+        case .otherCatalog(let catalogName): return "in \(catalogName)"
+        case .notNative: return "web app or other device"
         }
     }
 
@@ -530,48 +485,31 @@ public struct RipulToolCollectionsScreen: View {
 
     // MARK: - Ungrouped
 
-    @ViewBuilder
-    private var ungroupedSection: some View {
+    private var ungroupedCard: some View {
         let ungrouped = model.ungroupedTools(from: tools)
-        Section {
-            // Header as a row, for the same hit-testing reason as above — and
-            // it doubles as the "drag here to remove" target when the list is
-            // empty and there are no tool rows to aim at.
+        return card(highlighted: dropTarget == ungroupedDropId) {
             HStack(spacing: 8) {
-                Image(systemName: "tray")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                Image(systemName: "tray").font(.caption).foregroundStyle(.secondary)
                 Text("Ungrouped in \(catalog.name) (\(ungrouped.count))")
                     .font(.subheadline.weight(.semibold))
                 Spacer()
             }
-            .contentShape(Rectangle())
-            .listRowBackground(dropHighlight(for: ungroupedDropId))
-            .onDrop(of: dropTypes, isTargeted: targetBinding(for: ungroupedDropId)) { providers in
-                acceptDrop(providers, into: nil)
-            }
-
-            if ungrouped.isEmpty {
-                Text("Every tool in \(catalog.name) belongs to a collection.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
+            Text("Passed to that agent individually, costing tokens on every turn. Press and hold a tool, then drag it onto a collection.")
+                .font(.caption2).foregroundStyle(.secondary)
+            if !ungrouped.isEmpty { Divider() }
             ForEach(ungrouped) { tool in
-                HStack {
-                    Image(systemName: "line.3.horizontal")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
+                HStack(spacing: 8) {
+                    Image(systemName: "line.3.horizontal").font(.caption2).foregroundStyle(.secondary)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(tool.name).font(.system(.footnote, design: .monospaced))
                         if !tool.description.isEmpty {
                             Text(tool.description)
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(2)
+                                .font(.caption2).foregroundStyle(.secondary).lineLimit(2)
                         }
                     }
                     Spacer()
                 }
+                .padding(.vertical, 3)
                 .contentShape(Rectangle())
                 .onDrag {
                     RipulLog.log("[toolDrag] start tool=\(tool.name) source=ungrouped")
@@ -580,13 +518,10 @@ public struct RipulToolCollectionsScreen: View {
                             .encoded as NSString
                     )
                 }
-                .listRowBackground(dropHighlight(for: ungroupedDropId))
-                .onDrop(of: [.text], isTargeted: targetBinding(for: ungroupedDropId)) { providers in
-                    acceptDrop(providers, into: nil)
-                }
             }
-        } footer: {
-            Text("Passed to that agent individually, costing tokens on every turn. Press and hold a tool, then drag it onto a collection above.")
+        }
+        .onDrop(of: dropTypes, isTargeted: targetBinding(for: ungroupedDropId)) { providers in
+            acceptDrop(providers, into: nil)
         }
     }
 
@@ -594,57 +529,51 @@ public struct RipulToolCollectionsScreen: View {
 
     // MARK: - Out of scope
 
-    /// Collections that hold none of this surface's tools, behind a disclosure.
-    ///
-    /// Two kinds land here, and the row says which: collections belonging to
-    /// the app's OTHER surface, and Ripul's own seeded platform collections
-    /// (web app tools like `automationManager`) which an SDK consumer has no
-    /// reason to organise. Collapsed by default so the list stays about the
-    /// surface in hand.
     @ViewBuilder
-    private var otherCollectionsSection: some View {
+    private var otherCollectionsCard: some View {
         if !otherCollections.isEmpty {
-            Section {
-                DisclosureGroup("Show \(otherCollections.count)") {
+            card {
+                Button {
+                    withAnimation { showingOthers.toggle() }
+                } label: {
+                    HStack {
+                        Text("Not organising \(catalog.name) (\(otherCollections.count))")
+                            .font(.footnote.weight(.semibold))
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.caption2)
+                            .rotationEffect(.degrees(showingOthers ? 90 : 0))
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+
+                if showingOthers {
+                    Divider()
                     ForEach(otherCollections) { collection in
                         VStack(alignment: .leading, spacing: 2) {
                             Text(collection.displayLabel).font(.footnote)
                             Text(elsewhereReason(collection))
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
+                                .font(.caption2).foregroundStyle(.secondary)
                         }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.vertical, 2)
                     }
+                    Text("Collections holding none of this surface's tools — the app's other surface, or Ripul's own platform collections.")
+                        .font(.caption2).foregroundStyle(.secondary)
                 }
-                .font(.footnote)
-            } header: {
-                Text("Not organising \(catalog.name)")
-            } footer: {
-                Text("Collections holding none of this surface's tools — the app's other surface, or Ripul's own platform collections.")
             }
         }
     }
 
     // MARK: - Drop handling
 
-    /// Types accepted on drop.
-    ///
-    /// `NSItemProvider(object: NSString)` registers `public.utf8-plain-text`.
-    /// `onDrop(of:)` has matched by exact identifier rather than by conformance
-    /// in the past, so listing only `.text` risks a destination that never
-    /// activates — indistinguishable from one that isn't wired up at all.
+    /// Types accepted on drop. `NSItemProvider(object: NSString)` registers
+    /// `public.utf8-plain-text`; `onDrop(of:)` has matched by exact identifier
+    /// rather than conformance, so all three are listed.
     private var dropTypes: [UTType] { [.utf8PlainText, .plainText, .text] }
 
-    /// Tint for a row that would accept the tool being dragged.
-    /// `listRowBackground` rather than `.background`, because a plain
-    /// background sits inside the row's own content and reads as a stray
-    /// rectangle instead of the row lighting up.
-    private func dropHighlight(for id: String) -> Color? {
-        dropTarget == id ? Color.accentColor.opacity(0.18) : nil
-    }
-
-    /// `onDrop` reports hover via a Bound Bool per row. Several rows share one
-    /// target id (a collection's header and each of its members), so entering
-    /// any of them lights the whole group.
     private func targetBinding(for id: String) -> Binding<Bool> {
         Binding(
             get: { dropTarget == id },
@@ -662,14 +591,7 @@ public struct RipulToolCollectionsScreen: View {
     /// Accept a dropped payload. Returns false for anything that isn't ours, so
     /// text dragged in from another app is refused rather than parsed into a
     /// nonsense edit.
-    ///
-    /// Uses `onDrop`/`NSItemProvider` rather than `dropDestination`: inside a
-    /// `List`, `onDrop` on a row is the path that reliably receives drops.
     private func acceptDrop(_ providers: [NSItemProvider], into targetId: String?) -> Bool {
-        // Instrumented end to end: this interaction cannot be exercised by a
-        // build, and two rounds of reasoning about it were wrong. The log is
-        // readable remotely via `device_console_logs`, so a single drag on
-        // device says exactly which stage fails.
         let types = providers.flatMap(\.registeredTypeIdentifiers).joined(separator: ",")
         RipulLog.log("[toolDrag] drop into=\(targetId ?? "ungrouped") providers=\(providers.count) types=[\(types)]")
 
@@ -695,7 +617,6 @@ public struct RipulToolCollectionsScreen: View {
                 dropTarget = nil
                 await model.move(item, to: targetId)
                 RipulLog.log("[toolDrag] move done tool=\(item.toolName) -> \(targetId ?? "ungrouped") error=\(model.errorMessage ?? "none")")
-                // Reveal the destination so the moved tool is visible where it landed.
                 if let targetId {
                     withAnimation { _ = expanded.insert(targetId) }
                 }
