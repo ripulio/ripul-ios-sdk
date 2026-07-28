@@ -86,6 +86,32 @@ public struct RipulStyleKnobRows: View {
                 Text("On").tag(Bool?.some(true))
                 Text("Off").tag(Bool?.some(false))
             }
+        case .color(let fallback):
+            colorRow(knob, fallback: fallback)
+        }
+    }
+
+    /// A colour knob: the toggle flips Inherit (unset) ↔ Set, and the picker edits the
+    /// pinned `#RRGGBB`. Shows the INHERITED colour while unset, so the swatch always
+    /// reflects what the element actually renders.
+    private func colorRow(_ knob: RipulStyleKnob, fallback: String) -> some View {
+        let current = working[knob.key]?.string ?? fallback
+        return HStack {
+            ColorPicker(selection: Binding(
+                get: { SwiftUI.Color(UIColor(ripulHexString: current) ?? .magenta) },
+                set: { set(knob.key, .string(UIColor($0).ripulHexString)) }),
+                supportsOpacity: false) {
+                HStack {
+                    Text(knob.label)
+                    if working[knob.key] == nil {
+                        Text("Inherit").font(.caption2).foregroundColor(.secondary)
+                    }
+                }
+            }
+            Toggle("", isOn: Binding(
+                get: { working[knob.key] != nil },
+                set: { on in set(knob.key, on ? .string(fallback) : nil) }))
+                .labelsHidden()
         }
     }
 

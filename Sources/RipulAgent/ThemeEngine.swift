@@ -191,6 +191,10 @@ public struct RipulStyleKnob: Identifiable {
         case options([(raw: String, label: String)])
         /// A boolean knob: Inherit (unset), On, or Off.
         case bool
+        /// A colour knob, stored as a `#RRGGBB` string. For structural colours a component
+        /// TOKEN is the better home (it keeps the tier system); this is for the cases where
+        /// a scope genuinely pins its own colour — a per-screen gradient, say.
+        case color(fallback: String)
     }
     public let key: String
     public let label: String
