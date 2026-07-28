@@ -219,6 +219,46 @@ public struct RipulToolCollectionsScreen: View {
         )
     }
 
+    private func memberCount(_ collection: RipulToolCollection, in surface: RipulToolCatalog) -> Int {
+        RipulToolCollectionMatcher(
+            explicitTools: collection.explicitTools,
+            toolPatterns: collection.toolPatterns,
+            toolNames: surface.toolNames
+        ).presentCount
+    }
+
+    /// A collection with no members at all — newly created, or emptied. Shown
+    /// in every surface because it is a candidate to fill, not an irrelevance.
+    private func isUnpopulated(_ collection: RipulToolCollection) -> Bool {
+        collection.toolPatterns.isEmpty
+            && collection.explicitTools.allSatisfy { $0.hasPrefix("group://") }
+    }
+
+    /// Collections worth showing while organising this surface: those holding
+    /// at least one of its tools, plus unpopulated ones.
+    private var inScopeCollections: [RipulToolCollection] {
+        model.categories.filter { memberCount($0, in: catalog) > 0 || isUnpopulated($0) }
+    }
+
+    /// Everything else — collections belonging to another surface, and the
+    /// Ripul platform's own seeded collections (Automation Tools, Page
+    /// Interaction Tools …) which contain only web app tools and are not this
+    /// app's concern. Kept behind a disclosure rather than hidden: they are
+    /// real, and silently dropping them would be its own confusion.
+    private var otherCollections: [RipulToolCollection] {
+        let shown = Set(inScopeCollections.map(\.id))
+        return model.categories.filter { !shown.contains($0.id) }
+    }
+
+    private func elsewhereReason(_ collection: RipulToolCollection) -> String {
+        for surface in catalogs where surface.id != catalog.id {
+            if memberCount(collection, in: surface) > 0 {
+                return "in \(surface.name)"
+            }
+        }
+        return "no tools from this app"
+    }
+
     public var body: some View {
         List {
             catalogSection
@@ -242,19 +282,20 @@ public struct RipulToolCollectionsScreen: View {
                 }
             }
 
-            if model.categories.isEmpty && !model.isLoading {
+            if inScopeCollections.isEmpty && !model.isLoading {
                 Section {
-                    Text("No collections yet. Every tool is passed to the agent individually.")
+                    Text("No collections group \(catalog.name) yet. Every one of these tools is passed to the agent individually.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
             }
 
-            ForEach(model.categories) { collection in
+            ForEach(inScopeCollections) { collection in
                 collectionSection(collection)
             }
 
             ungroupedSection
+            otherCollectionsSection
         }
         .navigationTitle("Tool Collections")
         .navigationBarTitleDisplayMode(.inline)
@@ -512,6 +553,38 @@ public struct RipulToolCollectionsScreen: View {
     }
 
     private var ungroupedDropId: String { "__ungrouped__" }
+
+    // MARK: - Out of scope
+
+    /// Collections that hold none of this surface's tools, behind a disclosure.
+    ///
+    /// Two kinds land here, and the row says which: collections belonging to
+    /// the app's OTHER surface, and Ripul's own seeded platform collections
+    /// (web app tools like `automationManager`) which an SDK consumer has no
+    /// reason to organise. Collapsed by default so the list stays about the
+    /// surface in hand.
+    @ViewBuilder
+    private var otherCollectionsSection: some View {
+        if !otherCollections.isEmpty {
+            Section {
+                DisclosureGroup("Show \(otherCollections.count)") {
+                    ForEach(otherCollections) { collection in
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(collection.displayLabel).font(.footnote)
+                            Text(elsewhereReason(collection))
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                .font(.footnote)
+            } header: {
+                Text("Not organising \(catalog.name)")
+            } footer: {
+                Text("Collections holding none of this surface's tools — the app's other surface, or Ripul's own platform collections.")
+            }
+        }
+    }
 
     // MARK: - Drop handling
 

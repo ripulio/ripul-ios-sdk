@@ -10,9 +10,29 @@
 
 Progressive discovery collapses a large tool set into a handful of CategoryTools the model expands on demand. Membership is **curated, not inferred** — someone decides what belongs together (see [progressive discovery in the SDK README](../README.md#scaling-to-many-tools)).
 
-Today that curation happens only in the web dashboard, which is the wrong place for it. The dashboard knows the tools it has previously *seen* through discovery. The device knows the tools this build actually *registered* — every `NativeTool` handed to `AgentBridge` moments ago, with names and descriptions.
+Today that curation happens only in the web dashboard, which is the wrong place for it. The dashboard knows the tools it has previously *seen* through discovery. The device knows the tools this build actually *registered* — every `NativeTool` handed to an `AgentBridge` moments ago, with names and descriptions.
 
 That asymmetry is the whole argument. An app developer holding their phone has better information about their own tool set than the dashboard does, and no way to act on it.
+
+## Tool surfaces — read this before anything else
+
+**An embedding app has more than one tool registry, and they are disjoint.** This document's first draft said "the tool set this build registered", as if there were one. That premise was wrong and caused every defect this feature shipped with:
+
+| Surface | Lives on | Contains |
+|---|---|---|
+| **End-user tools** | the app's agent panel bridge (`AgentView`) | what a user's agent can do — WAC's receipts, rota, pickers |
+| **Developer tools** | the console's own bridge (`RipulAgentConsole`) | console logs, screen inspection, theme knobs |
+
+They coexist in one process on different `AgentBridge` instances. Reading one and calling it "this app" made the editor report every end-user tool — precisely the ones worth grouping — as missing.
+
+`RipulToolCatalog` models this: a **named tool surface belonging to one agent**, carrying a plain-language purpose. Both surfaces are organisable, because either agent can carry too many tools. What must never be ambiguous is *whose context is being economised* — so the editor shows **exactly one catalog at a time, never a union**, behind a picker with the purpose stated under it.
+
+Consequences that follow, and are easy to get wrong again:
+
+- A host **declares** its end-user surface (`endUserTools:`); the console does not **register** it. Registering would hand end-user capabilities to the dev agent.
+- The SDK synthesises the developer catalog from its own bridge, so a host declares one line, not two.
+- Members are **attributed**, not merely counted: "in Developer tools", "web app or other device". "Not in this app" was false in both directions.
+- Collections are account-wide and carry no catalog tag, so one **can** span surfaces. The editor scopes the list to collections holding at least one tool of the surface in hand, and puts the rest behind a disclosure — including Ripul's own seeded platform collections (`automation_tools`, `page_interaction_tools`), which contain only web app tools and are not an SDK consumer's concern. The test is content-based rather than an allow-list, so it stays correct for Ripul's own app, where those collections *are* relevant.
 
 ## Current state
 
