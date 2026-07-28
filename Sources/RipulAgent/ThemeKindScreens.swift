@@ -184,9 +184,36 @@ public struct RipulStyleKindScreen: View {
         }
     }
 
-    /// The whole screen for a singleton: its knobs, and a reset when anything is set.
+    /// The whole screen for a singleton: a live preview (when the kind registered one),
+    /// its knobs, and a reset when anything is set.
+    ///
+    /// The preview is PINNED above the scrolling knobs, matching the named-style editor —
+    /// for app-wide settings you are almost always adjusting a size against something you
+    /// can see, so it must stay on screen while the sliders move.
     @ViewBuilder
     private func singletonBody(_ element: RipulThemeScope) -> some View {
+        VStack(spacing: 0) {
+            if let preview = RipulStylePreviews.view(
+                kind: kind, element: element.id,
+                working: RipulThemeEngine.current.styleOverrides[kind]?[element.id] ?? [:]) {
+                preview
+                    .frame(maxWidth: .infinity)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.vertical, 10)
+                    .background(.bar)
+                Divider()
+            }
+            singletonForm(element)
+        }
+        .navigationTitle(styleKind?.label ?? kind)
+        .navigationBarTitleDisplayMode(.inline)
+        .id(themeVersion)
+        .onReceive(NotificationCenter.default.publisher(for: .ripulThemeDidChange)) { _ in
+            themeVersion &+= 1
+        }
+    }
+
+    private func singletonForm(_ element: RipulThemeScope) -> some View {
         Form {
             Section {
                 RipulStyleKnobRows(
@@ -207,12 +234,6 @@ public struct RipulStyleKindScreen: View {
                     }
                 }
             }
-        }
-        .navigationTitle(styleKind?.label ?? kind)
-        .navigationBarTitleDisplayMode(.inline)
-        .id(themeVersion)
-        .onReceive(NotificationCenter.default.publisher(for: .ripulThemeDidChange)) { _ in
-            themeVersion &+= 1
         }
     }
 
