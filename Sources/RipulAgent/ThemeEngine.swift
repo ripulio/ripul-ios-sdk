@@ -248,12 +248,36 @@ public struct RipulStyleKind {
     public let defaultTier: (RipulThemeDocument, _ element: String) -> [String: RipulKnob]
     public let persistedKeys: PersistedKeys?
 
-    public init(name: String, scopes: [RipulThemeScope], knobs: [RipulStyleKnob],
+    // MARK: presentation metadata (so generic screens need no per-kind switch)
+
+    /// Display name for this kind's library ("Panel styles"). Generic hubs title sections
+    /// with it — the same role `RipulThemeVocabulary.Entry.label` plays for tokens.
+    /// Defaults to the capitalised `name`.
+    public let label: String
+    /// The AUTHOR-declared placement of this kind in a theme hub (["Panels"]) — hubs nest
+    /// by it, exactly as they do for token paths. Empty = top level.
+    public let path: [String]
+    /// Label for the "no named style assigned" row in pickers ("Default (card)"). The
+    /// wording is host vocabulary — what the unassigned tier actually looks like.
+    public let defaultStyleLabel: String
+    /// The element a style LIBRARY previews against when no specific element is in play
+    /// (editing a named style rather than assigning one). First scope by default — for
+    /// part kinds that is the first synthesized child scope, which is what a host would
+    /// have hand-picked anyway.
+    public var previewElement: String? { scopes.first?.id }
+
+    public init(name: String, label: String? = nil, path: [String] = [],
+                defaultStyleLabel: String = "Default",
+                scopes: [RipulThemeScope], knobs: [RipulStyleKnob],
                 slots: [RipulStyleSlot] = [],
                 builtIns: [String: [String: RipulKnob]] = [:],
                 defaultTier: @escaping (RipulThemeDocument, _ element: String) -> [String: RipulKnob],
                 persistedKeys: PersistedKeys? = nil) {
-        self.name = name; self.scopes = scopes; self.knobs = knobs; self.slots = slots
+        self.name = name
+        self.label = label ?? (name.prefix(1).uppercased() + name.dropFirst())
+        self.path = path
+        self.defaultStyleLabel = defaultStyleLabel
+        self.scopes = scopes; self.knobs = knobs; self.slots = slots
         self.builtIns = builtIns; self.defaultTier = defaultTier; self.persistedKeys = persistedKeys
     }
 }
@@ -361,7 +385,9 @@ public enum RipulThemeEngine {
                 return true
             }
             guard kept.count != kind.slots.count else { return kind }
-            return RipulStyleKind(name: kind.name, scopes: kind.scopes, knobs: kind.knobs,
+            return RipulStyleKind(name: kind.name, label: kind.label, path: kind.path,
+                                  defaultStyleLabel: kind.defaultStyleLabel,
+                                  scopes: kind.scopes, knobs: kind.knobs,
                                   slots: kept, builtIns: kind.builtIns,
                                   defaultTier: kind.defaultTier, persistedKeys: kind.persistedKeys)
         }
@@ -395,7 +421,9 @@ public enum RipulThemeEngine {
 
         return kinds.map { kind in
             guard let add = extra[kind.name], !add.isEmpty else { return kind }
-            return RipulStyleKind(name: kind.name, scopes: kind.scopes + add, knobs: kind.knobs,
+            return RipulStyleKind(name: kind.name, label: kind.label, path: kind.path,
+                                  defaultStyleLabel: kind.defaultStyleLabel,
+                                  scopes: kind.scopes + add, knobs: kind.knobs,
                                   slots: kind.slots, builtIns: kind.builtIns,
                                   defaultTier: kind.defaultTier, persistedKeys: kind.persistedKeys)
         }
@@ -692,23 +720,23 @@ public enum RipulThemeEngine {
         return builtInNames + userNames
     }
 
-    /// Assign (or clear, with nil) the named style for an element. Adopts the change live;
-    /// the host persists through its own document write.
+    /// Assign (or clear, with nil) the named style for an element. Routed through the
+    /// host's `persistMutation` (same as `setOverride`) so an SDK-owned surface — the style
+    /// picker especially — writes the host's blob rather than only applying live; adopting
+    /// without persisting looked correct until relaunch, when the assignment vanished.
     public static func assign(style: String?, kind: String, element: String) {
-        var doc = current
-        var map = doc.styleAssignments[kind] ?? [:]
+        var map = current.styleAssignments[kind] ?? [:]
         map[element] = style
-        doc.styleAssignments[kind] = map
-        adopt(doc)
+        current.styleAssignments[kind] = map
+        if let persistMutation { persistMutation(current) } else { adopt(current) }
     }
 
-    /// Clear an element's per-element overrides. Adopts the change live.
+    /// Clear an element's per-element overrides. Persists through the host, as above.
     public static func clearOverrides(kind: String, element: String) {
-        var doc = current
-        var map = doc.styleOverrides[kind] ?? [:]
+        var map = current.styleOverrides[kind] ?? [:]
         map[element] = nil
-        doc.styleOverrides[kind] = map
-        adopt(doc)
+        current.styleOverrides[kind] = map
+        if let persistMutation { persistMutation(current) } else { adopt(current) }
     }
 
     // MARK: live repaint (UIKit walker)

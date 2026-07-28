@@ -213,4 +213,32 @@ public struct RipulStyleKindEditorView<Preview: View, Footer: View>: View {
         onChange(next)
     }
 }
+
+// MARK: - Registry-driven convenience
+
+@available(iOS 16.0, *)
+extension RipulStyleKindEditorView where Preview == AnyView {
+    /// The editor for a named style of `kind`, previewed from the REGISTRY — no per-call
+    /// preview closure. The live example re-renders on every edit by merging the working
+    /// knobs over the kind's default tier (`RipulStylePreviews.view(kind:element:working:)`),
+    /// and the breadcrumb comes from the previewed scope's registered path.
+    ///
+    /// This is the form a generic hub uses: everything it needs is registration data.
+    public init(kind: RipulStyleKind, styleName: String, initial: [String: RipulKnob],
+                title: String? = nil,
+                onChange: @escaping ([String: RipulKnob]) -> Void,
+                @ViewBuilder footerSections: @escaping () -> Footer = { EmptyView() }) {
+        let element = kind.previewElement ?? ""
+        let namespace = kind.scopes.first { $0.id == element }?.path ?? kind.path
+        self.init(title: title ?? styleName,
+                  knobs: kind.knobs, slots: kind.slots, initial: initial,
+                  onChange: onChange,
+                  preview: { working in
+                      RipulStylePreviews.view(kind: kind.name, element: element, working: working)
+                          ?? AnyView(EmptyView())
+                  },
+                  namespace: namespace,
+                  footerSections: footerSections)
+    }
+}
 #endif
