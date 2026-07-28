@@ -75,14 +75,25 @@ public struct RipulThemeComponentsScreen: View {
 
 /// One kind's named styles: the built-in library plus the user's own, drilling into the
 /// generic editor. Editing a built-in copies-on-write; removing the copy restores stock.
+///
+/// Each row carries a LIVE preview of the style — the host's real component rendered with
+/// that style's knobs merged over the kind's default tier — so the library is browsed by
+/// looking at the components rather than by drilling into each name in turn. Rows fall
+/// back to name-only when the kind has no registered preview.
 @available(iOS 16.0, *)
 @MainActor
 public struct RipulStyleLibraryScreen: View {
     let kind: String
+    /// Row previews on/off. On by default; a host can suppress them for a kind whose
+    /// component does not read well at row size.
+    let showsPreviews: Bool
     @State private var newStyleName = ""
     @State private var themeVersion = 0
 
-    public init(kind: String) { self.kind = kind }
+    public init(kind: String, showsPreviews: Bool = true) {
+        self.kind = kind
+        self.showsPreviews = showsPreviews
+    }
 
     private var styleKind: RipulStyleKind? {
         RipulThemeEngine.styleKinds.first { $0.name == kind }
@@ -93,8 +104,19 @@ public struct RipulStyleLibraryScreen: View {
             Section {
                 ForEach(RipulThemeEngine.allStyleNames(kind: kind), id: \.self) { name in
                     let isBuiltIn = RipulThemeEngine.isBuiltInStyle(kind: kind, name: name)
-                    NavigationLink(isBuiltIn ? "\(name) · built-in" : name) {
-                        editor(name: name, isBuiltIn: isBuiltIn)
+                    // The link and the preview are SIBLINGS, not nested: a preview inside a
+                    // NavigationLink label inherits the link's tint (and any controls in it
+                    // fight the row's tap). This keeps the name row as the drill-in and the
+                    // preview as inert, honestly-coloured chrome beneath it.
+                    VStack(alignment: .leading, spacing: 8) {
+                        NavigationLink(isBuiltIn ? "\(name) · built-in" : name) {
+                            editor(name: name, isBuiltIn: isBuiltIn)
+                        }
+                        if showsPreviews, let preview = rowPreview(name: name) {
+                            preview
+                                .allowsHitTesting(false)   // a preview, not a second tap target
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
                     }
                 }
                 HStack {
@@ -121,6 +143,15 @@ public struct RipulStyleLibraryScreen: View {
         .onReceive(NotificationCenter.default.publisher(for: .ripulThemeDidChange)) { _ in
             themeVersion &+= 1
         }
+    }
+
+    /// The host's component rendered with THIS style's knobs merged over the kind's default
+    /// tier — "what does this style look like", independent of any element's assignment or
+    /// overrides (which is what the picker sheet shows instead).
+    private func rowPreview(name: String) -> AnyView? {
+        guard let element = styleKind?.previewElement else { return nil }
+        return RipulStylePreviews.view(kind: kind, element: element,
+                                       working: RipulThemeEngine.namedStyle(kind: kind, name: name) ?? [:])
     }
 
     @ViewBuilder
