@@ -464,14 +464,23 @@ public struct UnifiedSessionRow: View {
                         .uiKitIdentifier("UnifiedSessionRow.deletingSpinner")
                 }
                 .uiKitIdentifier("UnifiedSessionRow.deletingIndicator")
-            } else if isOpening {
-                ProgressView().controlSize(.small)
-                    .uiKitIdentifier("UnifiedSessionRow.openingSpinner")
             } else {
-                RelativeTimeText(date: effectiveLastActive)
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-                    .uiKitIdentifier("UnifiedSessionRow.timeText")
+                // Keep the time text in layout while opening (invisible) so
+                // the trailing slot's width is unchanged when the spinner
+                // replaces it — otherwise the phase indicator to the left
+                // jumps horizontally as the narrower spinner appears.
+                ZStack {
+                    RelativeTimeText(date: effectiveLastActive)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .opacity(isOpening ? 0 : 1)
+                        .accessibilityHidden(isOpening)
+                        .uiKitIdentifier("UnifiedSessionRow.timeText")
+                    if isOpening {
+                        ProgressView().controlSize(.small)
+                            .uiKitIdentifier("UnifiedSessionRow.openingSpinner")
+                    }
+                }
             }
         }
         .padding(.vertical, 2)

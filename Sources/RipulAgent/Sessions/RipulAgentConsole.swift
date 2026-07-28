@@ -39,6 +39,8 @@ public struct RipulAgentConsole: View {
     /// DevTools console sheet (ConsoleLogViewer), opened by the screen's
     /// `.ripulShowDevTools` posts.
     @State private var showDevTools = false
+    /// One-shot guard for the additively-registered collection tools.
+    @State private var didRegisterCollectionTools = false
 
     private let slots: RipulAgentScreenSlots
 
@@ -117,6 +119,24 @@ public struct RipulAgentConsole: View {
             if !configuration.devTools.isEmpty {
                 bridge.register(configuration.devTools)
             }
+            // Tool-collection CRUD for the agent, the peer of the editor screen.
+            // Enabled unconditionally because the console is already a
+            // signed-in, dev-gated surface.
+            //
+            // `register` APPENDS, and `.task` re-runs if this view disappears
+            // and returns (e.g. embedded in a TabView), so this is guarded.
+            // Duplicate tool names are not cosmetic here: a repeated name in
+            // the MCP tool set reads as a change to the bridge's tool-set
+            // watcher and can loop `tools/list_changed`.
+            if !didRegisterCollectionTools {
+                didRegisterCollectionTools = true
+                bridge.register(RipulDevToolCollectionTools.all(
+                    isEnabled: true,
+                    bridge: bridge,
+                    baseURL: configuration.baseURL,
+                    tokenProvider: { authStore.token }
+                ))
+            }
             authStore.startPolling(bridge: bridge)
             logWebBuildVersion()
         }
@@ -134,6 +154,13 @@ public struct RipulAgentConsole: View {
                             Button("Done") { showDevTools = false }
                         }
                     }
+                    // Unlocks the Tool Collections entry in the DevTools Tools
+                    // tab. Injected here rather than inside the viewer because
+                    // this is the surface that guarantees a signed-in developer.
+                    .environment(
+                        \.ripulToolCollectionsAccess,
+                        RipulToolCollectionsAccess(tokenProvider: { authStore.token })
+                    )
             }
         }
         .animation(.easeInOut(duration: 0.25), value: authStore.isSignedIn)

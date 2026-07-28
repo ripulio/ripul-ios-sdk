@@ -520,6 +520,9 @@ private struct NetworkTabView: View {
 private struct ToolsTabView: View {
     @ObservedObject var bridge: AgentBridge
     @Environment(\.dismiss) private var dismiss
+    /// Non-nil only when presented from a signed-in surface — see
+    /// `RipulToolCollectionsAccess`.
+    @Environment(\.ripulToolCollectionsAccess) private var toolCollectionsAccess
 
     @State private var scrollHudOn = false
     @State private var elementInspectorOn = false
@@ -550,6 +553,28 @@ private struct ToolsTabView: View {
                 Text("View Explorer is iOS-only.")
                 #endif
             }
+
+            #if os(iOS)
+            // Writing collections needs a Clerk token, so this appears only
+            // when the presenting surface has one (the console does; the bare
+            // `.ripulDevTools()` modifier does not).
+            if let toolCollectionsAccess {
+                Section {
+                    NavigationLink {
+                        RipulToolCollectionsScreen(
+                            bridge: bridge,
+                            tokenProvider: toolCollectionsAccess.tokenProvider
+                        )
+                    } label: {
+                        Label("Tool Collections", systemImage: "folder.badge.gearshape")
+                    }
+                } header: {
+                    Text("Agent")
+                } footer: {
+                    Text("Group this app's tools so the agent sees one entry it expands on demand, instead of every tool on every turn.")
+                }
+            }
+            #endif
 
             Section {
                 Toggle(isOn: webHudBinding($scrollHudOn, key: "enableScrollHud")) {

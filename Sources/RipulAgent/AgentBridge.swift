@@ -1330,6 +1330,26 @@ public final class AgentBridge: NSObject, ObservableObject {
         builtInTools = tools
     }
 
+    /// The tools currently registered with this bridge — the live tool set of
+    /// *this* build, which is more than any server-side view of it knows.
+    ///
+    /// Read-only by design: registration stays with `register` / `setTools`.
+    /// The tool-collections editor uses this to show which tools a membership
+    /// pattern captures before the developer saves.
+    ///
+    /// Names are canonical (no `host_` prefix — that is added downstream by the
+    /// web layer), which is also what collection patterns match against.
+    public var registeredToolSummaries: [RipulRegisteredTool] {
+        let builtInNames = Set(builtInTools.map(\.name))
+        return allTools.map { tool in
+            RipulRegisteredTool(
+                name: tool.name,
+                description: tool.description,
+                isBuiltIn: builtInNames.contains(tool.name)
+            )
+        }
+    }
+
     /// Replace all app-registered tools and re-broadcast to the web app.
     /// Built-in tools (registered via `registerBuiltInTools`) are preserved.
     /// Use this when the tool list changes dynamically (e.g. user scripts).
