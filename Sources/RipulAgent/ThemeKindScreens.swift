@@ -48,6 +48,59 @@ public struct RipulThemeComponentsScreen: View {
         return order.map { ($0, byGroup[$0] ?? []) }
     }
 
+    /// One hub row: a kind, plus whether it is a PART of a composite (indented and
+    /// annotated) rather than a thing in its own right.
+    private struct HubRow: Identifiable {
+        let kind: RipulStyleKind
+        let isPart: Bool
+        let annotation: String?
+        var id: String { kind.name }
+    }
+
+    /// kind name -> the kinds that declare a slot targeting it.
+    private var composersByKind: [String: [RipulStyleKind]] {
+        var out: [String: [RipulStyleKind]] = [:]
+        for kind in RipulThemeEngine.styleKinds {
+            for slot in kind.slots { out[slot.kind, default: []].append(kind) }
+        }
+        return out
+    }
+
+    /// Order a group so the COMPOSITION is visible: each composite first, its parts nested
+    /// beneath it and labelled with what composes them.
+    ///
+    /// Without this the hub lists "Card styles", "Lozenge styles" and "Panel styles" as
+    /// three peers, which reads as though a card contains a panel rather than the reverse.
+    /// The relationship is already in the registration (the panel kind's slots), so it can
+    /// be derived rather than authored — and any future composite gets it free.
+    private func rows(for kinds: [RipulStyleKind]) -> [HubRow] {
+        let composers = composersByKind
+        let namesInGroup = Set(kinds.map(\.name))
+        var emitted = Set<String>()
+        var out: [HubRow] = []
+
+        for kind in kinds {
+            // A part whose composite is in this group is emitted UNDER it, not here.
+            if let cs = composers[kind.name], cs.contains(where: { namesInGroup.contains($0.name) }) {
+                continue
+            }
+            guard emitted.insert(kind.name).inserted else { continue }
+            out.append(HubRow(kind: kind, isPart: false, annotation: nil))
+            for slot in kind.slots {
+                guard let part = kinds.first(where: { $0.name == slot.kind }),
+                      emitted.insert(part.name).inserted else { continue }
+                out.append(HubRow(kind: part, isPart: true,
+                                  annotation: "part of \(kind.label)"))
+            }
+        }
+        // Parts whose composite lives in another group still need a home.
+        for kind in kinds where !emitted.contains(kind.name) {
+            let annotation = composers[kind.name]?.first.map { "part of \($0.label)" }
+            out.append(HubRow(kind: kind, isPart: annotation != nil, annotation: annotation))
+        }
+        return out
+    }
+
     public var body: some View {
         Form {
             ForEach(groups, id: \.name) { group in
@@ -55,8 +108,20 @@ public struct RipulThemeComponentsScreen: View {
                     // ONE row per kind. This used to be two ("Panel styles" and
                     // "Panel styles · elements"), which doubled the hub and pushed every
                     // element a tap further away for no gain — the kind screen shows both.
-                    ForEach(group.kinds, id: \.name) { kind in
-                        NavigationLink(kind.label) { RipulStyleKindScreen(kind: kind.name) }
+                    ForEach(rows(for: group.kinds)) { row in
+                        NavigationLink {
+                            RipulStyleKindScreen(kind: row.kind.name)
+                        } label: {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(row.kind.label)
+                                if let annotation = row.annotation {
+                                    Text(annotation)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                            .padding(.leading, row.isPart ? 16 : 0)
+                        }
                     }
                 } header: {
                     if !group.name.isEmpty { Text(group.name) }
@@ -92,8 +157,51 @@ public struct RipulStyleKindScreen: View {
     }
     private var elements: [RipulThemeScope] { styleKind?.scopes ?? [] }
 
+    /// The kinds this one is assembled FROM (its slots), and the kinds that assemble it.
+    private var partKinds: [(slot: RipulStyleSlot, kind: RipulStyleKind)] {
+        (styleKind?.slots ?? []).compactMap { slot in
+            RipulThemeEngine.styleKinds.first { $0.name == slot.kind }.map { (slot, $0) }
+        }
+    }
+    private var composedBy: [RipulStyleKind] {
+        RipulThemeEngine.styleKinds.filter { $0.slots.contains { $0.kind == kind } }
+    }
+
     public var body: some View {
         Form {
+            // Make the COMPOSITION legible from here too. Listing kinds as peers in the hub
+            // reads as though a card contains a panel rather than the reverse, so each side
+            // of the relationship states it: a composite links to its parts, a part names
+            // what it belongs to.
+            if !partKinds.isEmpty {
+                Section {
+                    ForEach(partKinds, id: \.slot.name) { entry in
+                        NavigationLink {
+                            RipulStyleKindScreen(kind: entry.kind.name)
+                        } label: {
+                            HStack {
+                                Text(entry.slot.label)
+                                Spacer()
+                                Text(entry.kind.label).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                } header: {
+                    Text("Assembled from")
+                } footer: {
+                    Text("A style below picks one of each. Editing a part's style restyles "
+                         + "every component pointing at it.")
+                }
+            }
+            if !composedBy.isEmpty {
+                Section {
+                    ForEach(composedBy, id: \.name) { parent in
+                        NavigationLink(parent.label) { RipulStyleKindScreen(kind: parent.name) }
+                    }
+                } header: {
+                    Text("Used as a part of")
+                }
+            }
             if styleKind?.supportsNamedStyles == true {
                 Section {
                     RipulStyleLibraryRows(kind: kind)
