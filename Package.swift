@@ -22,6 +22,7 @@ let package = Package(
             ],
             resources: [
                 .process("Resources/providers.json"),
+                .process("Resources/RipulBranding.xcassets"),
             ]
         ),
     ]

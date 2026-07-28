@@ -173,20 +173,10 @@ public struct RipulAgentConsole: View {
     }
 
     private var reconnectingSplash: some View {
-        VStack(spacing: 16) {
-            ProgressView()
-            Text("Reconnecting…")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-            Button("Sign in with a different account") { forceSignIn = true }
-                .font(.footnote)
-                .buttonStyle(.plain)
-                .foregroundStyle(.tint)
-                .uiKitIdentifier("RipulAgentConsole.reconnect.signIn")
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(.background)
-        .transition(.opacity)
+        RipulBrandedLoadingView(
+            status: "Reconnecting…",
+            action: (title: "Sign in with a different account", handler: { forceSignIn = true })
+        )
     }
 }
 #endif

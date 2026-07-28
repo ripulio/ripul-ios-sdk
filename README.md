@@ -12,6 +12,7 @@ What this delivers:
 - **Zero new UI to build** — The agent *is* the interface. You don't design screens for every new capability; you register a tool and the agent handles the interaction.
 - **Composable actions** — The agent can chain multiple tools together in ways you never explicitly programmed. A calendar tool + a contacts tool = "Schedule lunch with Sarah at our usual place."
 - **Your existing code, unchanged** — Tool wrappers are thin adapters around APIs you already have. Your service layer, models, and business logic stay exactly as they are.
+- **Instrument freely** — You expose capabilities; you don't design how the agent finds them. A large app can register a hundred tools without the agent drowning in them — see [Scaling to Many Tools](#scaling-to-many-tools).
 
 This reference app demonstrates the pattern with a **calendar assistant**: a native week-view calendar backed by EventKit, with a floating Ripul AI Agent that can list, create, delete, and search calendar events on the user's behalf. The same pattern applies to any native capability you want to expose.
 
@@ -201,6 +202,7 @@ That's it. The Ripul AI Agent framework handles:
 - MCP tool invocation (agent calls a tool, framework routes to your `execute()`)
 - Result/error delivery back to the agent
 - Theme synchronization (light/dark mode)
+- Presenting your tools to the model efficiently as the set grows — see [Scaling to Many Tools](#scaling-to-many-tools)
 
 ## Agent Communication Protocol
 
@@ -419,6 +421,110 @@ let outputSchema: [String: Any]? = ToolSchema.object(
 ```
 
 When `outputSchema` is defined, the agent sees a "Returns:" section in the tool description and can construct correct `$ref` paths. Without it, the agent guesses field names and may get them wrong.
+
+## Scaling to Many Tools
+
+Every tool you register costs tokens in **every** request, because the model is
+shown the full tool list on every turn. A handful of tools is free. Forty is a
+tax on every message. At a hundred, the model also starts choosing badly — the
+right tool is harder to find in a long list than a short one.
+
+This is the point where most agent integrations ask you to start hand-designing
+what the model can see: splitting agents, writing routers, gating tools by
+screen. **You don't do that here.** Keep writing thin `NativeTool` wrappers for
+whatever your app can do, and register all of them. Organising the list is our
+job, not yours.
+
+### Tool collections
+
+You group related tools into a **collection**. Where the model would have seen
+twelve calendar tools, it sees one entry:
+
+```
+list_events, create_event, delete_event, search_events,   →   calendar_tools
+move_event, set_reminder, list_calendars, ...                 "Calendar. 12 tools."
+```
+
+When the model needs one, it calls `calendar_tools`, and the twelve real tools
+appear in its next turn. Your Swift code is untouched — these are still the same
+tools, invoked through the same `execute()`. The only thing that changed is when
+the model is shown them.
+
+From there the runtime handles the lifecycle on its own:
+
+| Behaviour | What it means for you |
+|---|---|
+| Expand on demand | The model opens a collection only when the conversation calls for it |
+| Auto-collapse | A collection unused for ~10 turns folds back up, reclaiming the context |
+| Live refresh | Tools registered mid-session — or arriving from a newly connected device — are picked up without restarting the conversation |
+| Consistent everywhere | The same resolution applies to the in-app agent and to CLI sessions |
+
+### Defining membership
+
+A collection's members are defined two ways, and a tool joins if **either**
+matches:
+
+- **Picked explicitly** — you name the tools. Precise, good for a curated set.
+- **Name patterns** — regexes tested against the tool name. This is where the
+  [naming conventions](#tool-naming-conventions) pay off: a collection with the
+  pattern `^calendar_` absorbs every future `calendar_*` tool you register, with
+  no further configuration.
+
+Patterns match the name **you** registered, not the transport-prefixed one the
+agent sees internally — write `^calendar_`, not `^host_calendar_`.
+
+Prefer patterns where a convention exists. A collection built on `^calendar_`
+stays correct as your app grows; an explicit list goes stale the day someone
+adds a tool and forgets to update it.
+
+### Two modes
+
+| Mode | Behaviour | Use when |
+|---|---|---|
+| **Expand** | Tools are added alongside everything else the model already has | The task mixes this area with others — "find a free slot and text Sarah" |
+| **Isolate** | A focused sub-agent runs with *only* these tools, then reports back | The area is self-contained and you want the model concentrating — bulk edits, multi-step flows in one domain |
+
+Isolate mode also accepts a custom system prompt, so a collection can carry
+domain instructions the main agent doesn't need to hold.
+
+### Where to configure it
+
+Collections live in your Ripul account, not in your app binary — so you can
+reorganise them against a shipped app without a release. Manage them under
+**Tools** in the dashboard, or just ask the agent ("group all my calendar tools
+into one collection").
+
+Grouping is not a one-way door. Membership is the union of picked tools and
+patterns, a tool may belong to several collections at once, and anything
+ungrouped is still passed to the model individually — so you can re-slice the
+same tool set as often as you like, and a grouping you regret costs context, not
+capability.
+
+**When a change takes effect:** apps authenticating with a site key receive
+collections as part of their site-key configuration, which is resolved when the
+session starts — so edits apply from the **next app launch**, not mid-session.
+
+That is rarely a constraint, because reorganising is a design-time act you do
+occasionally. Registering a *new tool* is the frequent event, and it does not
+wait: a tool matching an existing collection's pattern is absorbed into it
+automatically, within the same session. This is the practical reason to prefer
+patterns — they keep routine additions off the slow, manual path.
+
+### What's automatic and what isn't
+
+Worth being straight about the split:
+
+- **Automatic**: collapsing, expanding on demand, auto-collapse, mid-session
+  refresh, and identical behaviour across the in-app agent and CLI.
+- **Yours**: deciding what belongs together. We don't guess at groupings —
+  a collection is a judgement about your domain, and one bad automatic grouping
+  costs more than it saves.
+
+Patterns are how you make that judgement once instead of continuously.
+
+> **Nothing changes until you define a collection.** With none configured, every
+> tool is passed to the model exactly as registered. Adopt this when your tool
+> count justifies it, not before.
 
 ## Advanced Topics
 
