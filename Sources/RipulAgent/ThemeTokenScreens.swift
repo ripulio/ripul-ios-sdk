@@ -18,21 +18,23 @@ import SwiftUI
 
 /// A node in a token tree, built from the tokens' author-declared paths. Branches nest;
 /// leaves edit in place.
-struct RipulTokenNode: Identifiable {
-    enum Leaf {
+public struct RipulTokenNode: Identifiable {
+    public enum Leaf {
         case component(RipulThemeVocabulary.Entry)
         case role(RipulThemeVocabulary.Entry)
         case primitive(RipulThemeVocabulary.Entry)
         case scope(RipulThemeScope, kind: String)
     }
 
-    let name: String
-    let path: [String]
-    var id: String { path.joined(separator: "/") }
-    var children: [RipulTokenNode] = []
-    var leaves: [Leaf] = []
+    public let name: String
+    public let path: [String]
+    public var id: String { path.joined(separator: "/") }
+    public var children: [RipulTokenNode] = []
+    public var leaves: [Leaf] = []
 
-    static func build(_ entries: [(path: [String], leaf: Leaf)]) -> [RipulTokenNode] {
+    /// Build a tree from (path, leaf) pairs — the one path-nesting implementation, shared
+    /// by the SDK's token screens and any host screen that nests registered scopes.
+    public static func build(_ entries: [(path: [String], leaf: Leaf)]) -> [RipulTokenNode] {
         var roots: [RipulTokenNode] = []
         for entry in entries {
             // A leaf with no declared path would vanish; give it a top-level home under
@@ -178,10 +180,11 @@ public struct RipulThemeColoursScreen: View {
 
 @available(iOS 16.0, *)
 @MainActor
-struct RipulTokenNodeScreen: View {
+public struct RipulTokenNodeScreen: View {
     let node: RipulTokenNode
+    public init(node: RipulTokenNode) { self.node = node }
 
-    var body: some View {
+    public var body: some View {
         Form {
             if !node.children.isEmpty {
                 Section {
