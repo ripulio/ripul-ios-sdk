@@ -561,8 +561,13 @@ private struct ToolsTabView: View {
             if let toolCollectionsAccess {
                 Section {
                     NavigationLink {
+                        // Host catalogs first (its end-user surface is the one
+                        // usually worth grouping, and the first is selected
+                        // initially), then the developer catalog the SDK
+                        // synthesises from this console's own bridge.
                         RipulToolCollectionsScreen(
-                            bridge: bridge,
+                            catalogs: toolCollectionsAccess.hostCatalogs
+                                + [.developer(bridge.registeredToolSummaries)],
                             tokenProvider: toolCollectionsAccess.tokenProvider
                         )
                     } label: {
@@ -571,7 +576,7 @@ private struct ToolsTabView: View {
                 } header: {
                     Text("Agent")
                 } footer: {
-                    Text("Group this app's tools so the agent sees one entry it expands on demand, instead of every tool on every turn.")
+                    Text("Group tools so an agent sees one entry it expands on demand, instead of every tool on every turn. Choose which tool surface you are organising on the next screen.")
                 }
             }
             #endif

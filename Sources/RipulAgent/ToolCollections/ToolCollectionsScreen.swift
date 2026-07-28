@@ -170,30 +170,46 @@ public final class RipulToolCollectionsModel: ObservableObject {
 
 // MARK: - Screen
 
-/// Browse and reorganise the account's tool collections against this build's tools.
+/// Browse and reorganise tool collections against one named tool surface.
+///
+/// **Exactly one catalog is in view at a time, never a union.** An app has
+/// several disjoint tool surfaces — its users' agent, its in-app dev agent —
+/// and both can be worth grouping, but a developer must never be in doubt
+/// about which agent's context they are economising. The picker and the
+/// purpose line under it are what keep that unambiguous; see `RipulToolCatalog`.
 ///
 /// Membership is edited by dragging: collections expand in place, and a tool
-/// dragged onto a collection joins it, dragged to Ungrouped leaves it. Only
-/// hand-picked members are draggable — see `memberRow`.
+/// dragged onto a collection joins it, dragged to Ungrouped leaves it.
 @available(iOS 16.0, *)
 public struct RipulToolCollectionsScreen: View {
-    @ObservedObject private var bridge: AgentBridge
     @StateObject private var model: RipulToolCollectionsModel
+    private let catalogs: [RipulToolCatalog]
+
+    @State private var selectedCatalogId: String
     @State private var creating = false
     @State private var expanded: Set<String> = []
     @State private var editing: RipulToolCollection?
     /// Collection currently under the finger, for a drop highlight.
     @State private var dropTarget: String?
 
-    public init(bridge: AgentBridge, tokenProvider: @escaping () -> String?) {
-        self.bridge = bridge
+    /// - Parameter catalogs: the tool surfaces available to organise. The first
+    ///   is selected initially — pass the end-user catalog first, since it is
+    ///   usually the one worth grouping.
+    public init(catalogs: [RipulToolCatalog], tokenProvider: @escaping () -> String?) {
+        self.catalogs = catalogs
+        _selectedCatalogId = State(initialValue: catalogs.first?.id ?? RipulToolCatalog.endUserId)
         _model = StateObject(wrappedValue: RipulToolCollectionsModel(
             client: RipulToolCollectionsClient(tokenProvider: tokenProvider)
         ))
     }
 
-    private var tools: [RipulRegisteredTool] { bridge.registeredToolSummaries }
-    private var toolNames: [String] { tools.map(\.name) }
+    private var catalog: RipulToolCatalog {
+        catalogs.first { $0.id == selectedCatalogId } ?? catalogs.first
+            ?? RipulToolCatalog(id: "empty", name: "No tools", purpose: "", tools: [])
+    }
+
+    private var tools: [RipulRegisteredTool] { catalog.tools }
+    private var toolNames: [String] { catalog.toolNames }
 
     private func matcher(for collection: RipulToolCollection) -> RipulToolCollectionMatcher {
         RipulToolCollectionMatcher(
@@ -205,6 +221,8 @@ public struct RipulToolCollectionsScreen: View {
 
     public var body: some View {
         List {
+            catalogSection
+
             if let errorMessage = model.errorMessage {
                 Section {
                     Label(errorMessage, systemImage: "exclamationmark.triangle")
@@ -268,6 +286,36 @@ public struct RipulToolCollectionsScreen: View {
         .refreshable { await model.load() }
     }
 
+    // MARK: - Catalog picker
+
+    /// The context header. Without this a developer cannot tell whose tools
+    /// they are looking at — which is precisely how this screen first shipped,
+    /// silently scoped to the dev agent's own tools.
+    @ViewBuilder
+    private var catalogSection: some View {
+        Section {
+            if catalogs.count > 1 {
+                Picker("Tool surface", selection: $selectedCatalogId) {
+                    ForEach(catalogs) { entry in
+                        Text(entry.name).tag(entry.id)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .accessibilityIdentifier("ripul.toolCollections.catalogPicker")
+            } else {
+                Text(catalog.name).font(.subheadline.weight(.semibold))
+            }
+            Text(catalog.purpose)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Text("\(catalog.tools.count) tool\(catalog.tools.count == 1 ? "" : "s") registered")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        } header: {
+            Text("Organising")
+        }
+    }
+
     // MARK: - Collection section
 
     @ViewBuilder
@@ -284,7 +332,7 @@ public struct RipulToolCollectionsScreen: View {
                     memberRow(name, in: collection, kind: .pattern)
                 }
                 ForEach(m.absentMembers, id: \.self) { name in
-                    memberRow(name, in: collection, kind: .absent)
+                    memberRow(name, in: collection, kind: .elsewhere)
                 }
                 if m.memberCount == 0 {
                     Text("Empty — drag a tool here, or add a name pattern.")
@@ -352,21 +400,16 @@ public struct RipulToolCollectionsScreen: View {
                 if isOpen { expanded.remove(collection.id) } else { expanded.insert(collection.id) }
             }
         }
-        .dropDestination(for: String.self) { payloads, _ in
-            handleDrop(payloads, into: collection.id)
-        } isTargeted: { targeted in
-            dropTarget = targeted ? collection.id : (dropTarget == collection.id ? nil : dropTarget)
-        }
         .accessibilityIdentifier("ripul.toolCollections.header")
     }
 
-    private enum MemberKind { case picked, pattern, absent }
+    private enum MemberKind { case picked, pattern, elsewhere }
 
     /// One member row. Only `.picked` members are draggable: a `.pattern`
     /// member cannot be removed by editing `explicitTools` (the pattern would
-    /// re-capture it immediately), and an `.absent` member isn't registered
-    /// here at all. Offering a drag that silently reverts is worse than
-    /// offering none, so both are shown inert with the reason.
+    /// re-capture it immediately), and an `.elsewhere` member is not registered
+    /// in the catalog on screen. Offering a drag that silently reverts is worse
+    /// than offering none, so both are shown inert with the reason.
     @ViewBuilder
     private func memberRow(_ name: String, in collection: RipulToolCollection, kind: MemberKind) -> some View {
         let row = HStack {
@@ -382,8 +425,8 @@ public struct RipulToolCollectionsScreen: View {
                 EmptyView()
             case .pattern:
                 Text("pattern").font(.caption2).foregroundStyle(.secondary)
-            case .absent:
-                Text("not in this app").font(.caption2).foregroundStyle(.secondary)
+            case .elsewhere:
+                Text(originLabel(for: name)).font(.caption2).foregroundStyle(.secondary)
             }
         }
 
@@ -396,12 +439,24 @@ public struct RipulToolCollectionsScreen: View {
         }
     }
 
-    /// Curated size first, local presence second. A collection of web app
-    /// tools is fully populated and still matches nothing in this build —
-    /// reporting only the local count would render it as empty.
+    /// Says WHERE a member lives rather than merely that it is missing.
+    /// "in End-user tools" is actionable; "not in this app" was false.
+    private func originLabel(for name: String) -> String {
+        switch RipulMemberAttribution.origin(of: name, viewing: catalog, allCatalogs: catalogs) {
+        case .thisCatalog:
+            return ""
+        case .otherCatalog(let catalogName):
+            return "in \(catalogName)"
+        case .notNative:
+            return "web app or other device"
+        }
+    }
+
+    /// Curated size first, presence in the SELECTED catalog second. A
+    /// collection can span surfaces, so one number could never be honest.
     private func summary(matcher m: RipulToolCollectionMatcher, collection: RipulToolCollection) -> String {
         var parts = ["\(m.memberCount) member\(m.memberCount == 1 ? "" : "s")"]
-        parts.append("\(m.presentCount) in this app")
+        parts.append("\(m.presentCount) here")
         if !collection.toolPatterns.isEmpty {
             parts.append("\(collection.toolPatterns.count) pattern\(collection.toolPatterns.count == 1 ? "" : "s")")
         }
@@ -415,7 +470,7 @@ public struct RipulToolCollectionsScreen: View {
         let ungrouped = model.ungroupedTools(from: tools)
         Section {
             if ungrouped.isEmpty {
-                Text("Every registered tool belongs to a collection.")
+                Text("Every tool in \(catalog.name) belongs to a collection.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
@@ -440,7 +495,7 @@ public struct RipulToolCollectionsScreen: View {
             }
         } header: {
             HStack {
-                Text("Ungrouped (\(ungrouped.count))").textCase(nil)
+                Text("Ungrouped in \(catalog.name) (\(ungrouped.count))").textCase(nil)
                 Spacer()
             }
             .padding(.vertical, 4)
@@ -452,7 +507,7 @@ public struct RipulToolCollectionsScreen: View {
                 dropTarget = targeted ? ungroupedDropId : (dropTarget == ungroupedDropId ? nil : dropTarget)
             }
         } footer: {
-            Text("Passed to the agent individually, costing tokens on every turn. Drag one onto a collection above to group it.")
+            Text("Passed to that agent individually, costing tokens on every turn. Drag one onto a collection above to group it.")
         }
     }
 

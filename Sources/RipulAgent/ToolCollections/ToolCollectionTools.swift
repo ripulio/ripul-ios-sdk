@@ -20,18 +20,20 @@ public enum RipulDevToolCollectionTools {
     /// - Parameters:
     ///   - isEnabled: host gate — these are development affordances and do not
     ///     belong in an end user's tool list.
-    ///   - bridge: supplies the live tool set so listings can report how many
-    ///     registered tools each collection actually captures.
+    ///   - catalogs: the app's tool surfaces, evaluated lazily because the
+    ///     developer catalog is derived from a live bridge. Listings report
+    ///     membership per catalog: a collection can span surfaces, and one
+    ///     number could never say which agent it actually economises.
     public static func all(
         isEnabled: Bool,
-        bridge: AgentBridge,
+        catalogs: @escaping () -> [RipulToolCatalog],
         baseURL: URL = AgentConfiguration.defaultBaseURL,
         tokenProvider: @escaping () -> String?
     ) -> [NativeTool] {
         guard isEnabled else { return [] }
         let client = RipulToolCollectionsClient(baseURL: baseURL, tokenProvider: tokenProvider)
         return [
-            RipulListToolCollectionsTool(client: client, bridge: bridge),
+            RipulListToolCollectionsTool(client: client, catalogs: catalogs),
             RipulCreateToolCollectionTool(client: client),
             RipulUpdateToolCollectionTool(client: client),
             RipulDeleteToolCollectionTool(client: client),
@@ -49,28 +51,48 @@ private let restartNote =
 public struct RipulListToolCollectionsTool: NativeTool {
     public var name: String { "list_tool_collections" }
     public var description: String {
-        "List the account's tool collections (progressive-discovery categories), with each "
-        + "collection's membership rules and how many of THIS app's registered tools it currently captures. "
-        + "A collection is shown to the agent as one tool it expands on demand."
+        "List the account's tool collections (progressive-discovery categories) with their "
+        + "membership rules, and how each one maps onto this app's tool surfaces. "
+        + "The app has more than one surface — the end-user agent's tools and the in-app dev "
+        + "agent's tools are separate sets — so membership is reported per surface. "
+        + "A collection is shown to an agent as one tool it expands on demand."
     }
     public var inputSchema: [String: Any] {
         ["type": "object", "properties": [:], "required": []]
     }
 
     let client: RipulToolCollectionsClient
-    let bridge: AgentBridge
+    let catalogs: () -> [RipulToolCatalog]
 
     @MainActor
     public func execute(args: [String: Any]) async throws -> Any {
-        let toolNames = bridge.registeredToolSummaries.map(\.name)
+        let surfaces = catalogs()
         let collections = try await client.list(type: "category")
         return [
             "collections": collections.map { collection -> [String: Any] in
-                let matcher = RipulToolCollectionMatcher(
-                    explicitTools: collection.explicitTools,
-                    toolPatterns: collection.toolPatterns,
-                    toolNames: toolNames
-                )
+                // Per-surface, because a collection can span them. Reporting a
+                // single count against one surface is what made every
+                // collection look empty when the wrong one was consulted.
+                var perSurface: [[String: Any]] = []
+                var accountedFor = Set<String>()
+                for surface in surfaces {
+                    let matcher = RipulToolCollectionMatcher(
+                        explicitTools: collection.explicitTools,
+                        toolPatterns: collection.toolPatterns,
+                        toolNames: surface.toolNames
+                    )
+                    matcher.presentMatches.forEach { accountedFor.insert(RipulToolCollectionMatcher.canonicalName($0)) }
+                    perSurface.append([
+                        "surface": surface.name,
+                        "surfaceId": surface.id,
+                        "tools": matcher.presentMatches,
+                        "count": matcher.presentCount,
+                    ])
+                }
+                let elsewhere = collection.explicitTools.filter {
+                    !$0.hasPrefix("group://")
+                    && !accountedFor.contains(RipulToolCollectionMatcher.canonicalName($0))
+                }
                 return [
                     "id": collection.id,
                     "name": collection.name,
@@ -79,16 +101,13 @@ public struct RipulListToolCollectionsTool: NativeTool {
                     "mode": collection.mode,
                     "toolPatterns": collection.toolPatterns,
                     "explicitTools": collection.explicitTools,
-                    // Split deliberately: a collection curating web app tools is
-                    // fully populated yet matches nothing here, and an agent
-                    // reading one number would call it empty.
-                    "toolsInThisApp": matcher.presentMatches,
-                    "toolsInThisAppCount": matcher.presentCount,
-                    "membersNotInThisApp": matcher.absentMembers,
-                    "memberCount": matcher.memberCount,
+                    "bySurface": perSurface,
+                    // Members native to no surface here: web app tools, or
+                    // tools belonging to another device.
+                    "membersNotNativeHere": elsewhere,
                 ]
             },
-            "registeredToolCount": toolNames.count,
+            "surfaces": surfaces.map { ["id": $0.id, "name": $0.name, "purpose": $0.purpose, "toolCount": $0.tools.count] },
         ]
     }
 }

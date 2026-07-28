@@ -42,6 +42,19 @@ public struct RipulAgentConsole: View {
     /// One-shot guard for the additively-registered collection tools.
     @State private var didRegisterCollectionTools = false
 
+    /// Tool surfaces the host owns, for the collections editor to organise.
+    /// Empty `endUserTools` yields no end-user catalog rather than an empty
+    /// one — a picker offering a surface with nothing in it is worse than not
+    /// offering it.
+    private var hostToolCatalogs: [RipulToolCatalog] {
+        var catalogs: [RipulToolCatalog] = []
+        if !configuration.endUserTools.isEmpty {
+            catalogs.append(.endUser(configuration.endUserTools))
+        }
+        catalogs.append(contentsOf: configuration.toolCatalogs)
+        return catalogs
+    }
+
     private let slots: RipulAgentScreenSlots
 
     /// - Parameter bridge: optional externally-owned bridge. Pass one when the
@@ -132,7 +145,15 @@ public struct RipulAgentConsole: View {
                 didRegisterCollectionTools = true
                 bridge.register(RipulDevToolCollectionTools.all(
                     isEnabled: true,
-                    bridge: bridge,
+                    catalogs: { [configuration, bridge] in
+                        var all: [RipulToolCatalog] = []
+                        if !configuration.endUserTools.isEmpty {
+                            all.append(.endUser(configuration.endUserTools))
+                        }
+                        all.append(contentsOf: configuration.toolCatalogs)
+                        all.append(.developer(bridge.registeredToolSummaries))
+                        return all
+                    },
                     baseURL: configuration.baseURL,
                     tokenProvider: { authStore.token }
                 ))
@@ -159,7 +180,15 @@ public struct RipulAgentConsole: View {
                     // this is the surface that guarantees a signed-in developer.
                     .environment(
                         \.ripulToolCollectionsAccess,
-                        RipulToolCollectionsAccess(tokenProvider: { authStore.token })
+                        RipulToolCollectionsAccess(
+                            tokenProvider: { authStore.token },
+                            // The host's own surfaces. `endUserTools` is
+                            // declared, NOT registered — those tools belong to
+                            // the app's agent panel on a different bridge, and
+                            // registering them here would hand end-user
+                            // capabilities to the dev agent.
+                            hostCatalogs: hostToolCatalogs
+                        )
                     )
             }
         }

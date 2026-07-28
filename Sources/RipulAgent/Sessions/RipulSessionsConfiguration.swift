@@ -39,6 +39,25 @@ public struct RipulSessionsConfiguration {
     /// separate from the host's end-user agent panel and its tools, which live on a
     /// different bridge. A host that wants a tool in both places passes it to both.
     public var devTools: [NativeTool]
+    /// THE HOST'S END-USER TOOL SURFACE — what its users' agent can call.
+    ///
+    /// Declared here purely so the tool-collections editor can organise it. The
+    /// console does NOT register these; they belong to the host's own agent
+    /// panel on a different bridge, and registering them here would put
+    /// end-user capabilities in the dev agent's hands.
+    ///
+    /// Without this, the editor can only see the console's own bridge — the
+    /// developer surface — and reports every end-user tool as missing. That is
+    /// exactly backwards: the end-user surface is the one whose context window
+    /// real users pay for, so it is the one most worth grouping.
+    ///
+    /// WAC passes `WACNativeTools.all`. Hosts with more than two agent surfaces
+    /// use `toolCatalogs` instead.
+    public var endUserTools: [NativeTool]
+    /// Additional named tool surfaces, for hosts with more than the end-user /
+    /// developer pair. Merged with the catalog built from `endUserTools` and
+    /// the console's own bridge.
+    public var toolCatalogs: [RipulToolCatalog]
     /// Optional app-injected panels (nil = omitted).
     public var invitesSection: (() -> AnyView)?
     public var foldersSection: (() -> AnyView)?
@@ -53,6 +72,8 @@ public struct RipulSessionsConfiguration {
         allowRipulAgents: Bool = false,
         quickActionsEnabled: Bool = false,
         devTools: [NativeTool] = [],
+        endUserTools: [NativeTool] = [],
+        toolCatalogs: [RipulToolCatalog] = [],
         invitesSection: (() -> AnyView)? = nil,
         foldersSection: (() -> AnyView)? = nil,
         emptyStateOverride: (() -> AnyView)? = nil
@@ -65,6 +86,8 @@ public struct RipulSessionsConfiguration {
         self.allowRipulAgents = allowRipulAgents
         self.quickActionsEnabled = quickActionsEnabled
         self.devTools = devTools
+        self.endUserTools = endUserTools
+        self.toolCatalogs = toolCatalogs
         self.invitesSection = invitesSection
         self.foldersSection = foldersSection
         self.emptyStateOverride = emptyStateOverride

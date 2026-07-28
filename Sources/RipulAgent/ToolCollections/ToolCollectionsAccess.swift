@@ -12,9 +12,17 @@ import SwiftUI
 /// Mirrors the shape of `DevToolsAction`.
 public struct RipulToolCollectionsAccess {
     public let tokenProvider: () -> String?
+    /// Tool surfaces the HOST owns — principally its end-user agent's tools.
+    /// The developer catalog is synthesised separately from the console's own
+    /// bridge, so it is not listed here.
+    public let hostCatalogs: [RipulToolCatalog]
 
-    public init(tokenProvider: @escaping () -> String?) {
+    public init(
+        tokenProvider: @escaping () -> String?,
+        hostCatalogs: [RipulToolCatalog] = []
+    ) {
         self.tokenProvider = tokenProvider
+        self.hostCatalogs = hostCatalogs
     }
 }
 
