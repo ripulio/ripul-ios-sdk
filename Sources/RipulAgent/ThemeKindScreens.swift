@@ -243,6 +243,67 @@ public struct RipulThemeScopesScreen: View {
     }
 }
 
+/// ONE element's overrides as a whole screen — for kinds addressed directly rather than
+/// browsed through a tree (a per-screen override editor reached from a host's own hub).
+/// Same rows as `RipulScopeContent`, without the collapsible or the assignment picker when
+/// the kind has no named styles to assign.
+@available(iOS 16.0, *)
+@MainActor
+public struct RipulScopeOverridesScreen: View {
+    let kind: String
+    let element: String
+    let title: String?
+
+    public init(kind: String, element: String, title: String? = nil) {
+        self.kind = kind; self.element = element; self.title = title
+    }
+
+    private var styleKind: RipulStyleKind? {
+        RipulThemeEngine.styleKinds.first { $0.name == kind }
+    }
+    private var hasStyles: Bool { !RipulThemeEngine.allStyleNames(kind: kind).isEmpty }
+    private var hasOverrides: Bool { RipulThemeEngine.current.styleOverrides[kind]?[element] != nil }
+
+    public var body: some View {
+        Form {
+            if hasStyles {
+                Section {
+                    Picker("Style", selection: Binding<String?>(
+                        get: { RipulThemeEngine.current.styleAssignments[kind]?[element] },
+                        set: { RipulThemeEngine.assign(style: $0, kind: kind, element: element) })) {
+                        Text(styleKind?.defaultStyleLabel ?? "Default").tag(String?.none)
+                        ForEach(RipulThemeEngine.allStyleNames(kind: kind), id: \.self) { name in
+                            Text(name).tag(String?.some(name))
+                        }
+                    }
+                }
+            }
+            Section {
+                RipulStyleKnobRows(
+                    knobs: styleKind?.knobs ?? [],
+                    slots: styleKind?.slots ?? [],
+                    working: RipulThemeEngine.current.styleOverrides[kind]?[element] ?? [:],
+                    onChange: { knobs in
+                        RipulThemeEngine.setOverrides(kind: kind, element: element, knobs: knobs)
+                    })
+            } footer: {
+                Text("Each value inherits until you set it, at which point it applies to this "
+                     + "element only.")
+            }
+            if hasOverrides {
+                Section {
+                    Button("Reset to inherited", role: .destructive) {
+                        RipulThemeEngine.clearOverrides(kind: kind, element: element)
+                    }
+                }
+            }
+        }
+        .navigationTitle(title ?? (styleKind?.scopes.first { $0.id == element }?.label ?? element))
+        .navigationBarTitleDisplayMode(.inline)
+        .refreshesOnThemeChange()
+    }
+}
+
 /// One element: a collapsible carrying its style assignment and its own override knobs
 /// (the kind's knob schema plus its slots, so a composite element can re-point a part).
 @available(iOS 16.0, *)
