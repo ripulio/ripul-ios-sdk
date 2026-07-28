@@ -52,6 +52,27 @@ public struct RipulTokenNode: Identifiable {
         }
     }
 
+    /// Every leaf beneath this node, depth-first.
+    public var allLeaves: [Leaf] { leaves + children.flatMap(\.allLeaves) }
+
+    /// COLLAPSE SINGLE-CHILD CHAINS. A node whose only content is one child branch offers
+    /// no choice — tapping it is pure ceremony — so merge the two into one row titled
+    /// "Parent › Child". Standard file-browser behaviour (IntelliJ's "compact middle
+    /// packages"), and it matters here because synthesized slot scopes generate exactly
+    /// this shape: `Add Shift ▸ Earnings panel ▸ Card`, where the middle level has one
+    /// child and no leaves of its own.
+    public var collapsingChains: RipulTokenNode {
+        var node = self
+        while node.leaves.isEmpty, node.children.count == 1 {
+            let only = node.children[0]
+            node = RipulTokenNode(name: "\(node.name) › \(only.name)", path: only.path,
+                                  children: only.children, leaves: only.leaves)
+        }
+        return RipulTokenNode(name: node.name, path: node.path,
+                              children: node.children.map(\.collapsingChains),
+                              leaves: node.leaves)
+    }
+
     private static func insert(_ nodes: inout [RipulTokenNode], path: [String],
                                leaf: Leaf, at prefix: [String]) {
         guard let head = path.first else { return }

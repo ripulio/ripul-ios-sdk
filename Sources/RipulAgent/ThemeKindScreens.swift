@@ -52,13 +52,11 @@ public struct RipulThemeComponentsScreen: View {
         Form {
             ForEach(groups, id: \.name) { group in
                 Section {
+                    // ONE row per kind. This used to be two ("Panel styles" and
+                    // "Panel styles · elements"), which doubled the hub and pushed every
+                    // element a tap further away for no gain — the kind screen shows both.
                     ForEach(group.kinds, id: \.name) { kind in
-                        NavigationLink(kind.label) { RipulStyleLibraryScreen(kind: kind.name) }
-                        if !kind.scopes.isEmpty {
-                            NavigationLink("\(kind.label) · elements") {
-                                RipulThemeScopesScreen(kind: kind.name)
-                            }
-                        }
+                        NavigationLink(kind.label) { RipulStyleKindScreen(kind: kind.name) }
                     }
                 } header: {
                     if !group.name.isEmpty { Text(group.name) }
@@ -68,6 +66,69 @@ public struct RipulThemeComponentsScreen: View {
         .navigationTitle("Components")
         .navigationBarTitleDisplayMode(.inline)
         .refreshesOnThemeChange()
+    }
+}
+
+// MARK: One kind — its style library AND its elements, on one screen
+
+/// Everything for a single kind without further drilling: the named-style library (with
+/// live previews) and the kind's elements (each expanding in place to its assignment and
+/// override knobs).
+///
+/// Elements inline only while there are few enough to scan; past that they move behind a
+/// tree, which is the point at which nesting actually earns its tap.
+@available(iOS 16.0, *)
+@MainActor
+public struct RipulStyleKindScreen: View {
+    let kind: String
+    /// Above this many elements, drilling beats one long scroll.
+    private let inlineElementLimit = 8
+    @State private var themeVersion = 0
+
+    public init(kind: String) { self.kind = kind }
+
+    private var styleKind: RipulStyleKind? {
+        RipulThemeEngine.styleKinds.first { $0.name == kind }
+    }
+    private var elements: [RipulThemeScope] { styleKind?.scopes ?? [] }
+
+    public var body: some View {
+        Form {
+            if styleKind?.supportsNamedStyles == true {
+                Section {
+                    RipulStyleLibraryRows(kind: kind)
+                } header: {
+                    Text("Styles")
+                } footer: {
+                    Text("Shared styles. Assign one to elements below; editing it restyles "
+                         + "every element that uses it.")
+                }
+            }
+            if !elements.isEmpty {
+                Section {
+                    if elements.count <= inlineElementLimit {
+                        // FLAT + INLINE. Every element on one screen, expanding in place —
+                        // no tree, because a tree over a handful of leaves is all ceremony.
+                        ForEach(elements) { RipulScopeContent(kind: kind, scope: $0) }
+                    } else {
+                        NavigationLink("Browse \(elements.count) elements") {
+                            RipulThemeScopesScreen(kind: kind)
+                        }
+                    }
+                } header: {
+                    Text("Elements")
+                } footer: {
+                    Text("Knobs set on an element apply to THAT element only and beat its "
+                         + "assigned style.")
+                }
+            }
+        }
+        .navigationTitle(styleKind?.label ?? kind)
+        .navigationBarTitleDisplayMode(.inline)
+        .id(themeVersion)
+        .onReceive(NotificationCenter.default.publisher(for: .ripulThemeDidChange)) { _ in
+            themeVersion &+= 1
+        }
     }
 }
 
@@ -102,35 +163,7 @@ public struct RipulStyleLibraryScreen: View {
     public var body: some View {
         Form {
             Section {
-                ForEach(RipulThemeEngine.allStyleNames(kind: kind), id: \.self) { name in
-                    let isBuiltIn = RipulThemeEngine.isBuiltInStyle(kind: kind, name: name)
-                    // The link and the preview are SIBLINGS, not nested: a preview inside a
-                    // NavigationLink label inherits the link's tint (and any controls in it
-                    // fight the row's tap). This keeps the name row as the drill-in and the
-                    // preview as inert, honestly-coloured chrome beneath it.
-                    VStack(alignment: .leading, spacing: 8) {
-                        NavigationLink(isBuiltIn ? "\(name) · built-in" : name) {
-                            editor(name: name, isBuiltIn: isBuiltIn)
-                        }
-                        if showsPreviews, let preview = rowPreview(name: name) {
-                            preview
-                                .allowsHitTesting(false)   // a preview, not a second tap target
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                    }
-                }
-                HStack {
-                    TextField("New style name", text: $newStyleName)
-                        .autocorrectionDisabled(true)
-                        .textInputAutocapitalization(.never)
-                    Button("Add") {
-                        let name = newStyleName.trimmingCharacters(in: .whitespacesAndNewlines)
-                        guard !name.isEmpty else { return }
-                        RipulThemeEngine.setNamedStyle(kind: kind, name: name, knobs: [:])
-                        newStyleName = ""
-                    }
-                    .disabled(newStyleName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                }
+                RipulStyleLibraryRows(kind: kind, showsPreviews: showsPreviews)
             } footer: {
                 Text("Shared styles for \(styleKind?.label.lowercased() ?? kind). Assign one to "
                      + "elements; editing it restyles every element that uses it. Editing a "
@@ -142,6 +175,57 @@ public struct RipulStyleLibraryScreen: View {
         .id(themeVersion)
         .onReceive(NotificationCenter.default.publisher(for: .ripulThemeDidChange)) { _ in
             themeVersion &+= 1
+        }
+    }
+
+}
+
+/// The style-library rows on their own — built-ins + user styles, each with a live preview,
+/// plus the add-new field. Shared by the standalone library screen and the kind screen so
+/// the two can never drift.
+@available(iOS 16.0, *)
+@MainActor
+public struct RipulStyleLibraryRows: View {
+    let kind: String
+    let showsPreviews: Bool
+    @State private var newStyleName = ""
+
+    public init(kind: String, showsPreviews: Bool = true) {
+        self.kind = kind; self.showsPreviews = showsPreviews
+    }
+
+    private var styleKind: RipulStyleKind? {
+        RipulThemeEngine.styleKinds.first { $0.name == kind }
+    }
+
+    public var body: some View {
+        ForEach(RipulThemeEngine.allStyleNames(kind: kind), id: \.self) { name in
+            let isBuiltIn = RipulThemeEngine.isBuiltInStyle(kind: kind, name: name)
+            // The link and the preview are SIBLINGS, not nested: a preview inside a
+            // NavigationLink label inherits the link's tint (and any controls in it fight
+            // the row's tap). Name row drills in; preview is inert chrome beneath it.
+            VStack(alignment: .leading, spacing: 8) {
+                NavigationLink(isBuiltIn ? "\(name) · built-in" : name) {
+                    editor(name: name, isBuiltIn: isBuiltIn)
+                }
+                if showsPreviews, let preview = rowPreview(name: name) {
+                    preview
+                        .allowsHitTesting(false)   // a preview, not a second tap target
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+        }
+        HStack {
+            TextField("New style name", text: $newStyleName)
+                .autocorrectionDisabled(true)
+                .textInputAutocapitalization(.never)
+            Button("Add") {
+                let name = newStyleName.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !name.isEmpty else { return }
+                RipulThemeEngine.setNamedStyle(kind: kind, name: name, knobs: [:])
+                newStyleName = ""
+            }
+            .disabled(newStyleName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
     }
 
@@ -203,8 +287,24 @@ public struct RipulThemeScopesScreen: View {
         RipulThemeEngine.styleKinds.first { $0.name == kind }
     }
 
+    /// Above this many leaves a tree earns its taps; below it, nesting is pure ceremony.
+    private let flattenBelow = 12
+
     private var roots: [RipulTokenNode] {
         RipulTokenNode.build((styleKind?.scopes ?? []).map { ($0.path, .scope($0, kind: kind)) })
+            .map(\.collapsingChains)
+    }
+
+    /// Small kinds render FLAT — every element listed by its full label, no drilling. The
+    /// synthesized slot scopes are the motivating case: two leaves behind a three-level
+    /// tree ("Add Shift ▸ Earnings panel ▸ Card") is all ceremony and no choice.
+    private var flatLeaves: [RipulThemeScope]? {
+        guard node == nil else { return nil }
+        let all = roots.flatMap(\.allLeaves).compactMap { leaf -> RipulThemeScope? in
+            if case .scope(let s, _) = leaf { return s }
+            return nil
+        }
+        return all.count <= flattenBelow ? all : nil
     }
 
     private var children: [RipulTokenNode] { node?.children ?? roots }
@@ -218,15 +318,19 @@ public struct RipulThemeScopesScreen: View {
 
     public var body: some View {
         Form {
-            if !children.isEmpty {
-                Section {
-                    ForEach(children) { child in
-                        NavigationLink(child.name) { RipulThemeScopesScreen(kind: kind, node: child) }
+            if let flat = flatLeaves {
+                Section { ForEach(flat) { RipulScopeContent(kind: kind, scope: $0) } }
+            } else {
+                if !children.isEmpty {
+                    Section {
+                        ForEach(children) { child in
+                            NavigationLink(child.name) { RipulThemeScopesScreen(kind: kind, node: child) }
+                        }
                     }
                 }
-            }
-            if !leaves.isEmpty {
-                Section { ForEach(leaves) { RipulScopeContent(kind: kind, scope: $0) } }
+                if !leaves.isEmpty {
+                    Section { ForEach(leaves) { RipulScopeContent(kind: kind, scope: $0) } }
+                }
             }
             if node == nil {
                 Section {

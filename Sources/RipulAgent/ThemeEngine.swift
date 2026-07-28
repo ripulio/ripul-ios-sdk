@@ -271,6 +271,10 @@ public struct RipulStyleKind {
     /// Label for the "no named style assigned" row in pickers ("Default (card)"). The
     /// wording is host vocabulary — what the unassigned tier actually looks like.
     public let defaultStyleLabel: String
+    /// Whether a shared style LIBRARY makes sense for this kind. False for kinds that exist
+    /// only to carry per-element divergence from an app-wide default (per-screen record
+    /// tokens, say) — offering "named styles" there is a dead end, so screens hide it.
+    public let supportsNamedStyles: Bool
     /// The element a style LIBRARY previews against when no specific element is in play
     /// (editing a named style rather than assigning one). First scope by default — for
     /// part kinds that is the first synthesized child scope, which is what a host would
@@ -279,6 +283,7 @@ public struct RipulStyleKind {
 
     public init(name: String, label: String? = nil, path: [String] = [],
                 defaultStyleLabel: String = "Default",
+                supportsNamedStyles: Bool = true,
                 scopes: [RipulThemeScope], knobs: [RipulStyleKnob],
                 slots: [RipulStyleSlot] = [],
                 builtIns: [String: [String: RipulKnob]] = [:],
@@ -288,6 +293,7 @@ public struct RipulStyleKind {
         self.label = label ?? (name.prefix(1).uppercased() + name.dropFirst())
         self.path = path
         self.defaultStyleLabel = defaultStyleLabel
+        self.supportsNamedStyles = supportsNamedStyles
         self.scopes = scopes; self.knobs = knobs; self.slots = slots
         self.builtIns = builtIns; self.defaultTier = defaultTier; self.persistedKeys = persistedKeys
     }
@@ -398,6 +404,7 @@ public enum RipulThemeEngine {
             guard kept.count != kind.slots.count else { return kind }
             return RipulStyleKind(name: kind.name, label: kind.label, path: kind.path,
                                   defaultStyleLabel: kind.defaultStyleLabel,
+                                  supportsNamedStyles: kind.supportsNamedStyles,
                                   scopes: kind.scopes, knobs: kind.knobs,
                                   slots: kept, builtIns: kind.builtIns,
                                   defaultTier: kind.defaultTier, persistedKeys: kind.persistedKeys)
@@ -434,6 +441,7 @@ public enum RipulThemeEngine {
             guard let add = extra[kind.name], !add.isEmpty else { return kind }
             return RipulStyleKind(name: kind.name, label: kind.label, path: kind.path,
                                   defaultStyleLabel: kind.defaultStyleLabel,
+                                  supportsNamedStyles: kind.supportsNamedStyles,
                                   scopes: kind.scopes + add, knobs: kind.knobs,
                                   slots: kind.slots, builtIns: kind.builtIns,
                                   defaultTier: kind.defaultTier, persistedKeys: kind.persistedKeys)
