@@ -87,7 +87,7 @@ struct RipulToolCollectionEditorView: View {
             Button("Delete", role: .destructive) { Task { await performDelete() } }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Its \(matcher.matchCount) tools return to the agent's flat list. They are not deleted.")
+            Text("Its \(matcher.memberCount) members return to the agent's flat list. The tools themselves are not deleted.")
         }
     }
 
@@ -196,19 +196,30 @@ struct RipulToolCollectionEditorView: View {
 
     private var previewSection: some View {
         Section {
-            if matcher.matchCount == 0 {
-                Text("Nothing matches yet — this collection would not be shown to the agent.")
+            if matcher.memberCount == 0 {
+                Text("No members yet — this collection would not be shown to the agent.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
-            } else {
-                ForEach(matcher.allMatches, id: \.self) { toolName in
-                    HStack {
-                        Text(toolName).font(.system(.footnote, design: .monospaced))
-                        Spacer()
-                        if matcher.patternMatches.contains(toolName) {
-                            Text("pattern").font(.caption2).foregroundStyle(.secondary)
-                        }
+            }
+            ForEach(matcher.presentMatches, id: \.self) { toolName in
+                HStack {
+                    Text(toolName).font(.system(.footnote, design: .monospaced))
+                    Spacer()
+                    if matcher.patternMatches.contains(toolName) {
+                        Text("pattern").font(.caption2).foregroundStyle(.secondary)
                     }
+                }
+            }
+            // Members this build doesn't register — a web app tool, or one from
+            // another device. Shown greyed rather than hidden, so a collection
+            // curated elsewhere doesn't look empty here.
+            ForEach(matcher.absentMembers, id: \.self) { member in
+                HStack {
+                    Text(member)
+                        .font(.system(.footnote, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Text("not in this app").font(.caption2).foregroundStyle(.secondary)
                 }
             }
             ForEach(matcher.invalidPatterns, id: \.pattern) { invalid in
@@ -217,9 +228,9 @@ struct RipulToolCollectionEditorView: View {
                     .foregroundStyle(.orange)
             }
         } header: {
-            Text("Matches \(matcher.matchCount) of \(tools.count) registered tools")
+            Text("\(matcher.memberCount) members · \(matcher.presentCount) in this app")
         } footer: {
-            Text("Live, against the tools this build registered.")
+            Text("Collections are account-wide. Members this build doesn't register are still part of the collection — they belong to the web app or another device.")
         }
     }
 
@@ -236,7 +247,7 @@ struct RipulToolCollectionEditorView: View {
             explicitTools: [],
             toolPatterns: [pattern],
             toolNames: toolNames
-        ).matchCount
+        ).presentCount
     }
 
     private func addPattern() {

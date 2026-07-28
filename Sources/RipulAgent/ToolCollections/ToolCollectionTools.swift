@@ -79,8 +79,13 @@ public struct RipulListToolCollectionsTool: NativeTool {
                     "mode": collection.mode,
                     "toolPatterns": collection.toolPatterns,
                     "explicitTools": collection.explicitTools,
-                    "matchedTools": matcher.allMatches,
-                    "matchedCount": matcher.matchCount,
+                    // Split deliberately: a collection curating web app tools is
+                    // fully populated yet matches nothing here, and an agent
+                    // reading one number would call it empty.
+                    "toolsInThisApp": matcher.presentMatches,
+                    "toolsInThisAppCount": matcher.presentCount,
+                    "membersNotInThisApp": matcher.absentMembers,
+                    "memberCount": matcher.memberCount,
                 ]
             },
             "registeredToolCount": toolNames.count,

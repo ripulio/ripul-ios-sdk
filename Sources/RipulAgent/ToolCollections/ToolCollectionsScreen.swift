@@ -100,7 +100,7 @@ public final class RipulToolCollectionsModel: ObservableObject {
                 toolPatterns: collection.toolPatterns,
                 toolNames: names
             )
-            grouped.formUnion(matcher.allMatches)
+            grouped.formUnion(matcher.presentMatches)
         }
         return tools.filter { !grouped.contains($0.name) }
     }
@@ -215,8 +215,12 @@ public struct RipulToolCollectionsScreen: View {
         }
     }
 
+    /// Curated size first, local presence second. A collection of web app
+    /// tools is fully populated and still matches nothing in this build —
+    /// reporting only the local count would render it as empty.
     private func summary(matcher: RipulToolCollectionMatcher, collection: RipulToolCollection) -> String {
-        var parts = ["\(matcher.matchCount) of \(tools.count) tools"]
+        var parts = ["\(matcher.memberCount) member\(matcher.memberCount == 1 ? "" : "s")"]
+        parts.append("\(matcher.presentCount) in this app")
         if !collection.toolPatterns.isEmpty {
             parts.append("\(collection.toolPatterns.count) pattern\(collection.toolPatterns.count == 1 ? "" : "s")")
         }
