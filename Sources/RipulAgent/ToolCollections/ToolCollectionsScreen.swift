@@ -1,5 +1,6 @@
 #if os(iOS)
 import SwiftUI
+import UniformTypeIdentifiers
 
 // ---------------------------------------------------------------------------
 // In-app editor for progressive-discovery tool collections.
@@ -359,15 +360,39 @@ public struct RipulToolCollectionsScreen: View {
 
     // MARK: - Collection section
 
+    /// A collection renders as a Section whose FIRST ROW is its header.
+    ///
+    /// The header is deliberately a row rather than SwiftUI's `header:` slot: a
+    /// `Section` is not a hit-testable view — `List` interprets it as a
+    /// container — so a drop modifier attached to a Section or its header never
+    /// participates in drag hit-testing. Drags lifted fine and nothing ever
+    /// accepted them, with no highlight, because the destination was never live.
+    /// Drop targets must be real rows.
     @ViewBuilder
     private func collectionSection(_ collection: RipulToolCollection) -> some View {
         let m = matcher(for: collection)
         let isOpen = expanded.contains(collection.id)
 
         Section {
+            headerRow(collection, matcher: m, isOpen: isOpen)
+                .listRowBackground(dropHighlight(for: collection.id))
+                .onDrop(
+                    of: [.text],
+                    isTargeted: targetBinding(for: collection.id)
+                ) { providers in
+                    acceptDrop(providers, into: collection.id)
+                }
+
             if isOpen {
                 ForEach(m.explicitMatches, id: \.self) { name in
                     memberRow(name, in: collection, kind: .picked)
+                        .listRowBackground(dropHighlight(for: collection.id))
+                        .onDrop(
+                            of: [.text],
+                            isTargeted: targetBinding(for: collection.id)
+                        ) { providers in
+                            acceptDrop(providers, into: collection.id)
+                        }
                 }
                 ForEach(m.patternMatches, id: \.self) { name in
                     memberRow(name, in: collection, kind: .pattern)
@@ -379,6 +404,13 @@ public struct RipulToolCollectionsScreen: View {
                     Text("Empty — drag a tool here, or add a name pattern.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
+                        .listRowBackground(dropHighlight(for: collection.id))
+                        .onDrop(
+                            of: [.text],
+                            isTargeted: targetBinding(for: collection.id)
+                        ) { providers in
+                            acceptDrop(providers, into: collection.id)
+                        }
                 }
                 Button {
                     editing = collection
@@ -387,34 +419,23 @@ public struct RipulToolCollectionsScreen: View {
                         .font(.footnote)
                 }
             }
-        } header: {
-            header(collection, matcher: m, isOpen: isOpen)
-        }
-        // The header alone is a thin target, and List section headers pin
-        // while scrolling, which moves the target mid-drag. Accepting drops on
-        // the whole section means anywhere in an expanded group works.
-        .dropDestination(for: String.self) { payloads, _ in
-            handleDrop(payloads, into: collection.id)
-        } isTargeted: { targeted in
-            dropTarget = targeted ? collection.id : (dropTarget == collection.id ? nil : dropTarget)
         }
     }
 
-    private func header(
+    private func headerRow(
         _ collection: RipulToolCollection,
         matcher m: RipulToolCollectionMatcher,
         isOpen: Bool
     ) -> some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 8) {
             Image(systemName: "chevron.right")
-                .font(.caption2)
+                .font(.caption)
                 .rotationEffect(.degrees(isOpen ? 90 : 0))
                 .foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
                     Text(collection.displayLabel)
                         .font(.subheadline.weight(.semibold))
-                        .textCase(nil)
                     if collection.isIsolate {
                         Text("isolate")
                             .font(.caption2)
@@ -423,19 +444,12 @@ public struct RipulToolCollectionsScreen: View {
                     }
                 }
                 Text(summary(matcher: m, collection: collection))
-                    .font(.caption2)
+                    .font(.caption)
                     .foregroundStyle(.secondary)
-                    .textCase(nil)
             }
             Spacer()
         }
-        .padding(.vertical, 4)
         .contentShape(Rectangle())
-        .background(
-            dropTarget == collection.id
-                ? Color.accentColor.opacity(0.15)
-                : Color.clear
-        )
         .onTapGesture {
             withAnimation(.easeInOut(duration: 0.18)) {
                 if isOpen { expanded.remove(collection.id) } else { expanded.insert(collection.id) }
@@ -470,11 +484,19 @@ public struct RipulToolCollectionsScreen: View {
                 Text(originLabel(for: name)).font(.caption2).foregroundStyle(.secondary)
             }
         }
+        .contentShape(Rectangle())
 
         if kind == .picked {
-            row.draggable(
-                RipulToolDragItem(toolName: name, sourceCollectionId: collection.id).encoded
-            )
+            // `onDrag` rather than `draggable`, to match `onDrop` on the
+            // receiving side. Mixing the Transferable API with the
+            // NSItemProvider one relies on a bridge that is one more thing to
+            // be wrong when a drop silently fails.
+            row.onDrag {
+                NSItemProvider(
+                    object: RipulToolDragItem(toolName: name, sourceCollectionId: collection.id)
+                        .encoded as NSString
+                )
+            }
         } else {
             row
         }
@@ -510,6 +532,23 @@ public struct RipulToolCollectionsScreen: View {
     private var ungroupedSection: some View {
         let ungrouped = model.ungroupedTools(from: tools)
         Section {
+            // Header as a row, for the same hit-testing reason as above — and
+            // it doubles as the "drag here to remove" target when the list is
+            // empty and there are no tool rows to aim at.
+            HStack(spacing: 8) {
+                Image(systemName: "tray")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text("Ungrouped in \(catalog.name) (\(ungrouped.count))")
+                    .font(.subheadline.weight(.semibold))
+                Spacer()
+            }
+            .contentShape(Rectangle())
+            .listRowBackground(dropHighlight(for: ungroupedDropId))
+            .onDrop(of: [.text], isTargeted: targetBinding(for: ungroupedDropId)) { providers in
+                acceptDrop(providers, into: nil)
+            }
+
             if ungrouped.isEmpty {
                 Text("Every tool in \(catalog.name) belongs to a collection.")
                     .font(.footnote)
@@ -529,26 +568,22 @@ public struct RipulToolCollectionsScreen: View {
                                 .lineLimit(2)
                         }
                     }
+                    Spacer()
                 }
-                .draggable(
-                    RipulToolDragItem(toolName: tool.name, sourceCollectionId: nil).encoded
-                )
-            }
-        } header: {
-            HStack {
-                Text("Ungrouped in \(catalog.name) (\(ungrouped.count))").textCase(nil)
-                Spacer()
-            }
-            .padding(.vertical, 4)
-            .contentShape(Rectangle())
-            .background(dropTarget == ungroupedDropId ? Color.accentColor.opacity(0.15) : Color.clear)
-            .dropDestination(for: String.self) { payloads, _ in
-                handleDrop(payloads, into: nil)
-            } isTargeted: { targeted in
-                dropTarget = targeted ? ungroupedDropId : (dropTarget == ungroupedDropId ? nil : dropTarget)
+                .contentShape(Rectangle())
+                .onDrag {
+                    NSItemProvider(
+                        object: RipulToolDragItem(toolName: tool.name, sourceCollectionId: nil)
+                            .encoded as NSString
+                    )
+                }
+                .listRowBackground(dropHighlight(for: ungroupedDropId))
+                .onDrop(of: [.text], isTargeted: targetBinding(for: ungroupedDropId)) { providers in
+                    acceptDrop(providers, into: nil)
+                }
             }
         } footer: {
-            Text("Passed to that agent individually, costing tokens on every turn. Drag one onto a collection above to group it.")
+            Text("Passed to that agent individually, costing tokens on every turn. Press and hold a tool, then drag it onto a collection above.")
         }
     }
 
@@ -588,19 +623,50 @@ public struct RipulToolCollectionsScreen: View {
 
     // MARK: - Drop handling
 
-    /// Returns true only when at least one payload was ours — an unrecognised
-    /// drop (text from another app) is rejected rather than parsed.
-    private func handleDrop(_ payloads: [String], into targetId: String?) -> Bool {
-        let items = payloads.compactMap(RipulToolDragItem.decode)
-        guard !items.isEmpty else { return false }
-        dropTarget = nil
-        Task {
-            for item in items {
-                await model.move(item, to: targetId)
+    /// Tint for a row that would accept the tool being dragged.
+    /// `listRowBackground` rather than `.background`, because a plain
+    /// background sits inside the row's own content and reads as a stray
+    /// rectangle instead of the row lighting up.
+    private func dropHighlight(for id: String) -> Color? {
+        dropTarget == id ? Color.accentColor.opacity(0.18) : nil
+    }
+
+    /// `onDrop` reports hover via a Bound Bool per row. Several rows share one
+    /// target id (a collection's header and each of its members), so entering
+    /// any of them lights the whole group.
+    private func targetBinding(for id: String) -> Binding<Bool> {
+        Binding(
+            get: { dropTarget == id },
+            set: { isOver in
+                if isOver {
+                    dropTarget = id
+                } else if dropTarget == id {
+                    dropTarget = nil
+                }
             }
-            // Reveal the destination so the moved tool is visible where it landed.
-            if let targetId {
-                withAnimation { _ = expanded.insert(targetId) }
+        )
+    }
+
+    /// Accept a dropped payload. Returns false for anything that isn't ours, so
+    /// text dragged in from another app is refused rather than parsed into a
+    /// nonsense edit.
+    ///
+    /// Uses `onDrop`/`NSItemProvider` rather than `dropDestination`: inside a
+    /// `List`, `onDrop` on a row is the path that reliably receives drops.
+    private func acceptDrop(_ providers: [NSItemProvider], into targetId: String?) -> Bool {
+        guard let provider = providers.first(where: { $0.canLoadObject(ofClass: NSString.self) }) else {
+            return false
+        }
+        provider.loadObject(ofClass: NSString.self) { object, _ in
+            guard let raw = object as? String,
+                  let item = RipulToolDragItem.decode(raw) else { return }
+            Task { @MainActor in
+                dropTarget = nil
+                await model.move(item, to: targetId)
+                // Reveal the destination so the moved tool is visible where it landed.
+                if let targetId {
+                    withAnimation { _ = expanded.insert(targetId) }
+                }
             }
         }
         return true
