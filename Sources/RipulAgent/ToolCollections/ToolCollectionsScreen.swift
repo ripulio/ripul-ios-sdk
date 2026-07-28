@@ -376,39 +376,40 @@ public struct RipulToolCollectionsScreen: View {
         Section {
             headerRow(collection, matcher: m, isOpen: isOpen)
                 .listRowBackground(dropHighlight(for: collection.id))
-                .onDrop(
-                    of: [.text],
-                    isTargeted: targetBinding(for: collection.id)
-                ) { providers in
+                .onDrop(of: dropTypes, isTargeted: targetBinding(for: collection.id)) { providers in
                     acceptDrop(providers, into: collection.id)
                 }
 
             if isOpen {
+                // Picked rows are drag SOURCES and deliberately not drop
+                // targets. A row that is both confuses the drag session — the
+                // failing case was a drag started from one of these — so
+                // source and target are kept strictly disjoint. The header
+                // above is the target for this collection.
                 ForEach(m.explicitMatches, id: \.self) { name in
                     memberRow(name, in: collection, kind: .picked)
+                }
+                // These carry no drag, so they can safely widen the target.
+                ForEach(m.patternMatches, id: \.self) { name in
+                    memberRow(name, in: collection, kind: .pattern)
                         .listRowBackground(dropHighlight(for: collection.id))
-                        .onDrop(
-                            of: [.text],
-                            isTargeted: targetBinding(for: collection.id)
-                        ) { providers in
+                        .onDrop(of: dropTypes, isTargeted: targetBinding(for: collection.id)) { providers in
                             acceptDrop(providers, into: collection.id)
                         }
                 }
-                ForEach(m.patternMatches, id: \.self) { name in
-                    memberRow(name, in: collection, kind: .pattern)
-                }
                 ForEach(m.absentMembers, id: \.self) { name in
                     memberRow(name, in: collection, kind: .elsewhere)
+                        .listRowBackground(dropHighlight(for: collection.id))
+                        .onDrop(of: dropTypes, isTargeted: targetBinding(for: collection.id)) { providers in
+                            acceptDrop(providers, into: collection.id)
+                        }
                 }
                 if m.memberCount == 0 {
                     Text("Empty — drag a tool here, or add a name pattern.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                         .listRowBackground(dropHighlight(for: collection.id))
-                        .onDrop(
-                            of: [.text],
-                            isTargeted: targetBinding(for: collection.id)
-                        ) { providers in
+                        .onDrop(of: dropTypes, isTargeted: targetBinding(for: collection.id)) { providers in
                             acceptDrop(providers, into: collection.id)
                         }
                 }
@@ -492,7 +493,8 @@ public struct RipulToolCollectionsScreen: View {
             // NSItemProvider one relies on a bridge that is one more thing to
             // be wrong when a drop silently fails.
             row.onDrag {
-                NSItemProvider(
+                RipulLog.log("[toolDrag] start tool=\(name) source=\(collection.id)")
+                return NSItemProvider(
                     object: RipulToolDragItem(toolName: name, sourceCollectionId: collection.id)
                         .encoded as NSString
                 )
@@ -545,7 +547,7 @@ public struct RipulToolCollectionsScreen: View {
             }
             .contentShape(Rectangle())
             .listRowBackground(dropHighlight(for: ungroupedDropId))
-            .onDrop(of: [.text], isTargeted: targetBinding(for: ungroupedDropId)) { providers in
+            .onDrop(of: dropTypes, isTargeted: targetBinding(for: ungroupedDropId)) { providers in
                 acceptDrop(providers, into: nil)
             }
 
@@ -572,7 +574,8 @@ public struct RipulToolCollectionsScreen: View {
                 }
                 .contentShape(Rectangle())
                 .onDrag {
-                    NSItemProvider(
+                    RipulLog.log("[toolDrag] start tool=\(tool.name) source=ungrouped")
+                    return NSItemProvider(
                         object: RipulToolDragItem(toolName: tool.name, sourceCollectionId: nil)
                             .encoded as NSString
                     )
@@ -623,6 +626,14 @@ public struct RipulToolCollectionsScreen: View {
 
     // MARK: - Drop handling
 
+    /// Types accepted on drop.
+    ///
+    /// `NSItemProvider(object: NSString)` registers `public.utf8-plain-text`.
+    /// `onDrop(of:)` has matched by exact identifier rather than by conformance
+    /// in the past, so listing only `.text` risks a destination that never
+    /// activates — indistinguishable from one that isn't wired up at all.
+    private var dropTypes: [UTType] { [.utf8PlainText, .plainText, .text] }
+
     /// Tint for a row that would accept the tool being dragged.
     /// `listRowBackground` rather than `.background`, because a plain
     /// background sits inside the row's own content and reads as a stray
@@ -639,6 +650,7 @@ public struct RipulToolCollectionsScreen: View {
             get: { dropTarget == id },
             set: { isOver in
                 if isOver {
+                    if dropTarget != id { RipulLog.log("[toolDrag] hover \(id)") }
                     dropTarget = id
                 } else if dropTarget == id {
                     dropTarget = nil
@@ -654,15 +666,35 @@ public struct RipulToolCollectionsScreen: View {
     /// Uses `onDrop`/`NSItemProvider` rather than `dropDestination`: inside a
     /// `List`, `onDrop` on a row is the path that reliably receives drops.
     private func acceptDrop(_ providers: [NSItemProvider], into targetId: String?) -> Bool {
+        // Instrumented end to end: this interaction cannot be exercised by a
+        // build, and two rounds of reasoning about it were wrong. The log is
+        // readable remotely via `device_console_logs`, so a single drag on
+        // device says exactly which stage fails.
+        let types = providers.flatMap(\.registeredTypeIdentifiers).joined(separator: ",")
+        RipulLog.log("[toolDrag] drop into=\(targetId ?? "ungrouped") providers=\(providers.count) types=[\(types)]")
+
         guard let provider = providers.first(where: { $0.canLoadObject(ofClass: NSString.self) }) else {
+            RipulLog.error("[toolDrag] no provider can load NSString — refusing drop")
             return false
         }
-        provider.loadObject(ofClass: NSString.self) { object, _ in
-            guard let raw = object as? String,
-                  let item = RipulToolDragItem.decode(raw) else { return }
+        provider.loadObject(ofClass: NSString.self) { object, error in
+            if let error {
+                RipulLog.error("[toolDrag] loadObject failed: \(error.localizedDescription)")
+                return
+            }
+            guard let raw = object as? String else {
+                RipulLog.error("[toolDrag] loaded object was not a String")
+                return
+            }
+            guard let item = RipulToolDragItem.decode(raw) else {
+                RipulLog.error("[toolDrag] payload not ours: \(raw.prefix(120))")
+                return
+            }
+            RipulLog.log("[toolDrag] decoded tool=\(item.toolName) source=\(item.sourceCollectionId ?? "ungrouped")")
             Task { @MainActor in
                 dropTarget = nil
                 await model.move(item, to: targetId)
+                RipulLog.log("[toolDrag] move done tool=\(item.toolName) -> \(targetId ?? "ungrouped") error=\(model.errorMessage ?? "none")")
                 // Reveal the destination so the moved tool is visible where it landed.
                 if let targetId {
                     withAnimation { _ = expanded.insert(targetId) }
