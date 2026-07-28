@@ -167,7 +167,56 @@ public struct RipulStyleKindScreen: View {
         RipulThemeEngine.styleKinds.filter { $0.slots.contains { $0.kind == kind } }
     }
 
+    /// A SINGLETON kind: one element, no shared styles — i.e. app-wide settings rather
+    /// than a library of looks (masthead metrics, hub-row sizes, typography). There is no
+    /// choice to present, so the screen IS the knob list: no library section, no element
+    /// list, no collapsible to open first.
+    private var singletonElement: RipulThemeScope? {
+        guard let kind = styleKind, !kind.supportsNamedStyles, kind.scopes.count == 1 else { return nil }
+        return kind.scopes[0]
+    }
+
     public var body: some View {
+        if let element = singletonElement {
+            singletonBody(element)
+        } else {
+            libraryBody
+        }
+    }
+
+    /// The whole screen for a singleton: its knobs, and a reset when anything is set.
+    @ViewBuilder
+    private func singletonBody(_ element: RipulThemeScope) -> some View {
+        Form {
+            Section {
+                RipulStyleKnobRows(
+                    knobs: styleKind?.knobs ?? [],
+                    slots: styleKind?.slots ?? [],
+                    working: RipulThemeEngine.current.styleOverrides[kind]?[element.id] ?? [:],
+                    onChange: { knobs in
+                        RipulThemeEngine.setOverrides(kind: kind, element: element.id, knobs: knobs)
+                    })
+            } footer: {
+                Text("Applies everywhere this is used. Each value inherits the bundled theme "
+                     + "until you set it.")
+            }
+            if RipulThemeEngine.current.styleOverrides[kind]?[element.id] != nil {
+                Section {
+                    Button("Reset to bundled", role: .destructive) {
+                        RipulThemeEngine.clearOverrides(kind: kind, element: element.id)
+                    }
+                }
+            }
+        }
+        .navigationTitle(styleKind?.label ?? kind)
+        .navigationBarTitleDisplayMode(.inline)
+        .id(themeVersion)
+        .onReceive(NotificationCenter.default.publisher(for: .ripulThemeDidChange)) { _ in
+            themeVersion &+= 1
+        }
+    }
+
+    private var libraryBody: some View {
         Form {
             // Make the COMPOSITION legible from here too. Listing kinds as peers in the hub
             // reads as though a card contains a panel rather than the reverse, so each side
