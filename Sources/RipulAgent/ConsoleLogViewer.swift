@@ -520,18 +520,10 @@ private struct NetworkTabView: View {
 private struct ToolsTabView: View {
     @ObservedObject var bridge: AgentBridge
     @Environment(\.dismiss) private var dismiss
-    /// Non-nil only when presented from a signed-in surface — see
-    /// `RipulToolCollectionsAccess`.
-    @Environment(\.ripulToolCollectionsAccess) private var toolCollectionsAccess
-
     @State private var scrollHudOn = false
     @State private var elementInspectorOn = false
     @State private var wsDebugOn = false
     @State private var perfHudOn = false
-    /// Phase-2 absorption: pending confirmation for the testing toggle, and
-    /// the colliding names when the toggle was refused.
-    @State private var confirmAbsorption = false
-    @State private var absorptionCollisions: [String]?
     // Native, reactive gate for the chat "Rebuild from JSONL" menu items —
     // flipping this updates the native menus live (no web round-trip). Also
     // mirrored to the web `enableChatRebuild` setting for the web header menu.
@@ -558,73 +550,8 @@ private struct ToolsTabView: View {
                 #endif
             }
 
-            #if os(iOS)
-            // Writing collections needs a Clerk token, so this appears only
-            // when the presenting surface has one (the console does; the bare
-            // `.ripulDevTools()` modifier does not).
-            if let toolCollectionsAccess {
-                Section {
-                    NavigationLink {
-                        // Host catalogs first (its end-user surface is the one
-                        // usually worth grouping, and the first is selected
-                        // initially), then the developer catalog the SDK
-                        // synthesises from this console's own bridge.
-                        RipulToolCollectionsScreen(
-                            catalogs: toolCollectionsAccess.hostCatalogs
-                                + [.developer(bridge.registeredToolSummaries)],
-                            tokenProvider: toolCollectionsAccess.tokenProvider
-                        )
-                    } label: {
-                        Label("Tool Collections", systemImage: "folder.badge.gearshape")
-                    }
-                    if bridge.audience == .developer {
-                        Toggle(isOn: Binding(
-                            get: { bridge.isEndUserTestingEnabled },
-                            set: { on in
-                                if on {
-                                    confirmAbsorption = true
-                                } else {
-                                    bridge.setEndUserTesting(false)
-                                }
-                            }
-                        )) {
-                            Label("Include end-user tools (testing)", systemImage: "person.badge.key")
-                        }
-                    }
-                } header: {
-                    Text("Agent")
-                } footer: {
-                    Text("Group tools so an agent sees one entry it expands on demand, instead of every tool on every turn. Choose which tool surface you are organising on the next screen. The testing toggle lends this dev agent the app's end-user tools for this session only.")
-                }
-                .confirmationDialog(
-                    "Include end-user tools?",
-                    isPresented: $confirmAbsorption,
-                    titleVisibility: .visible
-                ) {
-                    Button("Include for this session", role: .destructive) {
-                        if case .blocked(let names) = bridge.setEndUserTesting(true) {
-                            absorptionCollisions = names
-                        }
-                    }
-                    Button("Cancel", role: .cancel) {}
-                } message: {
-                    // Side-effect honesty (phase 2 §4): never masquerade as a sandbox.
-                    Text("These tools act on this device's real data — pickers present real UI, create/update tools write real records. The setting resets when this console session ends.")
-                }
-                .alert(
-                    "Name collision",
-                    isPresented: Binding(
-                        get: { absorptionCollisions != nil },
-                        set: { if !$0 { absorptionCollisions = nil } }
-                    )
-                ) {
-                    Button("OK", role: .cancel) { absorptionCollisions = nil }
-                } message: {
-                    Text("A developer tool and an end-user tool share a name, so the sets cannot be merged: \((absorptionCollisions ?? []).joined(separator: ", "))")
-                }
-            }
-            #endif
-
+            // Solution management (collections, contexts, testing mode) moved to
+            // the agent screen's "Solution management" disclosure after Folders.
             Section {
                 Toggle(isOn: webHudBinding($scrollHudOn, key: "enableScrollHud")) {
                     Label("Scroll HUD", systemImage: "scroll")

@@ -30,6 +30,7 @@ public struct RipulSessionsView: View {
     private let allowRipulAgents: Bool
     private let invitesSection: (() -> AnyView)?
     private let foldersSection: (() -> AnyView)?
+    private let solutionManagement: RipulSolutionManagement?
     private let emptyStateOverride: (() -> AnyView)?
     private let chooseMode: RipulChooseMode?
     private let showsTitleLozenge: Bool
@@ -53,6 +54,7 @@ public struct RipulSessionsView: View {
         allowRipulAgents: Bool = false,
         invitesSection: (() -> AnyView)? = nil,
         foldersSection: (() -> AnyView)? = nil,
+        solutionManagement: RipulSolutionManagement? = nil,
         emptyStateOverride: (() -> AnyView)? = nil,
         model: RipulSessionListModel? = nil,
         chooseMode: RipulChooseMode? = nil,
@@ -67,6 +69,7 @@ public struct RipulSessionsView: View {
         self.allowRipulAgents = allowRipulAgents
         self.invitesSection = invitesSection
         self.foldersSection = foldersSection
+        self.solutionManagement = solutionManagement
         self.emptyStateOverride = emptyStateOverride
         self.chooseMode = chooseMode
         self.showsTitleLozenge = showsTitleLozenge
@@ -146,6 +149,7 @@ public struct RipulSessionsView: View {
             } : nil,
             invitesSection: invitesSection,
             foldersSection: foldersSection,
+            solutionManagement: solutionManagement,
             emptyStateOverride: emptyStateOverride,
             searchText: $searchText,
             renamingSession: $renamingSession,

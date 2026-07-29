@@ -40,14 +40,6 @@ public struct RipulAgentConsole: View {
     /// `.ripulShowDevTools` posts.
     @State private var showDevTools = false
 
-    /// Tool surfaces the host owns, for the collections editor to organise —
-    /// the registry's editor projection (endUser + named audiences). An empty
-    /// audience yields no catalog rather than an empty one — a picker offering
-    /// a surface with nothing in it is worse than not offering it.
-    private var hostToolCatalogs: [RipulToolCatalog] {
-        configuration.registry.editorCatalogs()
-    }
-
     private let slots: RipulAgentScreenSlots
 
     /// - Parameter bridge: optional externally-owned bridge, which MUST be a
@@ -169,21 +161,6 @@ public struct RipulAgentConsole: View {
                             Button("Done") { showDevTools = false }
                         }
                     }
-                    // Unlocks the Tool Collections entry in the DevTools Tools
-                    // tab. Injected here rather than inside the viewer because
-                    // this is the surface that guarantees a signed-in developer.
-                    .environment(
-                        \.ripulToolCollectionsAccess,
-                        RipulToolCollectionsAccess(
-                            tokenProvider: { authStore.token },
-                            // The host's own surfaces. `endUserTools` is
-                            // declared, NOT registered — those tools belong to
-                            // the app's agent panel on a different bridge, and
-                            // registering them here would hand end-user
-                            // capabilities to the dev agent.
-                            hostCatalogs: hostToolCatalogs
-                        )
-                    )
             }
         }
         .animation(.easeInOut(duration: 0.25), value: authStore.isSignedIn)

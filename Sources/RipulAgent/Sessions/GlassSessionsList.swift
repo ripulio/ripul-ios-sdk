@@ -92,6 +92,10 @@ public struct GlassSessionsList: View {
     var invitesSection: (() -> AnyView)? = nil
     /// Optional folders (file browser) section, rendered where FolderTreeSection was.
     var foldersSection: (() -> AnyView)? = nil
+    /// Developer's solution-shaping controls (collections, contexts, testing
+    /// mode), rendered as a disclosure directly after Folders. Nil on surfaces
+    /// that shouldn't manage anything.
+    var solutionManagement: RipulSolutionManagement? = nil
     /// Optional empty-state override, rendered instead of the built-in empty text.
     var emptyStateOverride: (() -> AnyView)? = nil
     /// Optional universal-link opener (was DeepLinkHandler.shared).
@@ -161,6 +165,7 @@ public struct GlassSessionsList: View {
         onExecuteAction: ((RemoteMachine, RemoteActionDescriptor, [String: Any]) async -> [String: Any])? = nil,
         invitesSection: (() -> AnyView)? = nil,
         foldersSection: (() -> AnyView)? = nil,
+        solutionManagement: RipulSolutionManagement? = nil,
         emptyStateOverride: (() -> AnyView)? = nil,
         onOpenUniversalLink: ((URL) -> Void)? = nil,
         searchText: Binding<String>,
@@ -201,6 +206,7 @@ public struct GlassSessionsList: View {
         self.onExecuteAction = onExecuteAction
         self.invitesSection = invitesSection
         self.foldersSection = foldersSection
+        self.solutionManagement = solutionManagement
         self.emptyStateOverride = emptyStateOverride
         self.onOpenUniversalLink = onOpenUniversalLink
         self._searchText = searchText
@@ -852,6 +858,15 @@ public struct GlassSessionsList: View {
                     sessionsPanelSection
                         .frame(maxHeight: .infinity, alignment: .top)
                     foldersPanelSection
+
+                    // Developer's solution-shaping controls, after Folders.
+                    #if os(iOS)
+                    if let solutionManagement {
+                        if #available(iOS 16.0, *) {
+                            SolutionManagementSection(management: solutionManagement, bridge: bridge)
+                        }
+                    }
+                    #endif
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 8)

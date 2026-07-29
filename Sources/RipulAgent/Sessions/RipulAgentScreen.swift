@@ -260,6 +260,11 @@ public struct RipulAgentScreen: View {
             allowRipulAgents: configuration.allowRipulAgents,
             invitesSection: configuration.invitesSection,
             foldersSection: configuration.foldersSection,
+            solutionManagement: RipulSolutionManagement(
+                registry: configuration.registry,
+                baseURL: configuration.baseURL,
+                tokenProvider: tokenProvider
+            ),
             emptyStateOverride: configuration.emptyStateOverride,
             model: model,
             chooseMode: slots.chooseMode,
