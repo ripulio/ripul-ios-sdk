@@ -59,7 +59,6 @@ private struct ScrollToBottomOverlay: View {
 @MainActor
 public struct AgentView<TopBar: View>: View {
     public let configuration: AgentConfiguration
-    public var tools: [NativeTool] = []
     public weak var searchClickDelegate: SearchClickDelegate?
     public weak var linkOpenDelegate: LinkOpenDelegate?
     public var onMinimize: (() -> Void)?
@@ -92,21 +91,22 @@ public struct AgentView<TopBar: View>: View {
     #endif
 
     /// Creates an AgentView that manages its own bridge internally.
+    /// - Parameter registry: the host's tool registry; the view's `.endUser`
+    ///   bridge exposes its endUser-tagged entries. Omit for a toolless view.
     public init(
         configuration: AgentConfiguration,
-        tools: [NativeTool] = [],
+        registry: RipulToolRegistry? = nil,
         searchClickDelegate: SearchClickDelegate? = nil,
         linkOpenDelegate: LinkOpenDelegate? = nil,
         onMinimize: (() -> Void)? = nil,
         @ViewBuilder topBar: @escaping (AgentBridge) -> TopBar
     ) {
         self.configuration = configuration
-        self.tools = tools
         self.searchClickDelegate = searchClickDelegate
         self.linkOpenDelegate = linkOpenDelegate
         self.onMinimize = onMinimize
         self.topBar = topBar
-        self._bridge = StateObject(wrappedValue: AgentBridge())
+        self._bridge = StateObject(wrappedValue: AgentBridge(registry: registry ?? RipulToolRegistry()))
         self.skipBridgeSetup = false
     }
 
@@ -120,7 +120,6 @@ public struct AgentView<TopBar: View>: View {
         @ViewBuilder topBar: @escaping (AgentBridge) -> TopBar
     ) {
         self.configuration = configuration
-        self.tools = []
         self.searchClickDelegate = nil
         self.linkOpenDelegate = nil
         self.onMinimize = onMinimize
@@ -311,7 +310,6 @@ public struct AgentView<TopBar: View>: View {
         }
         .task {
             if !skipBridgeSetup {
-                bridge.register(tools)
                 bridge.searchClickDelegate = searchClickDelegate
                 bridge.linkOpenDelegate = linkOpenDelegate
             }
@@ -393,20 +391,21 @@ public struct AgentView<TopBar: View>: View {
 @available(iOS 16.0, macOS 14.0, *)
 public extension AgentView where TopBar == EmptyView {
     /// Creates an AgentView with no top bar, managing its own bridge.
+    /// - Parameter registry: the host's tool registry; the view's `.endUser`
+    ///   bridge exposes its endUser-tagged entries. Omit for a toolless view.
     init(
         configuration: AgentConfiguration,
-        tools: [NativeTool] = [],
+        registry: RipulToolRegistry? = nil,
         searchClickDelegate: SearchClickDelegate? = nil,
         linkOpenDelegate: LinkOpenDelegate? = nil,
         onMinimize: (() -> Void)? = nil
     ) {
         self.configuration = configuration
-        self.tools = tools
         self.searchClickDelegate = searchClickDelegate
         self.linkOpenDelegate = linkOpenDelegate
         self.onMinimize = onMinimize
         self.topBar = nil
-        self._bridge = StateObject(wrappedValue: AgentBridge())
+        self._bridge = StateObject(wrappedValue: AgentBridge(registry: registry ?? RipulToolRegistry()))
         self.skipBridgeSetup = false
     }
 
@@ -417,7 +416,6 @@ public extension AgentView where TopBar == EmptyView {
         onMinimize: (() -> Void)? = nil
     ) {
         self.configuration = configuration
-        self.tools = []
         self.searchClickDelegate = nil
         self.linkOpenDelegate = nil
         self.onMinimize = onMinimize

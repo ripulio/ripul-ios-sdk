@@ -36,7 +36,8 @@ public struct RipulListThemeScopesTool: NativeTool {
     }
     public var inputSchema: [String: Any] { ["type": "object", "properties": [:], "required": []] }
 
-    public init() {}
+    /// SDK-internal — see `RipulDeveloperOnlyTool`.
+    init() {}
 
     public func execute(args: [String: Any]) async throws -> Any {
         await MainActor.run {
@@ -70,7 +71,8 @@ public struct RipulGetThemeStyleTool: NativeTool {
                                   "description": "Scope id, e.g. addShift.receipt.panel"]]]
     }
 
-    public init() {}
+    /// SDK-internal — see `RipulDeveloperOnlyTool`.
+    init() {}
 
     public func execute(args: [String: Any]) async throws -> Any {
         guard let id = args["scope"] as? String else {
@@ -122,7 +124,8 @@ public struct RipulSetThemeKnobTool: NativeTool {
                       "description": "New value for the knob"]]]
     }
 
-    public init() {}
+    /// SDK-internal — see `RipulDeveloperOnlyTool`.
+    init() {}
 
     public func execute(args: [String: Any]) async throws -> Any {
         guard let id = args["scope"] as? String, let knobName = args["knob"] as? String,
@@ -164,7 +167,8 @@ public struct RipulResetThemeScopeTool: NativeTool {
                                   "description": "Scope id, e.g. addShift.receipt.panel"]]]
     }
 
-    public init() {}
+    /// SDK-internal — see `RipulDeveloperOnlyTool`.
+    init() {}
 
     public func execute(args: [String: Any]) async throws -> Any {
         guard let id = args["scope"] as? String else {
@@ -195,7 +199,8 @@ public struct RipulGetAppDiagnosticsTool: NativeTool {
     }
     public var inputSchema: [String: Any] { ["type": "object", "properties": [:], "required": []] }
 
-    public init() {}
+    /// SDK-internal — see `RipulDeveloperOnlyTool`.
+    init() {}
 
     public func execute(args: [String: Any]) async throws -> Any {
         await MainActor.run {

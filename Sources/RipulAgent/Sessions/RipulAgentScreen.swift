@@ -169,6 +169,18 @@ public struct RipulAgentScreen: View {
             nativeChatInputHeight: 140
         )
         config.websiteDataStore = configuration.websiteDataStore
+        // Console auto-entry (native-tool-registry phase 3): a cached seeded
+        // Developer-context id — written by RipulAgentConsole after its
+        // authenticated bootstrap fetch — rides the URL as `context=<id>`; the
+        // web app enters it once its contexts load. Clerk mode only: alongside
+        // a siteKey the web side refuses client-side entry anyway, so the
+        // param is not emitted. First-ever console launch has nothing cached
+        // and boots with no context (today's behavior); every later launch
+        // auto-enters.
+        if configuration.siteKey == nil,
+           let devContextId = configuration.cache.object(forKey: RipulSeededContextCache.devContextIdKey) as? String {
+            config.clerkContextId = devContextId
+        }
         return config
     }
 

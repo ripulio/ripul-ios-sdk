@@ -35,7 +35,9 @@ public struct InspectScreenTool: NativeTool {
 
     let bridge: AgentBridge
 
-    public init(bridge: AgentBridge) {
+    /// SDK-internal: constructible only from within this module (the console
+    /// composition path) — see `RipulDeveloperOnlyTool`.
+    init(bridge: AgentBridge) {
         self.bridge = bridge
     }
 

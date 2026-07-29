@@ -191,6 +191,13 @@ final class RipulDevOverlayRootVC: UIViewController {
     /// means the relay comes online before the first panel expand.
     private var sharedBridge: AgentBridge?
 
+    /// Same registry as the console configuration, so the compact bar and the
+    /// full console project the same tool set (`RipulAgentConsole.init`
+    /// asserts exactly this).
+    private func makeSharedBridge() -> AgentBridge {
+        AgentBridge(registry: configuration?.registry ?? RipulToolRegistry(), audience: .developer)
+    }
+
     /// True while a bubble<->compact morph is animating. viewDidLayoutSubviews
     /// must NOT re-assert compactFrame mid-morph (it snapped the bar to the
     /// docked position instantly, so the grow-from-the-bubble animation
@@ -332,7 +339,7 @@ final class RipulDevOverlayRootVC: UIViewController {
     func showCompact() {
         minimizedState = .compact
         if compactHost == nil {
-            if sharedBridge == nil { sharedBridge = AgentBridge() }
+            if sharedBridge == nil { sharedBridge = makeSharedBridge() }
             let bar = CompactAgentBarView(
                 bridge: sharedBridge!,
                 onExpand: { [weak self] in self?.overlay?.expand() },
@@ -579,7 +586,7 @@ final class RipulDevOverlayRootVC: UIViewController {
             // swipe (the showingSidebar slot — a host app has no sidebar, the
             // bubble IS the console's off-screen home) and the glass minus
             // button in the top bar's trailing accessory slot.
-            if sharedBridge == nil { sharedBridge = AgentBridge() }
+            if sharedBridge == nil { sharedBridge = makeSharedBridge() }
             let console = AnyView(RipulAgentConsole(
                 configuration: configuration,
                 slots: RipulAgentScreenSlots(

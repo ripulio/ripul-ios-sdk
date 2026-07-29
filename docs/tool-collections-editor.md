@@ -4,7 +4,7 @@
 
 > Let the developer of an SDK-consuming app reorganise their tool collections from inside their own iPhone app, against the live tool set of the build in their hand.
 
-**Status:** built 2026-07-28 in `Sources/RipulAgent/ToolCollections/`. Compiles for macOS and iOS; **not yet exercised on a device** — see [Verification still owed](#verification-still-owed).
+**Status:** built 2026-07-28 in `Sources/RipulAgent/ToolCollections/`. Compiles for macOS and iOS. Drag-and-drop *has* since been exercised on device — instrumented runs showed `onDrag` firing while `isTargeted` and the drop handler never did inside a `List`, which is why the editor is built on `ScrollView` + `LazyVStack` (commits `bac467c76`, `6aabddd07`, `e6b1958f3`). The API round trip and post-restart collapse remain unverified — see [Verification still owed](#verification-still-owed).
 
 ## Why this surface
 
@@ -13,6 +13,23 @@ Progressive discovery collapses a large tool set into a handful of CategoryTools
 Today that curation happens only in the web dashboard, which is the wrong place for it. The dashboard knows the tools it has previously *seen* through discovery. The device knows the tools this build actually *registered* — every `NativeTool` handed to an `AgentBridge` moments ago, with names and descriptions.
 
 That asymmetry is the whole argument. An app developer holding their phone has better information about their own tool set than the dashboard does, and no way to act on it.
+
+> **The surface model here has been decided, and `RipulToolCatalog` is on its way out.**
+> It was a device-side, hardcoded concept in an otherwise data-driven system; the
+> resolution is that it becomes an **audience tag** on a unified `RipulToolRegistry`
+> (register once, tagged; channels expose a projection). See
+> [native-tool-registry](../../docs/plans/native-tool-registry/README.md) — phase 1
+> deletes `RipulToolCatalog` and `RipulSessionsConfiguration.endUserTools`. The
+> options paper
+> ([tool-grouping-rationalisation.md](../../docs/plans/tool-grouping-rationalisation.md))
+> is now historical context, not an open question.
+>
+> ⚠️ **"Surface" in this document means audience** (end-user tools vs developer tools).
+> Since 2026-07-28 the SDK also has `AgentConfiguration.surface`, which means something
+> different — a named **app area** mapped server-side to a solution context via
+> `surfaceContextMap`. Two axes, one word: *audience* is who the tools are for
+> (build-time, device-known); *surface* is where in the app the session lives
+> (server-resolved). The plan renames this document's axis to **audience**.
 
 ## Tool surfaces — read this before anything else
 
@@ -29,7 +46,17 @@ They coexist in one process on different `AgentBridge` instances. Reading one an
 
 Consequences that follow, and are easy to get wrong again:
 
-- A host **declares** its end-user surface (`endUserTools:`); the console does not **register** it. Registering would hand end-user capabilities to the dev agent.
+- A host **declares** its end-user surface (`endUserTools:`); the console does not **register** it *by default*.
+  > **Revised 2026-07-29.** The original wording — "registering would hand end-user
+  > capabilities to the dev agent" — conflated three layers, and the conflation was the
+  > thing to fix. Declaration is for **attribution** and is unconditional. Registration
+  > is **absorption**: an opt-in, attributed testing affordance the authenticated owner
+  > performs on capabilities they already own (plan phase 2), not a hazard. The hazard
+  > is only the *other* direction, and that is now a structural gate rather than a
+  > convention: developer-tagged tools have SDK-internal initializers and are filtered
+  > out of any `.endUser` channel's `mcp:tools` broadcast and invoke lookup
+  > (`AgentBridge.audience`, shipped in phase 0). The valve is deliberately one-way,
+  > because the two directions differ in principal and blast radius.
 - The SDK synthesises the developer catalog from its own bridge, so a host declares one line, not two.
 - Members are **attributed**, not merely counted: "in Developer tools", "web app or other device". "Not in this app" was false in both directions.
 - Collections are account-wide and carry no catalog tag, so one **can** span surfaces. The editor scopes the list to collections holding at least one tool of the surface in hand, and puts the rest behind a disclosure — including Ripul's own seeded platform collections (`automation_tools`, `page_interaction_tools`), which contain only web app tools and are not an SDK consumer's concern. The test is content-based rather than an allow-list, so it stays correct for Ripul's own app, where those collections *are* relevant.
@@ -39,7 +66,7 @@ Consequences that follow, and are easy to get wrong again:
 | Piece | Where | Status |
 |---|---|---|
 | Collections CRUD API | `chrome-extension/packages/api/src/toolCollections/` | Shipped — `/v1/tool-collections`, Clerk-authed |
-| Site-key read path | `packages/api/src/index.ts:1025,1260` | Shipped — **GET only**, resolves via `billingUserId` |
+| Site-key read path | `packages/api/src/index.ts:1035,1284` | Shipped — collections are **GET only**, resolved via `billingUserId`. (Note: "site keys are read-only" is true *of collections*, no longer of the site-key surface as a whole — `POST /v1/site-key/context` now mints tokens.) |
 | Membership matching | `chrome-extension/src/LLM/Tools/CategoryToolMatcher.ts` | Shipped — `explicitTools` ∪ `toolPatterns` |
 | Web authoring UI | `chrome-extension/src/logging/SiteToolsTab.tsx` | Shipped — collections dialog incl. name patterns |
 | Agent-facing CRUD | `chrome-extension/src/LLM/Tools/ManageToolCollectionToolHandler.ts` | Shipped — `manageToolCollection` |
@@ -77,16 +104,20 @@ This is affordable because **reorganising is rare and design-time** — the freq
 
 If a plain web view reload turns out to re-resolve the site-key config, that is a cheaper middle ground worth taking during implementation. Do not design around it.
 
-## Proposed components
+## Components as built
+
+> Design-time names in an earlier draft (`RipulToolCollectionsScreen`, …) did not all
+> survive contact; this table is what actually exists. See "Current state" above for
+> file paths.
 
 | Component | Role | Precedent |
 |---|---|---|
-| `RipulToolCollectionsClient` | CRUD over `/v1/tool-collections`, taking a `tokenProvider` closure | `MachineDirectory`, `CmsClient`, `BuildFeed` |
-| `RipulToolCollectionsScreen` | The editor — collections, membership, pattern testing | `RipulSessionsView` as a console peer |
+| `ToolCollectionsClient` | CRUD over `/v1/tool-collections`, taking a `tokenProvider` closure | `MachineDirectory`, `CmsClient`, `BuildFeed` |
+| `ToolCollectionsScreen` | The editor — collections, membership, pattern testing | `RipulSessionsView` as a console peer |
 | `RipulDevToolCollectionTools` | Agent-facing CRUD, same write path as the human UX | `RipulDevThemeTools` |
-| `AgentBridge` tool accessor | Public read of the registered tool set | new — `registeredTools` is currently private |
+| `AgentBridge.registeredToolSummaries` | Public read of the registered tool set | new — the raw arrays stay private |
 
-The screen needs both `bridge` (for the live tool set) and `tokenProvider` (for writes) — exactly what `RipulAgentConsole` already has to hand at `:75`.
+The screen needs both `bridge` (for the live tool set) and `tokenProvider` (for writes) — exactly what `RipulAgentConsole` already has to hand.
 
 ### Live pattern testing is the centre of gravity
 

@@ -16,6 +16,22 @@ public struct AgentConfiguration {
     /// JSON string of site key config returned from validation.
     /// Set automatically by SiteKeyValidator; not typically set by consumers.
     public var siteKeyConfig: String? = nil
+    /// Explicit solution context id to request at validate. Must be in the site
+    /// key's allowed set — the server 403s otherwise, deliberately: a silent
+    /// fallback would hide a misconfigured screen behind plausible output.
+    public var solutionContextId: String? = nil
+    /// Named surface to request, resolved through the key's surfaceContextMap.
+    /// Preferred over `solutionContextId`: the app names its screens and the
+    /// key's admin decides which context each screen gets, so re-pointing a
+    /// screen is a config change rather than an app release.
+    public var surface: String? = nil
+    /// Clerk-mode boot context (native-tool-registry phase 3): a registry
+    /// context id the web session auto-enters once contexts load, emitted as
+    /// `context=<id>`. The developer console passes its account's seeded
+    /// Developer context here. Distinct from `solutionContextId`/`surface`,
+    /// which are SITE-KEY validate requests — under a site-key lock the web
+    /// side refuses client-side entry, so this param is inert there.
+    public var clerkContextId: String? = nil
     /// When true, the URL uses `native=true` instead of `embedded=true`.
     /// Native mode enables the bridge but lets the web app use its own
     /// Clerk authentication, giving a full web experience with native tools.
@@ -92,7 +108,9 @@ public struct AgentConfiguration {
         hideChatInput: Bool = false,
         nativeChatInputHeight: Int = 0,
         fontFamilies: [String]? = nil,
-        relayHost: Bool = false
+        relayHost: Bool = false,
+        solutionContextId: String? = nil,
+        surface: String? = nil
     ) {
         self.baseURL = baseURL
         self.path = path
@@ -108,6 +126,8 @@ public struct AgentConfiguration {
         self.nativeChatInputHeight = nativeChatInputHeight
         self.fontFamilies = fontFamilies
         self.relayHost = relayHost
+        self.solutionContextId = solutionContextId
+        self.surface = surface
     }
 
     /// Strict per-value percent-encoding for hash params: RFC 3986 unreserved
@@ -135,6 +155,21 @@ public struct AgentConfiguration {
         if let siteKey {
             hashParams.append("siteKey=\(siteKey)")
             hashParams.append("skipOnboarding=true")
+        }
+
+        // Which solution context this surface wants. Only meaningful alongside
+        // a siteKey — the web boot forwards them to validate, which resolves
+        // the surface and mints a token scoped to the result.
+        if let solutionContextId, let encoded = Self.hashParamValue(solutionContextId) {
+            hashParams.append("solutionContext=\(encoded)")
+        }
+
+        if let surface, let encoded = Self.hashParamValue(surface) {
+            hashParams.append("surface=\(encoded)")
+        }
+
+        if let clerkContextId, let encoded = Self.hashParamValue(clerkContextId) {
+            hashParams.append("context=\(encoded)")
         }
 
         if let sessionToken {

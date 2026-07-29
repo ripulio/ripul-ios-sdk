@@ -528,6 +528,10 @@ private struct ToolsTabView: View {
     @State private var elementInspectorOn = false
     @State private var wsDebugOn = false
     @State private var perfHudOn = false
+    /// Phase-2 absorption: pending confirmation for the testing toggle, and
+    /// the colliding names when the toggle was refused.
+    @State private var confirmAbsorption = false
+    @State private var absorptionCollisions: [String]?
     // Native, reactive gate for the chat "Rebuild from JSONL" menu items —
     // flipping this updates the native menus live (no web round-trip). Also
     // mirrored to the web `enableChatRebuild` setting for the web header menu.
@@ -573,10 +577,50 @@ private struct ToolsTabView: View {
                     } label: {
                         Label("Tool Collections", systemImage: "folder.badge.gearshape")
                     }
+                    if bridge.audience == .developer {
+                        Toggle(isOn: Binding(
+                            get: { bridge.isEndUserTestingEnabled },
+                            set: { on in
+                                if on {
+                                    confirmAbsorption = true
+                                } else {
+                                    bridge.setEndUserTesting(false)
+                                }
+                            }
+                        )) {
+                            Label("Include end-user tools (testing)", systemImage: "person.badge.key")
+                        }
+                    }
                 } header: {
                     Text("Agent")
                 } footer: {
-                    Text("Group tools so an agent sees one entry it expands on demand, instead of every tool on every turn. Choose which tool surface you are organising on the next screen.")
+                    Text("Group tools so an agent sees one entry it expands on demand, instead of every tool on every turn. Choose which tool surface you are organising on the next screen. The testing toggle lends this dev agent the app's end-user tools for this session only.")
+                }
+                .confirmationDialog(
+                    "Include end-user tools?",
+                    isPresented: $confirmAbsorption,
+                    titleVisibility: .visible
+                ) {
+                    Button("Include for this session", role: .destructive) {
+                        if case .blocked(let names) = bridge.setEndUserTesting(true) {
+                            absorptionCollisions = names
+                        }
+                    }
+                    Button("Cancel", role: .cancel) {}
+                } message: {
+                    // Side-effect honesty (phase 2 §4): never masquerade as a sandbox.
+                    Text("These tools act on this device's real data — pickers present real UI, create/update tools write real records. The setting resets when this console session ends.")
+                }
+                .alert(
+                    "Name collision",
+                    isPresented: Binding(
+                        get: { absorptionCollisions != nil },
+                        set: { if !$0 { absorptionCollisions = nil } }
+                    )
+                ) {
+                    Button("OK", role: .cancel) { absorptionCollisions = nil }
+                } message: {
+                    Text("A developer tool and an end-user tool share a name, so the sets cannot be merged: \((absorptionCollisions ?? []).joined(separator: ", "))")
                 }
             }
             #endif

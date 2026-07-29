@@ -199,16 +199,52 @@ public struct RipulToolCollectionsScreen: View {
     @State private var showingOthers = false
     /// Collection currently under the finger, for a drop highlight.
     @State private var dropTarget: String?
+    /// collection name → names of solution contexts referencing it via
+    /// `group://` (native-tool-registry phase 4). Referenced collections are
+    /// badged, and deleting one warns — membership now feeds enforcement, so
+    /// the developer should see the blast radius.
+    @State private var contextRefs: [String: [String]] = [:]
+
+    private let tokenProvider: () -> String?
 
     /// - Parameter catalogs: the tool surfaces available to organise. The first
     ///   is selected initially — pass the end-user catalog first, since it is
     ///   usually the one worth grouping.
     public init(catalogs: [RipulToolCatalog], tokenProvider: @escaping () -> String?) {
         self.catalogs = catalogs
+        self.tokenProvider = tokenProvider
         _selectedCatalogId = State(initialValue: catalogs.first?.id ?? RipulToolCatalog.endUserId)
         _model = StateObject(wrappedValue: RipulToolCollectionsModel(
             client: RipulToolCollectionsClient(tokenProvider: tokenProvider)
         ))
+    }
+
+    /// Which contexts reference each collection, from the admin contexts list
+    /// (the console session can read it — same auth as the collections CRUD).
+    /// Best-effort: a failed fetch just means no badges.
+    private func loadContextRefs() async {
+        guard let token = tokenProvider(),
+              let url = URL(string: "api/admin/solution-contexts", relativeTo: AgentConfiguration.defaultBaseURL)
+        else { return }
+        var request = URLRequest(url: url)
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        guard let (data, response) = try? await URLSession.shared.data(for: request),
+              (response as? HTTPURLResponse)?.statusCode == 200,
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let contexts = json["solutionContexts"] as? [[String: Any]]
+        else { return }
+
+        var refs: [String: [String]] = [:]
+        for context in contexts {
+            let contextName = (context["name"] as? String) ?? (context["id"] as? String) ?? "?"
+            let toolLists = [context["includedTools"], context["excludedTools"]]
+                .compactMap { $0 as? [String] }
+            for entry in toolLists.joined() where entry.hasPrefix("group://") {
+                let collectionName = String(entry.dropFirst("group://".count))
+                refs[collectionName, default: []].append(contextName)
+            }
+        }
+        contextRefs = refs
     }
 
     private var catalog: RipulToolCatalog {
@@ -307,10 +343,16 @@ public struct RipulToolCollectionsScreen: View {
         }
         .sheet(item: $editing) { collection in
             NavigationStack {
-                RipulToolCollectionEditorView(model: model, tools: tools, existing: collection)
+                RipulToolCollectionEditorView(
+                    model: model,
+                    tools: tools,
+                    existing: collection,
+                    referencedByContexts: contextRefs[collection.name] ?? []
+                )
             }
         }
         .task { await model.load() }
+        .task { await loadContextRefs() }
     }
 
     // MARK: - Cards
@@ -388,6 +430,13 @@ public struct RipulToolCollectionsScreen: View {
                                     .font(.caption2)
                                     .padding(.horizontal, 5).padding(.vertical, 1)
                                     .background(Color.secondary.opacity(0.15), in: Capsule())
+                            }
+                            if let refs = contextRefs[collection.name], !refs.isEmpty {
+                                Text("used by \(refs.joined(separator: ", "))")
+                                    .font(.caption2)
+                                    .foregroundStyle(.tint)
+                                    .padding(.horizontal, 5).padding(.vertical, 1)
+                                    .background(Color.accentColor.opacity(0.12), in: Capsule())
                             }
                         }
                         Text(summary(matcher: m, collection: collection))

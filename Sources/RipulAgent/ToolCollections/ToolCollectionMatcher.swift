@@ -8,6 +8,17 @@ import Foundation
 // actually runs at request time. It exists so the editor can show a developer
 // which tools a rule captures BEFORE they save.
 //
+// DRIFT NOW CARRIES ENFORCEMENT WEIGHT: since native-tool-registry phase 4, a
+// solution context may include a collection by reference (`group://<name>` in
+// `includedTools`), so membership determines tool AVAILABILITY, not just the
+// editor preview. Parity is pinned by a shared fixture in
+// `ToolCollectionMatcherParityTests.swift` and the web side's
+// `packages/api/src/toolCollections/__tests__/matcherParity.test.ts` — change
+// matching semantics on either side only together with both tests.
+// (Enforcement expansion itself resolves `explicitTools` only — a regex has no
+// finite expansion into a name whitelist; see
+// `packages/api/src/toolCollections/groupRefs.ts`.)
+//
 // The rules, in full:
 //   • A tool joins if its name is in `explicitTools` OR matches any
 //     `toolPatterns` regex. Membership is a union, never first-match-wins.

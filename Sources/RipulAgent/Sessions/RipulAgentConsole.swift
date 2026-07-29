@@ -39,28 +39,23 @@ public struct RipulAgentConsole: View {
     /// DevTools console sheet (ConsoleLogViewer), opened by the screen's
     /// `.ripulShowDevTools` posts.
     @State private var showDevTools = false
-    /// One-shot guard for the additively-registered collection tools.
-    @State private var didRegisterCollectionTools = false
 
-    /// Tool surfaces the host owns, for the collections editor to organise.
-    /// Empty `endUserTools` yields no end-user catalog rather than an empty
-    /// one — a picker offering a surface with nothing in it is worse than not
-    /// offering it.
+    /// Tool surfaces the host owns, for the collections editor to organise —
+    /// the registry's editor projection (endUser + named audiences). An empty
+    /// audience yields no catalog rather than an empty one — a picker offering
+    /// a surface with nothing in it is worse than not offering it.
     private var hostToolCatalogs: [RipulToolCatalog] {
-        var catalogs: [RipulToolCatalog] = []
-        if !configuration.endUserTools.isEmpty {
-            catalogs.append(.endUser(configuration.endUserTools))
-        }
-        catalogs.append(contentsOf: configuration.toolCatalogs)
-        return catalogs
+        configuration.registry.editorCatalogs()
     }
 
     private let slots: RipulAgentScreenSlots
 
-    /// - Parameter bridge: optional externally-owned bridge. Pass one when the
-    ///   host needs the same connection elsewhere (e.g. the dev-assistant
-    ///   overlay's compact bar, which mirrors the active chat). Default: the
-    ///   console creates and owns its bridge.
+    /// - Parameter bridge: optional externally-owned bridge, which MUST be a
+    ///   `.developer`-audience bridge built on the configuration's registry
+    ///   (`AgentBridge(registry: configuration.registry, audience: .developer)`).
+    ///   Pass one when the host needs the same connection elsewhere (e.g. the
+    ///   dev-assistant overlay's compact bar, which mirrors the active chat).
+    ///   Default: the console creates its own `.developer` bridge.
     public init(
         configuration: RipulSessionsConfiguration,
         slots: RipulAgentScreenSlots = .init(),
@@ -70,7 +65,19 @@ public struct RipulAgentConsole: View {
         self.slots = slots
         let authStore = RipulClerkAuthStore(cache: configuration.cache)
         _authStore = StateObject(wrappedValue: authStore)
-        let bridge = bridge ?? AgentBridge()
+        let bridge = bridge ?? AgentBridge(registry: configuration.registry, audience: .developer)
+        assert(
+            bridge.audience == .developer,
+            "RipulAgentConsole requires a .developer-audience AgentBridge — construct the " +
+            "passed-in bridge with AgentBridge(registry: configuration.registry, audience: .developer), " +
+            "or omit `bridge:` to let the console create its own. An .endUser bridge here " +
+            "would silently refuse this console's own dev tools."
+        )
+        assert(
+            bridge.registry === configuration.registry,
+            "RipulAgentConsole's bridge must project from the SAME registry as its " +
+            "configuration — otherwise the editor and the agent see different tool sets."
+        )
         _bridge = StateObject(wrappedValue: bridge)
         _listModel = StateObject(wrappedValue: RipulSessionListModel(
             bridge: bridge,
@@ -111,9 +118,20 @@ public struct RipulAgentConsole: View {
             }
         }
         .task {
-            // Dev-assistant tools: logs + native screen inspection. Registered on
-            // the console's own bridge so the agent driving from here can read logs
-            // and `inspect_screen` the host app (which excludes this overlay).
+            // The console's CHANNEL-BOUND tools, in one replacing call:
+            // logs + native screen inspection (so the agent driving from here
+            // can SEE the running app) plus tool-collection CRUD (the peer of
+            // the editor screen; enabled unconditionally because the console
+            // is already a signed-in, dev-gated surface).
+            //
+            // One call, replacement semantics — `.task` re-runs when this view
+            // disappears and returns (e.g. embedded in a TabView), and a
+            // repeated name in the MCP tool set reads as a change to the
+            // bridge's tool-set watcher and can loop `tools/list_changed`.
+            //
+            // Host-contributed dev tools are NOT registered here: they are
+            // developer-tagged entries in `configuration.registry`, which this
+            // `.developer` channel already projects.
             bridge.registerBuiltInTools([
                 ConsoleLogsTool(bridge: bridge),
                 NetworkLogsTool(bridge: bridge),
@@ -121,48 +139,24 @@ public struct RipulAgentConsole: View {
                 TapElementTool(),
                 TypeTextTool(),
                 ScrollElementTool(),
-            ])
-            // Host-contributed dev tools, registered ADDITIVELY via `register` rather than
-            // `registerBuiltInTools` — the latter REPLACES the built-in list, which is how
-            // `.ripulDevTools()` used to clobber InspectScreenTool.
-            //
-            // Without this slot a host app has no way to give the dev assistant tools: its
-            // own registry goes to the end-user agent panel, which is a DIFFERENT bridge.
-            // That gap is easy to miss, because both surfaces are "the app's tools".
-            if !configuration.devTools.isEmpty {
-                bridge.register(configuration.devTools)
-            }
-            // Tool-collection CRUD for the agent, the peer of the editor screen.
-            // Enabled unconditionally because the console is already a
-            // signed-in, dev-gated surface.
-            //
-            // `register` APPENDS, and `.task` re-runs if this view disappears
-            // and returns (e.g. embedded in a TabView), so this is guarded.
-            // Duplicate tool names are not cosmetic here: a repeated name in
-            // the MCP tool set reads as a change to the bridge's tool-set
-            // watcher and can loop `tools/list_changed`.
-            if !didRegisterCollectionTools {
-                didRegisterCollectionTools = true
-                bridge.register(RipulDevToolCollectionTools.all(
-                    isEnabled: true,
-                    catalogs: { [configuration, bridge] in
-                        var all: [RipulToolCatalog] = []
-                        if !configuration.endUserTools.isEmpty {
-                            all.append(.endUser(configuration.endUserTools))
-                        }
-                        all.append(contentsOf: configuration.toolCatalogs)
-                        all.append(.developer(bridge.registeredToolSummaries))
-                        return all
-                    },
-                    baseURL: configuration.baseURL,
-                    tokenProvider: { authStore.token }
-                ))
-            }
+            ] + RipulDevToolCollectionTools.all(
+                isEnabled: true,
+                catalogs: { [configuration, bridge] in
+                    configuration.registry.editorCatalogs()
+                        + [.developer(bridge.registeredToolSummaries)]
+                },
+                baseURL: configuration.baseURL,
+                tokenProvider: { authStore.token }
+            ))
             authStore.startPolling(bridge: bridge)
             logWebBuildVersion()
+            if authStore.isSignedIn { fetchSeededContexts() }
         }
         .onChange(of: authStore.isSignedIn) { _, signedIn in
-            if signedIn { forceSignIn = false }
+            if signedIn {
+                forceSignIn = false
+                fetchSeededContexts()
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: .ripulShowDevTools)) { _ in
             showDevTools = true
@@ -193,6 +187,34 @@ public struct RipulAgentConsole: View {
             }
         }
         .animation(.easeInOut(duration: 0.25), value: authStore.isSignedIn)
+    }
+
+    /// Console bootstrap (native-tool-registry phase 3): idempotently ensure
+    /// this account's seeded `User`/`Developer` contexts exist server-side and
+    /// cache the Developer id — that is how it reaches the web view URL
+    /// (`RipulAgentScreen.agentConfig`) without being hardcoded, and how
+    /// accounts that predate seeding get their pair lazily on first console
+    /// touch. The token can lag `isSignedIn` by a poll cycle, so retry briefly.
+    private func fetchSeededContexts() {
+        Task {
+            var token = authStore.token
+            for _ in 0..<10 where token == nil {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                token = authStore.token
+            }
+            guard let token,
+                  let url = URL(string: "api/admin/solution-contexts/seeded", relativeTo: configuration.baseURL)
+            else { return }
+            var request = URLRequest(url: url)
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            guard let (data, response) = try? await URLSession.shared.data(for: request),
+                  (response as? HTTPURLResponse)?.statusCode == 200,
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let devContextId = json["devContextId"] as? String
+            else { return }
+            configuration.cache.set(devContextId, forKey: RipulSeededContextCache.devContextIdKey)
+            bridge.handleConsoleLog("[SELFTEST] seeded dev context cached: \(devContextId)")
+        }
     }
 
     /// Logs the embedded web app's bundle version + the LIVE/STALE verdict

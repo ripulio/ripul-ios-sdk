@@ -749,8 +749,41 @@ public func nerror(_ message: String) {
     Task { @MainActor in AgentBridge.current?.handleConsoleLog("ERROR: [native] \(message)") }
 }
 
+/// Which audience an `AgentBridge` channel serves. Fixed for the bridge's
+/// lifetime in practice (set at construction): a channel is either the app's
+/// end-user agent surface (`.endUser`, the default — `AgentView`'s bridges)
+/// or the developer console / DevTools surface (`.developer` —
+/// `RipulAgentConsole`, the dev-assistant overlay).
+///
+/// This is the hard, structural half of the one-way tool valve: a
+/// `.endUser` channel can never expose a tool marked `RipulDeveloperOnlyTool`,
+/// regardless of how it was registered. There is deliberately no override —
+/// see docs/plans/native-tool-registry/phase-0-hard-gate-and-decision-record.md.
+public enum RipulChannelAudience {
+    case endUser
+    case developer
+}
+
 @MainActor
 public final class AgentBridge: NSObject, ObservableObject {
+    /// Immutable for the bridge's lifetime — assigned in the designated
+    /// initializer before `super.init()`. See `RipulChannelAudience`.
+    public let audience: RipulChannelAudience
+
+    /// The host's tool registry this channel projects from. The bridge OWNS no
+    /// tools (channel-bound built-ins aside) — it exposes
+    /// `registry.entries(audience:)` for its exposed audiences. See
+    /// `RipulToolRegistry`.
+    public let registry: RipulToolRegistry
+
+    /// Which registry audiences this channel exposes. Fixed at construction to
+    /// the channel's own audience; phase 2 (absorption) widens a `.developer`
+    /// channel's set on an explicit session-scoped opt-in
+    /// (`setEndUserTesting`). Never widened on an `.endUser` channel — there
+    /// is deliberately no API to do so. Published so the console's testing
+    /// toggle reflects the live state.
+    @Published public private(set) var exposedAudiences: Set<RipulToolAudience>
+
     @Published public var isConnected = false
     /// Per-thread native CPU sampler (this app process only, not WebKit).
     /// Off by default; a Settings toggle drives `start()`/`stop()`. Spikes are
@@ -1227,8 +1260,12 @@ public final class AgentBridge: NSObject, ObservableObject {
     @Published public var currentPageContext: PageContext = .default
 
     private weak var webView: WKWebView?
-    private var registeredTools: [NativeTool] = []
+    /// Channel-bound tools (a console's `console_logs`, `inspect_screen`, …):
+    /// they capture this bridge at init, so they live on the channel, never in
+    /// the shared registry. Everything else lives in `registry`.
     private var builtInTools: [NativeTool] = []
+    /// Token for this bridge's registry-change observer (see `deinit`).
+    private let registryObserverId = UUID()
     private var llmProvider: LLMProvider?
     private var sessionsRetryCount = 0
     private static let maxSessionsRetries = 5
@@ -1263,9 +1300,34 @@ public final class AgentBridge: NSObject, ObservableObject {
     /// The host app should use this to set plan mode on the CLI server directly.
     public var onPlanModeChanged: ((_ enabled: Bool) -> Void)?
 
-    public override init() {
+    /// - Parameter registry: the host's tool registry this channel projects
+    ///   from. Defaults to a fresh empty registry so a host with no native
+    ///   tools never has to construct one.
+    /// - Parameter audience: which channel this bridge serves. Defaults to
+    ///   `.endUser` so a host that never considers the question gets the
+    ///   restrictive setting; pass `.developer` for a console / DevTools
+    ///   bridge (`RipulAgentConsole` constructs its own that way).
+    ///
+    /// Designated (not convenience) so `audience` can be a `let` assigned
+    /// before `super.init()`: the gate's invariant is enforced by the type,
+    /// not by a doc comment promising immutability.
+    public init(registry: RipulToolRegistry = RipulToolRegistry(), audience: RipulChannelAudience = .endUser) {
+        self.registry = registry
+        self.audience = audience
+        // The channel's exposure: its own audience's tools, nothing else.
+        // Phase 2 (absorption) widens a `.developer` channel's exposure on an
+        // explicit, session-scoped opt-in; an `.endUser` channel's exposure is
+        // fixed by construction.
+        self.exposedAudiences = audience == .developer ? [.developer] : [.endUser]
         super.init()
         AgentBridge.current = self
+        // Late registrations (a host registering after the web app connected)
+        // re-broadcast, so the tool list is live rather than
+        // handshake-snapshotted. Registration happens on the main thread; the
+        // Task hop keeps the closure valid under strict concurrency.
+        registry.addObserver(registryObserverId) { [weak self] in
+            Task { @MainActor in self?.broadcastToolsIfConnected() }
+        }
         startNetworkPathMonitoring()
         startProcessLifecycleMonitoring()
         // Route CPU spikes into the bridge console (visible in host_console_logs
@@ -1318,16 +1380,41 @@ public final class AgentBridge: NSObject, ObservableObject {
 
     // MARK: - Tool Registration
 
-    /// Register native tools that the agent can discover and invoke.
-    public func register(_ tools: [NativeTool]) {
-        registeredTools.append(contentsOf: tools)
+    // App-tool registration is a REGISTRY operation (`registry.register(_:audience:)`),
+    // not a bridge one — the bridge only exposes a projection. The old
+    // `register(_:)` / `setTools(_:)` are deleted, not deprecated (no
+    // back-compat shims, repo doctrine).
+
+    /// Register channel-bound tools (a console's `console_logs`,
+    /// `inspect_screen`, …). SDK-internal: these capture their bridge at init,
+    /// so they are instantiated per channel and never enter the shared
+    /// registry. Replaces the previous set.
+    internal func registerBuiltInTools(_ tools: [NativeTool]) {
+        warnIfDeveloperOnlyOnEndUserChannel(tools)
+        builtInTools = tools
+        broadcastToolsIfConnected()
     }
 
-    /// Register SDK built-in tools (e.g. console_logs, network_logs).
-    /// These persist across `setTools()` calls — app-provided tools are
-    /// replaced but built-in tools remain.
-    public func registerBuiltInTools(_ tools: [NativeTool]) {
-        builtInTools = tools
+    /// The hard gate's audit trail. Filtering itself happens in `allTools` (the
+    /// one place both broadcast and invoke read from) regardless of whether
+    /// this fires — this is diagnostic only, not a correctness check.
+    ///
+    /// NOT necessarily a bug: `.ripulDevTools(bridge:)` intentionally supports
+    /// attaching to a host's own `.endUser` bridge (for a no-login local log
+    /// viewer — see its doc comment), and this fires every time that happens.
+    /// It is informational either way ("these registered tools are gated on
+    /// this channel"), never a crash — deliberately, since the one case this
+    /// SDK actually wants to catch hard (a console constructed with the wrong
+    /// audience) is asserted separately, in `RipulAgentConsole.init`.
+    ///
+    /// Fires for SDK-provided dev tools only (`RipulDeveloperOnlyTool` is
+    /// SDK-internal, so a host's own tools can never trigger it).
+    private func warnIfDeveloperOnlyOnEndUserChannel(_ tools: [NativeTool]) {
+        guard audience == .endUser else { return }
+        let gated = tools.filter { $0 is RipulDeveloperOnlyTool }
+        guard !gated.isEmpty else { return }
+        let names = gated.map(\.name).joined(separator: ", ")
+        NSLog("[RIPUL_GATE] Developer-only tool(s) registered on an .endUser channel, gated from the agent: %@", names)
     }
 
     /// The tools currently registered with this bridge — the live tool set of
@@ -1350,19 +1437,71 @@ public final class AgentBridge: NSObject, ObservableObject {
         }
     }
 
-    /// Replace all app-registered tools and re-broadcast to the web app.
-    /// Built-in tools (registered via `registerBuiltInTools`) are preserved.
-    /// Use this when the tool list changes dynamically (e.g. user scripts).
-    public func setTools(_ tools: [NativeTool]) {
-        registeredTools = tools
+    /// Re-broadcast the current tool projection to a connected web app. Fired
+    /// by registry changes, channel-tool registration, and exposure changes —
+    /// the tool list is live, not handshake-snapshotted.
+    private func broadcastToolsIfConnected() {
         guard isConnected else { return }
-        let defs = toolDefinitions
         send([
             "type": "\(messagePrefix)mcp:tools",
             "version": protocolVersion,
             "timestamp": currentTimestamp(),
-            "tools": defs,
+            "tools": toolDefinitions,
         ])
+    }
+
+    // MARK: - Absorption (phase 2 — the permissive direction of the valve)
+
+    /// Outcome of toggling end-user tool testing on a `.developer` channel.
+    public enum AbsorptionToggleResult: Equatable {
+        case on
+        case off
+        /// The toggle was refused: a dev tool and an end-user tool share a
+        /// canonical name, which would make name-based invocation silently
+        /// first-match. Fix the collision, then retry.
+        case blocked(collidingNames: [String])
+    }
+
+    /// Whether this `.developer` channel currently absorbs the host's
+    /// end-user tools. Session state by construction — it lives on the bridge
+    /// instance, so a channel teardown resets it and nothing persists it.
+    public var isEndUserTestingEnabled: Bool {
+        exposedAudiences.contains(.endUser) && audience == .developer
+    }
+
+    /// Toggle testing mode: the console borrows the host's end-user tools —
+    /// deliberate, session-scoped, attributed on every invocation
+    /// (`absorbed: true` in the result envelope). The API is SPECIFIC to this
+    /// widening on purpose: there is no general exposure override, so an
+    /// `.endUser` channel has no equivalent call — the reverse direction of
+    /// the valve stays structurally impossible (see the phase-2 doc).
+    ///
+    /// Absorbed tools execute against REAL app state — `pick_*` presents real
+    /// UI, `create_*` writes real data. The console's confirmation sheet says
+    /// this plainly; this affordance is not a sandbox.
+    @discardableResult
+    public func setEndUserTesting(_ on: Bool) -> AbsorptionToggleResult {
+        precondition(
+            audience == .developer,
+            "setEndUserTesting is a developer-console affordance; an .endUser channel has no absorption"
+        )
+        if on {
+            // Cross-set collision check at absorb time: the registry prevents
+            // duplicates within itself, but channel-bound tools are not in it.
+            let exposedNames = Set(exposedTools.map { RipulToolCollectionMatcher.canonicalName($0.name) })
+            let collisions = registry.tools(audience: .endUser)
+                .map(\.name)
+                .filter { exposedNames.contains(RipulToolCollectionMatcher.canonicalName($0)) }
+            if !collisions.isEmpty {
+                NSLog("[RIPUL_ABSORB] Testing mode blocked by name collision(s): %@", collisions.joined(separator: ", "))
+                return .blocked(collidingNames: collisions.sorted())
+            }
+            exposedAudiences.insert(.endUser)
+        } else {
+            exposedAudiences.remove(.endUser)
+        }
+        broadcastToolsIfConnected()
+        return on ? .on : .off
     }
 
     /// Configure a native LLM provider for on-device inference.
@@ -1736,6 +1875,7 @@ public final class AgentBridge: NSObject, ObservableObject {
 
     deinit {
         pathMonitor?.cancel()
+        registry.removeObserver(registryObserverId)
     }
 
     /// Evaluate arbitrary JavaScript in the attached web view.
@@ -5793,8 +5933,34 @@ public final class AgentBridge: NSObject, ObservableObject {
 
     // MARK: - Private helpers
 
+    /// Every tool this channel could conceivably name, ungated and regardless
+    /// of exposure. The ONLY legitimate readers are `exposedTools`/`allTools`
+    /// (which apply exposure + the audience gate) and the invoke-path
+    /// diagnostic that distinguishes "gated / not exposed" from "no such
+    /// tool". Adding a third tool source means changing this one property, so
+    /// the gate can never be left behind.
+    private var unfilteredTools: [NativeTool] {
+        builtInTools + registry.allEntries.map(\.tool)
+    }
+
+    /// The channel's projection of the registry: channel-bound tools plus the
+    /// entries of every exposed audience, in registration order.
+    private var exposedTools: [NativeTool] {
+        builtInTools + registry.allEntries
+            .filter { exposedAudiences.contains($0.audience) }
+            .map(\.tool)
+    }
+
+    /// The single source both discovery (`toolDefinitions`) and invocation
+    /// (`tool(named:)`) read from — which is what makes the audience gate
+    /// below a genuine choke point rather than something each caller has to
+    /// remember to apply. Exposure (the registry projection above) narrows by
+    /// audience tag; the phase-0 marker gate then re-asserts that an
+    /// `.endUser` channel never sees or can invoke a `RipulDeveloperOnlyTool`,
+    /// no matter what a registration call or a future exposure tweak did.
     private var allTools: [NativeTool] {
-        builtInTools + registeredTools
+        guard audience == .endUser else { return exposedTools }
+        return exposedTools.filter { !($0 is RipulDeveloperOnlyTool) }
     }
 
     private var toolDefinitions: [[String: Any]] {
@@ -5916,7 +6082,17 @@ public final class AgentBridge: NSObject, ObservableObject {
         }
 
         guard let tool = tool(named: toolName) else {
-            NSLog("[AgentBridge] Tool not found: %@", toolName)
+            // Distinguish "gated / not exposed" from "genuinely doesn't exist"
+            // in the native log only — the wire error stays a generic "not
+            // found" so an .endUser channel never hints that a developer-only
+            // tool exists.
+            if audience == .endUser, unfilteredTools.contains(where: { $0.name == toolName && $0 is RipulDeveloperOnlyTool }) {
+                NSLog("[RIPUL_GATE] Refused invoke of developer-only tool on .endUser channel: %@", toolName)
+            } else if unfilteredTools.contains(where: { $0.name == toolName }) {
+                NSLog("[AgentBridge] Tool registered under an audience this channel does not expose: %@", toolName)
+            } else {
+                NSLog("[AgentBridge] Tool not found: %@", toolName)
+            }
             send([
                 "type": "\(messagePrefix)mcp:error",
                 "version": protocolVersion,
@@ -5925,6 +6101,16 @@ public final class AgentBridge: NSObject, ObservableObject {
                 "error": "Tool not found: \(toolName)",
             ])
             return
+        }
+
+        // Attribution for cross-audience borrowing (phase 2): the CHANNEL
+        // stamps the invocation — tools stay principal-free. An absorbed call
+        // is one whose registry audience is `.endUser` on a `.developer`
+        // channel (channel-bound tools have no registry entry, so they never
+        // read as absorbed).
+        let absorbed = audience == .developer && registry.audience(ofToolNamed: toolName) == RipulToolAudience.endUser
+        if absorbed {
+            NSLog("[RIPUL_ABSORB] tool=%@ channel=developer", toolName)
         }
 
         Task { @MainActor in
@@ -5944,13 +6130,18 @@ public final class AgentBridge: NSObject, ObservableObject {
                     safeResult = result
                 }
 
-                self.send([
+                var envelope: [String: Any] = [
                     "type": "\(messagePrefix)mcp:result",
                     "version": protocolVersion,
                     "timestamp": self.currentTimestamp(),
                     "requestId": requestId,
                     "result": safeResult,
-                ])
+                ]
+                // Additive field: the web/chat side badges the call ("ran as
+                // developer, borrowed from End-user tools"); unknown fields
+                // are ignored elsewhere.
+                if absorbed { envelope["absorbed"] = true }
+                self.send(envelope)
             } catch {
                 NSLog("[AgentBridge] Tool %@ failed: %@", toolName, error.localizedDescription)
                 self.send([
@@ -6849,7 +7040,20 @@ public final class AgentBridge: NSObject, ObservableObject {
 
     // MARK: - Transport
 
+    #if DEBUG
+    /// Test-only observation seam: every outbound message, before the webView
+    /// check. `internal` (not `public`) so only `@testable import` in this
+    /// package's test target can reach it — a host can never set this.
+    /// `#if DEBUG`-only so it doesn't exist in a release binary at all.
+    /// Lets tests assert on `mcp:tools` broadcasts and `mcp:error`/`mcp:result`
+    /// without a real WKWebView. See ChannelGateTests.
+    var testOutboundSink: (([String: Any]) -> Void)?
+    #endif
+
     public func send(_ message: [String: Any]) {
+        #if DEBUG
+        testOutboundSink?(message)
+        #endif
         guard let webView else {
             NSLog("[AgentBridge] Cannot send — webView is nil")
             return

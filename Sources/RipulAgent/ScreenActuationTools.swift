@@ -103,7 +103,8 @@ public struct TapElementTool: NativeTool {
         .string("text", "Visible text to match instead (case-insensitive substring)")
     )
 
-    public init() {}
+    /// SDK-internal — see `RipulDeveloperOnlyTool`.
+    init() {}
 
     @MainActor
     public func execute(args: [String: Any]) async throws -> Any {
@@ -250,7 +251,8 @@ public struct TypeTextTool: NativeTool {
         .bool("append", "Append to the existing content instead of replacing it (default false)")
     )
 
-    public init() {}
+    /// SDK-internal — see `RipulDeveloperOnlyTool`.
+    init() {}
 
     @MainActor
     public func execute(args: [String: Any]) async throws -> Any {
@@ -342,7 +344,8 @@ public struct ScrollElementTool: NativeTool {
         .number("amount", "Fraction of the visible size to scroll by, 0.1–2.0 (default 0.8)")
     )
 
-    public init() {}
+    /// SDK-internal — see `RipulDeveloperOnlyTool`.
+    init() {}
 
     @MainActor
     public func execute(args: [String: Any]) async throws -> Any {

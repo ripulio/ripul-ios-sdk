@@ -27,37 +27,23 @@ public struct RipulSessionsConfiguration {
     /// Whether host-defined quick actions are discovered/executed on machine
     /// rows (the first-party app: on; a dev console: off).
     public var quickActionsEnabled: Bool
-    /// HOST-CONTRIBUTED DEV TOOLS for the console's agent.
+    /// THE HOST'S TOOL REGISTRY — every native tool, registered once, tagged
+    /// by audience (native-tool-registry phase 1).
     ///
-    /// The console registers its own built-ins (`console_logs`, `network_logs`,
-    /// `inspect_screen`) so the developer driving from here can SEE the running app.
-    /// These are the host app's contribution — tools that let that agent also ACT on it
-    /// (set a theme knob, report the running build, tap a control).
+    /// The console's `.developer` channel exposes the registry's
+    /// developer-tagged entries (a host contributes dev-assistant tools with
+    /// `registry.register(RipulDevThemeTools.all(...), audience: .developer)`),
+    /// and the tool-collections editor reads the same registry for every
+    /// surface — so what the editor organises and what each agent can call can
+    /// no longer drift apart. End-user-tagged entries are NOT exposed here:
+    /// they belong to the host's own agent panel (`AgentView(registry:)`), and
+    /// phase 2's explicit testing mode is the only way this console borrows
+    /// them.
     ///
-    /// They are registered ADDITIVELY, so they neither replace nor are replaced by the
-    /// console's built-ins. Note this is the DEV-assistant surface: it is deliberately
-    /// separate from the host's end-user agent panel and its tools, which live on a
-    /// different bridge. A host that wants a tool in both places passes it to both.
-    public var devTools: [NativeTool]
-    /// THE HOST'S END-USER TOOL SURFACE — what its users' agent can call.
-    ///
-    /// Declared here purely so the tool-collections editor can organise it. The
-    /// console does NOT register these; they belong to the host's own agent
-    /// panel on a different bridge, and registering them here would put
-    /// end-user capabilities in the dev agent's hands.
-    ///
-    /// Without this, the editor can only see the console's own bridge — the
-    /// developer surface — and reports every end-user tool as missing. That is
-    /// exactly backwards: the end-user surface is the one whose context window
-    /// real users pay for, so it is the one most worth grouping.
-    ///
-    /// WAC passes `WACNativeTools.all`. Hosts with more than two agent surfaces
-    /// use `toolCatalogs` instead.
-    public var endUserTools: [NativeTool]
-    /// Additional named tool surfaces, for hosts with more than the end-user /
-    /// developer pair. Merged with the catalog built from `endUserTools` and
-    /// the console's own bridge.
-    public var toolCatalogs: [RipulToolCatalog]
+    /// Pass the SAME registry instance to `AgentView` and this configuration.
+    /// WAC registers `WACNativeTools.endUser` as `.endUser` and its theme dev
+    /// tools as `.developer`.
+    public var registry: RipulToolRegistry
     /// Optional app-injected panels (nil = omitted).
     public var invitesSection: (() -> AnyView)?
     public var foldersSection: (() -> AnyView)?
@@ -71,9 +57,7 @@ public struct RipulSessionsConfiguration {
         theme: AgentTheme = .system,
         allowRipulAgents: Bool = false,
         quickActionsEnabled: Bool = false,
-        devTools: [NativeTool] = [],
-        endUserTools: [NativeTool] = [],
-        toolCatalogs: [RipulToolCatalog] = [],
+        registry: RipulToolRegistry = RipulToolRegistry(),
         invitesSection: (() -> AnyView)? = nil,
         foldersSection: (() -> AnyView)? = nil,
         emptyStateOverride: (() -> AnyView)? = nil
@@ -85,9 +69,7 @@ public struct RipulSessionsConfiguration {
         self.theme = theme
         self.allowRipulAgents = allowRipulAgents
         self.quickActionsEnabled = quickActionsEnabled
-        self.devTools = devTools
-        self.endUserTools = endUserTools
-        self.toolCatalogs = toolCatalogs
+        self.registry = registry
         self.invitesSection = invitesSection
         self.foldersSection = foldersSection
         self.emptyStateOverride = emptyStateOverride

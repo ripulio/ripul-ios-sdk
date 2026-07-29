@@ -12,6 +12,11 @@ struct RipulToolCollectionEditorView: View {
     let tools: [RipulRegisteredTool]
     /// Nil when creating.
     let existing: RipulToolCollection?
+    /// Names of solution contexts referencing this collection via `group://`
+    /// (native-tool-registry phase 4). Deleting a referenced collection is
+    /// allowed — the server degrades the context rather than bricking it —
+    /// but the developer should see the blast radius first.
+    var referencedByContexts: [String] = []
 
     @Environment(\.dismiss) private var dismiss
 
@@ -83,11 +88,20 @@ struct RipulToolCollectionEditorView: View {
             }
         }
         .onAppear(perform: loadExisting)
-        .alert("Delete collection?", isPresented: $confirmingDelete) {
+        .alert(
+            referencedByContexts.isEmpty
+                ? "Delete collection?"
+                : "Delete collection used by \(referencedByContexts.joined(separator: ", "))?",
+            isPresented: $confirmingDelete
+        ) {
             Button("Delete", role: .destructive) { Task { await performDelete() } }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Its \(matcher.memberCount) members return to the agent's flat list. The tools themselves are not deleted.")
+            if referencedByContexts.isEmpty {
+                Text("Its \(matcher.memberCount) members return to the agent's flat list. The tools themselves are not deleted.")
+            } else {
+                Text("Its \(matcher.memberCount) members return to the agent's flat list. The tools themselves are not deleted.\n\nContexts referencing it via group:// keep working but lose these tools on their next request.")
+            }
         }
     }
 

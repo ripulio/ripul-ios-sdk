@@ -9,7 +9,22 @@ public enum SiteKeyValidator {
         public let configJSON: String?
     }
 
-    public static func validate(siteKey: String, baseURL: URL) async -> ValidationResult {
+    /// Validate a site key, optionally requesting a specific solution context.
+    ///
+    /// - Parameters:
+    ///   - contextId: explicit context id; must be in the key's allowed set.
+    ///   - surface: named surface, resolved through the key's surfaceContextMap.
+    ///
+    /// A refused context/surface comes back as a 403 and fails validation with
+    /// the server's message logged. That is deliberate: falling back to the
+    /// default context would let a misconfigured screen load the wrong toolset
+    /// and prompt while looking like it worked.
+    public static func validate(
+        siteKey: String,
+        contextId: String? = nil,
+        surface: String? = nil,
+        baseURL: URL
+    ) async -> ValidationResult {
         let url = baseURL.appendingPathComponent("api/v1/site-key/validate")
 
         // Build the origin from baseURL (e.g. "https://demo.ripul.io")
@@ -23,7 +38,12 @@ public enum SiteKeyValidator {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue(origin, forHTTPHeaderField: "Origin")
-        request.httpBody = try? JSONSerialization.data(withJSONObject: ["siteKey": siteKey])
+        // Field names mirror the worker contract (handleSiteKeyValidate);
+        // scripts/selftest-api.mjs asserts the parity.
+        var body: [String: Any] = ["siteKey": siteKey]
+        if let contextId { body["contextId"] = contextId }
+        if let surface { body["surface"] = surface }
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
 
         NSLog("[SiteKeyValidator] Validating site key from origin: %@", origin)
 
@@ -36,7 +56,14 @@ public enum SiteKeyValidator {
             }
 
             guard httpResponse.statusCode == 200 else {
-                NSLog("[SiteKeyValidator] Validation failed with status: %d", httpResponse.statusCode)
+                // Surface the server's message — a 403 here is almost always
+                // `context_not_allowed`, and the status alone doesn't say which
+                // surface or context was refused.
+                let detail = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])
+                    .flatMap { ($0?["error"] as? [String: Any])?["message"] as? String }
+                    ?? "no message"
+                NSLog("[SiteKeyValidator] Validation failed with status: %d (%@)",
+                      httpResponse.statusCode, detail)
                 return ValidationResult(sessionToken: nil, configJSON: nil)
             }
 

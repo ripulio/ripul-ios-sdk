@@ -19,7 +19,9 @@ public struct NetworkLogsTool: NativeTool {
 
     let bridge: AgentBridge
 
-    public init(bridge: AgentBridge) {
+    /// SDK-internal: constructible only from within this module (the console
+    /// composition path and `.ripulDevTools()`) — see `RipulDeveloperOnlyTool`.
+    init(bridge: AgentBridge) {
         self.bridge = bridge
     }
 

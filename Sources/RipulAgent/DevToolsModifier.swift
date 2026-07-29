@@ -26,6 +26,17 @@ public extension View {
     /// AgentView(bridge: bridge)
     ///     .ripulDevTools(bridge: bridge)
     /// ```
+    ///
+    /// Attachable to ANY bridge, including a host's own `.endUser`-audience
+    /// `AgentView` bridge as in the example above — that's the point, this
+    /// modifier carries no login. But `console_logs` / `network_logs` are
+    /// registered as MCP tools on the SAME bridge, and the one-way tool valve
+    /// (`RipulDeveloperOnlyTool`, enforced in `AgentBridge`) means an
+    /// `.endUser` bridge silently keeps the log VIEWER working (it reads
+    /// `bridge.consoleLogs` / `.networkLogs` directly) while refusing to
+    /// expose those tools to the agent on that channel. To let the agent
+    /// itself call them, attach this to a `.developer`-audience bridge
+    /// instead (e.g. the one `RipulAgentConsole` uses).
     func ripulDevTools(bridge: AgentBridge) -> some View {
         modifier(DevToolsModifier(bridge: bridge))
     }

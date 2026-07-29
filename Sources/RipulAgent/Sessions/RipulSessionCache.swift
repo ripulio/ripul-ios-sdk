@@ -13,6 +13,13 @@ import Foundation
 /// Mirrors the subset of `UserDefaults` the session list actually uses, plus a
 /// `userDefaults` escape hatch that backs `@AppStorage(store:)` bindings in the
 /// SwiftUI list.
+/// Cache keys for the console's seeded-context bootstrap (native-tool-registry
+/// phase 3). Written by `RipulAgentConsole.fetchSeededContexts`, read by
+/// `RipulAgentScreen.agentConfig` — the id is server-derived, never hardcoded.
+enum RipulSeededContextCache {
+    static let devContextIdKey = "ripulSeededDevContextId"
+}
+
 public protocol RipulSessionCache: AnyObject {
     func data(forKey key: String) -> Data?
     func stringArray(forKey key: String) -> [String]?

@@ -25,5 +25,9 @@ let package = Package(
                 .process("Resources/RipulBranding.xcassets"),
             ]
         ),
+        .testTarget(
+            name: "RipulAgentTests",
+            dependencies: ["RipulAgent"]
+        ),
     ]
 )

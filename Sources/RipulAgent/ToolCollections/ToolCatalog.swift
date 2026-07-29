@@ -1,25 +1,22 @@
 import Foundation
 
 // ---------------------------------------------------------------------------
-// A tool catalog is a NAMED TOOL SURFACE BELONGING TO ONE AGENT.
+// A tool catalog is a NAMED TOOL SURFACE BELONGING TO ONE AGENT — since
+// native-tool-registry phase 1, a DERIVED value, never a host declaration.
 //
-// An app that embeds Ripul has more than one, and they are disjoint:
+// The host registers every tool once in `RipulToolRegistry`, tagged by
+// audience; catalogs are the registry's projection for the collections editor
+// (`registry.editorCatalogs()` for the host-owned surfaces, plus
+// `.developer(bridge.registeredToolSummaries)` from the console's own
+// channel). The old world — `endUserTools:`/`toolCatalogs:` declared beside a
+// separate per-bridge registration — is gone; the editor and the runtime read
+// the same truth, so the editor can no longer report a surface the runtime
+// doesn't have (or vice versa).
 //
-//   • End-user tools  — what the user's agent can do (receipts, rota, pickers).
-//                       Registered on the agent panel's bridge.
-//   • Developer tools — what the in-app dev agent can do (console logs, screen
-//                       inspection, theme knobs). Registered on the console's
-//                       bridge.
-//
-// They live in the same process on different `AgentBridge` instances, so
-// "the tools this build registered" is not a single set. Reading one bridge and
-// calling the result "this app" is how the collections editor first came to
-// report every end-user tool as missing.
-//
-// Progressive discovery applies to BOTH — either agent can carry too many tools
-// — so both are organisable. What must never be ambiguous is WHICH agent's
-// context is being economised. Hence: catalogs are named, carry a stated
-// purpose, and the editor shows exactly one at a time. Never a union.
+// Progressive discovery applies to every surface — any agent can carry too
+// many tools — so all are organisable. What must never be ambiguous is WHICH
+// agent's context is being economised. Hence: catalogs are named, carry a
+// stated purpose, and the editor shows exactly one at a time. Never a union.
 // ---------------------------------------------------------------------------
 
 /// A named tool surface belonging to one agent.
