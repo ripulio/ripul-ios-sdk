@@ -7,11 +7,22 @@ public struct RipulSolutionManagement {
     public let registry: RipulToolRegistry
     public let baseURL: URL
     public let tokenProvider: () -> String?
+    /// Whether to offer site-key ↔ context assignment. Off for an ordinary SDK
+    /// host: a developer curates contexts and collections, but binding them to
+    /// keys is a platform-admin act performed from the first-party Ripul app.
+    /// (The API gates it too — this only decides whether the row is offered.)
+    public let showsSiteKeyAdmin: Bool
 
-    public init(registry: RipulToolRegistry, baseURL: URL, tokenProvider: @escaping () -> String?) {
+    public init(
+        registry: RipulToolRegistry,
+        baseURL: URL,
+        tokenProvider: @escaping () -> String?,
+        showsSiteKeyAdmin: Bool = false
+    ) {
         self.registry = registry
         self.baseURL = baseURL
         self.tokenProvider = tokenProvider
+        self.showsSiteKeyAdmin = showsSiteKeyAdmin
     }
 }
 
@@ -33,6 +44,7 @@ struct SolutionManagementSection: View {
     @State private var isExpanded = false
     @State private var showingCollections = false
     @State private var showingContexts = false
+    @State private var showingSiteKeys = false
     /// Phase-2 absorption confirmation + collision alert (moved here from the
     /// console DevTools Tools tab).
     @State private var confirmAbsorption = false
@@ -56,6 +68,16 @@ struct SolutionManagementSection: View {
                     icon: "square.stack.3d.up",
                     identifier: "SolutionManagement.contexts"
                 ) { showingContexts = true }
+
+                if management.showsSiteKeyAdmin {
+                    Divider().padding(.leading, 44)
+                    row(
+                        title: "Site Keys",
+                        subtitle: "Assign contexts to apps — allowed, default, surfaces",
+                        icon: "key",
+                        identifier: "SolutionManagement.siteKeys"
+                    ) { showingSiteKeys = true }
+                }
 
                 if bridge.audience == .developer {
                     Divider().padding(.leading, 44)
@@ -123,6 +145,25 @@ struct SolutionManagementSection: View {
                 .toolbar {
                     ToolbarItem(placement: .topBarTrailing) {
                         Button("Done") { showingContexts = false }
+                    }
+                }
+            }
+        }
+        .sheet(isPresented: $showingSiteKeys) {
+            NavigationStack {
+                RipulSiteKeysScreen(
+                    siteKeysClient: RipulSiteKeysClient(
+                        baseURL: management.baseURL,
+                        tokenProvider: management.tokenProvider
+                    ),
+                    contextsClient: RipulSolutionContextsClient(
+                        baseURL: management.baseURL,
+                        tokenProvider: management.tokenProvider
+                    )
+                )
+                .toolbar {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button("Done") { showingSiteKeys = false }
                     }
                 }
             }

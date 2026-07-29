@@ -263,7 +263,8 @@ public struct RipulAgentScreen: View {
             solutionManagement: RipulSolutionManagement(
                 registry: configuration.registry,
                 baseURL: configuration.baseURL,
-                tokenProvider: tokenProvider
+                tokenProvider: tokenProvider,
+                showsSiteKeyAdmin: configuration.showsSiteKeyAdmin
             ),
             emptyStateOverride: configuration.emptyStateOverride,
             model: model,

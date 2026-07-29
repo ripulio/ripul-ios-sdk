@@ -160,6 +160,19 @@ public final class RipulSolutionContextsClient {
         )
     }
 
+    /// The API returns `{ "error": { "type": ..., "message": ... } }`; older
+    /// paths return `{ "error": "..." }`. Accept both, then fall back to the
+    /// raw body so a proxy/HTML error page stays legible rather than blank.
+    static func errorMessage(from data: Data) -> String {
+        if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            if let nested = json["error"] as? [String: Any], let message = nested["message"] as? String {
+                return message
+            }
+            if let flat = json["error"] as? String { return flat }
+        }
+        return String(data: data, encoding: .utf8) ?? ""
+    }
+
     private func encode(_ id: String) -> String {
         id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
     }
@@ -192,9 +205,7 @@ public final class RipulSolutionContextsClient {
             throw RipulSolutionContextsError.malformedResponse
         }
         guard (200..<300).contains(http.statusCode) else {
-            let message = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])
-                .flatMap { $0["error"] as? String }
-                ?? String(data: data, encoding: .utf8) ?? ""
+            let message = Self.errorMessage(from: data)
             throw RipulSolutionContextsError.server(status: http.statusCode, message: message)
         }
         return data

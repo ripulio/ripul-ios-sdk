@@ -44,6 +44,12 @@ public struct RipulSessionsConfiguration {
     /// WAC registers `WACNativeTools.endUser` as `.endUser` and its theme dev
     /// tools as `.developer`.
     public var registry: RipulToolRegistry
+    /// Offer site-key ↔ context assignment in Solution management. The
+    /// first-party Ripul app (the platform admin surface) sets this; an
+    /// ordinary SDK host leaves it off — its developer curates contexts and
+    /// collections, but binding them to keys is a platform-admin act. The API
+    /// gates it independently; this only decides whether the row is offered.
+    public var showsSiteKeyAdmin: Bool
     /// Optional app-injected panels (nil = omitted).
     public var invitesSection: (() -> AnyView)?
     public var foldersSection: (() -> AnyView)?
@@ -58,6 +64,7 @@ public struct RipulSessionsConfiguration {
         allowRipulAgents: Bool = false,
         quickActionsEnabled: Bool = false,
         registry: RipulToolRegistry = RipulToolRegistry(),
+        showsSiteKeyAdmin: Bool = false,
         invitesSection: (() -> AnyView)? = nil,
         foldersSection: (() -> AnyView)? = nil,
         emptyStateOverride: (() -> AnyView)? = nil
@@ -70,6 +77,7 @@ public struct RipulSessionsConfiguration {
         self.allowRipulAgents = allowRipulAgents
         self.quickActionsEnabled = quickActionsEnabled
         self.registry = registry
+        self.showsSiteKeyAdmin = showsSiteKeyAdmin
         self.invitesSection = invitesSection
         self.foldersSection = foldersSection
         self.emptyStateOverride = emptyStateOverride
