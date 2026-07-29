@@ -14,8 +14,9 @@ import SwiftUI
 //                          exactly, no canonicalisation
 //   • anything else     → free text, stored as typed (web/deployed tools)
 //
-// Prompts are deliberately absent from v1: `systemPromptId` references a
-// separate entity with its own CRUD; the dashboard edits it today.
+// The system prompt is edited inline but SAVED as its own SystemPrompt
+// entity (created on first save, named "<context> prompt", updated in place
+// after) — the dashboard and this editor see the same prompt, not copies.
 // ---------------------------------------------------------------------------
 
 @MainActor
@@ -46,18 +47,35 @@ final class RipulSolutionContextsModel: ObservableObject {
         name: String,
         description: String?,
         includedTools: [String],
-        excludedTools: [String]
+        excludedTools: [String],
+        promptText: String
     ) async -> Bool {
         do {
+            // The context's prompt is a referenced SystemPrompt entity. An
+            // existing link is updated in place (clearing the text empties the
+            // prompt rather than orphaning it); new text on a promptless
+            // context creates one named after the context.
+            let trimmedPrompt = promptText.trimmingCharacters(in: .whitespacesAndNewlines)
+            var promptId = existing?.systemPromptId
+            if let linkedPromptId = promptId {
+                if trimmedPrompt != (existing?.systemPromptContent ?? "") {
+                    try await client.updateSystemPrompt(id: linkedPromptId, content: trimmedPrompt)
+                }
+            } else if !trimmedPrompt.isEmpty {
+                promptId = try await client.createSystemPrompt(name: "\(name) prompt", content: trimmedPrompt)
+            }
+
             if let existing {
                 _ = try await client.update(
                     id: existing.id, name: name, description: description,
-                    includedTools: includedTools, excludedTools: excludedTools
+                    includedTools: includedTools, excludedTools: excludedTools,
+                    systemPromptId: promptId
                 )
             } else {
                 _ = try await client.create(
                     name: name, description: description,
-                    includedTools: includedTools, excludedTools: excludedTools
+                    includedTools: includedTools, excludedTools: excludedTools,
+                    systemPromptId: promptId
                 )
             }
             await load()
@@ -206,6 +224,7 @@ struct RipulSolutionContextEditorView: View {
 
     @State private var name = ""
     @State private var descriptionText = ""
+    @State private var promptText = ""
     @State private var includedTools: [String] = []
     @State private var excludedTools: [String] = []
     @State private var saving = false
@@ -228,6 +247,20 @@ struct RipulSolutionContextEditorView: View {
                     .uiKitIdentifier("RipulSolutionContexts.editor.name")
                 TextField("What sessions in this context are for", text: $descriptionText, axis: .vertical)
                     .lineLimit(2...4)
+            }
+
+            Section {
+                TextField(
+                    "You are the records assistant for this app…",
+                    text: $promptText,
+                    axis: .vertical
+                )
+                .lineLimit(4...12)
+                .uiKitIdentifier("RipulSolutionContexts.editor.prompt")
+            } header: {
+                Text("System prompt")
+            } footer: {
+                Text("Injected as the system message for sessions in this context. Saved as its own prompt entity (\"<name> prompt\") so the dashboard sees the same one.")
             }
 
             toolsSection(
@@ -328,6 +361,7 @@ struct RipulSolutionContextEditorView: View {
         didLoad = true
         name = existing.name
         descriptionText = existing.description ?? ""
+        promptText = existing.systemPromptContent ?? ""
         includedTools = existing.includedTools
         excludedTools = existing.excludedTools
     }
@@ -339,7 +373,8 @@ struct RipulSolutionContextEditorView: View {
             name: name.trimmingCharacters(in: .whitespaces),
             description: descriptionText.trimmingCharacters(in: .whitespaces),
             includedTools: includedTools,
-            excludedTools: excludedTools
+            excludedTools: excludedTools,
+            promptText: promptText
         )
         saving = false
         if ok { dismiss() }

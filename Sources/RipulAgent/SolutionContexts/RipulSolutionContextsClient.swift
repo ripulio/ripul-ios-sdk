@@ -24,6 +24,11 @@ public struct RipulSolutionContext: Identifiable, Hashable {
     public let expandedIncludedTools: [String]?
     public let isBuiltIn: Bool
     public let createdBy: String?
+    /// Reference to the context's SystemPrompt entity, if any.
+    public let systemPromptId: String?
+    /// Resolved prompt content (response-only; saving goes through the
+    /// system-prompts CRUD, see `RipulSolutionContextsClient`).
+    public let systemPromptContent: String?
 
     init?(json: [String: Any]) {
         guard let id = json["id"] as? String, let name = json["name"] as? String else { return nil }
@@ -36,6 +41,8 @@ public struct RipulSolutionContext: Identifiable, Hashable {
         self.expandedIncludedTools = json["expandedIncludedTools"] as? [String]
         self.isBuiltIn = json["isBuiltIn"] as? Bool ?? false
         self.createdBy = json["createdBy"] as? String
+        self.systemPromptId = json["systemPromptId"] as? String
+        self.systemPromptContent = json["systemPromptContent"] as? String
     }
 
     /// The seeded per-account pair (`sc_<hash12>_user` / `sc_<hash12>_dev`) —
@@ -87,10 +94,12 @@ public final class RipulSolutionContextsClient {
         name: String,
         description: String?,
         includedTools: [String],
-        excludedTools: [String]
+        excludedTools: [String],
+        systemPromptId: String? = nil
     ) async throws -> RipulSolutionContext {
         var body: [String: Any] = ["name": name, "includedTools": includedTools, "excludedTools": excludedTools]
         if let description, !description.isEmpty { body["description"] = description }
+        if let systemPromptId { body["systemPromptId"] = systemPromptId }
         let data = try await send(path: "api/admin/solution-contexts", method: "POST", body: body)
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let context = RipulSolutionContext(json: json) else {
@@ -104,14 +113,16 @@ public final class RipulSolutionContextsClient {
         name: String,
         description: String?,
         includedTools: [String],
-        excludedTools: [String]
+        excludedTools: [String],
+        systemPromptId: String? = nil
     ) async throws -> RipulSolutionContext {
-        let body: [String: Any] = [
+        var body: [String: Any] = [
             "name": name,
             "description": description ?? "",
             "includedTools": includedTools,
             "excludedTools": excludedTools,
         ]
+        if let systemPromptId { body["systemPromptId"] = systemPromptId }
         let data = try await send(path: "api/admin/solution-contexts/\(encode(id))", method: "PATCH", body: body)
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let context = RipulSolutionContext(json: json) else {
@@ -122,6 +133,31 @@ public final class RipulSolutionContextsClient {
 
     public func delete(id: String) async throws {
         _ = try await send(path: "api/admin/solution-contexts/\(encode(id))", method: "DELETE", body: nil)
+    }
+
+    // MARK: - System prompts (the context's prompt is a referenced entity)
+
+    /// Create a SystemPrompt and return its id — the editor names it after the
+    /// context ("<name> prompt") so the dashboard list stays legible.
+    public func createSystemPrompt(name: String, content: String) async throws -> String {
+        let data = try await send(
+            path: "api/admin/system-prompts",
+            method: "POST",
+            body: ["name": name, "content": content]
+        )
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let id = json["id"] as? String else {
+            throw RipulSolutionContextsError.malformedResponse
+        }
+        return id
+    }
+
+    public func updateSystemPrompt(id: String, content: String) async throws {
+        _ = try await send(
+            path: "api/admin/system-prompts/\(encode(id))",
+            method: "PATCH",
+            body: ["content": content]
+        )
     }
 
     private func encode(_ id: String) -> String {
