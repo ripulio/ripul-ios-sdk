@@ -6,8 +6,21 @@ import UIKit
 
 public extension MacroSelector {
     /// Synthesize a durable selector for a live view, using the SAME identity
-    /// ladder the actuation tools already compute — an id alone when present
-    /// (tightest, most stable), else role + visible text, else role + class.
+    /// ladder the actuation tools already compute, plus two fallbacks learned
+    /// from the first real replay failure (a UITabBar tap matched all five
+    /// tab buttons — same class, same role, nothing else):
+    ///
+    /// 1. id alone when present (tightest, most stable), else
+    /// 2. role + visible text (textContent), else
+    /// 3. role + `accessibilityLabel` — where tab-bar items, icon-only SF
+    ///    Symbol buttons, and SwiftUI combined elements keep their name
+    ///    (`textContent` only reads UILabel/text-field/view/Button-title),
+    /// else
+    /// 4. role + class + `nth` — computed against the LIVE tree right now:
+    ///    when the selector would still match several disjoint elements, the
+    ///    tapped element's own index among them is recorded, so "the third
+    ///    tab button" replays as exactly that instead of failing ambiguous.
+    ///
     /// This is what makes a recorded step replay correctly later: it's built
     /// from the same `ScreenElementFinder` facts `tap_element`'s own matching
     /// reads, not a one-off snapshot of the view.
@@ -23,10 +36,28 @@ public extension MacroSelector {
             self.init(id: id)
             return
         }
+
         let text = InspectedView.textContent(of: view)
-        self.init(text: (text?.isEmpty == false) ? text : nil,
-                  role: ScreenElementFinder.role(of: view),
-                  className: String(describing: type(of: view)))
+        let label = view.accessibilityLabel?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let role = ScreenElementFinder.role(of: view)
+        let className = String(describing: type(of: view))
+        let textPredicate: String? = (text?.isEmpty == false) ? text
+            : (label?.isEmpty == false) ? label : nil
+
+        var selector = MacroSelector(text: textPredicate, role: role, className: className)
+
+        // Disambiguation: if this selector matches several disjoint elements
+        // in the live tree (siblings sharing class+role, e.g. every tab
+        // button in a tab bar), record the tapped element's own index — the
+        // XPath positional predicate — so replay picks it deterministically
+        // instead of failing ambiguous.
+        let query = ScreenElementFinder.Query(id: nil, text: selector.text,
+                                              role: selector.role, className: selector.className, nth: nil)
+        let matches = ScreenElementFinder.find(query)
+        if matches.count > 1, let index = matches.firstIndex(where: { $0.view === view }) {
+            selector.nth = index
+        }
+        self = selector
     }
 }
 
@@ -86,11 +117,16 @@ enum MacroRecorder {
     }
 
     /// A short human label for the step list / dialog title — role-qualified
-    /// text when available, else the id, else the class name.
+    /// text when available (visible text first, then `accessibilityLabel`,
+    /// which is where tab-bar items and icon-only buttons keep their name),
+    /// else the id, else the class name.
     static func describeTarget(_ view: UIView) -> String {
         let role = ScreenElementFinder.role(of: view)
         if let text = InspectedView.textContent(of: view), !text.isEmpty {
             return role.map { "'\(text)' (\($0))" } ?? "'\(text)'"
+        }
+        if let label = view.accessibilityLabel?.trimmingCharacters(in: .whitespacesAndNewlines), !label.isEmpty {
+            return role.map { "'\(label)' (\($0))" } ?? "'\(label)'"
         }
         if let id = ScreenElementFinder.identifier(of: view), !id.isEmpty {
             return "'\(id)'"

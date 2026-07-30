@@ -20,15 +20,39 @@ import UIKit
 // unconditionally compiled, and its control flow (sequencing, parameter
 // substitution, stop-on-first-failure) pinned by `swift test` with a fake.
 
+// MARK: - MacroResolution — why a lookup failed, not just that it did
+
+/// The result of one selector resolution. `.notFound` and `.ambiguous` are
+/// deliberately distinct: "nothing matches" and "five things match" need
+/// completely different fixes (a wait / a `within` anchor or `nth`), and
+/// collapsing them into the same `nil` made the first real replay bug
+/// unreadable.
+public enum MacroResolution<Element> {
+    case resolved(Element)
+    case notFound
+    case ambiguous(count: Int)
+
+    /// Convenience for the `.wait` step's found/not-found check.
+    public var element: Element? {
+        if case .resolved(let e) = self { return e }
+        return nil
+    }
+}
+
 @MainActor
 public protocol MacroElementResolving {
     associatedtype ResolvedElement
 
     /// Resolve a selector to the element a tap/type step should act on.
     /// One-shot (no polling) — `MacroReplayEngine` owns the bounded-poll loop.
-    func resolveTap(_ selector: MacroSelector) -> ResolvedElement?
+    /// Returns a `MacroResolution` (not an Optional) specifically so the
+    /// replay error can distinguish "matched nothing" from "matched N,
+    /// ambiguous" — identical failures were the first user-visible bug this
+    /// system hit (a tab-bar tap matched all 5 tab buttons and read as
+    /// "could not resolve", identical to a genuinely missing element).
+    func resolveTap(_ selector: MacroSelector) -> MacroResolution<ResolvedElement>
     /// Resolve a selector to the scroll container a scroll step should act on.
-    func resolveScrollView(_ selector: MacroSelector) -> ResolvedElement?
+    func resolveScrollView(_ selector: MacroSelector) -> MacroResolution<ResolvedElement>
 
     /// Actuate a resolved element — mirrors `ScreenActuationEngine`'s three
     /// operations exactly; the live conformance just forwards to it.
@@ -67,13 +91,20 @@ public extension MacroElementResolving {
 public struct LiveScreenResolver: MacroElementResolving {
     public init() {}
 
-    public func resolveTap(_ selector: MacroSelector) -> UIView? {
+    public func resolveTap(_ selector: MacroSelector) -> MacroResolution<UIView> {
         Self.resolveView(for: selector)
     }
 
-    public func resolveScrollView(_ selector: MacroSelector) -> UIView? {
-        guard let view = Self.resolveView(for: selector) else { return nil }
-        return (view as? UIScrollView) ?? ScrollElementTool.enclosingScrollView(of: view)
+    public func resolveScrollView(_ selector: MacroSelector) -> MacroResolution<UIView> {
+        switch Self.resolveView(for: selector) {
+        case .resolved(let view):
+            if let scrollView = (view as? UIScrollView) ?? ScrollElementTool.enclosingScrollView(of: view) {
+                return .resolved(scrollView)
+            }
+            return .notFound
+        case .notFound: return .notFound
+        case .ambiguous(let count): return .ambiguous(count: count)
+        }
     }
 
     public func performTap(_ element: UIView, matchId: String?, matchText: String?) -> (success: Bool, error: String?) {
@@ -99,32 +130,35 @@ public struct LiveScreenResolver: MacroElementResolving {
     /// Resolves `selector.within` (one level — see `MacroAnchorSelector`) to
     /// an anchor view first, then searches `selector`'s own predicates scoped
     /// to that anchor. Ambiguous results (no `nth` and more than one disjoint
-    /// match, at either the anchor or the main query) resolve to nil — replay
-    /// has no interactive way to disambiguate, so it must fail rather than
-    /// guess, same as the live tools' own ambiguity-is-an-error posture.
-    private static func resolveView(for selector: MacroSelector) -> UIView? {
+    /// match, at either the anchor or the main query) are reported as
+    /// `.ambiguous` — replay has no interactive way to disambiguate, so it
+    /// must fail rather than guess, and the COUNT is what the error message
+    /// needs to say so.
+    private static func resolveView(for selector: MacroSelector) -> MacroResolution<UIView> {
         var anchor: UIView?
         if let anchorSelector = selector.within {
-            guard anchorSelector.hasAnyPredicate else { return nil }
+            guard anchorSelector.hasAnyPredicate else { return .notFound }
             let anchorQuery = ScreenElementFinder.Query(id: anchorSelector.id, text: anchorSelector.text,
                                                         role: anchorSelector.role, className: anchorSelector.className,
                                                         nth: anchorSelector.nth)
             let anchorMatches = ScreenElementFinder.find(anchorQuery)
-            guard !anchorMatches.isEmpty else { return nil }
+            if anchorMatches.isEmpty { return .notFound }
             let anchorNth = anchorSelector.nth ?? (anchorMatches.count == 1 ? 0 : -1)
-            guard anchorNth >= 0, anchorNth < anchorMatches.count else { return nil }
+            guard anchorNth >= 0, anchorNth < anchorMatches.count else { return .ambiguous(count: anchorMatches.count) }
             anchor = anchorMatches[anchorNth].view
         }
-        guard selector.hasAnyPredicate else { return anchor }
+        guard selector.hasAnyPredicate else {
+            return anchor.map { .resolved($0) } ?? .notFound
+        }
 
         let query = ScreenElementFinder.Query(id: selector.id, text: selector.text,
                                               role: selector.role, className: selector.className,
                                               nth: selector.nth)
         let matches = ScreenElementFinder.find(query, within: anchor)
-        guard !matches.isEmpty else { return nil }
+        if matches.isEmpty { return .notFound }
         let nth = selector.nth ?? (matches.count == 1 ? 0 : -1)
-        guard nth >= 0, nth < matches.count else { return nil }
-        return matches[nth].view
+        guard nth >= 0, nth < matches.count else { return .ambiguous(count: matches.count) }
+        return .resolved(matches[nth].view)
     }
 }
 #endif

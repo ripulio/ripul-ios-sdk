@@ -25,6 +25,8 @@ final class MacroReplayEngineTests: XCTestCase {
     final class FakeResolver: MacroElementResolving {
         /// Selector id → whether resolution should succeed. Missing id = fail.
         var resolvable: Set<String> = []
+        /// Selector id → ambiguity count to report instead of resolving.
+        var ambiguous: [String: Int] = [:]
         /// Selector id → whether performTap/performType should report success.
         var actuationFails: Set<String> = []
         /// The `via` string successful taps report — mirrors LiveScreenResolver
@@ -34,13 +36,14 @@ final class MacroReplayEngineTests: XCTestCase {
         private(set) var performTapCalls: [String?] = []
         private(set) var performTypeCalls: [(id: String?, text: String)] = []
 
-        func resolveTap(_ selector: MacroSelector) -> FakeElement? {
+        func resolveTap(_ selector: MacroSelector) -> MacroResolution<FakeElement> {
             resolveTapCalls.append(selector.id)
-            guard let id = selector.id, resolvable.contains(id) else { return nil }
-            return FakeElement(selectorId: id)
+            if let id = selector.id, let count = ambiguous[id] { return .ambiguous(count: count) }
+            guard let id = selector.id, resolvable.contains(id) else { return .notFound }
+            return .resolved(FakeElement(selectorId: id))
         }
 
-        func resolveScrollView(_ selector: MacroSelector) -> FakeElement? {
+        func resolveScrollView(_ selector: MacroSelector) -> MacroResolution<FakeElement> {
             resolveTap(selector)
         }
 
@@ -234,5 +237,21 @@ final class MacroReplayEngineTests: XCTestCase {
             return
         }
         XCTAssertNotNil(error)
+    }
+
+    // MARK: - Ambiguity is reported distinctly from not-found
+
+    func testAmbiguousMatchReportsTheCountInsteadOfGenericNotResolved() async {
+        let resolver = FakeResolver()
+        resolver.ambiguous["tab"] = 5
+        let result = await MacroReplayEngine.replay(
+            macro(steps: [tapStep("tab", label: "Tap _UITabButton")]),
+            parameters: [:], resolver: resolver, resolutionTimeout: 0.3)
+
+        XCTAssertFalse(result.success)
+        XCTAssertEqual(result.failedStepIndex, 0)
+        XCTAssertEqual(result.error, "'Tap _UITabButton' matched 5 elements — ambiguous (needs an nth or a within anchor to pick one).")
+        // Ambiguity must never become an actuation: nothing was pressed.
+        XCTAssertTrue(resolver.performTapCalls.isEmpty)
     }
 }

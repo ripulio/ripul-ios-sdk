@@ -105,23 +105,26 @@ public enum MacroReplayEngine {
                                                        resolver: R, resolutionTimeout: TimeInterval) async -> StepOutcome {
         switch step.kind {
         case .tap:
-            guard let element = await pollResolveTap(step.selector, resolver: resolver, resolutionTimeout: resolutionTimeout) else {
-                return StepOutcome(success: false, via: nil, error: notResolved(step, resolutionTimeout))
+            let resolution = await pollResolveTap(step.selector, resolver: resolver, resolutionTimeout: resolutionTimeout)
+            guard case .resolved(let element) = resolution else {
+                return StepOutcome(success: false, via: nil, error: notResolved(step, resolution, resolutionTimeout))
             }
             let outcome = resolver.performTapDetailed(element, matchId: step.selector.id, matchText: step.selector.text)
             return StepOutcome(success: outcome.success, via: outcome.via, error: outcome.error)
 
         case .type:
-            guard let element = await pollResolveTap(step.selector, resolver: resolver, resolutionTimeout: resolutionTimeout) else {
-                return StepOutcome(success: false, via: nil, error: notResolved(step, resolutionTimeout))
+            let resolution = await pollResolveTap(step.selector, resolver: resolver, resolutionTimeout: resolutionTimeout)
+            guard case .resolved(let element) = resolution else {
+                return StepOutcome(success: false, via: nil, error: notResolved(step, resolution, resolutionTimeout))
             }
             let text = MacroParameterSubstitution.apply(step.text ?? "", parameters: parameters)
             let outcome = resolver.performType(element, text: text, append: step.append ?? false)
             return StepOutcome(success: outcome.success, via: nil, error: outcome.error)
 
         case .scroll:
-            guard let element = await pollResolveScrollView(step.selector, resolver: resolver, resolutionTimeout: resolutionTimeout) else {
-                return StepOutcome(success: false, via: nil, error: notResolved(step, resolutionTimeout))
+            let resolution = await pollResolveScrollView(step.selector, resolver: resolver, resolutionTimeout: resolutionTimeout)
+            guard case .resolved(let element) = resolution else {
+                return StepOutcome(success: false, via: nil, error: notResolved(step, resolution, resolutionTimeout))
             }
             let scrolled = resolver.performScroll(element, direction: step.direction ?? "down", amount: step.amount ?? 0.8)
             return StepOutcome(success: scrolled, via: nil, error: scrolled ? nil : "Element resolved, but it isn't a scroll container.")
@@ -131,7 +134,7 @@ public enum MacroReplayEngine {
             let timeout = step.timeout ?? resolutionTimeout
             let deadline = Date().addingTimeInterval(timeout)
             while true {
-                let found = resolver.resolveTap(step.selector) != nil
+                let found = resolver.resolveTap(step.selector).element != nil
                 if wantGone != found { return StepOutcome(success: true, via: nil, error: nil) }
                 if Date() >= deadline {
                     return StepOutcome(success: false, via: nil,
@@ -145,28 +148,39 @@ public enum MacroReplayEngine {
     /// Bounded poll: re-resolves on every attempt (never holds a stale
     /// reference across attempts) so a step whose target hasn't rendered yet
     /// — the common case right after the previous step triggered a
-    /// navigation — succeeds without a recorded wait step.
+    /// navigation — succeeds without a recorded wait step. Keeps the LAST
+    /// resolution so the error message can say whether the poll saw nothing
+    /// or saw too much.
     private static func pollResolveTap<R: MacroElementResolving>(_ selector: MacroSelector, resolver: R,
-                                                                  resolutionTimeout: TimeInterval) async -> R.ResolvedElement? {
+                                                                  resolutionTimeout: TimeInterval) async -> MacroResolution<R.ResolvedElement> {
         let deadline = Date().addingTimeInterval(resolutionTimeout)
+        var last: MacroResolution<R.ResolvedElement> = .notFound
         while true {
-            if let element = resolver.resolveTap(selector) { return element }
-            if Date() >= deadline { return nil }
+            last = resolver.resolveTap(selector)
+            if case .resolved = last { return last }
+            if Date() >= deadline { return last }
             try? await Task.sleep(nanoseconds: pollInterval)
         }
     }
 
     private static func pollResolveScrollView<R: MacroElementResolving>(_ selector: MacroSelector, resolver: R,
-                                                                         resolutionTimeout: TimeInterval) async -> R.ResolvedElement? {
+                                                                         resolutionTimeout: TimeInterval) async -> MacroResolution<R.ResolvedElement> {
         let deadline = Date().addingTimeInterval(resolutionTimeout)
+        var last: MacroResolution<R.ResolvedElement> = .notFound
         while true {
-            if let element = resolver.resolveScrollView(selector) { return element }
-            if Date() >= deadline { return nil }
+            last = resolver.resolveScrollView(selector)
+            if case .resolved = last { return last }
+            if Date() >= deadline { return last }
             try? await Task.sleep(nanoseconds: pollInterval)
         }
     }
 
-    private static func notResolved(_ step: MacroStep, _ timeout: TimeInterval) -> String {
-        "Could not resolve '\(step.recordedLabel)' within \(Int(timeout))s."
+    private static func notResolved<E>(_ step: MacroStep, _ resolution: MacroResolution<E>, _ timeout: TimeInterval) -> String {
+        switch resolution {
+        case .ambiguous(let count):
+            return "'\(step.recordedLabel)' matched \(count) elements — ambiguous (needs an nth or a within anchor to pick one)."
+        default:
+            return "Could not resolve '\(step.recordedLabel)' within \(Int(timeout))s."
+        }
     }
 }
