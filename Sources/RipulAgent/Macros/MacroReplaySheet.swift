@@ -20,6 +20,8 @@ struct MacroReplaySheet: View {
     @State private var statuses: [StepStatus] = []
     @State private var isRunning = false
     @State private var outcome: MacroReplayResult?
+    /// Brief "Copied" flip after tapping the copy-log button.
+    @State private var didCopy = false
     @Environment(\.dismiss) private var dismiss
 
     private enum StepStatus {
@@ -110,6 +112,18 @@ struct MacroReplaySheet: View {
                         .uiKitIdentifier("MacroReplaySheet.replayButton")
                     }
                 }
+                ToolbarItem(placement: .topBarLeading) {
+                    Button {
+                        copyLog()
+                    } label: {
+                        Label(didCopy ? "Copied" : "Copy log", systemImage: didCopy ? "checkmark" : "doc.on.doc")
+                            .font(.subheadline)
+                    }
+                    // Only meaningful once something has happened — before the
+                    // first Replay tap there's no log to take.
+                    .disabled(statuses.allSatisfy { if case .pending = $0 { return true } else { return false } })
+                    .uiKitIdentifier("MacroReplaySheet.copyLogButton")
+                }
             }
         }
         .onAppear {
@@ -160,6 +174,46 @@ struct MacroReplaySheet: View {
         }
         outcome = result
         isRunning = false
+    }
+
+    /// The full replay transcript as plain text — paste-ready for a bug
+    /// report or a chat message: macro name, param values used, every step's
+    /// status (via path on success, error on failure), and the final outcome.
+    private func logText() -> String {
+        var lines: [String] = ["Replay: \(macro.name) — \(macro.steps.count) step\(macro.steps.count == 1 ? "" : "s")"]
+        for parameter in macro.parameters {
+            lines.append("  \(parameter.name) = \"\(paramValues[parameter.name] ?? "")\"")
+        }
+        for (index, step) in macro.steps.enumerated() {
+            let prefix = "\(index + 1). \(step.recordedLabel)"
+            switch status(for: index) {
+            case .succeeded(let via):
+                lines.append("✓ \(prefix)\(via.map { " (via \($0))" } ?? "")")
+            case .failed(let error):
+                lines.append("✗ \(prefix) — \(error ?? "failed")")
+            case .running:
+                lines.append("… \(prefix) (running)")
+            default:
+                lines.append("· \(prefix) (pending)")
+            }
+        }
+        if let outcome {
+            lines.append(outcome.success
+                ? "Outcome: all \(outcome.totalSteps) steps completed."
+                : "Outcome: stopped at step \((outcome.failedStepIndex ?? 0) + 1) of \(outcome.totalSteps) — \(outcome.error ?? "unknown error")")
+        } else if isRunning {
+            lines.append("Outcome: running…")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private func copyLog() {
+        UIPasteboard.general.string = logText()
+        didCopy = true
+        Task {
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            didCopy = false
+        }
     }
 }
 #endif
