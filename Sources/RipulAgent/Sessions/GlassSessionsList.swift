@@ -856,7 +856,15 @@ public struct GlassSessionsList: View {
                         invitesSection()
                     }
                     sessionsPanelSection
-                        .frame(maxHeight: .infinity, alignment: .top)
+                        // Only greedy-fill while expanded (so a long session list
+                        // gets the remaining space to grow into) — collapsed, this
+                        // must NOT hold an infinite frame, or the panel's outer
+                        // frame stays full-height around its now-tiny header row:
+                        // a blank gap where the list used to be, with Folders /
+                        // Solution management stuck below it instead of sliding up
+                        // to fill the space GlassSectionPanel's own collapse
+                        // (`if isExpanded { content }`) already freed.
+                        .frame(maxHeight: sessionsExpanded ? .infinity : nil, alignment: .top)
                     foldersPanelSection
 
                     // Developer's solution-shaping controls, after Folders.
