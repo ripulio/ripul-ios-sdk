@@ -27,6 +27,9 @@ final class MacroReplayEngineTests: XCTestCase {
         var resolvable: Set<String> = []
         /// Selector id → whether performTap/performType should report success.
         var actuationFails: Set<String> = []
+        /// The `via` string successful taps report — mirrors LiveScreenResolver
+        /// forwarding ScreenActuationEngine's real actuation path.
+        var tapVia: String? = nil
         private(set) var resolveTapCalls: [String?] = []
         private(set) var performTapCalls: [String?] = []
         private(set) var performTypeCalls: [(id: String?, text: String)] = []
@@ -47,6 +50,14 @@ final class MacroReplayEngineTests: XCTestCase {
                 return (false, "fake actuation failure for \(id)")
             }
             return (true, nil)
+        }
+
+        func performTapDetailed(_ element: FakeElement, matchId: String?, matchText: String?) -> (success: Bool, via: String?, error: String?) {
+            performTapCalls.append(element.selectorId)
+            if let id = element.selectorId, actuationFails.contains(id) {
+                return (false, nil, "fake actuation failure for \(id)")
+            }
+            return (true, tapVia, nil)
         }
 
         func performType(_ element: FakeElement, text: String, append: Bool) -> (success: Bool, error: String?) {
@@ -156,5 +167,72 @@ final class MacroReplayEngineTests: XCTestCase {
         XCTAssertTrue(result.success)
         XCTAssertEqual(result.completedSteps, 0)
         XCTAssertEqual(result.totalSteps, 0)
+    }
+
+    // MARK: - Per-step results + live progress events
+
+    func testStepResultsRecordEveryAttemptedStepInOrder() async {
+        let resolver = FakeResolver()
+        resolver.resolvable = ["a", "b", "c"]
+        resolver.tapVia = "fakePath"
+        let result = await MacroReplayEngine.replay(
+            macro(steps: [tapStep("a", label: "Tap A"), tapStep("b", label: "Tap B"), tapStep("c", label: "Tap C")]),
+            parameters: [:], resolver: resolver)
+
+        XCTAssertEqual(result.stepResults.count, 3)
+        XCTAssertEqual(result.stepResults.map(\.index), [0, 1, 2])
+        XCTAssertEqual(result.stepResults.map(\.label), ["Tap A", "Tap B", "Tap C"])
+        XCTAssertTrue(result.stepResults.allSatisfy(\.succeeded))
+        XCTAssertEqual(result.stepResults.first?.via, "fakePath")
+    }
+
+    func testStepResultsStopAtTheFailedStepAndCarryItsError() async {
+        let resolver = FakeResolver()
+        resolver.resolvable = ["a", "b", "c"]
+        resolver.actuationFails = ["b"]
+        let result = await MacroReplayEngine.replay(
+            macro(steps: [tapStep("a"), tapStep("b"), tapStep("c")]),
+            parameters: [:], resolver: resolver)
+
+        // Steps up to and INCLUDING the failure are recorded; step "c" is absent.
+        XCTAssertEqual(result.stepResults.map(\.index), [0, 1])
+        XCTAssertTrue(result.stepResults[0].succeeded)
+        XCTAssertFalse(result.stepResults[1].succeeded)
+        XCTAssertNotNil(result.stepResults[1].error)
+    }
+
+    func testProgressEventsFireStartedThenSucceededPerStep() async {
+        let resolver = FakeResolver()
+        resolver.resolvable = ["a", "b"]
+        var events: [MacroStepEvent] = []
+        _ = await MacroReplayEngine.replay(
+            macro(steps: [tapStep("a"), tapStep("b")]),
+            parameters: [:], resolver: resolver,
+            onStepProgress: { events.append($0) })
+
+        XCTAssertEqual(events.count, 4)
+        XCTAssertEqual(events.map(\.index), [0, 0, 1, 1])
+        XCTAssertEqual(events[0].phase, .started)
+        XCTAssertEqual(events[1].phase, .succeeded(via: nil))
+        XCTAssertEqual(events[2].phase, .started)
+        XCTAssertEqual(events[3].phase, .succeeded(via: nil))
+    }
+
+    func testProgressEventsCarryTheFailureOnTheFailedStep() async {
+        let resolver = FakeResolver()
+        resolver.resolvable = ["a", "b"]
+        resolver.actuationFails = ["b"]
+        var events: [MacroStepEvent] = []
+        _ = await MacroReplayEngine.replay(
+            macro(steps: [tapStep("a"), tapStep("b")]),
+            parameters: [:], resolver: resolver,
+            onStepProgress: { events.append($0) })
+
+        XCTAssertEqual(events.count, 4)
+        guard case .failed(let error) = events[3].phase else {
+            XCTFail("expected the final event to be .failed, got \(events[3].phase)")
+            return
+        }
+        XCTAssertNotNil(error)
     }
 }

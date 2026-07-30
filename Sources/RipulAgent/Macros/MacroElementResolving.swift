@@ -33,8 +33,29 @@ public protocol MacroElementResolving {
     /// Actuate a resolved element — mirrors `ScreenActuationEngine`'s three
     /// operations exactly; the live conformance just forwards to it.
     func performTap(_ element: ResolvedElement, matchId: String?, matchText: String?) -> (success: Bool, error: String?)
+    /// Via-aware tap outcome — declared as a REQUIREMENT (not just an
+    /// extension convenience) specifically so it dispatches through the
+    /// witness table at generic call sites. A method defined only in a
+    /// protocol extension statically dispatches to the default at
+    /// `R: MacroElementResolving` call sites — conformances never see it
+    /// called. (Caught by MacroReplayEngineTests: the fake's `via` never
+    /// surfaced until this became a requirement.)
+    func performTapDetailed(_ element: ResolvedElement, matchId: String?, matchText: String?) -> (success: Bool, via: String?, error: String?)
     func performType(_ element: ResolvedElement, text: String, append: Bool) -> (success: Bool, error: String?)
     func performScroll(_ element: ResolvedElement, direction: String, amount: Double) -> Bool
+}
+
+@MainActor
+public extension MacroElementResolving {
+    /// Via-aware tap outcome — reports WHICH actuation path fired
+    /// (`uicontrol` / `accessibilityElement` / `tapGesture` / …), so a replay
+    /// sheet can show "pressed, but only via the weakest path" instead of a
+    /// bare success. Default maps the original `performTap` (via unknown);
+    /// the live conformance overrides with the real value.
+    func performTapDetailed(_ element: ResolvedElement, matchId: String?, matchText: String?) -> (success: Bool, via: String?, error: String?) {
+        let (success, error) = performTap(element, matchId: matchId, matchText: matchText)
+        return (success, nil, error)
+    }
 }
 
 #if canImport(UIKit)
@@ -58,6 +79,11 @@ public struct LiveScreenResolver: MacroElementResolving {
     public func performTap(_ element: UIView, matchId: String?, matchText: String?) -> (success: Bool, error: String?) {
         let outcome = ScreenActuationEngine.performTap(on: element, matchId: matchId, matchText: matchText)
         return (outcome.success, outcome.error)
+    }
+
+    public func performTapDetailed(_ element: UIView, matchId: String?, matchText: String?) -> (success: Bool, via: String?, error: String?) {
+        let outcome = ScreenActuationEngine.performTap(on: element, matchId: matchId, matchText: matchText)
+        return (outcome.success, outcome.via, outcome.error)
     }
 
     public func performType(_ element: UIView, text: String, append: Bool) -> (success: Bool, error: String?) {

@@ -61,3 +61,37 @@ public final class UserDefaultsSessionCache: RipulSessionCache {
     public func set(_ value: Any?, forKey key: String) { userDefaults.set(value, forKey: key) }
     public func removeObject(forKey key: String) { userDefaults.removeObject(forKey: key) }
 }
+
+/// Lookup for the per-session model-picker cache (`ripulSessionModelIds`).
+///
+/// The model pickers (iOS context menu / ModelPickerSheet, macOS sidebar +
+/// agent screen) write the user's choice at tap time, keyed by the LIVE
+/// ChatSession.id (tab id). The entry survives app restarts — but nothing
+/// re-applies it when a closed session is reopened: the web's open/import path
+/// re-derives the override from the transcript's last assistant model, which
+/// can't represent models outside the Claude opus/haiku/sonnet families (Kimi
+/// k3, Fable) or effort variants. Pushing the cached choice via
+/// `AgentBridge.setChatModel` right after a successful (re)open restores the
+/// model the native session actually shows as selected.
+public enum SessionModelSelectionCache {
+    /// The cache key both platforms' pickers write.
+    public static let key = "ripulSessionModelIds"
+
+    /// The cached catalog model id for a session being (re)opened, trying every
+    /// known alias: the live tab id, the row id, and all matchKeys — each with
+    /// and without the `cli_` prefix (ChatSession ids carry it, bare CLI uuids
+    /// don't).
+    public static func modelId(cache: RipulSessionCache, session: UnifiedSession, liveTabId: String?) -> String? {
+        guard let map = cache.dictionary(forKey: key) as? [String: String], !map.isEmpty else { return nil }
+        var keys: [String] = []
+        if let liveTabId { keys.append(liveTabId) }
+        keys.append(session.id)
+        keys.append(contentsOf: session.matchKeys)
+        for k in keys {
+            if let hit = map[k] { return hit }
+            if k.hasPrefix("cli_"), let hit = map[String(k.dropFirst(4))] { return hit }
+            if let hit = map["cli_\(k)"] { return hit }
+        }
+        return nil
+    }
+}

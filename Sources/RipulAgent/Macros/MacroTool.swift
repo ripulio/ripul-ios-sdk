@@ -55,6 +55,18 @@ public struct MacroTool: NativeTool {
             "totalSteps": result.totalSteps,
             "failedStepIndex": result.failedStepIndex as Any,
             "error": result.error as Any,
+            // Per-step outcomes — "did step 3 pass?" is answerable, and the
+            // failed step's error + the passing steps' via paths tell the
+            // agent exactly where and how the run broke or succeeded.
+            "steps": result.stepResults.map { step in
+                [
+                    "index": step.index,
+                    "label": step.label,
+                    "succeeded": step.succeeded,
+                    "via": step.via as Any,
+                    "error": step.error as Any,
+                ] as [String: Any]
+            },
         ]
     }
 }

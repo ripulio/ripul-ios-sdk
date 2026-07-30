@@ -537,6 +537,17 @@ public final class RipulSessionListModel: ObservableObject {
                 }
                 if let newSession = bridge.sessions.first(where: { $0.id == tabId }) {
                     onSelect(newSession)
+                    // Restore the user's explicit model choice for this session.
+                    // The open/import path re-derives the override from the
+                    // transcript's last assistant model, which can't represent
+                    // models outside the web's known families (Kimi k3, Fable)
+                    // or effort variants — the picker cache is the only place
+                    // the true choice survives a close. setChatModel is a no-op
+                    // when the web descriptor already holds this value.
+                    if let modelId = SessionModelSelectionCache.modelId(cache: cache, session: session, liveTabId: tabId) {
+                        bridge.handleConsoleLog("LOG: [MODELSW] native.reapplyOnOpen sessionId=\(session.id.suffix(12)) modelId=\(modelId)")
+                        _ = await bridge.setChatModel(chatId: newSession.sourceChatId, modelId: modelId)
+                    }
                 } else {
                     onDismiss()
                 }

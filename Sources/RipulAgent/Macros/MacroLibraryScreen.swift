@@ -24,13 +24,9 @@ struct MacroLibraryScreen: View {
     @State private var macros: [RipulMacro] = []
     @State private var isLoading = true
     @State private var errorMessage: String?
-    /// Deterministic replay (no agent round-trip): the row tapped, the
-    /// confirmation dialog, the param-entry sheet for `{{token}}` macros,
-    /// and the outcome readout.
-    @State private var replayCandidate: RipulMacro?
-    @State private var replayParamMacro: RipulMacro?
-    @State private var paramValues: [String: String] = [:]
-    @State private var replayOutcome: (name: String, result: MacroReplayResult)?
+    /// The macro currently open in the deterministic-replay sheet (no agent
+    /// round-trip — live per-step pass/fail, `MacroReplaySheet`).
+    @State private var replayMacro: RipulMacro?
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -71,56 +67,11 @@ struct MacroLibraryScreen: View {
             } message: {
                 Text(errorMessage ?? "")
             }
-            .confirmationDialog(
-                replayCandidate.map { "Replay '\($0.name)'?" } ?? "",
-                isPresented: Binding(get: { replayCandidate != nil }, set: { if !$0 { replayCandidate = nil } }),
-                titleVisibility: .visible
-            ) {
-                if let macro = replayCandidate {
-                    Button("Replay (\(macro.steps.count) step\(macro.steps.count == 1 ? "" : "s"))") {
-                        confirmReplay(macro)
-                    }
-                }
-                Button("Cancel", role: .cancel) { replayCandidate = nil }
-            } message: {
-                Text("Performs the recorded steps on the app screen behind this console — minimize the console to watch.")
-            }
-            .sheet(item: $replayParamMacro) { macro in
-                MacroReplayParamsSheet(macro: macro, initialValues: paramValues) { values in
-                    paramValues = values
-                    Task { await runReplay(macro) }
-                }
-            }
-            .alert(
-                replayOutcome.map { $0.result.success ? "Replay finished" : "Replay stopped at step \((($0.result.failedStepIndex ?? 0) + 1))" } ?? "",
-                isPresented: Binding(get: { replayOutcome != nil }, set: { if !$0 { replayOutcome = nil } })
-            ) {
-                Button("OK", role: .cancel) { replayOutcome = nil }
-            } message: {
-                if let outcome = replayOutcome {
-                    Text(outcome.result.success
-                        ? "'\(outcome.name)': all \(outcome.result.totalSteps) steps completed."
-                        : "'\(outcome.name)': \(outcome.result.completedSteps) of \(outcome.result.totalSteps) steps done. \(outcome.result.error ?? "Unknown error")")
-                }
+            .sheet(item: $replayMacro) { macro in
+                MacroReplaySheet(macro: macro)
             }
         }
         .task { await load() }
-    }
-
-    private func confirmReplay(_ macro: RipulMacro) {
-        replayCandidate = nil
-        if macro.parameters.isEmpty {
-            paramValues = [:]
-            Task { await runReplay(macro) }
-        } else {
-            paramValues = [:]
-            replayParamMacro = macro
-        }
-    }
-
-    private func runReplay(_ macro: RipulMacro) async {
-        let result = await MacroReplayEngine.replay(macro, parameters: paramValues, resolver: LiveScreenResolver())
-        replayOutcome = (macro.name, result)
     }
 
     private func row(_ macro: RipulMacro) -> some View {
@@ -130,7 +81,7 @@ struct MacroLibraryScreen: View {
                     .font(.headline)
                 Spacer()
                 Button {
-                    replayCandidate = macro
+                    replayMacro = macro
                 } label: {
                     Image(systemName: "play.circle.fill")
                         .font(.title3)
@@ -220,56 +171,6 @@ private struct ContentUnavailableViewCompat: View {
         }
         .multilineTextAlignment(.center)
         .padding()
-    }
-}
-
-/// Parameter entry for a deterministic replay of a `{{token}}` macro — one
-/// field per declared `MacroParameter`, handed back to the caller as
-/// `[name: value]` for `MacroReplayEngine.replay`.
-@available(iOS 16.0, *)
-private struct MacroReplayParamsSheet: View {
-    let macro: RipulMacro
-    let onReplay: ([String: String]) -> Void
-
-    @State private var values: [String: String]
-    @Environment(\.dismiss) private var dismiss
-
-    init(macro: RipulMacro, initialValues: [String: String], onReplay: @escaping ([String: String]) -> Void) {
-        self.macro = macro
-        self.onReplay = onReplay
-        _values = State(initialValue: initialValues)
-    }
-
-    var body: some View {
-        NavigationStack {
-            Form {
-                ForEach(macro.parameters, id: \.name) { parameter in
-                    TextField(
-                        parameter.description.isEmpty ? parameter.name : "\(parameter.name) — \(parameter.description)",
-                        text: Binding(
-                            get: { values[parameter.name] ?? "" },
-                            set: { values[parameter.name] = $0 }
-                        )
-                    )
-                    .autocorrectionDisabled()
-                    .uiKitIdentifier("MacroReplayParamsSheet.field.\(parameter.name)")
-                }
-            }
-            .navigationTitle("Replay \(macro.name)")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Replay") {
-                        dismiss()
-                        onReplay(values)
-                    }
-                    .uiKitIdentifier("MacroReplayParamsSheet.replayButton")
-                }
-            }
-        }
     }
 }
 #endif
