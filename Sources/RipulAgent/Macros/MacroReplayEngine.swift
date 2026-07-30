@@ -12,6 +12,14 @@ public struct MacroStepResult: Codable, Equatable {
     /// worth knowing about when a step "passed" but the app didn't respond.
     public let via: String?
     public let error: String?
+    /// What the selector actually matched (class, role, id, text, frame) —
+    /// the difference between "the step passed" and "the step passed ON THE
+    /// RIGHT THING". Nil when resolution failed.
+    public let resolvedDetail: String?
+    /// Milliseconds spent resolving the selector (bounded-poll total).
+    public let resolveMs: Int
+    /// Milliseconds for the whole step (resolve + actuate).
+    public let durationMs: Int
 }
 
 /// A live replay-progress event — fired at step start and step end, drives
@@ -19,8 +27,8 @@ public struct MacroStepResult: Codable, Equatable {
 public struct MacroStepEvent {
     public enum Phase: Equatable {
         case started
-        case succeeded(via: String?)
-        case failed(error: String?)
+        case succeeded(via: String?, detail: String?, durationMs: Int)
+        case failed(error: String?, detail: String?, durationMs: Int)
     }
     public let index: Int
     public let label: String
@@ -80,11 +88,15 @@ public enum MacroReplayEngine {
             onStepProgress?(MacroStepEvent(index: index, label: step.recordedLabel, phase: .started))
             let outcome = await run(step, parameters: parameters, resolver: resolver, resolutionTimeout: resolutionTimeout)
             stepResults.append(MacroStepResult(index: index, label: step.recordedLabel,
-                                               succeeded: outcome.success, via: outcome.via, error: outcome.error))
+                                               succeeded: outcome.success, via: outcome.via, error: outcome.error,
+                                               resolvedDetail: outcome.detail, resolveMs: outcome.resolveMs,
+                                               durationMs: outcome.durationMs))
             if outcome.success {
-                onStepProgress?(MacroStepEvent(index: index, label: step.recordedLabel, phase: .succeeded(via: outcome.via)))
+                onStepProgress?(MacroStepEvent(index: index, label: step.recordedLabel,
+                                               phase: .succeeded(via: outcome.via, detail: outcome.detail, durationMs: outcome.durationMs)))
             } else {
-                onStepProgress?(MacroStepEvent(index: index, label: step.recordedLabel, phase: .failed(error: outcome.error)))
+                onStepProgress?(MacroStepEvent(index: index, label: step.recordedLabel,
+                                               phase: .failed(error: outcome.error, detail: outcome.detail, durationMs: outcome.durationMs)))
                 return MacroReplayResult(success: false, completedSteps: index,
                                          totalSteps: macro.steps.count, failedStepIndex: index,
                                          error: outcome.error, stepResults: stepResults)
@@ -99,35 +111,66 @@ public enum MacroReplayEngine {
         let success: Bool
         let via: String?
         let error: String?
+        let detail: String?
+        let resolveMs: Int
+        let durationMs: Int
+
+        init(success: Bool, via: String?, error: String?, detail: String? = nil,
+             resolveMs: Int = 0, durationMs: Int = 0) {
+            self.success = success
+            self.via = via
+            self.error = error
+            self.detail = detail
+            self.resolveMs = resolveMs
+            self.durationMs = durationMs
+        }
     }
 
     private static func run<R: MacroElementResolving>(_ step: MacroStep, parameters: [String: String],
                                                        resolver: R, resolutionTimeout: TimeInterval) async -> StepOutcome {
+        let stepStart = Date()
+        func ms(since date: Date) -> Int { Int(Date().timeIntervalSince(date) * 1000) }
+
         switch step.kind {
         case .tap:
             let resolution = await pollResolveTap(step.selector, resolver: resolver, resolutionTimeout: resolutionTimeout)
+            let resolveMs = ms(since: stepStart)
             guard case .resolved(let element) = resolution else {
-                return StepOutcome(success: false, via: nil, error: notResolved(step, resolution, resolutionTimeout))
+                return StepOutcome(success: false, via: nil,
+                                   error: notResolved(step, resolution, resolutionTimeout),
+                                   resolveMs: resolveMs, durationMs: ms(since: stepStart))
             }
+            let detail = resolver.describe(element)
             let outcome = resolver.performTapDetailed(element, matchId: step.selector.id, matchText: step.selector.text)
-            return StepOutcome(success: outcome.success, via: outcome.via, error: outcome.error)
+            return StepOutcome(success: outcome.success, via: outcome.via, error: outcome.error,
+                               detail: detail, resolveMs: resolveMs, durationMs: ms(since: stepStart))
 
         case .type:
             let resolution = await pollResolveTap(step.selector, resolver: resolver, resolutionTimeout: resolutionTimeout)
+            let resolveMs = ms(since: stepStart)
             guard case .resolved(let element) = resolution else {
-                return StepOutcome(success: false, via: nil, error: notResolved(step, resolution, resolutionTimeout))
+                return StepOutcome(success: false, via: nil,
+                                   error: notResolved(step, resolution, resolutionTimeout),
+                                   resolveMs: resolveMs, durationMs: ms(since: stepStart))
             }
+            let detail = resolver.describe(element)
             let text = MacroParameterSubstitution.apply(step.text ?? "", parameters: parameters)
             let outcome = resolver.performType(element, text: text, append: step.append ?? false)
-            return StepOutcome(success: outcome.success, via: nil, error: outcome.error)
+            return StepOutcome(success: outcome.success, via: nil, error: outcome.error,
+                               detail: detail, resolveMs: resolveMs, durationMs: ms(since: stepStart))
 
         case .scroll:
             let resolution = await pollResolveScrollView(step.selector, resolver: resolver, resolutionTimeout: resolutionTimeout)
+            let resolveMs = ms(since: stepStart)
             guard case .resolved(let element) = resolution else {
-                return StepOutcome(success: false, via: nil, error: notResolved(step, resolution, resolutionTimeout))
+                return StepOutcome(success: false, via: nil,
+                                   error: notResolved(step, resolution, resolutionTimeout),
+                                   resolveMs: resolveMs, durationMs: ms(since: stepStart))
             }
+            let detail = resolver.describe(element)
             let scrolled = resolver.performScroll(element, direction: step.direction ?? "down", amount: step.amount ?? 0.8)
-            return StepOutcome(success: scrolled, via: nil, error: scrolled ? nil : "Element resolved, but it isn't a scroll container.")
+            return StepOutcome(success: scrolled, via: nil, error: scrolled ? nil : "Element resolved, but it isn't a scroll container.",
+                               detail: detail, resolveMs: resolveMs, durationMs: ms(since: stepStart))
 
         case .wait:
             let wantGone = step.state == "gone"
@@ -135,10 +178,14 @@ public enum MacroReplayEngine {
             let deadline = Date().addingTimeInterval(timeout)
             while true {
                 let found = resolver.resolveTap(step.selector).element != nil
-                if wantGone != found { return StepOutcome(success: true, via: nil, error: nil) }
+                if wantGone != found {
+                    return StepOutcome(success: true, via: nil, error: nil,
+                                       durationMs: ms(since: stepStart))
+                }
                 if Date() >= deadline {
                     return StepOutcome(success: false, via: nil,
-                                       error: "Timed out after \(Int(timeout))s waiting for '\(step.recordedLabel)' to become \(wantGone ? "gone" : "visible").")
+                                       error: "Timed out after \(Int(timeout))s waiting for '\(step.recordedLabel)' to become \(wantGone ? "gone" : "visible").",
+                                       durationMs: ms(since: stepStart))
                 }
                 try? await Task.sleep(nanoseconds: pollInterval)
             }

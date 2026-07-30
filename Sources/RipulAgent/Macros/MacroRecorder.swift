@@ -84,7 +84,7 @@ enum MacroRecordingAction: String, CaseIterable {
 enum MacroRecorder {
     static func record(_ action: MacroRecordingAction, on view: UIView, typedText: String = "") -> (step: MacroStep, error: String?)? {
         let selector = MacroSelector(describing: view)
-        let label = describeTarget(view)
+        let label = describeTarget(view, ordinal: ordinalSuffix(for: view, selector: selector))
 
         switch action {
         case .tap:
@@ -119,19 +119,35 @@ enum MacroRecorder {
     /// A short human label for the step list / dialog title — role-qualified
     /// text when available (visible text first, then `accessibilityLabel`,
     /// which is where tab-bar items and icon-only buttons keep their name),
-    /// else the id, else the class name.
-    static func describeTarget(_ view: UIView) -> String {
+    /// else the id, else the class name. `ordinal` ("2 of 5") joins the role
+    /// in the parenthetical when the selector needed an `nth` to pick this
+    /// element out of identical siblings — otherwise a bare class-name label
+    /// like "_UITabButton" says nothing about WHICH tab button it is.
+    static func describeTarget(_ view: UIView, ordinal: String? = nil) -> String {
         let role = ScreenElementFinder.role(of: view)
+        let qualifier = [role, ordinal].compactMap { $0 }.joined(separator: ", ")
         if let text = InspectedView.textContent(of: view), !text.isEmpty {
-            return role.map { "'\(text)' (\($0))" } ?? "'\(text)'"
+            return qualifier.isEmpty ? "'\(text)'" : "'\(text)' (\(qualifier))"
         }
         if let label = view.accessibilityLabel?.trimmingCharacters(in: .whitespacesAndNewlines), !label.isEmpty {
-            return role.map { "'\(label)' (\($0))" } ?? "'\(label)'"
+            return qualifier.isEmpty ? "'\(label)'" : "'\(label)' (\(qualifier))"
         }
         if let id = ScreenElementFinder.identifier(of: view), !id.isEmpty {
             return "'\(id)'"
         }
-        return String(describing: type(of: view))
+        let className = String(describing: type(of: view))
+        return qualifier.isEmpty ? className : "\(className) (\(qualifier))"
+    }
+
+    /// "N of M" when the selector needed an `nth` to pick this element out of
+    /// M disjoint siblings — nil when it matched exactly one (or none).
+    private static func ordinalSuffix(for view: UIView, selector: MacroSelector) -> String? {
+        guard let nth = selector.nth else { return nil }
+        let query = ScreenElementFinder.Query(id: nil, text: selector.text, role: selector.role,
+                                              className: selector.className, nth: nil)
+        let total = ScreenElementFinder.find(query).count
+        guard total > 1 else { return nil }
+        return "\(nth + 1) of \(total)"
     }
 }
 #endif

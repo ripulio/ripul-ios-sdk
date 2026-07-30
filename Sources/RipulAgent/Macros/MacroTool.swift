@@ -65,6 +65,9 @@ public struct MacroTool: NativeTool {
                     "succeeded": step.succeeded,
                     "via": step.via as Any,
                     "error": step.error as Any,
+                    "resolvedDetail": step.resolvedDetail as Any,
+                    "resolveMs": step.resolveMs,
+                    "durationMs": step.durationMs,
                 ] as [String: Any]
             },
         ]

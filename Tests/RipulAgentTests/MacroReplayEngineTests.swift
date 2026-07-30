@@ -74,6 +74,10 @@ final class MacroReplayEngineTests: XCTestCase {
         func performScroll(_ element: FakeElement, direction: String, amount: Double) -> Bool {
             true
         }
+
+        func describe(_ element: FakeElement) -> String? {
+            "FakeElement(\(element.selectorId ?? "?"))"
+        }
     }
 
     private func tapStep(_ id: String, label: String? = nil) -> MacroStep {
@@ -216,9 +220,14 @@ final class MacroReplayEngineTests: XCTestCase {
         XCTAssertEqual(events.count, 4)
         XCTAssertEqual(events.map(\.index), [0, 0, 1, 1])
         XCTAssertEqual(events[0].phase, .started)
-        XCTAssertEqual(events[1].phase, .succeeded(via: nil))
+        guard case .succeeded(let via, _, _) = events[1].phase else {
+            XCTFail("expected .succeeded, got \(events[1].phase)"); return
+        }
+        XCTAssertNil(via)
         XCTAssertEqual(events[2].phase, .started)
-        XCTAssertEqual(events[3].phase, .succeeded(via: nil))
+        guard case .succeeded = events[3].phase else {
+            XCTFail("expected .succeeded, got \(events[3].phase)"); return
+        }
     }
 
     func testProgressEventsCarryTheFailureOnTheFailedStep() async {
@@ -232,7 +241,7 @@ final class MacroReplayEngineTests: XCTestCase {
             onStepProgress: { events.append($0) })
 
         XCTAssertEqual(events.count, 4)
-        guard case .failed(let error) = events[3].phase else {
+        guard case .failed(let error, _, _) = events[3].phase else {
             XCTFail("expected the final event to be .failed, got \(events[3].phase)")
             return
         }
@@ -253,5 +262,39 @@ final class MacroReplayEngineTests: XCTestCase {
         XCTAssertEqual(result.error, "'Tap _UITabButton' matched 5 elements — ambiguous (needs an nth or a within anchor to pick one).")
         // Ambiguity must never become an actuation: nothing was pressed.
         XCTAssertTrue(resolver.performTapCalls.isEmpty)
+    }
+
+    // MARK: - Resolved detail + timing land in step results
+
+    func testStepResultsCarryResolvedDetailAndTiming() async {
+        let resolver = FakeResolver()
+        resolver.resolvable = ["a"]
+        let result = await MacroReplayEngine.replay(
+            macro(steps: [tapStep("a")]),
+            parameters: [:], resolver: resolver)
+
+        XCTAssertEqual(result.stepResults.count, 1)
+        XCTAssertEqual(result.stepResults[0].resolvedDetail, "FakeElement(a)")
+        XCTAssertGreaterThanOrEqual(result.stepResults[0].durationMs, 0)
+        XCTAssertGreaterThanOrEqual(result.stepResults[0].resolveMs, 0)
+    }
+
+    func testFailedResolutionHasNoDetail() async {
+        let resolver = FakeResolver() // nothing resolvable
+        let result = await MacroReplayEngine.replay(
+            macro(steps: [tapStep("missing")]),
+            parameters: [:], resolver: resolver, resolutionTimeout: 0.3)
+
+        XCTAssertEqual(result.stepResults.count, 1)
+        XCTAssertNil(result.stepResults[0].resolvedDetail)
+    }
+
+    // MARK: - compactSummary (replay-log selector line)
+
+    func testCompactSummaryOmitsUnsetPredicates() {
+        XCTAssertEqual(MacroSelector(id: "records.tab").compactSummary, "id=records.tab")
+        XCTAssertEqual(MacroSelector(text: "Records", role: "button", className: "_UITabButton", nth: 1).compactSummary,
+                       "text='Records' role=button class=_UITabButton nth=1")
+        XCTAssertEqual(MacroSelector().compactSummary, "")
     }
 }

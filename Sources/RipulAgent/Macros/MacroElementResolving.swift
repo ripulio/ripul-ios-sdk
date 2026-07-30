@@ -67,6 +67,13 @@ public protocol MacroElementResolving {
     func performTapDetailed(_ element: ResolvedElement, matchId: String?, matchText: String?) -> (success: Bool, via: String?, error: String?)
     func performType(_ element: ResolvedElement, text: String, append: Bool) -> (success: Bool, error: String?)
     func performScroll(_ element: ResolvedElement, direction: String, amount: Double) -> Bool
+
+    /// A compact one-line identity for a resolved element — class, role,
+    /// id, text, window-space frame — recorded into each step's result so a
+    /// replay log says WHAT the selector actually matched, not just that it
+    /// matched. A requirement (not extension-only) for the same dispatch
+    /// reason as `performTapDetailed`.
+    func describe(_ element: ResolvedElement) -> String?
 }
 
 @MainActor
@@ -125,6 +132,18 @@ public struct LiveScreenResolver: MacroElementResolving {
         guard let scrollView = element as? UIScrollView else { return false }
         _ = ScreenActuationEngine.performScroll(on: scrollView, direction: direction, amount: amount)
         return true
+    }
+
+    public func describe(_ element: UIView) -> String? {
+        var parts: [String] = [String(describing: type(of: element))]
+        if let role = ScreenElementFinder.role(of: element) { parts.append("(\(role))") }
+        if let id = ScreenElementFinder.identifier(of: element) { parts.append("[\(id)]") }
+        if let text = InspectedView.textContent(of: element), !text.isEmpty { parts.append("\"\(text)\"") }
+        if let window = element.window {
+            let f = element.convert(element.bounds, to: window)
+            parts.append(String(format: "@(%.0f,%.0f %.0f×%.0f)", f.minX, f.minY, f.width, f.height))
+        }
+        return parts.joined(separator: " ")
     }
 
     /// Resolves `selector.within` (one level — see `MacroAnchorSelector`) to

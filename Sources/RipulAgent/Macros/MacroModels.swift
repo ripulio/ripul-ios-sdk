@@ -71,6 +71,23 @@ public struct MacroSelector: Codable, Equatable {
     public var hasAnyPredicate: Bool {
         [id, text, role, className].contains { $0?.isEmpty == false }
     }
+
+    /// One-line summary of the predicates actually set, for replay logs:
+    /// `role=control class=_UITabButton nth=1`. Pure string logic — no UIKit.
+    public var compactSummary: String {
+        var parts: [String] = []
+        if let within, within.hasAnyPredicate {
+            let anchor = [within.id.map { "id=\($0)" }, within.text.map { "text='\($0)'" },
+                          within.role.map { "role=\($0)" }, within.className.map { "class=\($0)" }].compactMap { $0 }.joined(separator: " ")
+            parts.append("within{\(anchor)}")
+        }
+        if let id { parts.append("id=\(id)") }
+        if let text { parts.append("text='\(text)'") }
+        if let role { parts.append("role=\(role)") }
+        if let className { parts.append("class=\(className)") }
+        if let nth { parts.append("nth=\(nth)") }
+        return parts.joined(separator: " ")
+    }
 }
 
 public enum MacroStepKind: String, Codable {

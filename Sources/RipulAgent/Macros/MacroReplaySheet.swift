@@ -25,7 +25,9 @@ struct MacroReplaySheet: View {
     @Environment(\.dismiss) private var dismiss
 
     private enum StepStatus {
-        case pending, running, succeeded(via: String?), failed(error: String?)
+        case pending, running
+        case succeeded(via: String?, detail: String?, durationMs: Int)
+        case failed(error: String?, detail: String?, durationMs: Int)
     }
 
     var body: some View {
@@ -62,14 +64,23 @@ struct MacroReplaySheet: View {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(step.recordedLabel)
                                     .font(.subheadline)
-                                if case .failed(let error) = status(for: index), let error {
-                                    Text(error)
+                                switch status(for: index) {
+                                case .failed(let error, _, let durationMs):
+                                    Text("\(error ?? "failed") · \(Self.formatMs(durationMs))")
                                         .font(.caption)
                                         .foregroundStyle(.red)
-                                } else if case .succeeded(let via) = status(for: index), let via {
-                                    Text("via \(via)")
+                                case .succeeded(let via, let detail, let durationMs):
+                                    Text([via.map { "via \($0)" }, Self.formatMs(durationMs)].compactMap { $0 }.joined(separator: " · "))
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
+                                    if let detail {
+                                        Text(detail)
+                                            .font(.caption2)
+                                            .foregroundStyle(.tertiary)
+                                            .lineLimit(2)
+                                    }
+                                default:
+                                    EmptyView()
                                 }
                             }
                         }
@@ -166,10 +177,10 @@ struct MacroReplaySheet: View {
             switch event.phase {
             case .started:
                 statuses[event.index] = .running
-            case .succeeded(let via):
-                statuses[event.index] = .succeeded(via: via)
-            case .failed(let error):
-                statuses[event.index] = .failed(error: error)
+            case .succeeded(let via, let detail, let durationMs):
+                statuses[event.index] = .succeeded(via: via, detail: detail, durationMs: durationMs)
+            case .failed(let error, let detail, let durationMs):
+                statuses[event.index] = .failed(error: error, detail: detail, durationMs: durationMs)
             }
         }
         outcome = result
@@ -177,8 +188,10 @@ struct MacroReplaySheet: View {
     }
 
     /// The full replay transcript as plain text — paste-ready for a bug
-    /// report or a chat message: macro name, param values used, every step's
-    /// status (via path on success, error on failure), and the final outcome.
+    /// report or a chat message: macro name, param values used, and per step
+    /// the action outcome (via path + duration), the selector it looked for,
+    /// and the element it actually matched. The outcome line carries the
+    /// total wall-clock time.
     private func logText() -> String {
         var lines: [String] = ["Replay: \(macro.name) — \(macro.steps.count) step\(macro.steps.count == 1 ? "" : "s")"]
         for parameter in macro.parameters {
@@ -187,10 +200,18 @@ struct MacroReplaySheet: View {
         for (index, step) in macro.steps.enumerated() {
             let prefix = "\(index + 1). \(step.recordedLabel)"
             switch status(for: index) {
-            case .succeeded(let via):
-                lines.append("✓ \(prefix)\(via.map { " (via \($0))" } ?? "")")
-            case .failed(let error):
-                lines.append("✗ \(prefix) — \(error ?? "failed")")
+            case .succeeded(let via, let detail, let durationMs):
+                let viaPart = via.map { "via \($0) · " } ?? ""
+                lines.append("✓ \(prefix) — \(viaPart)\(Self.formatMs(durationMs))")
+                if !step.selector.compactSummary.isEmpty {
+                    lines.append("   selector: \(step.selector.compactSummary)")
+                }
+                if let detail { lines.append("   matched: \(detail)") }
+            case .failed(let error, _, let durationMs):
+                lines.append("✗ \(prefix) — \(error ?? "failed") · \(Self.formatMs(durationMs))")
+                if !step.selector.compactSummary.isEmpty {
+                    lines.append("   selector: \(step.selector.compactSummary)")
+                }
             case .running:
                 lines.append("… \(prefix) (running)")
             default:
@@ -198,13 +219,19 @@ struct MacroReplaySheet: View {
             }
         }
         if let outcome {
+            let totalMs = outcome.stepResults.map(\.durationMs).reduce(0, +)
             lines.append(outcome.success
-                ? "Outcome: all \(outcome.totalSteps) steps completed."
+                ? "Outcome: all \(outcome.totalSteps) steps completed in \(Self.formatMs(totalMs))."
                 : "Outcome: stopped at step \((outcome.failedStepIndex ?? 0) + 1) of \(outcome.totalSteps) — \(outcome.error ?? "unknown error")")
         } else if isRunning {
             lines.append("Outcome: running…")
         }
         return lines.joined(separator: "\n")
+    }
+
+    /// "240ms" below a second, "1.2s" above — log-friendly durations.
+    static func formatMs(_ ms: Int) -> String {
+        ms < 1000 ? "\(ms)ms" : String(format: "%.1fs", Double(ms) / 1000)
     }
 
     private func copyLog() {
