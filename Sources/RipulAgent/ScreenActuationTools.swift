@@ -135,6 +135,37 @@ extension ScreenElementFinder {
         return (vid?.isEmpty == false) ? vid : nil
     }
 
+    /// The first non-empty `UILabel.text` in `view`'s subtree — the label a
+    /// composite control contains (a tab-bar button's title, an icon-button's
+    /// caption). Bounded depth, skips hidden/faded branches. Used by
+    /// `contentText` for controls only, never for plain containers — a
+    /// UITableViewCell whose row contains "Delete" must NOT itself match the
+    /// text, or collapse-to-outermost would hand the tap to the row instead
+    /// of the button inside it.
+    static func descendantLabelText(of view: UIView, maxDepth: Int = 4) -> String? {
+        guard maxDepth > 0 else { return nil }
+        for sub in view.subviews where !sub.isHidden && sub.alpha > 0.01 {
+            if let label = sub as? UILabel, let text = label.text, !text.isEmpty {
+                return text
+            }
+            if let found = descendantLabelText(of: sub, maxDepth: maxDepth - 1) {
+                return found
+            }
+        }
+        return nil
+    }
+
+    /// Text a view "contains" for matching purposes — XPath's `contains(.)`
+    /// predicate: the view's own text content, and for a UIControl (which is
+    /// an interactive container, never a passive row) the label text inside
+    /// it. Non-controls keep own-text-only semantics, deliberately — see
+    /// `descendantLabelText`.
+    static func contentText(of view: UIView) -> String? {
+        if let own = InspectedView.textContent(of: view), !own.isEmpty { return own }
+        guard view is UIControl else { return nil }
+        return descendantLabelText(of: view)
+    }
+
     /// Find elements by accessibility id (exact, then case-insensitive) or
     /// visible text (case-insensitive substring). Returns in walk (z) order.
     /// Kept for simple id/text lookups (wait_for_element polls); the actuation
@@ -253,9 +284,11 @@ extension ScreenElementFinder {
 
     /// UIView → `ElementFacts`, then delegates to the ungated `matches(_:_:)`
     /// (declared above, outside the `canImport(UIKit)` gate) so the predicate
-    /// rules themselves are tested once and used everywhere.
+    /// rules themselves are tested once and used everywhere. The text fact
+    /// comes from `contentText` — own text, plus descendant label text for
+    /// UIControl containers (the `contains(.)` semantics).
     private static func viewMatches(_ view: UIView, _ q: Query) -> Bool {
-        let facts = ElementFacts(id: identifier(of: view), text: InspectedView.textContent(of: view),
+        let facts = ElementFacts(id: identifier(of: view), text: contentText(of: view),
                                  role: role(of: view), className: String(describing: type(of: view)))
         return matches(facts, q)
     }

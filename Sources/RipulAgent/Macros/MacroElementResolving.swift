@@ -138,7 +138,9 @@ public struct LiveScreenResolver: MacroElementResolving {
         var parts: [String] = [String(describing: type(of: element))]
         if let role = ScreenElementFinder.role(of: element) { parts.append("(\(role))") }
         if let id = ScreenElementFinder.identifier(of: element) { parts.append("[\(id)]") }
-        if let text = InspectedView.textContent(of: element), !text.isEmpty { parts.append("\"\(text)\"") }
+        // contentText, not textContent — a composite control's contained label
+        // ("Records") belongs in the matched line too.
+        if let text = ScreenElementFinder.contentText(of: element), !text.isEmpty { parts.append("\"\(text)\"") }
         if let window = element.window {
             let f = element.convert(element.bounds, to: window)
             parts.append(String(format: "@(%.0f,%.0f %.0f×%.0f)", f.minX, f.minY, f.width, f.height))

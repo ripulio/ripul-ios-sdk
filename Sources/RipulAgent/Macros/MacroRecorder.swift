@@ -41,8 +41,14 @@ public extension MacroSelector {
         let label = view.accessibilityLabel?.trimmingCharacters(in: .whitespacesAndNewlines)
         let role = ScreenElementFinder.role(of: view)
         let className = String(describing: type(of: view))
+        // Text ladder: own text, then accessibilityLabel, then the label a
+        // composite control CONTAINS (descendant UILabel — where a tab-bar
+        // button or icon-button keeps its name). `contentText` covers the
+        // first and third rungs; the middle one isn't part of it because
+        // matching reads own-or-descendant, not the a11y label.
         let textPredicate: String? = (text?.isEmpty == false) ? text
-            : (label?.isEmpty == false) ? label : nil
+            : (label?.isEmpty == false) ? label
+            : ScreenElementFinder.contentText(of: view)
 
         var selector = MacroSelector(text: textPredicate, role: role, className: className)
 
@@ -131,6 +137,11 @@ enum MacroRecorder {
         }
         if let label = view.accessibilityLabel?.trimmingCharacters(in: .whitespacesAndNewlines), !label.isEmpty {
             return qualifier.isEmpty ? "'\(label)'" : "'\(label)' (\(qualifier))"
+        }
+        // The label a composite control contains (tab-bar title, icon-button
+        // caption) — third rung of the text ladder.
+        if let contained = ScreenElementFinder.contentText(of: view), !contained.isEmpty {
+            return qualifier.isEmpty ? "'\(contained)'" : "'\(contained)' (\(qualifier))"
         }
         if let id = ScreenElementFinder.identifier(of: view), !id.isEmpty {
             return "'\(id)'"
