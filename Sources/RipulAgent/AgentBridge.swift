@@ -785,6 +785,14 @@ public final class AgentBridge: NSObject, ObservableObject {
     @Published public private(set) var exposedAudiences: Set<RipulToolAudience>
 
     @Published public var isConnected = false
+    /// Set once by AgentWebView's navigationDelegate on the first `didFinish` for
+    /// this bridge's web view. StandaloneFileViewer keeps its webview hidden
+    /// (opacity 0, native black/white canvas showing through) until this flips,
+    /// then fades it in — the page's own theme/background is already painted by
+    /// didFinish, so the fade-in shows no WKWebView-internal white pre-paint
+    /// surface (see docs/runbooks/file-viewer-entry-flash-handover.md). Unused by
+    /// the main chat web view.
+    @Published public var didFinishFirstNavigation = false
     /// Per-thread native CPU sampler (this app process only, not WebKit).
     /// Off by default; a Settings toggle drives `start()`/`stop()`. Spikes are
     /// routed to the bridge console so they show up in `host_console_logs`.

@@ -77,8 +77,17 @@ public struct StandaloneFileViewer: View {
             (colorScheme == .dark ? Color.black : Color.white)
                 .ignoresSafeArea()
 
+            // Kept invisible until the page's own first navigation finishes loading
+            // (didFinish → viewerBridge.didFinishFirstNavigation). A fresh WKWebView
+            // paints a white internal surface before its first frame commits,
+            // regardless of backgroundColor/underPageBackgroundColor — the only way
+            // to avoid showing it is to not show the web view at all until it has
+            // already painted its own (dark) canvas. See
+            // docs/runbooks/file-viewer-entry-flash-handover.md for the diagnosis.
             AgentWebView(configuration: configuration, bridge: viewerBridge)
                 .ignoresSafeArea()
+                .opacity(viewerBridge.didFinishFirstNavigation ? 1 : 0)
+                .animation(.easeIn(duration: 0.15), value: viewerBridge.didFinishFirstNavigation)
 
             if isSearching {
                 searchBar

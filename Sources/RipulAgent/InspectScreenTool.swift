@@ -23,8 +23,11 @@ public enum RipulInspection {
 public struct InspectScreenTool: NativeTool {
     public let name = "inspect_screen"
     public let description = "Inspect the running app's on-screen native (UIKit/SwiftUI) view tree. "
-        + "Returns elements with class name, window-space frame, accessibility id / uiKitIdentifier stamp, "
+        + "Returns elements with class name, role (button/field/cell/list/… — the vocabulary the actuation "
+        + "tools' role predicate matches), window-space frame, accessibility id / uiKitIdentifier stamp, "
         + "visible text, owning view controller, and IBOutlet/property name — for locating a control in source. "
+        + "Every element also gets a short-lived \"handle\" (e.g. \"e7\") — pass it to tap_element / type_text / "
+        + "scroll_element to hit exactly that element. Handles go stale on the next inspect or actuation. "
         + "Set includeScreenshot for a downscaled JPEG. Excludes the Ripul dev-assistant overlay itself, so it "
         + "reports the host app's screen, never the assistant."
     public let inputSchema: [String: Any] = ToolSchema.object(
@@ -55,17 +58,23 @@ public struct InspectScreenTool: NativeTool {
 
         var elements: [[String: Any]] = []
         var visited = 0
+        // A fresh snapshot: handles issued by previous inspects go stale, then
+        // each returned element is registered so actuation tools can target it
+        // exactly (see ScreenSnapshotStore).
+        ScreenSnapshotStore.shared.beginSnapshot()
         Self.walk(root) { view, depth in
             visited += 1
             guard elements.count < maxElements else { return }
-            let el = Self.element(for: view, depth: depth, window: window)
+            var el = Self.element(for: view, depth: depth, window: window)
             if let filter {
-                let hay = ["class", "text", "id", "ibOutlet", "vc"]
+                let hay = ["class", "text", "id", "ibOutlet", "vc", "role"]
                     .compactMap { el[$0] as? String }
                     .joined(separator: " ")
                     .lowercased()
                 guard hay.contains(filter) else { return }
             }
+            el["handle"] = ScreenSnapshotStore.shared.register(
+                view: view, id: el["id"] as? String, text: el["text"] as? String)
             elements.append(el)
         }
 
@@ -134,6 +143,7 @@ public struct InspectScreenTool: NativeTool {
         if let id, !id.isEmpty { d["id"] = id }
 
         if let text = InspectedView.textContent(of: view), !text.isEmpty { d["text"] = text }
+        if let role = ScreenElementFinder.role(of: view) { d["role"] = role }
         if view.subviews.count > 0 { d["children"] = view.subviews.count }
 
         // Source-binding hints are reflection-heavy, so only resolve them for

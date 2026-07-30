@@ -69,6 +69,15 @@ public enum RipulViewExplorer {
     /// viewer. When nil, the Console button is hidden.
     public static var consoleAction: (() -> Void)?
 
+    /// Optional host-defined action invoked when the user finishes recording a
+    /// macro (the Macro tab's Stop & Save flow — see
+    /// `docs/plans/automation-macros/phase-2-recording-ui.md`). The SDK never
+    /// performs network I/O itself, same principle as `elementTapAction`: it
+    /// builds the `RipulMacro` value and hands it off; persisting it (e.g. via
+    /// a `MacroClient`) is entirely the host's call. When nil, recording still
+    /// works — Save is a no-op with an on-screen "not configured" notice.
+    public static var macroRecordedAction: ((RipulMacro) -> Void)?
+
     /// Present the View Explorer over the given window (defaults to the key
     /// window). No-op if it's already showing. Returns `false` only if no
     /// suitable window/view controller could be found to host it.
@@ -149,7 +158,8 @@ private struct RipulViewExplorerRoot: View {
     var body: some View {
         ViewInspectorOverlay(isActive: $isActive,
                              elementTapAction: RipulViewExplorer.elementTapAction,
-                             consoleAction: RipulViewExplorer.consoleAction)
+                             consoleAction: RipulViewExplorer.consoleAction,
+                             macroRecordedAction: RipulViewExplorer.macroRecordedAction)
             .onChange(of: isActive) { active in
                 if !active { onDismiss() }
             }

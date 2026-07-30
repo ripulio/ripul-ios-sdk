@@ -470,6 +470,22 @@ private struct AgentWebViewRepresentable: UIViewRepresentable {
         let webBg: UIColor = opaqueWeb ? .systemBackground : .clear
         webView.backgroundColor = webBg
         webView.scrollView.backgroundColor = webBg
+        // Under-page layer, FILE-VIEWER WEB VIEW ONLY. nil defaults to white for
+        // not-yet-loaded content, visible as a white edge flash while the panel
+        // slides in mid-load. Must NOT be set on the main chat web views: doing it
+        // globally promotes them to eager opaque compositing over the glass/panel
+        // stack and enlarges the flash (0d1f440bb, reverted in abb7dd403). The
+        // file viewer always passes an explicit .dark/.light theme.
+        if configuration.fileViewerPath != nil {
+            switch configuration.theme {
+            case .dark:
+                webView.underPageBackgroundColor = .black
+            case .light:
+                webView.underPageBackgroundColor = .white
+            case .system:
+                webView.underPageBackgroundColor = .systemBackground
+            }
+        }
         // Prevent the scroll view from adding automatic content insets for
         // safe areas.  The embedding SwiftUI view already controls the frame
         // placement, so the web content should fill the provided frame exactly.
@@ -701,6 +717,7 @@ extension AgentWebView {
             Self.lockTabsHeight(in: webView)
             Task { @MainActor in
                 bridge.pageDidFinishLoading()
+                bridge.didFinishFirstNavigation = true
             }
         }
 

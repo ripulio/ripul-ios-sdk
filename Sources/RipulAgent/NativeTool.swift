@@ -10,6 +10,9 @@ import Foundation
 //               Must return `name` (String) or `value` ([String: Any]) for display.
 //   get_*/list_*  Read data — fetches info for the agent.
 //   create_*/setup_*/delete_*  Write action — modifies app state.
+//   run_*       Replays a developer-recorded workflow (a macro — see
+//               `docs/plans/automation-macros/`), synthesized from data rather
+//               than hand-coded. Named `run_macro_<slug>`.
 
 public protocol NativeTool {
     /// Tool identifier using snake_case. Prefix drives agent behaviour (see above).
@@ -172,9 +175,34 @@ public enum ToolSchema {
         public static func array(_ name: String, _ description: String, items: [String: Any], required: Bool = false) -> Property {
             Property(name: name, type: "array", description: description, isRequired: required, extra: ["items": items])
         }
+
+        /// A nested selector object (`{ handle?, id?, text?, role?, class?, nth? }`) —
+        /// the shape of the screen-actuation tools' `within` anchor argument.
+        /// Mirrors the top-level predicates of tap_element / type_text /
+        /// scroll_element so the agent uses one addressing vocabulary everywhere
+        /// (XPath's addressing model, JSON syntax — see ScreenActuationTools).
+        public static func selector(_ name: String, _ description: String, required: Bool = false) -> Property {
+            Property(name: name, type: "object", description: description, isRequired: required, extra: [
+                "properties": [
+                    "handle": ["type": "string", "description": "Handle from the last inspect_screen"],
+                    "id": ["type": "string", "description": "Accessibility id / uiKitIdentifier"],
+                    "text": ["type": "string", "description": "Visible text (case-insensitive substring)"],
+                    "role": ["type": "string", "description": "Element role (button, field, cell, list, …)"],
+                    "class": ["type": "string", "description": "Class-name substring"],
+                    "nth": ["type": "integer", "description": "0-based ordinal when several match"],
+                ],
+            ])
+        }
     }
 
     public static func object(_ properties: Property...) -> [String: Any] {
+        object(properties)
+    }
+
+    /// Array-taking overload — Swift can't splat an `[Property]` into a
+    /// variadic parameter, so this is what a data-driven schema (e.g. a
+    /// macro's declared parameters, `MacroTool.inputSchema`) builds from.
+    public static func object(_ properties: [Property]) -> [String: Any] {
         var props: [String: Any] = [:]
         var required: [String] = []
 

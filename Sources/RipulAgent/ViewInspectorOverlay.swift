@@ -2077,6 +2077,195 @@ struct InspectorSettingsTab: View {
     }
 }
 
+// MARK: - Macro tab (docs/plans/automation-macros/phase-2-recording-ui.md)
+
+/// The Macro tab: start recording, watch the step list build live (each step
+/// already live-executed by the time it appears — see `MacroRecorder`), delete
+/// a bad step, Stop & Save. Screen-wide like Audit — doesn't depend on a
+/// current selection, since the steps come from double-taps while recording,
+/// not from `inspected`.
+@available(iOS 16.0, *)
+struct InspectorMacroTab: View {
+    @Binding var isRecording: Bool
+    let steps: [MacroStep]
+    let onDelete: (IndexSet) -> Void
+    let onStopAndSave: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Macro")
+                .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                .foregroundStyle(.pink).textCase(.uppercase).tracking(0.5)
+
+            if isRecording {
+                HStack(spacing: 6) {
+                    Circle().fill(Color.red).frame(width: 6, height: 6)
+                    Text("Recording — double-tap an element to add a step")
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(.white)
+                }
+
+                if steps.isEmpty {
+                    Text("No steps yet.")
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(.gray)
+                        .italic()
+                } else {
+                    stepList
+                }
+
+                Button {
+                    onStopAndSave()
+                } label: {
+                    Text(steps.isEmpty ? "Stop (nothing to save)" : "Stop & Save (\(steps.count) step\(steps.count == 1 ? "" : "s"))")
+                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 8)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.white)
+                .background(steps.isEmpty ? Color.gray.opacity(0.3) : Color.red.opacity(0.85))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .disabled(steps.isEmpty)
+                .uiKitIdentifier("InspectorMacroTab.stopAndSaveButton")
+            } else {
+                Text("Record a sequence of taps/types/scrolls as a named macro the "
+                    + "agent can later call as a single tool. Each step is live-executed "
+                    + "as you record it — what works now is what replays later.")
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(.gray)
+
+                Button {
+                    isRecording = true
+                } label: {
+                    Text("● Start Recording")
+                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 8)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.white)
+                .background(Color.pink.opacity(0.7))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .uiKitIdentifier("InspectorMacroTab.startRecordingButton")
+            }
+
+            Spacer()
+        }
+    }
+
+    private var stepList: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            ForEach(Array(steps.enumerated()), id: \.element.id) { index, step in
+                HStack(spacing: 6) {
+                    Text("\(index + 1).")
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(.gray)
+                        .frame(width: 18, alignment: .trailing)
+                    Text(step.recordedLabel)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                    Spacer()
+                    Button {
+                        onDelete(IndexSet(integer: index))
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.gray)
+                    }
+                    .buttonStyle(.plain)
+                    .uiKitIdentifier("InspectorMacroTab.deleteStep.\(index)")
+                }
+                .padding(.vertical, 2)
+            }
+        }
+        .padding(6)
+        .background(Color.white.opacity(0.05))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+    }
+}
+
+/// The Stop & Save sheet: name, description, and parameters auto-detected from
+/// `{{name}}` tokens already typed into any `.type` step while recording — no
+/// separate "add a parameter" UI needed for the common case.
+@available(iOS 16.0, *)
+struct MacroSaveSheet: View {
+    let steps: [MacroStep]
+    let onSave: (RipulMacro) -> Void
+    let onDiscard: () -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var name = ""
+    @State private var description = ""
+    @State private var parameterDescriptions: [String: String] = [:]
+
+    private var detectedParameterNames: [String] {
+        MacroParameterSubstitution.detectParameters(in: steps)
+    }
+
+    private var isValid: Bool {
+        !name.trimmingCharacters(in: .whitespaces).isEmpty
+            && !description.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Name") {
+                    TextField("clock_in", text: $name)
+                        .autocorrectionDisabled()
+                        .uiKitIdentifier("MacroSaveSheet.nameField")
+                }
+                Section("Description (what the agent reads to decide when to use this)") {
+                    TextField("Clocks in for the current shift.", text: $description, axis: .vertical)
+                        .uiKitIdentifier("MacroSaveSheet.descriptionField")
+                }
+                if !detectedParameterNames.isEmpty {
+                    Section("Parameters") {
+                        ForEach(detectedParameterNames, id: \.self) { paramName in
+                            TextField("What is {{\(paramName)}}?",
+                                     text: Binding(get: { parameterDescriptions[paramName] ?? "" },
+                                                   set: { parameterDescriptions[paramName] = $0 }))
+                        }
+                    }
+                }
+                Section("Steps (\(steps.count))") {
+                    ForEach(steps) { step in
+                        Text(step.recordedLabel)
+                            .font(.system(size: 12, design: .monospaced))
+                    }
+                }
+            }
+            .navigationTitle("Save Macro")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Discard") { onDiscard(); dismiss() }
+                        .uiKitIdentifier("MacroSaveSheet.discardButton")
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") { save() }
+                        .disabled(!isValid)
+                        .uiKitIdentifier("MacroSaveSheet.saveButton")
+                }
+            }
+        }
+    }
+
+    private func save() {
+        let parameters = detectedParameterNames.map {
+            MacroParameter(name: $0, description: parameterDescriptions[$0] ?? "")
+        }
+        let now = Date()
+        let macro = RipulMacro(id: "macro_\(UUID().uuidString)", name: MacroSlug.slug(from: name), description: description,
+                               steps: steps, parameters: parameters, published: false,
+                               createdAt: now, updatedAt: now)
+        onSave(macro)
+        dismiss()
+    }
+}
+
 // MARK: - HUD Panel
 
 @available(iOS 16.0, *)
@@ -2094,6 +2283,12 @@ struct InspectorHUD: View {
     /// and its gesture). Width is applied directly; height bounds the scroll area,
     /// so a folded HUD hugs its header instead of stretching to the stored height.
     let size: CGSize
+    /// Macro recording (docs/plans/automation-macros/phase-2-recording-ui.md) —
+    /// additive to the existing params above.
+    @Binding var isRecording: Bool
+    let recordedSteps: [MacroStep]
+    let onDeleteStep: (IndexSet) -> Void
+    let onStopAndSave: () -> Void
 
     @State private var tab: InspectorTab = .edit
 
@@ -2103,6 +2298,7 @@ struct InspectorHUD: View {
         case properties = "Properties"
         case tree = "Tree"
         case audit = "Audit"
+        case macro = "Macro"
         case settings = "Settings"
 
         /// SF Symbol for tabs shown as an icon; nil renders the text label.
@@ -2110,6 +2306,7 @@ struct InspectorHUD: View {
             switch self {
             case .properties: return "list.bullet.rectangle"
             case .settings: return "gearshape"
+            case .macro: return "record.circle"
             case .edit, .tree, .audit: return nil
             }
         }
@@ -2185,6 +2382,11 @@ struct InspectorHUD: View {
                 hudIconButton("terminal", label: "Console", tone: .cyan, action: consoleAction)
                     .uiKitIdentifier("InspectorHUD.consoleButton")
             }
+            hudIconButton("record.circle", label: isRecording ? "Stop Recording" : "Record Macro",
+                          tone: .red, active: isRecording) {
+                if isRecording { onStopAndSave() } else { isRecording = true; tab = .macro }
+            }
+            .uiKitIdentifier("InspectorHUD.recordButton")
             hudIconButton("ruler", label: "Ruler", tone: .cyan, active: showRulers) { showRulers.toggle() }
                 .uiKitIdentifier("InspectorHUD.rulersButton")
             hudButton("← Back", disabled: history.isEmpty, action: onBack)
@@ -2243,6 +2445,10 @@ struct InspectorHUD: View {
             InspectorAuditTab(anchorView: inspected?.view, onSelect: onSelectView)
         } else if tab == .settings {
             InspectorSettingsTab()
+        } else if tab == .macro {
+            // Screen-wide too — recording doesn't depend on a current selection.
+            InspectorMacroTab(isRecording: $isRecording, steps: recordedSteps,
+                              onDelete: onDeleteStep, onStopAndSave: onStopAndSave)
         } else if let info = inspected {
             switch tab {
             case .properties:
@@ -2252,7 +2458,7 @@ struct InspectorHUD: View {
                     .id(ObjectIdentifier(info.view))   // reset editor state per selection
             case .tree:
                 InspectorTreeTab(selectedView: info.view, onSelect: onSelectView)
-            case .audit, .settings:
+            case .audit, .settings, .macro:
                 EmptyView()   // handled above
             }
         } else {
@@ -2332,6 +2538,7 @@ public struct ViewInspectorOverlay: View {
     @Binding var isActive: Bool
     let elementTapAction: ((RipulElementTap) -> Void)?
     let consoleAction: (() -> Void)?
+    let macroRecordedAction: ((RipulMacro) -> Void)?
     @State private var inspected: InspectedView?
     @State private var cursorPosition: CGPoint = CGPoint(
         x: UIScreen.main.bounds.width / 2,
@@ -2350,10 +2557,31 @@ public struct ViewInspectorOverlay: View {
     /// extending to the screen edges. Persists across sessions like `folded`.
     @AppStorage("viewInspector.rulers") private var showRulers = false
 
-    public init(isActive: Binding<Bool>, elementTapAction: ((RipulElementTap) -> Void)? = nil, consoleAction: (() -> Void)? = nil) {
+    // MARK: Macro recording state (docs/plans/automation-macros/phase-2-recording-ui.md)
+    //
+    // Additive to the existing state above — recording never moves ownership
+    // of `inspected`/`history`/`currentView`; it only reacts to the same
+    // double-tap confirm the Edit-tab flow already uses.
+    @State private var isRecording = false
+    @State private var recordedSteps: [MacroStep] = []
+    /// The just-confirmed double-tap while recording — drives the action
+    /// chooser. Cleared once an action is picked (or the dialog is dismissed).
+    @State private var pendingRecordTap: RipulElementTap?
+    @State private var showTypeTextAlert = false
+    @State private var typeTextInput = ""
+    /// The view a Type step targets — held separately from `pendingRecordTap`
+    /// because the text-entry alert presents AFTER the chooser dialog
+    /// dismisses (SwiftUI can't stack two presentations on one state change).
+    @State private var typeTextTarget: UIView?
+    @State private var recordingError: String?
+    @State private var showSaveSheet = false
+
+    public init(isActive: Binding<Bool>, elementTapAction: ((RipulElementTap) -> Void)? = nil,
+               consoleAction: (() -> Void)? = nil, macroRecordedAction: ((RipulMacro) -> Void)? = nil) {
         self._isActive = isActive
         self.elementTapAction = elementTapAction
         self.consoleAction = consoleAction
+        self.macroRecordedAction = macroRecordedAction
     }
 
     public var body: some View {
@@ -2376,7 +2604,11 @@ public struct ViewInspectorOverlay: View {
                         cursorPosition = pos
                     },
                     onElementTap: { tap in
-                        elementTapAction?(tap)
+                        if isRecording {
+                            pendingRecordTap = tap
+                        } else {
+                            elementTapAction?(tap)
+                        }
                     }
                 )
                 .ignoresSafeArea()
@@ -2416,13 +2648,84 @@ public struct ViewInspectorOverlay: View {
                         onBack: navigateBack,
                         onExit: { isActive = false },
                         onSelectView: selectView,
-                        size: size
+                        size: size,
+                        isRecording: $isRecording,
+                        recordedSteps: recordedSteps,
+                        onDeleteStep: { offsets in recordedSteps.remove(atOffsets: offsets) },
+                        onStopAndSave: { isRecording = false; showSaveSheet = true }
                     )
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 .ignoresSafeArea()
             }
             .transition(.opacity)
+            .confirmationDialog(
+                pendingRecordTap.map { "Record a step for \(MacroRecorder.describeTarget($0.view))" } ?? "",
+                isPresented: Binding(get: { pendingRecordTap != nil }, set: { if !$0 { pendingRecordTap = nil } }),
+                titleVisibility: .visible
+            ) {
+                if let tap = pendingRecordTap {
+                    ForEach(MacroRecordingAction.allCases, id: \.self) { action in
+                        Button(action.rawValue) { chooseRecordingAction(action, for: tap) }
+                    }
+                }
+                Button("Cancel", role: .cancel) { pendingRecordTap = nil }
+            }
+            .alert("Text to type", isPresented: $showTypeTextAlert) {
+                TextField("Use {{name}} for a value the agent fills in", text: $typeTextInput)
+                Button("Record") { commitTypeStep() }
+                Button("Cancel", role: .cancel) { pendingRecordTap = nil; typeTextInput = "" }
+            } message: {
+                Text("This is typed into the field now, and replayed exactly the same way later.")
+            }
+            .alert("Couldn't record that step", isPresented: Binding(get: { recordingError != nil }, set: { if !$0 { recordingError = nil } })) {
+                Button("OK", role: .cancel) { recordingError = nil }
+            } message: {
+                Text(recordingError ?? "")
+            }
+            .sheet(isPresented: $showSaveSheet) {
+                MacroSaveSheet(steps: recordedSteps, onSave: { macro in
+                    macroRecordedAction?(macro)
+                    recordedSteps = []
+                }, onDiscard: {
+                    recordedSteps = []
+                })
+            }
+        }
+    }
+
+    /// Live-executes the chosen action (the dogfooding step — the developer's
+    /// app actually responds) and appends the resulting step, or surfaces why
+    /// it couldn't be recorded instead of silently dropping it.
+    private func chooseRecordingAction(_ action: MacroRecordingAction, for tap: RipulElementTap) {
+        pendingRecordTap = nil
+        if action == .type {
+            // Deferred: the alert needs to be presented AFTER this dialog
+            // dismisses, and it needs the target view kept around.
+            typeTextTarget = tap.view
+            typeTextInput = ""
+            showTypeTextAlert = true
+            return
+        }
+        guard let result = MacroRecorder.record(action, on: tap.view) else {
+            recordingError = "\(action.rawValue) isn't available for \(MacroRecorder.describeTarget(tap.view))."
+            return
+        }
+        if let error = result.error {
+            recordingError = error
+        } else {
+            recordedSteps.append(result.step)
+        }
+    }
+
+    private func commitTypeStep() {
+        guard let view = typeTextTarget else { return }
+        defer { typeTextTarget = nil; typeTextInput = "" }
+        guard let result = MacroRecorder.record(.type, on: view, typedText: typeTextInput) else { return }
+        if let error = result.error {
+            recordingError = error
+        } else {
+            recordedSteps.append(result.step)
         }
     }
 

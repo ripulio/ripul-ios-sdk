@@ -42,6 +42,12 @@ public final class RipulBuildFeedStore: ObservableObject {
 
     /// - Parameter tokenProvider: called per fetch, so a token refreshed after
     ///   init is picked up without rebuilding the store.
+    ///
+    ///   The default is the machine token, which is a HOST credential — on iOS
+    ///   it is only set from the web app's `host-token:set`, so a device that is
+    ///   only ever a relay *controller* has none. Hosts that sign in with Clerk
+    ///   should pass that token instead (falling back to the machine token),
+    ///   or every feed read 401s.
     public init(
         source: RipulBuildFeedSource,
         baseURL: URL = AgentConfiguration.defaultBaseURL,
@@ -85,9 +91,21 @@ public final class RipulBuildFeedStore: ObservableObject {
         isLoading = true
         defer { isLoading = false }
 
+        let token = tokenProvider()
+
+        // A missing credential is NOT a network failure, and reporting it as one
+        // sends you debugging connectivity while the real answer is "this device
+        // has no token". The hosted feed always requires auth; a static feed
+        // owns its own access control and may legitimately need none.
+        if case .ripulHosted = source, token == nil {
+            RipulLog.error("[Builds] no credential available — the hosted feed requires a signed-in session")
+            lastError = "Sign in to Ripul to see builds"
+            return
+        }
+
         let fetched = await RipulBuildFeedClient.fetch(
             source: source,
-            token: tokenProvider(),
+            token: token,
             baseURL: baseURL
         )
 

@@ -39,8 +39,15 @@ public struct RipulAgentConsole: View {
     /// DevTools console sheet (ConsoleLogViewer), opened by the screen's
     /// `.ripulShowDevTools` posts.
     @State private var showDevTools = false
+    /// Macro library sheet (docs/plans/automation-macros/phase-4-…), opened
+    /// by `.ripulShowMacroLibrary` posts — same pattern as `showDevTools`.
+    @State private var showMacroLibrary = false
 
     private let slots: RipulAgentScreenSlots
+    /// CRUD for recorded macros (docs/plans/automation-macros/). Owns no
+    /// state of its own beyond the token closure — safe to construct once
+    /// in `init` alongside `listModel`.
+    private let macroClient: RipulMacroClient
 
     /// - Parameter bridge: optional externally-owned bridge, which MUST be a
     ///   `.developer`-audience bridge built on the configuration's registry
@@ -57,6 +64,7 @@ public struct RipulAgentConsole: View {
         self.slots = slots
         let authStore = RipulClerkAuthStore(cache: configuration.cache)
         _authStore = StateObject(wrappedValue: authStore)
+        self.macroClient = RipulMacroClient(baseURL: configuration.baseURL, tokenProvider: { authStore.token })
         let bridge = bridge ?? AgentBridge(registry: configuration.registry, audience: .developer)
         assert(
             bridge.audience == .developer,
@@ -131,6 +139,7 @@ public struct RipulAgentConsole: View {
                 TapElementTool(),
                 TypeTextTool(),
                 ScrollElementTool(),
+                WaitForElementTool(),
             ] + RipulDevToolCollectionTools.all(
                 isEnabled: true,
                 catalogs: { [configuration, bridge] in
@@ -140,6 +149,23 @@ public struct RipulAgentConsole: View {
                 baseURL: configuration.baseURL,
                 tokenProvider: { authStore.token }
             ))
+            // Automation macros (docs/plans/automation-macros/phase-4-…):
+            // the View Explorer stays host-agnostic (its own design
+            // principle) — this is what turns a finished recording into
+            // something persisted and, once published, agent-callable.
+            // Overwrites any host-set closure on THIS console's attach, same
+            // replacement semantics as registerBuiltInTools above.
+            RipulViewExplorer.macroRecordedAction = { [macroClient] macro in
+                Task { @MainActor in
+                    do {
+                        _ = try await macroClient.create(macro)
+                    } catch {
+                        NSLog("[RIPUL_MACROS] failed to persist recorded macro '%@': %@", macro.name, error.localizedDescription)
+                    }
+                    await refreshMacroTools()
+                }
+            }
+            await refreshMacroTools()
             authStore.startPolling(bridge: bridge)
             logWebBuildVersion()
             if authStore.isSignedIn { fetchSeededContexts() }
@@ -163,7 +189,27 @@ public struct RipulAgentConsole: View {
                     }
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .ripulShowMacroLibrary)) { _ in
+            showMacroLibrary = true
+        }
+        .sheet(isPresented: $showMacroLibrary) {
+            MacroLibraryScreen(client: macroClient, onChange: { Task { await refreshMacroTools() } })
+        }
         .animation(.easeInOut(duration: 0.25), value: authStore.isSignedIn)
+    }
+
+    /// Fetch → dedup → partition → register (docs/plans/automation-macros/
+    /// phase-4-…): `.developer` for drafts (immediately console-testable),
+    /// `.endUser` for published ones (reachable by the host's real end-user
+    /// agent). Safe to call repeatedly — `setTools` replaces each audience's
+    /// entries wholesale, so re-registering after a publish/unpublish/delete
+    /// takes effect in the SAME session, no restart (deliberately unlike
+    /// tool_collections' restart-only model — see README decision #5).
+    private func refreshMacroTools() async {
+        guard let macros = try? await macroClient.list() else { return }
+        let plan = MacroRegistrationPlanner.plan(macros)
+        configuration.registry.setTools(plan.developer.map { MacroTool(macro: $0) }, audience: .developer)
+        configuration.registry.setTools(plan.endUser.map { MacroTool(macro: $0) }, audience: .endUser)
     }
 
     /// Console bootstrap (native-tool-registry phase 3): idempotently ensure
