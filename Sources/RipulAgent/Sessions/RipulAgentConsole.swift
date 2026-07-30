@@ -206,10 +206,7 @@ public struct RipulAgentConsole: View {
     /// takes effect in the SAME session, no restart (deliberately unlike
     /// tool_collections' restart-only model — see README decision #5).
     private func refreshMacroTools() async {
-        guard let macros = try? await macroClient.list() else { return }
-        let plan = MacroRegistrationPlanner.plan(macros)
-        configuration.registry.setTools(plan.developer.map { MacroTool(macro: $0) }, audience: .developer)
-        configuration.registry.setTools(plan.endUser.map { MacroTool(macro: $0) }, audience: .endUser)
+        await MacroRegistrySync.refresh(client: macroClient, registry: configuration.registry)
     }
 
     /// Console bootstrap (native-tool-registry phase 3): idempotently ensure

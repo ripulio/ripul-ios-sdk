@@ -45,6 +45,7 @@ struct SolutionManagementSection: View {
     @State private var showingCollections = false
     @State private var showingContexts = false
     @State private var showingSiteKeys = false
+    @State private var showingMacros = false
     /// Phase-2 absorption confirmation + collision alert (moved here from the
     /// console DevTools Tools tab).
     @State private var confirmAbsorption = false
@@ -59,6 +60,15 @@ struct SolutionManagementSection: View {
                     icon: "folder.badge.gearshape",
                     identifier: "SolutionManagement.collections"
                 ) { showingCollections = true }
+
+                Divider().padding(.leading, 44)
+
+                row(
+                    title: "Macros",
+                    subtitle: "Recorded workflows; publish one to make it agent-callable",
+                    icon: "record.circle",
+                    identifier: "SolutionManagement.macros"
+                ) { showingMacros = true }
 
                 Divider().padding(.leading, 44)
 
@@ -120,6 +130,19 @@ struct SolutionManagementSection: View {
                     }
                 }
             }
+        }
+        .sheet(isPresented: $showingMacros) {
+            MacroLibraryScreen(
+                client: RipulMacroClient(baseURL: management.baseURL, tokenProvider: management.tokenProvider),
+                onChange: {
+                    Task {
+                        await MacroRegistrySync.refresh(
+                            client: RipulMacroClient(baseURL: management.baseURL, tokenProvider: management.tokenProvider),
+                            registry: management.registry
+                        )
+                    }
+                }
+            )
         }
         .sheet(isPresented: $showingContexts) {
             NavigationStack {
