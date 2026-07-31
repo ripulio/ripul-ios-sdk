@@ -878,6 +878,12 @@ public struct GlassSessionsList: View {
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 8)
+                // Top-anchor the stack: with every disclosure collapsed,
+                // nothing in the VStack is greedy, so without this the short
+                // content centers in the offered height instead of hugging
+                // the top. Expanded Sessions still greedy-fills exactly as
+                // before (its own conditional frame above).
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             }
 
             floatingActionBars
