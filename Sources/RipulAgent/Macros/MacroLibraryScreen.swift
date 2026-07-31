@@ -70,6 +70,16 @@ struct MacroLibraryScreen: View {
             .sheet(item: $replayMacro) { macro in
                 MacroReplaySheet(macro: macro)
             }
+            .onReceive(MacroReplayHUDController.shared.$phase) { phase in
+                // A HUD-mode replay takes over the bottom strip — the modal
+                // sheet stack (library + replay sheet) must unwind
+                // SwiftUI-side or it floats over the host screen. Hiding the
+                // console panel never dismisses modal presentations (they're
+                // siblings of the panel in the window, not children of it),
+                // and dismissing them UIKit-side would desync the
+                // .sheet(isPresented:) bindings and re-present them.
+                if phase == .running { dismiss() }
+            }
         }
         .task { await load() }
     }
