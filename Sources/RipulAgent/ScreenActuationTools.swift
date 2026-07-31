@@ -429,6 +429,11 @@ enum ScreenActuationEngine {
         let success: Bool
         let via: String?
         let error: String?
+        /// One token per ladder path in order — what each tried and what it
+        /// did (e.g. "control:no a11y:no gesture:containerSkipped row:HomeCell[0:0]").
+        /// Turns "it didn't click through" from a shrug into a diagnosis:
+        /// the path that claimed success is named, and every skip is visible.
+        let trace: String
     }
 
     struct ScrollOutcome {
@@ -439,24 +444,31 @@ enum ScreenActuationEngine {
     /// The 4-path tap ladder (see the file header). `matchId`/`matchText` feed
     /// path 2's leaf matching within the view's own accessibility subtree.
     static func performTap(on view: UIView, matchId: String?, matchText: String?) -> TapOutcome {
+        var trace: [String] = []
         if let control = view as? UIControl {
             control.sendActions(for: .touchUpInside)
             ScreenSnapshotStore.shared.invalidate()
-            return TapOutcome(success: true, via: "uicontrol", error: nil)
+            return TapOutcome(success: true, via: "uicontrol", error: nil, trace: "control:fired")
         }
+        trace.append("control:no")
         if TapElementTool.activateAccessibilityElement(in: view, id: matchId, text: matchText) {
             ScreenSnapshotStore.shared.invalidate()
-            return TapOutcome(success: true, via: "accessibilityElement", error: nil)
+            trace.append("a11y:activated")
+            return TapOutcome(success: true, via: "accessibilityElement", error: nil, trace: trace.joined(separator: " "))
         }
+        trace.append("a11y:no")
         var v: UIView? = view
         while let cur = v {
             if cur.responds(to: #selector(UIResponder.accessibilityActivate)), cur.accessibilityActivate() {
                 ScreenSnapshotStore.shared.invalidate()
-                return TapOutcome(success: true, via: "accessibilityActivate", error: nil)
+                trace.append("chain:activated")
+                return TapOutcome(success: true, via: "accessibilityActivate", error: nil, trace: trace.joined(separator: " "))
             }
             v = cur.superview
         }
+        trace.append("chain:no")
         var g: UIView? = view
+        var skippedContainerGesture = false
         while let cur = g {
             // NEVER fire a recognizer attached to a scroll container itself:
             // UITableView/UICollectionView selection machinery is internal
@@ -472,12 +484,16 @@ enum ScreenActuationEngine {
                     guard let tap = gr as? UITapGestureRecognizer else { continue }
                     if TapElementTool.fireTapTargets(of: tap) {
                         ScreenSnapshotStore.shared.invalidate()
-                        return TapOutcome(success: true, via: "tapGesture", error: nil)
+                        trace.append(skippedContainerGesture ? "gesture:fired(afterContainerSkip)" : "gesture:fired")
+                        return TapOutcome(success: true, via: "tapGesture", error: nil, trace: trace.joined(separator: " "))
                     }
                 }
+            } else if !(cur.gestureRecognizers ?? []).isEmpty {
+                skippedContainerGesture = true
             }
             g = cur.superview
         }
+        trace.append(skippedContainerGesture ? "gesture:containerSkipped" : "gesture:no")
 
         // 5. Container selection — a plain view inside a UITableViewCell /
         //    UICollectionViewCell whose tap means "select this row". There is
@@ -489,10 +505,13 @@ enum ScreenActuationEngine {
         //    wrong-target selection is visible in the fire pill / logs.
         if let detail = Self.selectContainerRow(of: view) {
             ScreenSnapshotStore.shared.invalidate()
-            return TapOutcome(success: true, via: detail, error: nil)
+            trace.append("row:\(detail)")
+            return TapOutcome(success: true, via: detail, error: nil, trace: trace.joined(separator: " "))
         }
+        trace.append("row:noCell")
         return TapOutcome(success: false, via: nil,
-                          error: "Element found but not tappable by any path (not a control, no activatable accessibility element, no tap gesture, not inside a selectable cell).")
+                          error: "Element found but not tappable by any path (not a control, no activatable accessibility element, no tap gesture, not inside a selectable cell).",
+                          trace: trace.joined(separator: " "))
     }
 
     /// Walk up to the nearest table/collection cell, then to its owning

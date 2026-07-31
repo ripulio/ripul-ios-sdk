@@ -1010,8 +1010,9 @@ class ViewInspectorController: UIView {
                 on: element,
                 matchId: ScreenElementFinder.identifier(of: element),
                 matchText: ScreenElementFinder.contentText(of: element))
-            NSLog("[RipulViewExplorer] single-tap fire via=%@", outcome.via ?? "none")
-            self.onFireOutcome?(outcome.via.map { "via \($0)" } ?? "not tappable")
+            NSLog("[RipulViewExplorer] single-tap fire via=%@ trace=%@", outcome.via ?? "none", outcome.trace)
+            let headline = outcome.via.map { "via \($0)" } ?? "not tappable"
+            self.onFireOutcome?("\(headline)  [\(outcome.trace)]")
             self.flashFireOutcome(at: frameInSelf, success: outcome.success)
         }
         // The screen may navigate/re-render — re-pick shortly after so the
