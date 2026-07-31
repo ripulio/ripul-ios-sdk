@@ -12,6 +12,15 @@ public protocol MacroReplayPresenting {
     func collapseForReplay()
 }
 
+/// Set by the replay HUD's "open context" action (tap the finished strip) —
+/// consumed by the console's Solution management section (opens the macro
+/// library) and by the library itself (opens the editor for exactly this
+/// macro), so a replay's finish state is a one-tap return to the edit-test
+/// loop instead of a drill-back-down through the sessions list.
+enum MacroDeepLink {
+    static var pendingEditorMacro: RipulMacro?
+}
+
 /// Drives the deterministic-replay HUD strip (docs/plans/automation-macros/):
 /// a macro replay that runs WITHOUT the sheet/console covering the host
 /// screen — the console collapses, and this controller's published state
@@ -36,9 +45,9 @@ public final class MacroReplayHUDController: ObservableObject {
     @Published public private(set) var currentIndex = 0
     @Published public private(set) var outcome: MacroReplayResult?
 
-    /// How long the outcome stays on screen before the strip hands back to
-    /// the compact bar/bubble. Internal (not private) so tests can shorten it.
-    var autoHideDelayNs: UInt64 = 2_500_000_000
+    /// The macro currently (or most recently) replayed — retained so the
+    /// finished strip's tap can deep-link straight back to its editor.
+    public private(set) var currentMacro: RipulMacro?
 
     private var runTask: Task<Void, Never>?
     private var runGeneration = 0
@@ -61,7 +70,7 @@ public final class MacroReplayHUDController: ObservableObject {
         guard presenter.canPresent else { return false }
         runTask?.cancel()
         runGeneration += 1
-        let generation = runGeneration
+        currentMacro = macro
         macroName = macro.name
         stepLabels = macro.steps.map(\.recordedLabel)
         statuses = Array(repeating: .pending, count: macro.steps.count)
@@ -81,11 +90,10 @@ public final class MacroReplayHUDController: ObservableObject {
             } catch {
                 // Cancelled (dismiss, or a newer begin superseded this run).
             }
+            // The strip STAYS on the outcome — it's the one-tap return ticket
+            // to the macro's editor (openContext). It hides only on dismiss,
+            // openContext, or a newer run.
             if self.phase == .running { self.phase = .finished }
-            try? await Task.sleep(nanoseconds: self.autoHideDelayNs)
-            if self.phase == .finished, generation == self.runGeneration {
-                self.phase = .hidden
-            }
         }
         return true
     }
@@ -97,6 +105,25 @@ public final class MacroReplayHUDController: ObservableObject {
         runTask = nil
         runGeneration += 1
         phase = .hidden
+        currentMacro = nil
+    }
+
+    /// The finished strip's tap: deep-link back to the macro's editor —
+    /// expand the console, open the library, open the editor for exactly the
+    /// macro that just ran. The strip hides (the console covers everything
+    /// anyway); the pending deep-link is consumed on appear (robust to
+    /// presentation timing) AND by notification (robust to the console
+    /// already being warm in the background).
+    public func openContext() {
+        guard phase == .finished, let macro = currentMacro else { return }
+        MacroDeepLink.pendingEditorMacro = macro
+        phase = .hidden
+        #if os(iOS)
+        if #available(iOS 26.0, *) {
+            RipulDevAssistantOverlay.shared.expand()
+            NotificationCenter.default.post(name: .ripulOpenMacroEditor, object: nil)
+        }
+        #endif
     }
 
     private func apply(_ event: MacroStepEvent) {

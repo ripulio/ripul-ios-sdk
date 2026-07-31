@@ -7,6 +7,11 @@ public extension Notification.Name {
     /// Any view in the host's hierarchy can trigger it (a menu item, a
     /// button next to the console's own dev-tools entry point, etc.).
     static let ripulShowMacroLibrary = Notification.Name("ripulShowMacroLibrary")
+    /// Posted by the replay HUD's open-context action: the Solution
+    /// management section and the macro library consume it (alongside
+    /// `MacroDeepLink.pendingEditorMacro`) to land on the editor for the
+    /// macro that just ran.
+    static let ripulOpenMacroEditor = Notification.Name("ripulOpenMacroEditor")
 }
 
 /// Lists every macro in scope, with a publish/unpublish toggle and delete —
@@ -77,6 +82,10 @@ struct MacroLibraryScreen: View {
                     Task { await load(); onChange() }
                 })
             }
+            .onAppear { consumeDeepLink() }
+            .onReceive(NotificationCenter.default.publisher(for: .ripulOpenMacroEditor)) { _ in
+                consumeDeepLink()
+            }
             .onReceive(MacroReplayHUDController.shared.$phase) { phase in
                 // A HUD-mode replay takes over the bottom strip — the modal
                 // sheet stack (library + replay sheet) must unwind
@@ -89,6 +98,15 @@ struct MacroLibraryScreen: View {
             }
         }
         .task { await load() }
+    }
+
+    /// The replay HUD's return ticket: tap the finished strip → the console
+    /// expands → the library opens the editor for exactly the macro that
+    /// just ran. Consumed once.
+    private func consumeDeepLink() {
+        guard let macro = MacroDeepLink.pendingEditorMacro else { return }
+        MacroDeepLink.pendingEditorMacro = nil
+        editingMacro = macro
     }
 
     private func row(_ macro: RipulMacro) -> some View {

@@ -144,6 +144,10 @@ struct SolutionManagementSection: View {
                 }
             )
         }
+        .onAppear { consumeMacroDeepLink() }
+        .onReceive(NotificationCenter.default.publisher(for: .ripulOpenMacroEditor)) { _ in
+            consumeMacroDeepLink()
+        }
         .sheet(isPresented: $showingContexts) {
             NavigationStack {
                 RipulSolutionContextsScreen(
@@ -217,6 +221,14 @@ struct SolutionManagementSection: View {
         } message: {
             Text("A developer tool and an end-user tool share a name, so the sets cannot be merged: \((absorptionCollisions ?? []).joined(separator: ", "))")
         }
+    }
+
+    /// The replay HUD's return ticket: a finished replay's strip tap deep-
+    /// links here — open the library (which then opens the editor for that
+    /// exact macro via the same pending value).
+    private func consumeMacroDeepLink() {
+        guard MacroDeepLink.pendingEditorMacro != nil else { return }
+        showingMacros = true
     }
 
     @ViewBuilder

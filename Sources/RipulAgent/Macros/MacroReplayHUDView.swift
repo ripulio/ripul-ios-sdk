@@ -43,8 +43,16 @@ struct MacroReplayHUDView: View {
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                                 .lineLimit(1)
+                        } else {
+                            Text("Tap to return to the editor")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
                         }
                     }
+                    Image(systemName: "chevron.right")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
                 }
             case .hidden:
                 EmptyView()
@@ -70,6 +78,11 @@ struct MacroReplayHUDView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .glassEffect(.regular, in: .rect(cornerRadius: 20))
         .contentShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+        // Finished: the whole strip is the return ticket to the editor.
+        .onTapGesture {
+            if controller.phase == .finished { controller.openContext() }
+        }
+        .uiKitIdentifier("MacroReplayHUD.strip")
     }
 }
 

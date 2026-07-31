@@ -61,8 +61,6 @@ final class MacroReplayHUDControllerTests: XCTestCase {
     func testBeginCollapsesOnceAndRunsToFinishedWithStatuses() async {
         let controller = MacroReplayHUDController.shared
         controller.dismiss()
-        controller.autoHideDelayNs = 60_000_000_000 // keep finished state for assertions
-        defer { controller.autoHideDelayNs = 2_500_000_000 }
         let presenter = FakePresenter()
 
         let began = controller.begin(macro("clock_in", steps: 2), parameters: [:], resolver: AlwaysResolver(), presenter: presenter)
@@ -87,8 +85,6 @@ final class MacroReplayHUDControllerTests: XCTestCase {
     func testDismissCancelsAndHides() async {
         let controller = MacroReplayHUDController.shared
         controller.dismiss()
-        controller.autoHideDelayNs = 60_000_000_000
-        defer { controller.autoHideDelayNs = 2_500_000_000 }
         let presenter = FakePresenter()
 
         _ = controller.begin(macro(steps: 3), parameters: [:], resolver: AlwaysResolver(), presenter: presenter)
@@ -99,19 +95,48 @@ final class MacroReplayHUDControllerTests: XCTestCase {
         XCTAssertNil(controller.outcome)
     }
 
-    func testAutoHideReturnsToHiddenAfterFinished() async {
+    /// The strip STAYS on the outcome (it's the return ticket to the editor)
+    /// — no auto-hide. It hides only on dismiss or openContext.
+    func testStripStaysFinishedUntilDismissed() async {
         let controller = MacroReplayHUDController.shared
         controller.dismiss()
-        controller.autoHideDelayNs = 100_000_000 // 0.1s
-        defer { controller.autoHideDelayNs = 2_500_000_000 }
         let presenter = FakePresenter()
 
         _ = controller.begin(macro(steps: 1), parameters: [:], resolver: AlwaysResolver(), presenter: presenter)
         let finished = await waitFor { controller.phase == .finished }
         XCTAssertTrue(finished)
 
-        let hidden = await waitFor { controller.phase == .hidden }
-        XCTAssertTrue(hidden, "strip should auto-hide after the outcome delay")
+        // Well past the old 2.5s auto-hide: still finished.
+        try? await Task.sleep(nanoseconds: 300_000_000)
+        XCTAssertEqual(controller.phase, .finished)
+        XCTAssertNotNil(controller.currentMacro)
+
+        controller.dismiss()
+        XCTAssertEqual(controller.phase, .hidden)
+        XCTAssertNil(controller.currentMacro)
+    }
+
+    /// openContext deep-links to the macro's editor: the pending value is
+    /// set (consumed by the Solution management section → library → editor)
+    /// and the strip hides.
+    func testOpenContextSetsPendingEditorAndHides() async {
+        let controller = MacroReplayHUDController.shared
+        controller.dismiss()
+        MacroDeepLink.pendingEditorMacro = nil
+        let presenter = FakePresenter()
+
+        _ = controller.begin(macro("clock_in", steps: 1), parameters: [:], resolver: AlwaysResolver(), presenter: presenter)
+        let finished = await waitFor { controller.phase == .finished }
+        XCTAssertTrue(finished)
+
+        controller.openContext()
+        XCTAssertEqual(controller.phase, .hidden)
+        XCTAssertEqual(MacroDeepLink.pendingEditorMacro?.name, "clock_in")
+
+        // Only valid from finished: a second call is a no-op.
+        MacroDeepLink.pendingEditorMacro = nil
+        controller.openContext()
+        XCTAssertNil(MacroDeepLink.pendingEditorMacro)
         controller.dismiss()
     }
 }
