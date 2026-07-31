@@ -29,10 +29,7 @@ struct MacroLibraryScreen: View {
     @State private var macros: [RipulMacro] = []
     @State private var isLoading = true
     @State private var errorMessage: String?
-    /// The macro currently open in the deterministic-replay sheet (no agent
-    /// round-trip — live per-step pass/fail, `MacroReplaySheet`).
-    @State private var replayMacro: RipulMacro?
-    /// The macro open in the in-place editor (`MacroEditScreen`).
+    /// The macro open in the in-place editor/replayer (`MacroEditScreen`).
     @State private var editingMacro: RipulMacro?
     @Environment(\.dismiss) private var dismiss
 
@@ -74,9 +71,6 @@ struct MacroLibraryScreen: View {
             } message: {
                 Text(errorMessage ?? "")
             }
-            .sheet(item: $replayMacro) { macro in
-                MacroReplaySheet(macro: macro)
-            }
             .sheet(item: $editingMacro) { macro in
                 MacroEditScreen(macro: macro, client: client, onSaved: {
                     Task { await load(); onChange() }
@@ -115,16 +109,9 @@ struct MacroLibraryScreen: View {
                 Text(macro.name)
                     .font(.headline)
                 Spacer()
-                Button {
-                    replayMacro = macro
-                } label: {
-                    Image(systemName: "play.circle.fill")
-                        .font(.title3)
-                        .foregroundStyle(.tint)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Replay \(macro.name)")
-                .uiKitIdentifier("MacroLibraryScreen.row.\(macro.name).replayButton")
+                Image(systemName: "chevron.right")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
                 Text(macro.published ? "Published" : "Draft")
                     .font(.caption)
                     .padding(.horizontal, 8).padding(.vertical, 2)

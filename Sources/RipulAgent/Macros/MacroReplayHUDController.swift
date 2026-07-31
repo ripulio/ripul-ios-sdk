@@ -19,6 +19,20 @@ public protocol MacroReplayPresenting {
 /// loop instead of a drill-back-down through the sessions list.
 enum MacroDeepLink {
     static var pendingEditorMacro: RipulMacro?
+    /// The editor's unsaved working copy, stashed when a HUD replay begins —
+    /// replay unwinds the sheet stack, and without this the return trip
+    /// would silently revert the editor to the stored macro, losing edits.
+    /// Restored (and cleared) by the editor on appear.
+    static var pendingEditorState: MacroEditorState?
+}
+
+/// An in-progress edit snapshot (the editor's local state at replay time).
+struct MacroEditorState {
+    let macroId: String
+    let name: String
+    let description: String
+    let steps: [MacroStep]
+    let paramValues: [String: String]
 }
 
 /// Drives the deterministic-replay HUD strip (docs/plans/automation-macros/):

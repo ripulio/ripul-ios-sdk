@@ -1,12 +1,15 @@
 #if os(iOS)
 import SwiftUI
 
-/// In-place macro editing (docs/plans/automation-macros/): opened from a
-/// library row, edits a copy of the macro's steps — delete, drag-reorder,
-/// per-step field edits (selector, payload, wait timing), insert manual
-/// waits after any step — then PATCHes the whole thing back. Parameters are
-/// re-derived from `{{token}}` usage on save, preserving descriptions for
-/// names that survived.
+/// In-place macro editing AND replay (docs/plans/automation-macros/): one
+/// screen instead of two. Edits a working copy of the macro — delete,
+/// drag-reorder, per-step field edits, insert waits — and replays THAT COPY
+/// directly (unsaved edits included, so you can test before saving):
+/// HUD-mode when the overlay exists (sheets unwind, the strip runs on the
+/// host screen; the working copy is stashed and restored on the way back so
+/// the round-trip never silently reverts to the stored macro), inline with
+/// live per-step statuses otherwise. Also carries the former replay screen's
+/// remaining duties: parameter fields, outcome banner, and Copy log.
 @available(iOS 16.0, *)
 struct MacroEditScreen: View {
     let macro: RipulMacro
@@ -16,11 +19,18 @@ struct MacroEditScreen: View {
     @State private var name: String
     @State private var descriptionText: String
     @State private var steps: [MacroStep]
+    @State private var paramValues: [String: String]
+    @State private var statuses: [MacroReplayHUDController.StepStatus]?
+    @State private var outcome: MacroReplayResult?
+    @State private var lastRunMacro: RipulMacro?
+    @State private var isRunningInline = false
+    @State private var didCopy = false
     @State private var editingStep: StepIndex?
     @State private var insertChoice: InsertChoice?
     @State private var isSaving = false
     @State private var saveError: String?
     @Environment(\.dismiss) private var dismiss
+    @ObservedObject private var hud = MacroReplayHUDController.shared
 
     init(macro: RipulMacro, client: RipulMacroClient, onSaved: @escaping () -> Void) {
         self.macro = macro
@@ -29,6 +39,7 @@ struct MacroEditScreen: View {
         _name = State(initialValue: macro.name)
         _descriptionText = State(initialValue: macro.description)
         _steps = State(initialValue: macro.steps)
+        _paramValues = State(initialValue: [:])
     }
 
     private var isValid: Bool {
@@ -36,6 +47,14 @@ struct MacroEditScreen: View {
             && !descriptionText.trimmingCharacters(in: .whitespaces).isEmpty
             && !steps.isEmpty
     }
+
+    private var derivedParameters: [MacroParameter] {
+        MacroParameterSubstitution.detectParameters(in: steps).map { n in
+            MacroParameter(name: n, description: macro.parameters.first { $0.name == n }?.description ?? "")
+        }
+    }
+
+    private var isReplayBusy: Bool { isRunningInline || hud.phase == .running }
 
     var body: some View {
         NavigationStack {
@@ -48,13 +67,30 @@ struct MacroEditScreen: View {
                         .uiKitIdentifier("MacroEditScreen.descriptionField")
                 }
 
+                if !derivedParameters.isEmpty {
+                    Section("Parameters (used when replaying)") {
+                        ForEach(derivedParameters, id: \.name) { parameter in
+                            TextField(
+                                parameter.description.isEmpty ? parameter.name : "\(parameter.name) — \(parameter.description)",
+                                text: Binding(
+                                    get: { paramValues[parameter.name] ?? "" },
+                                    set: { paramValues[parameter.name] = $0 }
+                                )
+                            )
+                            .autocorrectionDisabled()
+                            .uiKitIdentifier("MacroEditScreen.param.\(parameter.name)")
+                        }
+                    }
+                }
+
                 Section {
                     ForEach(Array(steps.enumerated()), id: \.element.id) { index, step in
-                        Button { editingStep = StepIndex(value: index) } label: {
+                        Button {
+                            clearRunState()
+                            editingStep = StepIndex(value: index)
+                        } label: {
                             HStack(spacing: 10) {
-                                Image(systemName: icon(for: step.kind))
-                                    .foregroundStyle(.tint)
-                                    .frame(width: 20)
+                                leadingIcon(for: index, kind: step.kind)
                                 VStack(alignment: .leading, spacing: 1) {
                                     Text(step.recordedLabel)
                                         .font(.subheadline)
@@ -75,6 +111,7 @@ struct MacroEditScreen: View {
                         .buttonStyle(.plain)
                         .swipeActions(edge: .leading) {
                             Button {
+                                clearRunState()
                                 insertChoice = InsertChoice(index: index, kind: nil)
                             } label: {
                                 Label("Insert wait", systemImage: "plus")
@@ -83,8 +120,8 @@ struct MacroEditScreen: View {
                             .uiKitIdentifier("MacroEditScreen.step.\(index).insertAfter")
                         }
                     }
-                    .onDelete { steps.remove(atOffsets: $0) }
-                    .onMove { steps.move(fromOffsets: $0, toOffset: $1) }
+                    .onDelete { clearRunState(); steps.remove(atOffsets: $0) }
+                    .onMove { clearRunState(); steps.move(fromOffsets: $0, toOffset: $1) }
                 } header: {
                     Text("Steps")
                 } footer: {
@@ -93,11 +130,42 @@ struct MacroEditScreen: View {
 
                 Section {
                     Button {
+                        clearRunState()
                         insertChoice = InsertChoice(index: steps.count - 1, kind: nil)
                     } label: {
                         Label("Add a wait at the end", systemImage: "plus.circle")
                     }
                     .uiKitIdentifier("MacroEditScreen.addWaitAtEnd")
+
+                    Button {
+                        Task { await runReplay() }
+                    } label: {
+                        HStack {
+                            Spacer()
+                            if isReplayBusy {
+                                ProgressView()
+                            } else {
+                                Label("Replay", systemImage: "play.fill")
+                                    .fontWeight(.semibold)
+                            }
+                            Spacer()
+                        }
+                    }
+                    .disabled(steps.isEmpty || isReplayBusy || isSaving)
+                    .uiKitIdentifier("MacroEditScreen.replayButton")
+                }
+
+                if let outcome {
+                    Section {
+                        Label(
+                            outcome.success
+                                ? "All \(outcome.totalSteps) steps completed."
+                                : "Stopped at step \((outcome.failedStepIndex ?? 0) + 1) of \(outcome.totalSteps) — \(outcome.error ?? "unknown error")",
+                            systemImage: outcome.success ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
+                        )
+                        .foregroundStyle(outcome.success ? .green : .red)
+                        .font(.subheadline.weight(.medium))
+                    }
                 }
             }
             .navigationTitle("Edit \(macro.name)")
@@ -107,12 +175,20 @@ struct MacroEditScreen: View {
                     Button("Cancel") { dismiss() }
                         .uiKitIdentifier("MacroEditScreen.cancelButton")
                 }
+                ToolbarItem(placement: .topBarLeading) {
+                    Button { copyLog() } label: {
+                        Label(didCopy ? "Copied" : "Copy log", systemImage: didCopy ? "checkmark" : "doc.on.doc")
+                            .font(.subheadline)
+                    }
+                    .disabled(outcome == nil || lastRunMacro == nil)
+                    .uiKitIdentifier("MacroEditScreen.copyLogButton")
+                }
                 ToolbarItem(placement: .confirmationAction) {
                     HStack(spacing: 12) {
                         EditButton()
                             .uiKitIdentifier("MacroEditScreen.reorderButton")
                         Button(isSaving ? "Saving…" : "Save") { Task { await save() } }
-                            .disabled(!isValid || isSaving)
+                            .disabled(!isValid || isSaving || isReplayBusy)
                             .fontWeight(.semibold)
                             .uiKitIdentifier("MacroEditScreen.saveButton")
                     }
@@ -125,15 +201,39 @@ struct MacroEditScreen: View {
             }
             .sheet(item: $editingStep) { stepIndex in
                 MacroStepEditSheet(step: steps[stepIndex.value]) { edited in
+                    clearRunState()
                     steps[stepIndex.value] = edited
                 }
             }
             .sheet(item: $insertChoice) { choice in
                 MacroInsertWaitSheet(afterIndex: choice.index) { step in
+                    clearRunState()
                     let at = min(choice.index + 1, steps.count)
                     steps.insert(step, at: at)
                 }
             }
+            .onAppear { adoptRoundTripState() }
+        }
+    }
+
+    /// Status icon when a run has happened for these steps, else the kind icon.
+    @ViewBuilder
+    private func leadingIcon(for index: Int, kind: MacroStepKind) -> some View {
+        if let statuses, statuses.indices.contains(index) {
+            switch statuses[index] {
+            case .running:
+                ProgressView().frame(width: 20, height: 20)
+            case .succeeded:
+                Image(systemName: "checkmark.circle.fill").foregroundStyle(.green).frame(width: 20)
+            case .failed:
+                Image(systemName: "xmark.octagon.fill").foregroundStyle(.red).frame(width: 20)
+            case .pending:
+                Image(systemName: "circle").foregroundStyle(.tertiary).frame(width: 20)
+            }
+        } else {
+            Image(systemName: icon(for: kind))
+                .foregroundStyle(.tint)
+                .frame(width: 20)
         }
     }
 
@@ -162,20 +262,104 @@ struct MacroEditScreen: View {
         }
     }
 
+    /// The macro as it stands RIGHT NOW in this editor (unsaved edits
+    /// included) — replay always runs this, so test-before-save is free.
+    private func workingMacro() -> RipulMacro {
+        RipulMacro(id: macro.id, name: MacroSlug.slug(from: name), description: descriptionText,
+                   steps: steps, parameters: derivedParameters, published: macro.published,
+                   siteKeyId: macro.siteKeyId, createdAt: macro.createdAt, updatedAt: Date())
+    }
+
+    /// Any structural edit invalidates the displayed run results (status
+    /// icons index into the step list).
+    private func clearRunState() {
+        statuses = nil
+        outcome = nil
+        lastRunMacro = nil
+    }
+
+    /// Restore the working copy stashed when a HUD replay began (the sheet
+    /// stack unwinds for the run; the return trip must not revert to the
+    /// stored macro), and adopt the run's statuses/outcome for display.
+    private func adoptRoundTripState() {
+        if let stash = MacroDeepLink.pendingEditorState, stash.macroId == macro.id {
+            MacroDeepLink.pendingEditorState = nil
+            name = stash.name
+            descriptionText = stash.description
+            steps = stash.steps
+            paramValues = stash.paramValues
+        }
+        if hud.currentMacro?.id == macro.id, hud.statuses.count == steps.count {
+            statuses = hud.statuses
+            outcome = hud.outcome
+            lastRunMacro = hud.currentMacro
+        }
+    }
+
+    private func runReplay() async {
+        let working = workingMacro()
+        // HUD mode (overlay exists): the strip takes over the host screen;
+        // stash the working copy so the return trip restores it.
+        if #available(iOS 26.0, *),
+           MacroReplayHUDController.shared.begin(
+               working, parameters: paramValues,
+               resolver: LiveScreenResolver(), presenter: DevOverlayReplayPresenter()
+           ) {
+            MacroDeepLink.pendingEditorState = MacroEditorState(
+                macroId: macro.id, name: name, description: descriptionText,
+                steps: steps, paramValues: paramValues)
+            dismiss()
+            return
+        }
+        // Fallback (no overlay): inline run with live statuses in this list.
+        await runInline(working)
+    }
+
+    private func runInline(_ working: RipulMacro) async {
+        isRunningInline = true
+        statuses = Array(repeating: .pending, count: working.steps.count)
+        lastRunMacro = working
+        guard let result = try? await (MacroReplayEngine.replay(
+            working, parameters: paramValues, resolver: LiveScreenResolver()
+        ) { event in
+            guard let current = statuses, current.indices.contains(event.index) else { return }
+            var updated = current
+            switch event.phase {
+            case .started:
+                updated[event.index] = .running
+            case .succeeded(let via, _, _):
+                updated[event.index] = .succeeded(via: via)
+            case .failed(let error, _, _):
+                updated[event.index] = .failed(error: error)
+            }
+            statuses = updated
+        }) else {
+            isRunningInline = false
+            return
+        }
+        outcome = result
+        isRunningInline = false
+    }
+
+    private func copyLog() {
+        guard let outcome, let lastRunMacro else { return }
+        UIPasteboard.general.string = MacroReplayLog.text(macro: lastRunMacro, paramValues: paramValues, outcome: outcome)
+        didCopy = true
+        Task {
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            didCopy = false
+        }
+    }
+
     private func save() async {
         isSaving = true
         defer { isSaving = false }
-        // Params follow {{token}} usage, keeping descriptions for names that
-        // survived the edit.
-        let parameters = MacroParameterSubstitution.detectParameters(in: steps).map { name in
-            MacroParameter(name: name, description: macro.parameters.first { $0.name == name }?.description ?? "")
-        }
         do {
             _ = try await client.update(id: macro.id, edit: RipulMacroEdit(
                 name: MacroSlug.slug(from: name),
                 description: descriptionText,
                 steps: steps,
-                parameters: parameters
+                parameters: derivedParameters
             ))
             onSaved()
             dismiss()
