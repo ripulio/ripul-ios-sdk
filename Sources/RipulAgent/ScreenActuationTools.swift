@@ -33,7 +33,12 @@ import UIKit
 ///    introspection — but NEVER via KVC: `UIGestureRecognizerTarget` is not
 ///    KVC-compliant for its SEL-typed `_action` ivar, and `value(forKey:)`
 ///    throws `NSUnknownKeyException` straight through Swift, killing the
-///    host app. Runtime ivar reads return nil instead of throwing.
+///    host app. Runtime ivar reads return nil instead of throwing. NEVER
+///    fires recognizers attached to scroll containers (UITableView/
+///    UICollectionView/UIScrollView): those compute the target row from the
+///    recognizer's STALE location — firing one selects whatever row sits at
+///    that point (typically the top of the list) and reads as success, so
+///    path 5 never runs.
 /// 5. Container selection — walk to the nearest UITableViewCell /
 ///    UICollectionViewCell and drive the owning container's delegate
 ///    `didSelect` call (public API). Covers the case where NO touch
@@ -453,11 +458,22 @@ enum ScreenActuationEngine {
         }
         var g: UIView? = view
         while let cur = g {
-            for gr in cur.gestureRecognizers ?? [] where gr.isEnabled {
-                guard let tap = gr as? UITapGestureRecognizer else { continue }
-                if TapElementTool.fireTapTargets(of: tap) {
-                    ScreenSnapshotStore.shared.invalidate()
-                    return TapOutcome(success: true, via: "tapGesture", error: nil)
+            // NEVER fire a recognizer attached to a scroll container itself:
+            // UITableView/UICollectionView selection machinery is internal
+            // gesture recognizers on the CONTAINER, and firing one evaluates
+            // the row at the recognizer's STALE location (zero or the last
+            // real touch) — selecting whatever row sits there, typically the
+            // top of the visible list, and reading as a *success* so no later
+            // path runs. Cell-level and view-level recognizers are fine —
+            // their actions don't compute targets from location.
+            let isScrollContainer = cur is UIScrollView
+            if !isScrollContainer {
+                for gr in cur.gestureRecognizers ?? [] where gr.isEnabled {
+                    guard let tap = gr as? UITapGestureRecognizer else { continue }
+                    if TapElementTool.fireTapTargets(of: tap) {
+                        ScreenSnapshotStore.shared.invalidate()
+                        return TapOutcome(success: true, via: "tapGesture", error: nil)
+                    }
                 }
             }
             g = cur.superview
