@@ -85,6 +85,18 @@ public final class RipulDevAssistantOverlay {
         (window?.rootViewController as? RipulDevOverlayRootVC)?.showBubble()
     }
 
+    /// Cold-boot the console NOW (web app load + auth poll + relay) without
+    /// showing anything — the first expand becomes instant instead of paying
+    /// the boot on tap. Visibility rules are untouched: the bubble still
+    /// only appears per last-session state; a hidden console mounted in the
+    /// window's hierarchy still boots (the same keep-warm mechanism the
+    /// collapse path relies on).
+    public func prewarm() {
+        guard isEnabled?() ?? true, window == nil, configuration != nil else { return }
+        present()
+        (window?.rootViewController as? RipulDevOverlayRootVC)?.prewarmConsole()
+    }
+
     /// Tear the overlay down completely (the real "close").
     public func dismiss() {
         window?.isHidden = true
@@ -636,46 +648,61 @@ final class RipulDevOverlayRootVC: UIViewController {
         }
     }
 
+    /// Mount the console (cold boot — web app load + Clerk poll + list
+    /// fetch). No .ignoresSafeArea(): that flag zeroes safeAreaInsets for
+    /// the whole console subtree (including its GeometryReader proxies), so
+    /// the console cannot inset itself. Minimize paths are wired here: the
+    /// session list's rightward edge swipe (the showingSidebar slot — a host
+    /// app has no sidebar, the bubble IS the console's off-screen home) and
+    /// the glass minus button in the top bar's trailing accessory slot.
+    private func mountPanel() {
+        guard panelHost == nil else { return }
+        if sharedBridge == nil { sharedBridge = makeSharedBridge() }
+        let console = AnyView(RipulAgentConsole(
+            configuration: configuration,
+            slots: RipulAgentScreenSlots(
+                showingSidebar: Binding(
+                    get: { false },
+                    set: { [weak self] open in
+                        if open { self?.overlay?.collapse() }
+                    }
+                ),
+                topBarTrailingAccessory: { [weak self] in
+                    AnyView(
+                        GlassButton(icon: "minus") {
+                            self?.overlay?.collapse()
+                        }
+                        .uiKitIdentifier("RipulDevConsole.minimizeButton")
+                    )
+                }
+            ),
+            bridge: sharedBridge
+        ))
+        let host = UIHostingController(rootView: console)
+        host.view.backgroundColor = .systemBackground
+        addChild(host)
+        host.view.frame = view.bounds
+        host.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        view.addSubview(host.view)
+        host.didMove(toParent: self)
+        panelHost = host
+    }
+
+    /// Mount the console HIDDEN — the boot (web load, auth poll, relay)
+    /// starts immediately, but nothing shows and nothing intercepts touches.
+    /// The first real expand() then only unhides it. Used by
+    /// `RipulDevAssistantOverlay.prewarm()` at app launch.
+    func prewarmConsole() {
+        mountPanel()
+        panelHost?.view.isHidden = true
+        (view.window as? RipulDevOverlayWindow)?.isPassthrough = true
+        updateInteractiveFrame()
+    }
+
     func showPanel() {
         hideCompactForPanel()
         if panelHost == nil {
-            // First open: mount the console (cold boot — web app load + Clerk
-            // poll + list fetch). No .ignoresSafeArea(): that flag zeroes
-            // safeAreaInsets for the whole console subtree (including its
-            // GeometryReader proxies), so the console cannot inset itself.
-            // Minimize paths are wired here: the session list's rightward edge
-            // swipe (the showingSidebar slot — a host app has no sidebar, the
-            // bubble IS the console's off-screen home) and the glass minus
-            // button in the top bar's trailing accessory slot.
-            if sharedBridge == nil { sharedBridge = makeSharedBridge() }
-            let console = AnyView(RipulAgentConsole(
-                configuration: configuration,
-                slots: RipulAgentScreenSlots(
-                    showingSidebar: Binding(
-                        get: { false },
-                        set: { [weak self] open in
-                            if open { self?.overlay?.collapse() }
-                        }
-                    ),
-                    topBarTrailingAccessory: { [weak self] in
-                        AnyView(
-                            GlassButton(icon: "minus") {
-                                self?.overlay?.collapse()
-                            }
-                            .uiKitIdentifier("RipulDevConsole.minimizeButton")
-                        )
-                    }
-                ),
-                bridge: sharedBridge
-            ))
-            let host = UIHostingController(rootView: console)
-            host.view.backgroundColor = .systemBackground
-            addChild(host)
-            host.view.frame = view.bounds
-            host.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-            view.addSubview(host.view)
-            host.didMove(toParent: self)
-            panelHost = host
+            mountPanel()
         } else {
             // Re-open: console is already warm (web view + relay + auth) — just show it.
             panelHost?.view.isHidden = false

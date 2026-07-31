@@ -469,10 +469,11 @@ enum ScreenActuationEngine {
         //    container's delegate call, which is the semantic a real tap
         //    drives. Public API only; the broadest fallback, so it runs last
         //    (a button inside the cell or an explicit gesture on a subview
-        //    must win first).
-        if Self.selectContainerRow(of: view) {
+        //    must win first). The via string names the row selected, so a
+        //    wrong-target selection is visible in the fire pill / logs.
+        if let detail = Self.selectContainerRow(of: view) {
             ScreenSnapshotStore.shared.invalidate()
-            return TapOutcome(success: true, via: "rowSelection", error: nil)
+            return TapOutcome(success: true, via: detail, error: nil)
         }
         return TapOutcome(success: false, via: nil,
                           error: "Element found but not tappable by any path (not a control, no activatable accessibility element, no tap gesture, not inside a selectable cell).")
@@ -483,14 +484,16 @@ enum ScreenActuationEngine {
     /// real tap — `selectRow`/`selectItem` for visual fidelity, then the
     /// `didSelect` call itself (the semantic). Respects `allowsSelection`
     /// and `responds(to:)` so a non-selectable list is correctly not a tap.
-    private static func selectContainerRow(of view: UIView) -> Bool {
+    /// Returns a via string naming WHAT was selected (cell class +
+    /// section:row), so a wrong-target selection is immediately visible.
+    private static func selectContainerRow(of view: UIView) -> String? {
         var cell: UIView?
         var v: UIView? = view
         while let cur = v {
             if cur is UITableViewCell || cur is UICollectionViewCell { cell = cur; break }
             v = cur.superview
         }
-        guard let cell else { return false }
+        guard let cell else { return nil }
 
         var owner = cell.superview
         while let cur = owner {
@@ -502,7 +505,7 @@ enum ScreenActuationEngine {
                delegate.responds(to: #selector(UITableViewDelegate.tableView(_:didSelectRowAt:))) {
                 table.selectRow(at: indexPath, animated: true, scrollPosition: .none)
                 delegate.tableView?(table, didSelectRowAt: indexPath)
-                return true
+                return "rowSelection \(String(describing: type(of: tableCell)))[\(indexPath.section):\(indexPath.row)]"
             }
             if let collection = cur as? UICollectionView,
                let collectionCell = cell as? UICollectionViewCell,
@@ -512,11 +515,11 @@ enum ScreenActuationEngine {
                delegate.responds(to: #selector(UICollectionViewDelegate.collectionView(_:didSelectItemAt:))) {
                 collection.selectItem(at: indexPath, animated: true, scrollPosition: [])
                 delegate.collectionView?(collection, didSelectItemAt: indexPath)
-                return true
+                return "itemSelection \(String(describing: type(of: collectionCell)))[\(indexPath.section):\(indexPath.item)]"
             }
             owner = cur.superview
         }
-        return false
+        return nil
     }
 
     /// Set a text field/view's content, firing the same change notification
