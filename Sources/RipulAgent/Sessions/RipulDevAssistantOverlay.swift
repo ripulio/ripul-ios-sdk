@@ -1,6 +1,7 @@
 #if os(iOS)
 import SwiftUI
 import WebKit
+import Combine
 
 /// Floating dev-assistant overlay: a draggable, edge-snapping bubble that
 /// expands into a full `RipulAgentConsole`, minimizes back, and stays warm in
@@ -31,6 +32,11 @@ public final class RipulDevAssistantOverlay {
     private var window: RipulDevOverlayWindow?
     private var configuration: RipulSessionsConfiguration?
     private var isEnabled: (() -> Bool)?
+
+    /// True while the overlay window exists (bubble, compact, or expanded) —
+    /// the replay HUD can only show its strip when it has this window to
+    /// live in (`DevOverlayReplayPresenter`).
+    public var hasOverlayWindow: Bool { window != nil }
 
     // MARK: - Public API
 
@@ -180,6 +186,10 @@ final class RipulDevOverlayRootVC: UIViewController {
     private var bubble: UIView!
     private var panelHost: UIHostingController<AnyView>?
     private var compactHost: UIHostingController<CompactAgentBarView>?
+    /// The deterministic-replay HUD strip (bottom-docked, same idiom as the
+    /// compact bar), hosted while `MacroReplayHUDController.phase != .hidden`.
+    private var replayHost: UIHostingController<MacroReplayHUDView>?
+    private var replayHUDCancellables = Set<AnyCancellable>()
     /// Where the panel returns on minimize: the state you expanded FROM
     /// (compact bar or circle). expand() preserves it; showCompact /
     /// hideCompactToBubble set it.
@@ -217,6 +227,40 @@ final class RipulDevOverlayRootVC: UIViewController {
         super.viewDidLoad()
         view.backgroundColor = .clear
         setupBubble()
+        MacroReplayHUDController.shared.$phase
+            .removeDuplicates()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] phase in self?.applyReplayHUDVisibility(phase) }
+            .store(in: &replayHUDCancellables)
+    }
+
+    /// The replay strip takes over the bottom edge while a macro runs (the
+    /// compact bar / bubble hide behind it); on hide, the minimized state is
+    /// restored exactly as it was.
+    private func applyReplayHUDVisibility(_ phase: MacroReplayHUDController.Phase) {
+        if phase != .hidden {
+            if replayHost == nil {
+                let host = UIHostingController(rootView: MacroReplayHUDView(controller: .shared))
+                host.view.backgroundColor = .clear
+                addChild(host)
+                host.view.autoresizingMask = [.flexibleWidth, .flexibleTopMargin]
+                view.addSubview(host.view)
+                host.didMove(toParent: self)
+                replayHost = host
+            }
+            replayHost?.view.frame = compactFrame
+            replayHost?.view.isHidden = false
+            compactHost?.view.isHidden = true
+            bubble.isHidden = true
+        } else {
+            replayHost?.view.isHidden = true
+            if minimizedState == .compact, compactHost?.view != nil {
+                showCompact()
+            } else {
+                bubble.isHidden = false
+            }
+        }
+        updateInteractiveFrame()
     }
 
     private func setupBubble() {
@@ -273,6 +317,9 @@ final class RipulDevOverlayRootVC: UIViewController {
         if let compactHost, !compactHost.view.isHidden, !compactMorphInFlight {
             compactHost.view.frame = compactFrame
         }
+        if let replayHost, !replayHost.view.isHidden {
+            replayHost.view.frame = compactFrame
+        }
         updateInteractiveFrame()
     }
 
@@ -303,7 +350,11 @@ final class RipulDevOverlayRootVC: UIViewController {
 
     private func updateInteractiveFrame() {
         let win = view.window as? RipulDevOverlayWindow
-        if let compactHost, !compactHost.view.isHidden {
+        if let replayHost, !replayHost.view.isHidden {
+            // The replay strip owns the touch region while visible — the
+            // bubble/compact bar are hidden behind it.
+            win?.interactiveFrame = replayHost.view.frame
+        } else if let compactHost, !compactHost.view.isHidden {
             win?.interactiveFrame = compactHost.view.frame
         } else {
             win?.interactiveFrame = bubble?.frame ?? .zero
@@ -443,6 +494,16 @@ final class RipulDevOverlayRootVC: UIViewController {
     }
 
     func showBubble() {
+        // While the replay HUD is active, the strip owns the bottom edge —
+        // hide the console, reveal NOTHING (the HUD restores the minimized
+        // state when it hides). The controller sets its phase before asking
+        // for this collapse, so this check always sees it.
+        guard MacroReplayHUDController.shared.phase == .hidden else {
+            panelHost?.view.isHidden = true
+            (view.window as? RipulDevOverlayWindow)?.isPassthrough = true
+            updateInteractiveFrame()
+            return
+        }
         // Minimize returns to WHERE YOU EXPANDED FROM: the compact bar when
         // the panel came from compact, the circle when it came from the bubble.
         if minimizedState == .compact, compactHost?.view != nil {

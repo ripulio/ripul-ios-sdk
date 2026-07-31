@@ -166,9 +166,25 @@ struct MacroReplaySheet: View {
     }
 
     private func start() async {
+        // HUD mode (the overlay exists — iOS 26+ only, which is also the
+        // overlay's own floor, so below 26 there is never a HUD to host):
+        // hand the run to the replay HUD — this sheet closes, the console
+        // collapses, and a bottom strip shows the current executing line
+        // while the host screen stays visible and touchable. Otherwise (a
+        // console not hosted in the overlay) keep the in-sheet live view.
+        if #available(iOS 26.0, *),
+           MacroReplayHUDController.shared.begin(
+               macro,
+               parameters: paramValues,
+               resolver: LiveScreenResolver(),
+               presenter: DevOverlayReplayPresenter()
+           ) {
+            dismiss()
+            return
+        }
         isRunning = true
         statuses = Array(repeating: .pending, count: macro.steps.count)
-        let result = await MacroReplayEngine.replay(
+        guard let result = try? await (MacroReplayEngine.replay(
             macro,
             parameters: paramValues,
             resolver: LiveScreenResolver()
@@ -182,6 +198,9 @@ struct MacroReplaySheet: View {
             case .failed(let error, let detail, let durationMs):
                 statuses[event.index] = .failed(error: error, detail: detail, durationMs: durationMs)
             }
+        }) else {
+            isRunning = false
+            return
         }
         outcome = result
         isRunning = false

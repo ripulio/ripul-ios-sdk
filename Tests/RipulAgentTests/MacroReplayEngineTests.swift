@@ -95,10 +95,10 @@ final class MacroReplayEngineTests: XCTestCase {
 
     // MARK: - All steps succeed
 
-    func testAllStepsSucceedInOrder() async {
+    func testAllStepsSucceedInOrder() async throws {
         let resolver = FakeResolver()
         resolver.resolvable = ["a", "b", "c"]
-        let result = await MacroReplayEngine.replay(
+        let result = try await MacroReplayEngine.replay(
             macro(steps: [tapStep("a"), tapStep("b"), tapStep("c")]),
             parameters: [:], resolver: resolver)
 
@@ -111,10 +111,10 @@ final class MacroReplayEngineTests: XCTestCase {
 
     // MARK: - Stop on first failure
 
-    func testStopsAtFirstUnresolvableStepAndNeverCallsLaterSteps() async {
+    func testStopsAtFirstUnresolvableStepAndNeverCallsLaterSteps() async throws {
         let resolver = FakeResolver()
         resolver.resolvable = ["a"] // "b" is never resolvable
-        let result = await MacroReplayEngine.replay(
+        let result = try await MacroReplayEngine.replay(
             macro(steps: [tapStep("a"), tapStep("b"), tapStep("c")]),
             parameters: [:], resolver: resolver, resolutionTimeout: 0.3)
 
@@ -126,11 +126,11 @@ final class MacroReplayEngineTests: XCTestCase {
         XCTAssertNotNil(result.error)
     }
 
-    func testStopsAtFirstActuationFailureEvenWhenResolvable() async {
+    func testStopsAtFirstActuationFailureEvenWhenResolvable() async throws {
         let resolver = FakeResolver()
         resolver.resolvable = ["a", "b", "c"]
         resolver.actuationFails = ["b"] // resolves fine, but the tap itself fails
-        let result = await MacroReplayEngine.replay(
+        let result = try await MacroReplayEngine.replay(
             macro(steps: [tapStep("a"), tapStep("b"), tapStep("c")]),
             parameters: [:], resolver: resolver)
 
@@ -141,10 +141,10 @@ final class MacroReplayEngineTests: XCTestCase {
 
     // MARK: - Parameter substitution
 
-    func testTypeStepSubstitutesParameterBeforeActing() async {
+    func testTypeStepSubstitutesParameterBeforeActing() async throws {
         let resolver = FakeResolver()
         resolver.resolvable = ["field"]
-        _ = await MacroReplayEngine.replay(
+        _ = try await MacroReplayEngine.replay(
             macro(steps: [typeStep("field", text: "Note: {{note}}")], parameters: [MacroParameter(name: "note", description: "d")]),
             parameters: ["note": "started shift"], resolver: resolver)
 
@@ -152,10 +152,10 @@ final class MacroReplayEngineTests: XCTestCase {
         XCTAssertEqual(resolver.performTypeCalls.first?.text, "Note: started shift")
     }
 
-    func testMissingParameterLeavesTokenLiteralRatherThanFailing() async {
+    func testMissingParameterLeavesTokenLiteralRatherThanFailing() async throws {
         let resolver = FakeResolver()
         resolver.resolvable = ["field"]
-        let result = await MacroReplayEngine.replay(
+        let result = try await MacroReplayEngine.replay(
             macro(steps: [typeStep("field", text: "{{missing}}")]),
             parameters: [:], resolver: resolver)
 
@@ -168,9 +168,9 @@ final class MacroReplayEngineTests: XCTestCase {
 
     // MARK: - Empty macro
 
-    func testEmptyMacroSucceedsTrivially() async {
+    func testEmptyMacroSucceedsTrivially() async throws {
         let resolver = FakeResolver()
-        let result = await MacroReplayEngine.replay(macro(steps: []), parameters: [:], resolver: resolver)
+        let result = try await MacroReplayEngine.replay(macro(steps: []), parameters: [:], resolver: resolver)
         XCTAssertTrue(result.success)
         XCTAssertEqual(result.completedSteps, 0)
         XCTAssertEqual(result.totalSteps, 0)
@@ -178,11 +178,11 @@ final class MacroReplayEngineTests: XCTestCase {
 
     // MARK: - Per-step results + live progress events
 
-    func testStepResultsRecordEveryAttemptedStepInOrder() async {
+    func testStepResultsRecordEveryAttemptedStepInOrder() async throws {
         let resolver = FakeResolver()
         resolver.resolvable = ["a", "b", "c"]
         resolver.tapVia = "fakePath"
-        let result = await MacroReplayEngine.replay(
+        let result = try await MacroReplayEngine.replay(
             macro(steps: [tapStep("a", label: "Tap A"), tapStep("b", label: "Tap B"), tapStep("c", label: "Tap C")]),
             parameters: [:], resolver: resolver)
 
@@ -193,11 +193,11 @@ final class MacroReplayEngineTests: XCTestCase {
         XCTAssertEqual(result.stepResults.first?.via, "fakePath")
     }
 
-    func testStepResultsStopAtTheFailedStepAndCarryItsError() async {
+    func testStepResultsStopAtTheFailedStepAndCarryItsError() async throws {
         let resolver = FakeResolver()
         resolver.resolvable = ["a", "b", "c"]
         resolver.actuationFails = ["b"]
-        let result = await MacroReplayEngine.replay(
+        let result = try await MacroReplayEngine.replay(
             macro(steps: [tapStep("a"), tapStep("b"), tapStep("c")]),
             parameters: [:], resolver: resolver)
 
@@ -208,11 +208,11 @@ final class MacroReplayEngineTests: XCTestCase {
         XCTAssertNotNil(result.stepResults[1].error)
     }
 
-    func testProgressEventsFireStartedThenSucceededPerStep() async {
+    func testProgressEventsFireStartedThenSucceededPerStep() async throws {
         let resolver = FakeResolver()
         resolver.resolvable = ["a", "b"]
         var events: [MacroStepEvent] = []
-        _ = await MacroReplayEngine.replay(
+        _ = try await MacroReplayEngine.replay(
             macro(steps: [tapStep("a"), tapStep("b")]),
             parameters: [:], resolver: resolver,
             onStepProgress: { events.append($0) })
@@ -230,12 +230,12 @@ final class MacroReplayEngineTests: XCTestCase {
         }
     }
 
-    func testProgressEventsCarryTheFailureOnTheFailedStep() async {
+    func testProgressEventsCarryTheFailureOnTheFailedStep() async throws {
         let resolver = FakeResolver()
         resolver.resolvable = ["a", "b"]
         resolver.actuationFails = ["b"]
         var events: [MacroStepEvent] = []
-        _ = await MacroReplayEngine.replay(
+        _ = try await MacroReplayEngine.replay(
             macro(steps: [tapStep("a"), tapStep("b")]),
             parameters: [:], resolver: resolver,
             onStepProgress: { events.append($0) })
@@ -250,10 +250,10 @@ final class MacroReplayEngineTests: XCTestCase {
 
     // MARK: - Ambiguity is reported distinctly from not-found
 
-    func testAmbiguousMatchReportsTheCountInsteadOfGenericNotResolved() async {
+    func testAmbiguousMatchReportsTheCountInsteadOfGenericNotResolved() async throws {
         let resolver = FakeResolver()
         resolver.ambiguous["tab"] = 5
-        let result = await MacroReplayEngine.replay(
+        let result = try await MacroReplayEngine.replay(
             macro(steps: [tapStep("tab", label: "Tap _UITabButton")]),
             parameters: [:], resolver: resolver, resolutionTimeout: 0.3)
 
@@ -266,10 +266,10 @@ final class MacroReplayEngineTests: XCTestCase {
 
     // MARK: - Resolved detail + timing land in step results
 
-    func testStepResultsCarryResolvedDetailAndTiming() async {
+    func testStepResultsCarryResolvedDetailAndTiming() async throws {
         let resolver = FakeResolver()
         resolver.resolvable = ["a"]
-        let result = await MacroReplayEngine.replay(
+        let result = try await MacroReplayEngine.replay(
             macro(steps: [tapStep("a")]),
             parameters: [:], resolver: resolver)
 
@@ -279,9 +279,9 @@ final class MacroReplayEngineTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(result.stepResults[0].resolveMs, 0)
     }
 
-    func testFailedResolutionHasNoDetail() async {
+    func testFailedResolutionHasNoDetail() async throws {
         let resolver = FakeResolver() // nothing resolvable
-        let result = await MacroReplayEngine.replay(
+        let result = try await MacroReplayEngine.replay(
             macro(steps: [tapStep("missing")]),
             parameters: [:], resolver: resolver, resolutionTimeout: 0.3)
 

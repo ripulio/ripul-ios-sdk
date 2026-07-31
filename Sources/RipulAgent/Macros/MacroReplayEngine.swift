@@ -82,11 +82,12 @@ public enum MacroReplayEngine {
         resolver: R,
         resolutionTimeout: TimeInterval = MacroReplayEngine.resolutionTimeout,
         onStepProgress: ((MacroStepEvent) -> Void)? = nil
-    ) async -> MacroReplayResult {
+    ) async throws -> MacroReplayResult {
         var stepResults: [MacroStepResult] = []
         for (index, step) in macro.steps.enumerated() {
+            try Task.checkCancellation()
             onStepProgress?(MacroStepEvent(index: index, label: step.recordedLabel, phase: .started))
-            let outcome = await run(step, parameters: parameters, resolver: resolver, resolutionTimeout: resolutionTimeout)
+            let outcome = try await run(step, parameters: parameters, resolver: resolver, resolutionTimeout: resolutionTimeout)
             stepResults.append(MacroStepResult(index: index, label: step.recordedLabel,
                                                succeeded: outcome.success, via: outcome.via, error: outcome.error,
                                                resolvedDetail: outcome.detail, resolveMs: outcome.resolveMs,
@@ -127,13 +128,13 @@ public enum MacroReplayEngine {
     }
 
     private static func run<R: MacroElementResolving>(_ step: MacroStep, parameters: [String: String],
-                                                       resolver: R, resolutionTimeout: TimeInterval) async -> StepOutcome {
+                                                       resolver: R, resolutionTimeout: TimeInterval) async throws -> StepOutcome {
         let stepStart = Date()
         func ms(since date: Date) -> Int { Int(Date().timeIntervalSince(date) * 1000) }
 
         switch step.kind {
         case .tap:
-            let resolution = await pollResolveTap(step.selector, resolver: resolver, resolutionTimeout: resolutionTimeout)
+            let resolution = try await pollResolveTap(step.selector, resolver: resolver, resolutionTimeout: resolutionTimeout)
             let resolveMs = ms(since: stepStart)
             guard case .resolved(let element) = resolution else {
                 return StepOutcome(success: false, via: nil,
@@ -146,7 +147,7 @@ public enum MacroReplayEngine {
                                detail: detail, resolveMs: resolveMs, durationMs: ms(since: stepStart))
 
         case .type:
-            let resolution = await pollResolveTap(step.selector, resolver: resolver, resolutionTimeout: resolutionTimeout)
+            let resolution = try await pollResolveTap(step.selector, resolver: resolver, resolutionTimeout: resolutionTimeout)
             let resolveMs = ms(since: stepStart)
             guard case .resolved(let element) = resolution else {
                 return StepOutcome(success: false, via: nil,
@@ -160,7 +161,7 @@ public enum MacroReplayEngine {
                                detail: detail, resolveMs: resolveMs, durationMs: ms(since: stepStart))
 
         case .scroll:
-            let resolution = await pollResolveScrollView(step.selector, resolver: resolver, resolutionTimeout: resolutionTimeout)
+            let resolution = try await pollResolveScrollView(step.selector, resolver: resolver, resolutionTimeout: resolutionTimeout)
             let resolveMs = ms(since: stepStart)
             guard case .resolved(let element) = resolution else {
                 return StepOutcome(success: false, via: nil,
@@ -187,7 +188,7 @@ public enum MacroReplayEngine {
                                        error: "Timed out after \(Int(timeout))s waiting for '\(step.recordedLabel)' to become \(wantGone ? "gone" : "visible").",
                                        durationMs: ms(since: stepStart))
                 }
-                try? await Task.sleep(nanoseconds: pollInterval)
+                try await Task.sleep(nanoseconds: pollInterval)
             }
         }
     }
@@ -197,28 +198,29 @@ public enum MacroReplayEngine {
     /// — the common case right after the previous step triggered a
     /// navigation — succeeds without a recorded wait step. Keeps the LAST
     /// resolution so the error message can say whether the poll saw nothing
-    /// or saw too much.
+    /// or saw too much. Throws promptly on task cancellation (dismissed
+    /// replay HUD) instead of polling out the full timeout.
     private static func pollResolveTap<R: MacroElementResolving>(_ selector: MacroSelector, resolver: R,
-                                                                  resolutionTimeout: TimeInterval) async -> MacroResolution<R.ResolvedElement> {
+                                                                  resolutionTimeout: TimeInterval) async throws -> MacroResolution<R.ResolvedElement> {
         let deadline = Date().addingTimeInterval(resolutionTimeout)
         var last: MacroResolution<R.ResolvedElement> = .notFound
         while true {
             last = resolver.resolveTap(selector)
             if case .resolved = last { return last }
             if Date() >= deadline { return last }
-            try? await Task.sleep(nanoseconds: pollInterval)
+            try await Task.sleep(nanoseconds: pollInterval)
         }
     }
 
     private static func pollResolveScrollView<R: MacroElementResolving>(_ selector: MacroSelector, resolver: R,
-                                                                         resolutionTimeout: TimeInterval) async -> MacroResolution<R.ResolvedElement> {
+                                                                         resolutionTimeout: TimeInterval) async throws -> MacroResolution<R.ResolvedElement> {
         let deadline = Date().addingTimeInterval(resolutionTimeout)
         var last: MacroResolution<R.ResolvedElement> = .notFound
         while true {
             last = resolver.resolveScrollView(selector)
             if case .resolved = last { return last }
             if Date() >= deadline { return last }
-            try? await Task.sleep(nanoseconds: pollInterval)
+            try await Task.sleep(nanoseconds: pollInterval)
         }
     }
 

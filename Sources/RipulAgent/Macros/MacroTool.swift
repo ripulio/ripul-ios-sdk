@@ -48,7 +48,7 @@ public struct MacroTool: NativeTool {
                 parameters[parameter.name] = value
             }
         }
-        let result = await MacroReplayEngine.replay(macro, parameters: parameters, resolver: LiveScreenResolver())
+        let result = try await MacroReplayEngine.replay(macro, parameters: parameters, resolver: LiveScreenResolver())
         return [
             "success": result.success,
             "completedSteps": result.completedSteps,
