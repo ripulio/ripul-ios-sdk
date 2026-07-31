@@ -81,14 +81,16 @@ public enum RipulViewExplorer {
     /// Present the View Explorer over the given window (defaults to the key
     /// window). No-op if it's already showing. Returns `false` only if no
     /// suitable window/view controller could be found to host it.
+    /// `recording: true` opens it already in macro-record mode (the Macro
+    /// tab armed) — used by the macro library's "Record new" entry point.
     @discardableResult
-    public static func present(in window: UIWindow? = nil) -> Bool {
+    public static func present(in window: UIWindow? = nil, recording: Bool = false) -> Bool {
         guard host == nil else { return true }
         guard let target = window ?? keyWindow(),
               let root = target.rootViewController else { return false }
 
         let parent = topMostViewController(from: root)
-        let hosting = UIHostingController(rootView: RipulViewExplorerRoot(onDismiss: { dismiss() }))
+        let hosting = UIHostingController(rootView: RipulViewExplorerRoot(startRecording: recording, onDismiss: { dismiss() }))
         hosting.view.backgroundColor = .clear
         // Tag so the inspector's hit-walks skip their own overlay subtree (this
         // host is a sibling of app content under the same VC, so the geometric
@@ -118,9 +120,9 @@ public enum RipulViewExplorer {
 
     /// Show if hidden, hide if shown.
     @discardableResult
-    public static func toggle(in window: UIWindow? = nil) -> Bool {
+    public static func toggle(in window: UIWindow? = nil, recording: Bool = false) -> Bool {
         if isPresented { dismiss(); return false }
-        return present(in: window)
+        return present(in: window, recording: recording)
     }
 
     // MARK: - Helpers
@@ -153,13 +155,15 @@ public enum RipulViewExplorer {
 @available(iOS 16.0, *)
 private struct RipulViewExplorerRoot: View {
     @State private var isActive = true
+    var startRecording = false
     let onDismiss: () -> Void
 
     var body: some View {
         ViewInspectorOverlay(isActive: $isActive,
                              elementTapAction: RipulViewExplorer.elementTapAction,
                              consoleAction: RipulViewExplorer.consoleAction,
-                             macroRecordedAction: RipulViewExplorer.macroRecordedAction)
+                             macroRecordedAction: RipulViewExplorer.macroRecordedAction,
+                             startRecording: startRecording)
             .onChange(of: isActive) { active in
                 if !active { onDismiss() }
             }

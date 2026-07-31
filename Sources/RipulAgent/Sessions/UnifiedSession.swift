@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 // MARK: - UnifiedSession
 
@@ -49,6 +50,44 @@ public struct UnifiedSession: Identifiable, Codable {
     /// forms of the same session resolve to one canonical key.
     public static func canonicalKey(_ key: String) -> String {
         key.hasPrefix("cli_") ? String(key.dropFirst(4)) : key
+    }
+
+    /// The CLI session uuid a chat id resolves to — the uuid its JSONL is named
+    /// by, and the ONLY identifier that is 1:1 with a conversation.
+    ///
+    /// `canonicalKey` above equates `cli_<uuid>` with a bare `<uuid>`, but a
+    /// conversation started on the host carries a THIRD form: `chat_<ts>_<n>`,
+    /// related to its uuid by SHA-256 and by nothing a string comparison can
+    /// see. Matching on strings alone therefore treats one conversation as two
+    /// — the host reports it under whichever identity its tab happens to hold,
+    /// the other identity arrives as a local tab, and the list shows both.
+    ///
+    /// MUST match `sessionIdToCliUuid` (cliSessionUuid.ts) and
+    /// `ClaudeCliServer.sessionToUuid` — all three name the same file.
+    public static func cliUuid(for sessionId: String) -> String {
+        let candidate = canonicalKey(sessionId)
+        if isUuidShaped(candidate) { return candidate.lowercased() }
+
+        // Non-uuid id (e.g. chat_<ts>) — hash the ORIGINAL id, prefix included.
+        let hex = SHA256.hash(data: Data(sessionId.utf8))
+            .map { String(format: "%02x", $0) }
+            .joined()
+        let p1 = String(hex.prefix(8))
+        let p2 = String(hex.dropFirst(8).prefix(4))
+        let p3 = "4" + String(hex.dropFirst(13).prefix(3))
+        let variantNibble = UInt8(String(hex.dropFirst(16).prefix(1)), radix: 16) ?? 0
+        let variant = (variantNibble & 0x3) | 0x8
+        let p4 = String(format: "%x", variant) + String(hex.dropFirst(17).prefix(3))
+        let p5 = String(hex.dropFirst(20).prefix(12))
+        return "\(p1)-\(p2)-\(p3)-\(p4)-\(p5)"
+    }
+
+    private static func isUuidShaped(_ s: String) -> Bool {
+        let parts = s.split(separator: "-", omittingEmptySubsequences: false)
+        guard parts.count == 5,
+              parts[0].count == 8, parts[1].count == 4, parts[2].count == 4,
+              parts[3].count == 4, parts[4].count == 12 else { return false }
+        return s.allSatisfy { $0 == "-" || $0.isHexDigit }
     }
 
     // MARK: - Codable (exclude ripulSession)
@@ -177,6 +216,14 @@ public struct UnifiedSession: Identifiable, Codable {
         // on that (and its stripped form) to dedup against remote rows whose id is
         // "claude-cli:<UUID>" (sourceChatId = bare UUID).
         var localById: [String: ChatSession] = [:]
+        // Every local tab that resolves to a given CLI uuid. A conversation can
+        // be open under BOTH of its identities (`chat_<ts>` and the `cli_<uuid>`
+        // twin minted for it); the string keys above can never equate those, so
+        // one of them always fell through to the orphan-local pass below and
+        // showed as a second row. Grouping by resolved uuid is what collapses
+        // them — and the whole GROUP has to be covered, not just the first hit,
+        // or the other member simply becomes the orphan instead.
+        var localsByCliUuid: [String: [ChatSession]] = [:]
         for s in localSessions {
             localById[s.id] = s
             localById[s.sourceChatId] = s
@@ -190,6 +237,10 @@ public struct UnifiedSession: Identifiable, Codable {
                     localById[String(host.dropFirst(4))] = s
                 }
             }
+            // Prefer the host's identity for the conversation when we know it —
+            // that is the id whose JSONL the host actually reads.
+            let identitySource = s.hostChatId ?? s.sourceChatId
+            localsByCliUuid[cliUuid(for: identitySource), default: []].append(s)
         }
 
         var result: [UnifiedSession] = []
@@ -198,9 +249,17 @@ public struct UnifiedSession: Identifiable, Codable {
         for r in remote {
             // Match priority: remote id, remote sourceChatId, then the host-provided
             // hostChatId (set by the Mac when it collapses a JSONL row into a Ripul tab).
+            // Identity match, not string match: the remote row and a local tab
+            // can name the same conversation in two shapes that share no
+            // substring (`claude-cli:<uuid>` vs `chat_<ts>`). Resolve both to
+            // the uuid the JSONL is named by and compare THAT; fall back to the
+            // string lookups for anything not CLI-backed.
+            let remoteUuid = cliUuid(for: r.hostChatId ?? r.sourceChatId)
+            let uuidGroup = localsByCliUuid[remoteUuid] ?? []
             let ripulMatch = localById[r.id]
                 ?? localById[r.sourceChatId]
                 ?? (r.hostChatId.flatMap { localById[$0] })
+                ?? uuidGroup.first
             if let m = ripulMatch {
                 coveredLocalIds.insert(m.id)
                 coveredLocalIds.insert(m.sourceChatId)
@@ -213,6 +272,12 @@ public struct UnifiedSession: Identifiable, Codable {
                         coveredLocalIds.insert(alt.id)
                         coveredLocalIds.insert(alt.sourceChatId)
                     }
+                }
+                // ...and every local that resolves to the same conversation,
+                // whichever identity it is open under.
+                for alt in uuidGroup {
+                    coveredLocalIds.insert(alt.id)
+                    coveredLocalIds.insert(alt.sourceChatId)
                 }
             }
             let rowKeys = [r.id, r.sourceChatId, r.hostChatId].compactMap({ $0 })
@@ -240,8 +305,30 @@ public struct UnifiedSession: Identifiable, Codable {
         // Skip locals we just archived/closed — closeSession returns before the
         // web app removes the tab, so without this filter a flaky archive-all
         // resurrects the row as an "orphan local" with a stale green dot.
+        // When no remote row covered a conversation (host asleep / scan failed),
+        // its two identities would BOTH land here as orphans. Emit one per
+        // conversation, preferring the `cli_<uuid>` identity — the canonical
+        // form every other path resolves to, and the one whose content came
+        // from the JSONL itself.
+        var emittedOrphanUuids = Set<String>()
+        let orphanSurvivors: Set<String> = {
+            var byUuid: [String: ChatSession] = [:]
+            for s in localSessions where !coveredLocalIds.contains(s.id)
+                && !recentlyClosedLocalIds.contains(s.id) {
+                let uuid = cliUuid(for: s.hostChatId ?? s.sourceChatId)
+                guard let incumbent = byUuid[uuid] else { byUuid[uuid] = s; continue }
+                let incumbentIsCli = canonicalKey(incumbent.hostChatId ?? incumbent.sourceChatId) != (incumbent.hostChatId ?? incumbent.sourceChatId)
+                let challengerIsCli = canonicalKey(s.hostChatId ?? s.sourceChatId) != (s.hostChatId ?? s.sourceChatId)
+                if challengerIsCli && !incumbentIsCli { byUuid[uuid] = s }
+            }
+            return Set(byUuid.values.map { $0.id })
+        }()
+
         for s in localSessions where !coveredLocalIds.contains(s.id)
-            && !recentlyClosedLocalIds.contains(s.id) {
+            && !recentlyClosedLocalIds.contains(s.id)
+            && orphanSurvivors.contains(s.id) {
+            let orphanUuid = cliUuid(for: s.hostChatId ?? s.sourceChatId)
+            if !emittedOrphanUuids.insert(orphanUuid).inserted { continue }
             result.append(UnifiedSession(
                 id: s.id,
                 title: s.displayName,

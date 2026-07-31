@@ -73,6 +73,23 @@ struct SolutionManagementSection: View {
                 Divider().padding(.leading, 44)
 
                 row(
+                    title: "View Explorer",
+                    subtitle: "Inspect elements; record macros by double-tapping",
+                    icon: "viewfinder",
+                    identifier: "SolutionManagement.viewExplorer"
+                ) {
+                    // Collapse the console first, then present over the HOST
+                    // window (the explorer inspects the host app, never the
+                    // console's own overlay window).
+                    if #available(iOS 26.0, *) {
+                        RipulDevAssistantOverlay.shared.collapse()
+                        RipulViewExplorer.present(in: ScreenElementFinder.hostWindow())
+                    }
+                }
+
+                Divider().padding(.leading, 44)
+
+                row(
                     title: "Solution Contexts",
                     subtitle: "What a session can do — tools and prompt",
                     icon: "square.stack.3d.up",

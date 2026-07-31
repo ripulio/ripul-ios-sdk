@@ -24,6 +24,12 @@ enum MacroDeepLink {
     /// would silently revert the editor to the stored macro, losing edits.
     /// Restored (and cleared) by the editor on appear.
     static var pendingEditorState: MacroEditorState?
+    /// Set by the macro library's "Record new" button: the console's
+    /// `macroRecordedAction` checks it after persisting, and if set posts
+    /// `.ripulShowMacroLibrary` — so a recording launched FROM the library
+    /// lands you back IN the library (with the new macro listed) when you
+    /// next expand the console.
+    static var pendingLibraryOpen = false
 }
 
 /// An in-progress edit snapshot (the editor's local state at replay time).

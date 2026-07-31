@@ -163,6 +163,13 @@ public struct RipulAgentConsole: View {
                         NSLog("[RIPUL_MACROS] failed to persist recorded macro '%@': %@", macro.name, error.localizedDescription)
                     }
                     await refreshMacroTools()
+                    // Recorded from the library's "Record new" button → bring
+                    // the user back to the library (with the new macro listed)
+                    // on their next console expand.
+                    if MacroDeepLink.pendingLibraryOpen {
+                        MacroDeepLink.pendingLibraryOpen = false
+                        NotificationCenter.default.post(name: .ripulShowMacroLibrary, object: nil)
+                    }
                 }
             }
             await refreshMacroTools()

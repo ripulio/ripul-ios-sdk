@@ -58,12 +58,21 @@ struct MacroLibraryScreen: View {
                     Button("Done") { dismiss() }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        Task { await load() }
-                    } label: {
-                        Image(systemName: "arrow.clockwise")
+                    HStack(spacing: 14) {
+                        Button {
+                            recordNewMacro()
+                        } label: {
+                            Image(systemName: "record.circle")
+                        }
+                        .accessibilityLabel("Record a new macro")
+                        .uiKitIdentifier("MacroLibraryScreen.recordButton")
+                        Button {
+                            Task { await load() }
+                        } label: {
+                            Image(systemName: "arrow.clockwise")
+                        }
+                        .uiKitIdentifier("MacroLibraryScreen.refreshButton")
                     }
-                    .uiKitIdentifier("MacroLibraryScreen.refreshButton")
                 }
             }
             .alert("Couldn't load macros", isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
@@ -101,6 +110,21 @@ struct MacroLibraryScreen: View {
         guard let macro = MacroDeepLink.pendingEditorMacro else { return }
         MacroDeepLink.pendingEditorMacro = nil
         editingMacro = macro
+    }
+
+    /// Start a recording straight from the library: unwind this sheet,
+    /// collapse the console, and present the View Explorer already in record
+    /// mode over the HOST window (never the overlay's own — the explorer
+    /// inspects the host app, not the console). The pending-library flag
+    /// tells the console's macroRecordedAction to bring you back here after
+    /// the save lands.
+    private func recordNewMacro() {
+        MacroDeepLink.pendingLibraryOpen = true
+        dismiss()
+        if #available(iOS 26.0, *) {
+            RipulDevAssistantOverlay.shared.collapse()
+            RipulViewExplorer.present(in: ScreenElementFinder.hostWindow(), recording: true)
+        }
     }
 
     private func row(_ macro: RipulMacro) -> some View {
