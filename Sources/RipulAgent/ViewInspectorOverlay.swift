@@ -838,6 +838,10 @@ class ViewInspectorController: UIView {
     var onCursorMoved: ((CGPoint) -> Void)?
     var onDismiss: (() -> Void)?
     var onElementTap: ((RipulElementTap) -> Void)?
+    /// The HOST window to hit-test when the explorer runs in its own overlay
+    /// window (`RipulViewExplorer.present`). Nil for embedded mounts, where
+    /// `self.window` IS the host window.
+    var hostWindow: UIWindow?
     /// Fired after a single-tap actuation attempt with a one-line outcome
     /// ("via uicontrol", "via rowSelection", "not tappable") — the overlay
     /// shows it as a transient pill so a dead element reports itself instead
@@ -1046,8 +1050,11 @@ class ViewInspectorController: UIView {
     // MARK: Hit testing
 
     private func pickAt(_ point: CGPoint) {
-        guard let window = self.window else { highlightLayer.path = nil; return }
-        let windowPoint = convert(point, to: nil)
+        // Pick against the HOST window when the explorer runs in its own
+        // overlay window (self.window is the overlay, not the host); for
+        // embedded mounts, self.window IS the host window.
+        guard let window = hostWindow ?? self.window else { highlightLayer.path = nil; return }
+        let windowPoint = convert(point, to: window)
 
         // Probe what's under the cursor. We must make the ENTIRE inspector overlay
         // transparent to hitTest, not just the touch layer: a launcher-presented
@@ -1207,6 +1214,7 @@ class ViewInspectorController: UIView {
 // MARK: - UIKit Representable
 
 struct ViewInspectorTouchLayer: UIViewRepresentable {
+    var hostWindow: UIWindow? = nil
     let onInspect: (InspectedView) -> Void
     let onCursorMoved: (CGPoint) -> Void
     let onElementTap: ((RipulElementTap) -> Void)?
@@ -1214,6 +1222,7 @@ struct ViewInspectorTouchLayer: UIViewRepresentable {
 
     func makeUIView(context: Context) -> ViewInspectorController {
         let v = ViewInspectorController(frame: UIScreen.main.bounds)
+        v.hostWindow = hostWindow
         v.onInspect = onInspect
         v.onCursorMoved = onCursorMoved
         v.onElementTap = onElementTap
@@ -1223,6 +1232,7 @@ struct ViewInspectorTouchLayer: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: ViewInspectorController, context: Context) {
+        uiView.hostWindow = hostWindow ?? uiView.hostWindow
         uiView.onInspect = onInspect
         uiView.onCursorMoved = onCursorMoved
         uiView.onElementTap = onElementTap
@@ -2723,9 +2733,14 @@ public struct ViewInspectorOverlay: View {
     let elementTapAction: ((RipulElementTap) -> Void)?
     let consoleAction: (() -> Void)?
     let macroRecordedAction: ((RipulMacro) -> Void)?
-    /// Launched straight into record mode (the library's "Record new" entry
+    /// Launched straight into record mode ( the library's "Record new" entry
     /// point) — the Macro tab is armed from the start.
     let startRecording: Bool
+    /// The HOST window to hit-test when picking — set when the explorer runs
+    /// in its own overlay window (`RipulViewExplorer.present`); nil when the
+    /// overlay is embedded in the host's own view hierarchy (pick against
+    /// the enclosing window instead).
+    let hostWindow: UIWindow?
     @State private var inspected: InspectedView?
     @State private var cursorPosition: CGPoint = CGPoint(
         x: UIScreen.main.bounds.width / 2,
@@ -2772,12 +2787,13 @@ public struct ViewInspectorOverlay: View {
 
     public init(isActive: Binding<Bool>, elementTapAction: ((RipulElementTap) -> Void)? = nil,
                consoleAction: (() -> Void)? = nil, macroRecordedAction: ((RipulMacro) -> Void)? = nil,
-               startRecording: Bool = false) {
+               startRecording: Bool = false, hostWindow: UIWindow? = nil) {
         self._isActive = isActive
         self.elementTapAction = elementTapAction
         self.consoleAction = consoleAction
         self.macroRecordedAction = macroRecordedAction
         self.startRecording = startRecording
+        self.hostWindow = hostWindow
         self._isRecording = State(initialValue: startRecording)
     }
 
@@ -2787,6 +2803,7 @@ public struct ViewInspectorOverlay: View {
                 // Touch capture layer — mounted whenever the explorer is active.
                 // Folding only collapses the HUD; the reticule stays movable/inspectable.
                 ViewInspectorTouchLayer(
+                    hostWindow: hostWindow,
                     onInspect: { info in
                         if info.view !== currentView {
                             if let old = currentView {

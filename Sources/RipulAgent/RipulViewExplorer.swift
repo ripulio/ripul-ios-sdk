@@ -47,15 +47,35 @@ public struct RipulElementTap {
 // binding, which calls back into `dismiss()`), so callers usually only need
 // `present()`.
 
+// MARK: - Overlay window
+//
+// The explorer mounts in its OWN window, not as a child of the top-most view
+// controller: a host-side panel added directly to the key window (WAC's
+// RecordMenu sidebar is a plain `window.addSubview`) would otherwise cover
+// it. Level is one above the dev-assistant overlay's (`alert + 1`), so while
+// active the explorer outranks every host panel AND the dev chrome. It is
+// stamped with the excluded-overlay identifier so screen inspection and
+// actuation never target it — the same exclusion the dev overlay gets.
+
+@available(iOS 16.0, *)
+final class RipulExplorerOverlayWindow: UIWindow {
+    // Full-capture while the explorer is active: the touch layer IS the
+    // interaction (reticule drag, tap-to-fire, HUD). No passthrough needed.
+}
+
 @available(iOS 16.0, *)
 @MainActor
 public enum RipulViewExplorer {
 
-    /// The controller hosting the live overlay, or `nil` when not shown.
-    private static weak var host: UIViewController?
+    /// The overlay window hosting the live explorer, or `nil` when not shown.
+    private static weak var window: RipulExplorerOverlayWindow?
+    /// The HOST window the explorer inspects and drives — retained for the
+    /// lifetime of the presentation (picking hit-tests this window, not the
+    /// explorer's own).
+    private static var hostWindow: UIWindow?
 
     /// Whether the explorer is currently on screen.
-    public static var isPresented: Bool { host != nil }
+    public static var isPresented: Bool { window != nil }
 
     /// Optional host-defined action invoked when the user double-taps the element
     /// currently highlighted by the inspector reticule. The SDK only reports the tapped
@@ -85,37 +105,36 @@ public enum RipulViewExplorer {
     /// tab armed) — used by the macro library's "Record new" entry point.
     @discardableResult
     public static func present(in window: UIWindow? = nil, recording: Bool = false) -> Bool {
-        guard host == nil else { return true }
+        guard self.window == nil else { return true }
         guard let target = window ?? keyWindow(),
-              let root = target.rootViewController else { return false }
+              let scene = target.windowScene else { return false }
 
-        let parent = topMostViewController(from: root)
-        let hosting = UIHostingController(rootView: RipulViewExplorerRoot(startRecording: recording, onDismiss: { dismiss() }))
+        hostWindow = target
+        let win = RipulExplorerOverlayWindow(windowScene: scene)
+        win.frame = scene.screen.bounds
+        win.windowLevel = UIWindow.Level(rawValue: UIWindow.Level.alert.rawValue + 2)
+        win.backgroundColor = .clear
+        // Stamped so screen inspection + actuation exclude it, same as the
+        // dev-assistant overlay — the explorer drives the HOST app, never itself.
+        win.accessibilityIdentifier = RipulInspection.excludedOverlayWindowIdentifier
+        let hosting = UIHostingController(rootView: RipulViewExplorerRoot(
+            hostWindow: target,
+            startRecording: recording,
+            onDismiss: { dismiss() }
+        ))
         hosting.view.backgroundColor = .clear
-        // Tag so the inspector's hit-walks skip their own overlay subtree (this
-        // host is a sibling of app content under the same VC, so the geometric
-        // walk would otherwise re-enter it — see ViewInspectorController).
-        hosting.view.tag = ripulViewExplorerOverlayTag
-        // Don't block touches the overlay itself lets through (folded HUD etc.).
-        hosting.view.frame = parent.view.bounds
-        hosting.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-
-        parent.addChild(hosting)
-        parent.view.addSubview(hosting.view)
-        parent.view.bringSubviewToFront(hosting.view)
-        hosting.didMove(toParent: parent)
-
-        host = hosting
+        win.rootViewController = hosting
+        win.isHidden = false
+        self.window = win
         return true
     }
 
     /// Remove the View Explorer if shown.
     public static func dismiss() {
-        guard let hosting = host else { return }
-        hosting.willMove(toParent: nil)
-        hosting.view.removeFromSuperview()
-        hosting.removeFromParent()
-        host = nil
+        guard let win = window else { return }
+        win.isHidden = true
+        window = nil
+        hostWindow = nil
     }
 
     /// Show if hidden, hide if shown.
@@ -138,23 +157,18 @@ public enum RipulViewExplorer {
         return scenes.flatMap { $0.windows }.first { $0.isKeyWindow }
             ?? scenes.flatMap { $0.windows }.first
     }
-
-    private static func topMostViewController(from root: UIViewController) -> UIViewController {
-        var top = root
-        while let presented = top.presentedViewController, !presented.isBeingDismissed {
-            top = presented
-        }
-        return top
-    }
 }
 
 // MARK: - Root wrapper
 
 /// Owns the `isActive` state for a launcher-presented overlay and bridges the
 /// overlay's self-dismiss (Exit button) back to `RipulViewExplorer.dismiss()`.
+/// `hostWindow` is the window the explorer inspects and drives — the picking
+/// hit-test runs against it, not the explorer's own overlay window.
 @available(iOS 16.0, *)
 private struct RipulViewExplorerRoot: View {
     @State private var isActive = true
+    var hostWindow: UIWindow?
     var startRecording = false
     let onDismiss: () -> Void
 
@@ -163,7 +177,8 @@ private struct RipulViewExplorerRoot: View {
                              elementTapAction: RipulViewExplorer.elementTapAction,
                              consoleAction: RipulViewExplorer.consoleAction,
                              macroRecordedAction: RipulViewExplorer.macroRecordedAction,
-                             startRecording: startRecording)
+                             startRecording: startRecording,
+                             hostWindow: hostWindow)
             .onChange(of: isActive) { active in
                 if !active { onDismiss() }
             }
