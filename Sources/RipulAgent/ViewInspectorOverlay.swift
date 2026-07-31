@@ -995,11 +995,16 @@ class ViewInspectorController: UIView {
 
     /// Fire the currently highlighted element through the shared actuation
     /// engine — the exact 4-path ladder a macro step would use, so what you
-    /// drive by pointing is what a recording would replay.
+    /// drive by pointing is what a recording would replay. Pulses the
+    /// highlight border around the element it actuated (pink on success, red
+    /// on failure) so the user SEES which element was pressed — "the tap
+    /// worked but the app ignored it" and "the tap hit the wrong element"
+    /// look identical without it.
     private func fireHighlightedElement() {
         pendingTapFire = nil
         guard let element = currentTokenAnchor ?? currentTarget else { return }
         UISelectionFeedbackGenerator().selectionChanged()
+        let frameInSelf = convert(element.convert(element.bounds, to: nil), from: nil)
         Task { @MainActor in
             let outcome = ScreenActuationEngine.performTap(
                 on: element,
@@ -1007,6 +1012,7 @@ class ViewInspectorController: UIView {
                 matchText: ScreenElementFinder.contentText(of: element))
             NSLog("[RipulViewExplorer] single-tap fire via=%@", outcome.via ?? "none")
             self.onFireOutcome?(outcome.via.map { "via \($0)" } ?? "not tappable")
+            self.flashFireOutcome(at: frameInSelf, success: outcome.success)
         }
         // The screen may navigate/re-render — re-pick shortly after so the
         // highlight reflects the new reality.
@@ -1014,6 +1020,26 @@ class ViewInspectorController: UIView {
             guard let self else { return }
             self.pickAt(self.cursorPos)
         }
+    }
+
+    /// Two quick border pulses around the frame the fire actuated — the
+    /// unmissable version of the outcome pill.
+    private func flashFireOutcome(at frame: CGRect, success: Bool) {
+        let pulse = CAShapeLayer()
+        pulse.fillColor = UIColor.clear.cgColor
+        pulse.strokeColor = (success ? UIColor.systemPink : UIColor.systemRed).cgColor
+        pulse.lineWidth = 3
+        pulse.path = UIBezierPath(roundedRect: frame.insetBy(dx: -2, dy: -2), cornerRadius: 8).cgPath
+        layer.addSublayer(pulse)
+        let anim = CABasicAnimation(keyPath: "opacity")
+        anim.fromValue = 1
+        anim.toValue = 0
+        anim.duration = 0.25
+        anim.autoreverses = true
+        anim.repeatCount = 2
+        anim.isRemovedOnCompletion = true
+        pulse.add(anim, forKey: "pulse")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.1) { pulse.removeFromSuperlayer() }
     }
 
     // MARK: Hit testing
