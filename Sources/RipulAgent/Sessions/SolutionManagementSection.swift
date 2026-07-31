@@ -12,17 +12,23 @@ public struct RipulSolutionManagement {
     /// keys is a platform-admin act performed from the first-party Ripul app.
     /// (The API gates it too — this only decides whether the row is offered.)
     public let showsSiteKeyAdmin: Bool
+    /// Registered app slug for Ripul-hosted OTA builds ("ripul", "wac"). nil
+    /// omits the Builds row — a host that doesn't publish builds to Ripul has
+    /// nothing to list.
+    public let buildsApp: String?
 
     public init(
         registry: RipulToolRegistry,
         baseURL: URL,
         tokenProvider: @escaping () -> String?,
-        showsSiteKeyAdmin: Bool = false
+        showsSiteKeyAdmin: Bool = false,
+        buildsApp: String? = nil
     ) {
         self.registry = registry
         self.baseURL = baseURL
         self.tokenProvider = tokenProvider
         self.showsSiteKeyAdmin = showsSiteKeyAdmin
+        self.buildsApp = buildsApp
     }
 }
 
@@ -46,6 +52,7 @@ struct SolutionManagementSection: View {
     @State private var showingContexts = false
     @State private var showingSiteKeys = false
     @State private var showingMacros = false
+    @State private var showingBuilds = false
     /// Phase-2 absorption confirmation + collision alert (moved here from the
     /// console DevTools Tools tab).
     @State private var confirmAbsorption = false
@@ -95,6 +102,18 @@ struct SolutionManagementSection: View {
                     icon: "square.stack.3d.up",
                     identifier: "SolutionManagement.contexts"
                 ) { showingContexts = true }
+
+                // Builds needs iOS 17 (RipulBuildsScreen); this section is
+                // available from 16, so the row simply doesn't appear below that.
+                if #available(iOS 17.0, *), management.buildsApp != nil {
+                    Divider().padding(.leading, 44)
+                    row(
+                        title: "Builds",
+                        subtitle: "Install a published build — history and release notes",
+                        icon: "shippingbox",
+                        identifier: "SolutionManagement.builds"
+                    ) { showingBuilds = true }
+                }
 
                 if management.showsSiteKeyAdmin {
                     Divider().padding(.leading, 44)
@@ -189,6 +208,22 @@ struct SolutionManagementSection: View {
                 .toolbar {
                     ToolbarItem(placement: .topBarTrailing) {
                         Button("Done") { showingContexts = false }
+                    }
+                }
+            }
+        }
+        .sheet(isPresented: $showingBuilds) {
+            if #available(iOS 17.0, *), let app = management.buildsApp {
+                NavigationStack {
+                    RipulBuildsScreen(
+                        source: .ripulHosted(app: app),
+                        baseURL: management.baseURL,
+                        tokenProvider: management.tokenProvider
+                    )
+                    .toolbar {
+                        ToolbarItem(placement: .topBarTrailing) {
+                            Button("Done") { showingBuilds = false }
+                        }
                     }
                 }
             }

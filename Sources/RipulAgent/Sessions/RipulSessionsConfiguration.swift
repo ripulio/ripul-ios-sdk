@@ -50,6 +50,14 @@ public struct RipulSessionsConfiguration {
     /// collections, but binding them to keys is a platform-admin act. The API
     /// gates it independently; this only decides whether the row is offered.
     public var showsSiteKeyAdmin: Bool
+    /// Registered app slug for Ripul-hosted OTA builds, e.g. "ripul" / "wac".
+    /// When set, Solution management offers a Builds row listing what has been
+    /// published for this app and installing it in place. nil omits the row.
+    ///
+    /// Unlike the first-party app's Settings > Advanced > Builds, this is the
+    /// route an SDK consumer actually has — their users never see Ripul's own
+    /// Settings screen.
+    public var buildsApp: String?
     /// Optional app-injected panels (nil = omitted).
     public var invitesSection: (() -> AnyView)?
     public var foldersSection: (() -> AnyView)?
@@ -65,6 +73,7 @@ public struct RipulSessionsConfiguration {
         quickActionsEnabled: Bool = false,
         registry: RipulToolRegistry = RipulToolRegistry(),
         showsSiteKeyAdmin: Bool = false,
+        buildsApp: String? = nil,
         invitesSection: (() -> AnyView)? = nil,
         foldersSection: (() -> AnyView)? = nil,
         emptyStateOverride: (() -> AnyView)? = nil
@@ -78,6 +87,7 @@ public struct RipulSessionsConfiguration {
         self.quickActionsEnabled = quickActionsEnabled
         self.registry = registry
         self.showsSiteKeyAdmin = showsSiteKeyAdmin
+        self.buildsApp = buildsApp
         self.invitesSection = invitesSection
         self.foldersSection = foldersSection
         self.emptyStateOverride = emptyStateOverride
