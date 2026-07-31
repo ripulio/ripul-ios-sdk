@@ -297,4 +297,20 @@ final class MacroReplayEngineTests: XCTestCase {
                        "text='Records' role=button class=_UITabButton nth=1")
         XCTAssertEqual(MacroSelector().compactSummary, "")
     }
+
+    // MARK: - pause steps
+
+    func testPauseStepSucceedsAndRunContinues() async throws {
+        let resolver = FakeResolver()
+        resolver.resolvable = ["a"]
+        let pause = MacroStep(kind: .pause, selector: MacroSelector(), seconds: 0.05, recordedLabel: "Pause 0.05s")
+        let result = try await MacroReplayEngine.replay(
+            macro(steps: [pause, tapStep("a")]),
+            parameters: [:], resolver: resolver)
+
+        XCTAssertTrue(result.success)
+        XCTAssertEqual(result.completedSteps, 2)
+        XCTAssertEqual(resolver.performTapCalls, ["a"], "the step after the pause must still run")
+        XCTAssertGreaterThanOrEqual(result.stepResults[0].durationMs, 40, "pause should report roughly its own duration")
+    }
 }

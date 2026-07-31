@@ -27,6 +27,8 @@ struct MacroLibraryScreen: View {
     /// The macro currently open in the deterministic-replay sheet (no agent
     /// round-trip — live per-step pass/fail, `MacroReplaySheet`).
     @State private var replayMacro: RipulMacro?
+    /// The macro open in the in-place editor (`MacroEditScreen`).
+    @State private var editingMacro: RipulMacro?
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -69,6 +71,11 @@ struct MacroLibraryScreen: View {
             }
             .sheet(item: $replayMacro) { macro in
                 MacroReplaySheet(macro: macro)
+            }
+            .sheet(item: $editingMacro) { macro in
+                MacroEditScreen(macro: macro, client: client, onSaved: {
+                    Task { await load(); onChange() }
+                })
             }
             .onReceive(MacroReplayHUDController.shared.$phase) { phase in
                 // A HUD-mode replay takes over the bottom strip — the modal
@@ -115,6 +122,8 @@ struct MacroLibraryScreen: View {
                 .foregroundStyle(.tertiary)
         }
         .padding(.vertical, 4)
+        .contentShape(Rectangle())
+        .onTapGesture { editingMacro = macro }
         .uiKitIdentifier("MacroLibraryScreen.row.\(macro.name)")
         .swipeActions(edge: .trailing) {
             Button(role: .destructive) {

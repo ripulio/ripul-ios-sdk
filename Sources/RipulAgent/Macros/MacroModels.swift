@@ -92,6 +92,10 @@ public struct MacroSelector: Codable, Equatable {
 
 public enum MacroStepKind: String, Codable {
     case tap, type, scroll, wait
+    /// A fixed-duration pause ("settle time") — not an element wait: it
+    /// always succeeds after `seconds`, never fails on a condition. Inserted
+    /// from the macro editor between steps (e.g. let an animation finish).
+    case pause
 }
 
 /// One recorded action. Fields not relevant to `kind` are simply nil — kept as
@@ -118,6 +122,9 @@ public struct MacroStep: Codable, Equatable, Identifiable {
     public var state: String?
     /// `.wait` — seconds to wait before giving up.
     public var timeout: Double?
+    /// `.pause` — seconds to sleep. Kept separate from `timeout`: a pause
+    /// always succeeds after this long, it is not a deadline on a condition.
+    public var seconds: Double?
 
     /// Human-readable, captured at record time (e.g. "Tap 'Clock In' (button)")
     /// — shown in the recording UI's step list and folded into the synthesized
@@ -127,7 +134,7 @@ public struct MacroStep: Codable, Equatable, Identifiable {
 
     public init(id: String = UUID().uuidString, kind: MacroStepKind, selector: MacroSelector,
                text: String? = nil, append: Bool? = nil, direction: String? = nil, amount: Double? = nil,
-               state: String? = nil, timeout: Double? = nil, recordedLabel: String) {
+               state: String? = nil, timeout: Double? = nil, seconds: Double? = nil, recordedLabel: String) {
         self.id = id
         self.kind = kind
         self.selector = selector
@@ -137,6 +144,7 @@ public struct MacroStep: Codable, Equatable, Identifiable {
         self.amount = amount
         self.state = state
         self.timeout = timeout
+        self.seconds = seconds
         self.recordedLabel = recordedLabel
     }
 }

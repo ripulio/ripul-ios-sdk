@@ -190,6 +190,14 @@ public enum MacroReplayEngine {
                 }
                 try await Task.sleep(nanoseconds: pollInterval)
             }
+
+        case .pause:
+            // Fixed settle time — always succeeds, no condition. The sleep
+            // throws promptly on cancellation, same as the poll loops.
+            let seconds = max(step.seconds ?? 1, 0)
+            try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+            return StepOutcome(success: true, via: nil, error: nil,
+                               durationMs: ms(since: stepStart))
         }
     }
 
