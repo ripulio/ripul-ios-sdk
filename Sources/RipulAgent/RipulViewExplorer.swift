@@ -68,7 +68,12 @@ final class RipulExplorerOverlayWindow: UIWindow {
 public enum RipulViewExplorer {
 
     /// The overlay window hosting the live explorer, or `nil` when not shown.
-    private static weak var window: RipulExplorerOverlayWindow?
+    /// STRONG: a standalone UIWindow has no owner — the previous `weak`
+    /// reference let it deallocate the moment present() returned, leaving
+    /// the explorer invisible (the old embedded VC survived because its
+    /// parent VC retained it via addChild; a standalone window has no such
+    /// owner). Teardown is explicit via dismiss().
+    private static var window: RipulExplorerOverlayWindow?
     /// The HOST window the explorer inspects and drives — retained for the
     /// lifetime of the presentation (picking hit-tests this window, not the
     /// explorer's own).
