@@ -838,6 +838,11 @@ class ViewInspectorController: UIView {
     var onCursorMoved: ((CGPoint) -> Void)?
     var onDismiss: (() -> Void)?
     var onElementTap: ((RipulElementTap) -> Void)?
+    /// Fired after a single-tap actuation attempt with a one-line outcome
+    /// ("via uicontrol", "via rowSelection", "not tappable") — the overlay
+    /// shows it as a transient pill so a dead element reports itself instead
+    /// of silently doing nothing.
+    var onFireOutcome: ((String) -> Void)?
 
     private let cursorAccel: CGFloat = 1.4
     private var cursorPos: CGPoint
@@ -1001,6 +1006,7 @@ class ViewInspectorController: UIView {
                 matchId: ScreenElementFinder.identifier(of: element),
                 matchText: ScreenElementFinder.contentText(of: element))
             NSLog("[RipulViewExplorer] single-tap fire via=%@", outcome.via ?? "none")
+            self.onFireOutcome?(outcome.via.map { "via \($0)" } ?? "not tappable")
         }
         // The screen may navigate/re-render — re-pick shortly after so the
         // highlight reflects the new reality.
@@ -1177,12 +1183,14 @@ struct ViewInspectorTouchLayer: UIViewRepresentable {
     let onInspect: (InspectedView) -> Void
     let onCursorMoved: (CGPoint) -> Void
     let onElementTap: ((RipulElementTap) -> Void)?
+    let onFireOutcome: ((String) -> Void)?
 
     func makeUIView(context: Context) -> ViewInspectorController {
         let v = ViewInspectorController(frame: UIScreen.main.bounds)
         v.onInspect = onInspect
         v.onCursorMoved = onCursorMoved
         v.onElementTap = onElementTap
+        v.onFireOutcome = onFireOutcome
         v.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         return v
     }
@@ -1191,6 +1199,7 @@ struct ViewInspectorTouchLayer: UIViewRepresentable {
         uiView.onInspect = onInspect
         uiView.onCursorMoved = onCursorMoved
         uiView.onElementTap = onElementTap
+        uiView.onFireOutcome = onFireOutcome
     }
 }
 
@@ -2726,6 +2735,9 @@ public struct ViewInspectorOverlay: View {
     @State private var typeTextTarget: UIView?
     @State private var recordingError: String?
     @State private var showSaveSheet = false
+    /// Transient outcome of a single-tap fire ("via uicontrol", "not
+    /// tappable") shown as a pill — auto-hides shortly after.
+    @State private var fireOutcome: String?
     /// Auto-pause between recorded steps: 0 = off; otherwise each recorded
     /// action after the first is preceded by a fixed `Pause Ns` step.
     /// Persisted per device so the setting survives sessions.
@@ -2767,9 +2779,33 @@ public struct ViewInspectorOverlay: View {
                         } else {
                             elementTapAction?(tap)
                         }
+                    },
+                    onFireOutcome: { outcome in
+                        fireOutcome = outcome
+                        Task {
+                            try? await Task.sleep(nanoseconds: 1_500_000_000)
+                            fireOutcome = nil
+                        }
                     }
                 )
                 .ignoresSafeArea()
+
+                // Fire-outcome pill — a dead tap reports itself ("not
+                // tappable") instead of silently doing nothing.
+                if let fireOutcome {
+                    Text(fireOutcome)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(Color.black.opacity(0.8))
+                        .clipShape(Capsule())
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                        .padding(.top, 60)
+                        .allowsHitTesting(false)
+                        .transition(.opacity)
+                        .uiKitIdentifier("ViewInspectorOverlay.fireOutcomePill")
+                }
 
                 // Crosshair — shown when unfolded; when folded it stays visible
                 // unless the user enables "Hide reticule when folded" in Settings.

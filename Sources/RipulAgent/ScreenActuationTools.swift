@@ -34,6 +34,11 @@ import UIKit
 ///    KVC-compliant for its SEL-typed `_action` ivar, and `value(forKey:)`
 ///    throws `NSUnknownKeyException` straight through Swift, killing the
 ///    host app. Runtime ivar reads return nil instead of throwing.
+/// 5. Container selection — walk to the nearest UITableViewCell /
+///    UICollectionViewCell and drive the owning container's delegate
+///    `didSelect` call (public API). Covers the case where NO touch
+///    semantics live on the element at all: the table/collection owns the
+///    tap. Broadest fallback, so it runs last.
 // MARK: - Element lookup (shared walker)
 //
 // `ScreenElementFinder`'s pure predicate-matching core (this declaration) is
@@ -457,8 +462,61 @@ enum ScreenActuationEngine {
             }
             g = cur.superview
         }
+
+        // 5. Container selection — a plain view inside a UITableViewCell /
+        //    UICollectionViewCell whose tap means "select this row". There is
+        //    no per-cell gesture recognizer to fire: selection lives in the
+        //    container's delegate call, which is the semantic a real tap
+        //    drives. Public API only; the broadest fallback, so it runs last
+        //    (a button inside the cell or an explicit gesture on a subview
+        //    must win first).
+        if Self.selectContainerRow(of: view) {
+            ScreenSnapshotStore.shared.invalidate()
+            return TapOutcome(success: true, via: "rowSelection", error: nil)
+        }
         return TapOutcome(success: false, via: nil,
-                          error: "Element found but not tappable by any path (not a control, no activatable accessibility element, no tap gesture).")
+                          error: "Element found but not tappable by any path (not a control, no activatable accessibility element, no tap gesture, not inside a selectable cell).")
+    }
+
+    /// Walk up to the nearest table/collection cell, then to its owning
+    /// container, and perform the selection the delegate would get from a
+    /// real tap — `selectRow`/`selectItem` for visual fidelity, then the
+    /// `didSelect` call itself (the semantic). Respects `allowsSelection`
+    /// and `responds(to:)` so a non-selectable list is correctly not a tap.
+    private static func selectContainerRow(of view: UIView) -> Bool {
+        var cell: UIView?
+        var v: UIView? = view
+        while let cur = v {
+            if cur is UITableViewCell || cur is UICollectionViewCell { cell = cur; break }
+            v = cur.superview
+        }
+        guard let cell else { return false }
+
+        var owner = cell.superview
+        while let cur = owner {
+            if let table = cur as? UITableView,
+               let tableCell = cell as? UITableViewCell,
+               table.allowsSelection,
+               let indexPath = table.indexPath(for: tableCell),
+               let delegate = table.delegate,
+               delegate.responds(to: #selector(UITableViewDelegate.tableView(_:didSelectRowAt:))) {
+                table.selectRow(at: indexPath, animated: true, scrollPosition: .none)
+                delegate.tableView?(table, didSelectRowAt: indexPath)
+                return true
+            }
+            if let collection = cur as? UICollectionView,
+               let collectionCell = cell as? UICollectionViewCell,
+               collection.allowsSelection,
+               let indexPath = collection.indexPath(for: collectionCell),
+               let delegate = collection.delegate,
+               delegate.responds(to: #selector(UICollectionViewDelegate.collectionView(_:didSelectItemAt:))) {
+                collection.selectItem(at: indexPath, animated: true, scrollPosition: [])
+                delegate.collectionView?(collection, didSelectItemAt: indexPath)
+                return true
+            }
+            owner = cur.superview
+        }
+        return false
     }
 
     /// Set a text field/view's content, firing the same change notification
