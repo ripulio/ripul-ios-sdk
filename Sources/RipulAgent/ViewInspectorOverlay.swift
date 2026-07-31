@@ -854,6 +854,25 @@ class ViewInspectorController: UIView {
     private let doubleTapInterval: TimeInterval = 0.45
     private let doubleTapDistance: CGFloat = 60
 
+    // Single-tap actuation state: a tap (short, no drag) FIRES the
+    // highlighted element through the shared actuation engine — delayed just
+    // past the double-tap window and cancelled if a second tap begins, so
+    // the existing double-tap confirm/record gesture is untouched. Dragging
+    // still picks live (the highlight follows the reticule) — inspection
+    // needs no tap at all.
+    private var touchDownTime: TimeInterval = 0
+    private var touchMoved = false
+    private var pendingTapFire: DispatchWorkItem?
+    private var suppressNextTapFire = false
+    private let tapFireDelay: TimeInterval = 0.28
+    private let tapMaxDuration: TimeInterval = 0.3
+
+    /// Settings-tab toggle ("Single tap fires the highlighted element"),
+    /// read raw because this is a UIView, not a SwiftUI View.
+    private var singleTapFiresEnabled: Bool {
+        UserDefaults.standard.object(forKey: "viewInspector.singleTapFires") as? Bool ?? true
+    }
+
     override init(frame: CGRect) {
         cursorPos = CGPoint(x: frame.width / 2, y: frame.height / 2)
         super.init(frame: frame)
@@ -887,6 +906,11 @@ class ViewInspectorController: UIView {
         if isDoubleTap(at: loc, time: t.timestamp) {
             lastTapTime = nil
             lastTapPosition = nil
+            // The first tap of the pair scheduled a single-tap fire — cancel it
+            // (this is a double-tap) and don't let this tap's end schedule another.
+            pendingTapFire?.cancel()
+            pendingTapFire = nil
+            suppressNextTapFire = true
             if let element = currentTokenAnchor ?? currentTarget {
                 let tap = RipulElementTap(view: element,
                                           targetView: currentTarget ?? element,
@@ -903,6 +927,8 @@ class ViewInspectorController: UIView {
         lastTapTime = t.timestamp
         lastTapPosition = loc
         lastTouch = loc
+        touchDownTime = t.timestamp
+        touchMoved = false
         pickAt(cursorPos)
     }
 
@@ -921,6 +947,7 @@ class ViewInspectorController: UIView {
 
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard let t = touches.first, let last = lastTouch else { return }
+        touchMoved = true
         let loc = t.location(in: self)
         let dx = (loc.x - last.x) * cursorAccel
         let dy = (loc.y - last.y) * cursorAccel
@@ -934,10 +961,53 @@ class ViewInspectorController: UIView {
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
         lastTouch = nil
+        guard let t = touches.first else { return }
+
+        // A tap that completed a double-tap shouldn't ALSO fire the element.
+        if suppressNextTapFire {
+            suppressNextTapFire = false
+            return
+        }
+
+        // Single tap = fire the highlighted element: short touch, no drag —
+        // scheduled just past the double-tap window so a second tap can
+        // cancel it (see touchesBegan).
+        guard !touchMoved,
+              t.timestamp - touchDownTime < tapMaxDuration,
+              singleTapFiresEnabled else { return }
+        pendingTapFire?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.fireHighlightedElement() }
+        pendingTapFire = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + tapFireDelay, execute: work)
     }
 
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
         lastTouch = nil
+        pendingTapFire?.cancel()
+        pendingTapFire = nil
+        suppressNextTapFire = false
+    }
+
+    /// Fire the currently highlighted element through the shared actuation
+    /// engine — the exact 4-path ladder a macro step would use, so what you
+    /// drive by pointing is what a recording would replay.
+    private func fireHighlightedElement() {
+        pendingTapFire = nil
+        guard let element = currentTokenAnchor ?? currentTarget else { return }
+        UISelectionFeedbackGenerator().selectionChanged()
+        Task { @MainActor in
+            let outcome = ScreenActuationEngine.performTap(
+                on: element,
+                matchId: ScreenElementFinder.identifier(of: element),
+                matchText: ScreenElementFinder.contentText(of: element))
+            NSLog("[RipulViewExplorer] single-tap fire via=%@", outcome.via ?? "none")
+        }
+        // The screen may navigate/re-render — re-pick shortly after so the
+        // highlight reflects the new reality.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
+            guard let self else { return }
+            self.pickAt(self.cursorPos)
+        }
     }
 
     // MARK: Hit testing
@@ -2053,6 +2123,10 @@ struct InspectorSettingsTab: View {
     /// Whether the crosshair reticule is hidden when the HUD is folded.
     /// Off by default so the reticule remains visible while folded.
     @AppStorage("viewInspector.hideReticuleWhenFolded") private var hideReticuleWhenFolded = false
+    /// Single tap fires the highlighted element (through the shared
+    /// actuation engine). On by default — dragging still inspects; a tap
+    /// presses.
+    @AppStorage("viewInspector.singleTapFires") private var singleTapFires = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -2066,6 +2140,18 @@ struct InspectorSettingsTab: View {
                         .font(.system(size: 11, design: .monospaced))
                         .foregroundStyle(.white)
                     Text("Hide the crosshair when the panel is folded so it doesn't overlay the app.")
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(.gray)
+                }
+            }
+            .tint(.pink)
+
+            Toggle(isOn: $singleTapFires) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Single tap fires the element")
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(.white)
+                    Text("Tap once to press what's highlighted; double-tap still records/confirms.")
                         .font(.system(size: 10, design: .monospaced))
                         .foregroundStyle(.gray)
                 }
@@ -2131,7 +2217,7 @@ struct InspectorMacroTab: View {
             if isRecording {
                 HStack(spacing: 6) {
                     Circle().fill(Color.red).frame(width: 6, height: 6)
-                    Text("Recording — double-tap an element to add a step")
+                    Text("Recording — tap once to fire it; double-tap to record a step")
                         .font(.system(size: 11, design: .monospaced))
                         .foregroundStyle(.white)
                 }
