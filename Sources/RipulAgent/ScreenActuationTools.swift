@@ -468,32 +468,33 @@ enum ScreenActuationEngine {
         }
         trace.append("chain:no")
         var g: UIView? = view
-        var skippedContainerGesture = false
+        var gestureStoppedAtBoundary = false
         while let cur = g {
-            // NEVER fire a recognizer attached to a scroll container itself:
-            // UITableView/UICollectionView selection machinery is internal
-            // gesture recognizers on the CONTAINER, and firing one evaluates
-            // the row at the recognizer's STALE location (zero or the last
-            // real touch) — selecting whatever row sits there, typically the
-            // top of the visible list, and reading as a *success* so no later
-            // path runs. Cell-level and view-level recognizers are fine —
-            // their actions don't compute targets from location.
-            let isScrollContainer = cur is UIScrollView
-            if !isScrollContainer {
-                for gr in cur.gestureRecognizers ?? [] where gr.isEnabled {
-                    guard let tap = gr as? UITapGestureRecognizer else { continue }
-                    if TapElementTool.fireTapTargets(of: tap) {
-                        ScreenSnapshotStore.shared.invalidate()
-                        trace.append(skippedContainerGesture ? "gesture:fired(afterContainerSkip)" : "gesture:fired")
-                        return TapOutcome(success: true, via: "tapGesture", error: nil, trace: trace.joined(separator: " "))
-                    }
+            // STOP at container boundaries — not merely "don't fire on them":
+            // scrolling up PAST a UITableView/UICollectionView reaches
+            // recognizers that are never element semantics — the table's own
+            // selection machinery (stale-location row selection) and, above
+            // it, global gestures like a keyboard-dismiss recognizer on the
+            // root/window view, which fires `resignFirstResponder` and claims
+            // a hollow success (exactly the observed
+            // "gesture:fired(afterContainerSkip)" no-op that kept path 5 from
+            // ever running). Recognizers on the element or its ancestors
+            // BELOW the boundary still fire normally.
+            if cur is UIScrollView || cur is UIWindow {
+                gestureStoppedAtBoundary = true
+                break
+            }
+            for gr in cur.gestureRecognizers ?? [] where gr.isEnabled {
+                guard let tap = gr as? UITapGestureRecognizer else { continue }
+                if TapElementTool.fireTapTargets(of: tap) {
+                    ScreenSnapshotStore.shared.invalidate()
+                    trace.append("gesture:fired")
+                    return TapOutcome(success: true, via: "tapGesture", error: nil, trace: trace.joined(separator: " "))
                 }
-            } else if !(cur.gestureRecognizers ?? []).isEmpty {
-                skippedContainerGesture = true
             }
             g = cur.superview
         }
-        trace.append(skippedContainerGesture ? "gesture:containerSkipped" : "gesture:no")
+        trace.append(gestureStoppedAtBoundary ? "gesture:stoppedAtBoundary" : "gesture:no")
 
         // 5. Container selection — a plain view inside a UITableViewCell /
         //    UICollectionViewCell whose tap means "select this row". There is
