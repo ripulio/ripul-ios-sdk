@@ -575,13 +575,22 @@ enum ScreenActuationEngine {
         for el in byPoint.prefix(4) where el.accessibilityActivate() {
             ScreenSnapshotStore.shared.invalidate()
             let name = el.accessibilityLabel ?? String(describing: type(of: el))
-            trace.append("a11yPoint:activated(\(name))")
+            let others = byPoint.prefix(6).dropFirst()
+                .map { $0.accessibilityLabel ?? String(describing: type(of: $0)) }
+                .joined(separator: "|")
+            trace.append("a11yPoint:activated(\(name)) over{\(others)}")
             return TapOutcome(success: true, via: "accessibilityElement(point)", error: nil,
                               activatedIdentifier: InspectedView.objectAccessibilityIdentifier(el),
                               activatedLabel: el.accessibilityLabel,
                               trace: trace.joined(separator: " "))
         }
-        trace.append(byPoint.isEmpty ? "a11yPoint:noElement" : "a11yPoint:noneActivated(\(byPoint.count))")
+        // Name the losers too. "It tapped the wrong thing" is only debuggable
+        // if you can see what else was under the point and in what order.
+        let candidateNames = byPoint.prefix(6)
+            .map { $0.accessibilityLabel ?? String(describing: type(of: $0)) }
+            .joined(separator: "|")
+        trace.append(byPoint.isEmpty ? "a11yPoint:noElement"
+                                     : "a11yPoint:noneActivated(\(byPoint.count)){\(candidateNames)}")
 
         var v: UIView? = view
         while let cur = v {
@@ -820,11 +829,21 @@ public struct TapElementTool: NativeTool {
         let outcome = ScreenActuationEngine.performTap(on: target.view,
                                                         matchId: args["id"] as? String,
                                                         matchText: args["text"] as? String)
+        // `activated` + `trace` are the answer to "it tapped, but the app did
+        // the wrong thing": the matched VIEW is often a whole SwiftUI island,
+        // and which element inside it was pressed is the part that decides
+        // what happens. Reporting only `via` made a wrong-target activation
+        // indistinguishable from a correct one.
         if outcome.success {
-            return ["success": true, "via": outcome.via as Any, "matched": matchCount, "element": ScreenElementFinder.describe(target)]
+            var result: [String: Any] = ["success": true, "via": outcome.via as Any, "matched": matchCount,
+                                         "element": ScreenElementFinder.describe(target),
+                                         "trace": outcome.trace]
+            if let a = outcome.activatedLabel { result["activated"] = a }
+            if let a = outcome.activatedIdentifier { result["activatedId"] = a }
+            return result
         }
         return ["success": false, "matched": matchCount, "element": ScreenElementFinder.describe(target),
-                "error": outcome.error as Any]
+                "trace": outcome.trace, "error": outcome.error as Any]
     }
 
     /// Walk the accessibility tree under `view` (elements array / container
