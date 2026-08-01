@@ -98,21 +98,15 @@ public struct InspectScreenTool: NativeTool {
     // MARK: - Capture (UIKit)
 
     #if canImport(UIKit)
-    /// The host app's visible window, excluding the dev-assistant overlay.
+    /// The host app's visible window — never SDK chrome.
     @MainActor
     private static func hostKeyWindow() -> UIWindow? {
-        let windows = UIApplication.shared.connectedScenes
-            .compactMap { $0 as? UIWindowScene }
-            .flatMap { $0.windows }
-            .filter { !isExcluded($0) && !$0.isHidden }
-        return windows.first { $0.isKeyWindow }
-            ?? windows.filter { $0.windowLevel == .normal }.last
-            ?? windows.last
+        RipulChrome.appWindow()
     }
 
     @MainActor
     private static func isExcluded(_ window: UIWindow) -> Bool {
-        window.accessibilityIdentifier == RipulInspection.excludedOverlayWindowIdentifier
+        RipulChrome.isRipulWindow(window)
     }
 
     /// Depth-first walk of the visible tree, skipping hidden / effectively-invisible

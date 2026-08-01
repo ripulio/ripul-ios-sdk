@@ -125,14 +125,9 @@ extension ScreenElementFinder {
         let text: String?
     }
 
+    /// The window actuation drives: the HOST's, never SDK chrome.
     static func hostWindow() -> UIWindow? {
-        let windows = UIApplication.shared.connectedScenes
-            .compactMap { $0 as? UIWindowScene }
-            .flatMap { $0.windows }
-            .filter { $0.accessibilityIdentifier != RipulInspection.excludedOverlayWindowIdentifier && !$0.isHidden }
-        return windows.first { $0.isKeyWindow }
-            ?? windows.filter { $0.windowLevel == .normal }.last
-            ?? windows.last
+        RipulChrome.appWindow()
     }
 
     /// The identity ladder: UIKit accessibilityIdentifier (WAC's

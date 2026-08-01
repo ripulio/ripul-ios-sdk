@@ -99,6 +99,7 @@ public final class RipulDevAssistantOverlay {
 
     /// Tear the overlay down completely (the real "close").
     public func dismiss() {
+        window?.relinquishKey()
         window?.isHidden = true
         window = nil
     }
@@ -132,11 +133,10 @@ public final class RipulDevAssistantOverlay {
         let win = RipulDevOverlayWindow(windowScene: scene)
         win.windowLevel = UIWindow.Level(rawValue: UIWindow.Level.alert.rawValue + 1)
         win.backgroundColor = .clear
-        win.accessibilityIdentifier = RipulDevOverlayWindow.markerIdentifier
         let root = RipulDevOverlayRootVC()
         root.overlay = self
         root.configuration = configuration
-        win.rootViewController = root
+        win.installRoot(root)
         win.isHidden = false
         window = win
     }
@@ -176,12 +176,27 @@ public final class RipulDevAssistantOverlay {
 // MARK: - Overlay window (pass-through when collapsed)
 
 @available(iOS 26.0, *)
-final class RipulDevOverlayWindow: UIWindow {
-    static let markerIdentifier = "ripul.devAssistant.overlay"
+final class RipulDevOverlayWindow: RipulChromeWindow {
+    static let markerIdentifier = RipulInspection.excludedOverlayWindowIdentifier
     /// Collapsed: only `interactiveFrame` (the bubble) is live; the rest passes
     /// through to the host app. Expanded: the whole window is live (takes over).
-    var isPassthrough = true
+    ///
+    /// This is also the console's key-input switch. Expanded, the console types
+    /// through a WKWebView and `@FocusState` fields — neither goes through a tap
+    /// on a UIKit text view, so hit-test arming can't see them and the window
+    /// has to hold key-ness outright. Collapsed, it must NOT: a chrome window
+    /// that stays key is one a host mounts its panels inside (RipulChromeWindow).
+    var isPassthrough = true {
+        didSet {
+            guard isPassthrough != oldValue else { return }
+            setKeyInputEnabled(!isPassthrough)
+        }
+    }
     var interactiveFrame: CGRect = .zero
+
+    /// A sheet presented into a pass-through window would render and then
+    /// swallow nothing — every touch outside the bubble returns nil.
+    override var acceptsPresentation: Bool { !isPassthrough }
 
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
         if !isPassthrough { return super.hitTest(point, with: event) }

@@ -165,12 +165,9 @@ public struct RipulStylePickerView: View {
 @available(iOS 26.0, *)
 public enum RipulStylePickerPresenter {
     @MainActor public static func present(kind: String, element: String) {
-        guard let scene = UIApplication.shared.connectedScenes
-                .first(where: { $0.activationState == .foregroundActive }) as? UIWindowScene,
-              let root = scene.windows.first(where: { $0.isKeyWindow })?.rootViewController
-                      ?? scene.windows.first?.rootViewController else { return }
-        var top = root
-        while let presented = top.presentedViewController, !presented.isBeingDismissed { top = presented }
+        // Same as the remap sheet: fired from the explorer, so it presents from
+        // the top-most chrome window rather than from under it.
+        guard let top = RipulChrome.presentationRoot() else { return }
         let host = UIHostingController(rootView: RipulStylePickerView(kind: kind, element: element))
         if let sheet = host.sheetPresentationController {
             sheet.detents = [.medium(), .large()]

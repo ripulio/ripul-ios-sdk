@@ -831,26 +831,12 @@ extension AgentWebView {
                 responder = r.next
             }
 
-            // Strategy 2: Window scene fallback
-            let scene = webView.window?.windowScene
-                ?? UIApplication.shared.connectedScenes
-                    .compactMap { $0 as? UIWindowScene }
-                    .first { $0.activationState == .foregroundActive }
-            guard let windowScene = scene else {
-                bridge.handleConsoleLog("[AgentWebView] JS dialog: no window scene found")
-                return nil
-            }
-
-            let rootVC = windowScene.keyWindow?.rootViewController
-                ?? windowScene.windows.first(where: { $0.isKeyWindow })?.rootViewController
-                ?? windowScene.windows.first?.rootViewController
-            guard var vc = rootVC else {
+            // Strategy 2: whatever SDK chrome is on top, else the app's own
+            // window — a dialog presented from the app while the console sits
+            // in an overlay window would open underneath it.
+            guard let vc = RipulChrome.presentationRoot() else {
                 bridge.handleConsoleLog("[AgentWebView] JS dialog: no rootViewController found")
                 return nil
-            }
-
-            while let presented = vc.presentedViewController {
-                vc = presented
             }
             return vc
         }

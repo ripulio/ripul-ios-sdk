@@ -2150,12 +2150,11 @@ struct InspectorAuditTab: View {
         audit = ScreenAudit.run(on: root)
     }
 
-    /// The screen to audit: the top-most view controller's view in the anchor's window (or the key
-    /// window) — the whole visible screen, independent of what's currently selected.
+    /// The screen to audit: the top-most view controller's view in the anchor's window (or the
+    /// app's window) — the whole visible screen, independent of what's currently selected.
+    /// Never the explorer's own chrome window, which is what `isKeyWindow` could hand back.
     private func screenRoot() -> UIView? {
-        let window = anchorView?.window
-            ?? UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
-                .flatMap { $0.windows }.first { $0.isKeyWindow }
+        let window = anchorView?.window ?? RipulChrome.appWindow()
         guard var vc = window?.rootViewController else { return window }
         while let presented = vc.presentedViewController, !presented.isBeingDismissed { vc = presented }
         return vc.view

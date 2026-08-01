@@ -53,12 +53,14 @@ public struct RipulElementTap {
 // controller: a host-side panel added directly to the key window (WAC's
 // RecordMenu sidebar is a plain `window.addSubview`) would otherwise cover
 // it. Level is one above the dev-assistant overlay's (`alert + 1`), so while
-// active the explorer outranks every host panel AND the dev chrome. It is
-// stamped with the excluded-overlay identifier so screen inspection and
-// actuation never target it — the same exclusion the dev overlay gets.
+// active the explorer outranks every host panel AND the dev chrome.
+//
+// Being a `RipulChromeWindow` is what keeps that true: it declines key-ness,
+// so a host resolving "the key window" gets the app's window and mounts its
+// panels there — under us — instead of inside us. See RipulChromeWindow.swift.
 
 @available(iOS 16.0, *)
-final class RipulExplorerOverlayWindow: UIWindow {
+final class RipulExplorerOverlayWindow: RipulChromeWindow {
     // Full-capture while the explorer is active: the touch layer IS the
     // interaction (reticule drag, tap-to-fire, HUD). No passthrough needed.
 }
@@ -111,7 +113,7 @@ public enum RipulViewExplorer {
     @discardableResult
     public static func present(in window: UIWindow? = nil, recording: Bool = false) -> Bool {
         guard self.window == nil else { return true }
-        guard let target = window ?? keyWindow(),
+        guard let target = window ?? RipulChrome.appWindow(),
               let scene = target.windowScene else { return false }
 
         hostWindow = target
@@ -119,16 +121,13 @@ public enum RipulViewExplorer {
         win.frame = scene.screen.bounds
         win.windowLevel = UIWindow.Level(rawValue: UIWindow.Level.alert.rawValue + 2)
         win.backgroundColor = .clear
-        // Stamped so screen inspection + actuation exclude it, same as the
-        // dev-assistant overlay — the explorer drives the HOST app, never itself.
-        win.accessibilityIdentifier = RipulInspection.excludedOverlayWindowIdentifier
         let hosting = UIHostingController(rootView: RipulViewExplorerRoot(
             hostWindow: target,
             startRecording: recording,
             onDismiss: { dismiss() }
         ))
         hosting.view.backgroundColor = .clear
-        win.rootViewController = hosting
+        win.installRoot(hosting)
         win.isHidden = false
         self.window = win
         return true
@@ -137,6 +136,7 @@ public enum RipulViewExplorer {
     /// Remove the View Explorer if shown.
     public static func dismiss() {
         guard let win = window else { return }
+        win.relinquishKey()
         win.isHidden = true
         window = nil
         hostWindow = nil
@@ -149,19 +149,6 @@ public enum RipulViewExplorer {
         return present(in: window, recording: recording)
     }
 
-    // MARK: - Helpers
-
-    private static func keyWindow() -> UIWindow? {
-        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
-        // Prefer the foreground-active scene's key window, then any key window,
-        // then any window at all.
-        if let active = scenes.first(where: { $0.activationState == .foregroundActive }),
-           let key = active.windows.first(where: { $0.isKeyWindow }) ?? active.windows.first {
-            return key
-        }
-        return scenes.flatMap { $0.windows }.first { $0.isKeyWindow }
-            ?? scenes.flatMap { $0.windows }.first
-    }
 }
 
 // MARK: - Root wrapper

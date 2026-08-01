@@ -25,7 +25,7 @@ import UIKit
 public enum RipulLogConsole {
 
     /// The window carrying the live console, or `nil` when not shown.
-    private static var window: UIWindow?
+    private static var window: RipulChromeWindow?
 
     /// Whether the log console is currently on screen.
     public static var isPresented: Bool { window != nil }
@@ -37,16 +37,16 @@ public enum RipulLogConsole {
         guard window == nil else { return true }
         guard let scene = activeWindowScene() else { return false }
 
-        let win = UIWindow(windowScene: scene)
-        // Above the app (and above a View-Explorer overlay, which is mounted inside
-        // the app's own window), but marked so screen-inspection tools skip it —
-        // the agent should always see the HOST app's screen, not this console.
+        // Above the app, and a chrome window — so it stays out of screen
+        // inspection (the agent should always see the HOST's screen, not this
+        // console) and declines key-ness, which is what stops host panels being
+        // mounted inside it. See RipulChromeWindow.swift.
+        let win = RipulChromeWindow(windowScene: scene)
         win.windowLevel = UIWindow.Level(rawValue: UIWindow.Level.alert.rawValue + 1)
-        win.accessibilityIdentifier = RipulInspection.excludedOverlayWindowIdentifier
         win.backgroundColor = .systemBackground
 
         let host = UIHostingController(rootView: RipulLogConsoleRoot())
-        win.rootViewController = host
+        win.installRoot(host)
         win.isHidden = false
 
         window = win
@@ -55,6 +55,7 @@ public enum RipulLogConsole {
 
     /// Remove the log console if shown.
     public static func dismiss() {
+        window?.relinquishKey()
         window?.isHidden = true
         window = nil
     }

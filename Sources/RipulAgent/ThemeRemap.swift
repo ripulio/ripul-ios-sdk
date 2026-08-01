@@ -92,12 +92,10 @@ public enum RipulThemeRemapSheetPresenter {
     public static var editorAction: (() -> Void)?
 
     @MainActor public static func present(targets: [any RipulThemeRemapTarget], tap: RipulElementTap) {
-        guard let scene = UIApplication.shared.connectedScenes
-                .first(where: { $0.activationState == .foregroundActive }) as? UIWindowScene,
-              let root = scene.windows.first(where: { $0.isKeyWindow })?.rootViewController
-                      ?? scene.windows.first?.rootViewController else { return }
-        var top = root
-        while let presented = top.presentedViewController, !presented.isBeingDismissed { top = presented }
+        // Presented from the top-most chrome window when one is up — this sheet
+        // is fired FROM the explorer, and presenting it from the app's window
+        // would put it underneath the explorer's overlay window.
+        guard let top = RipulChrome.presentationRoot() else { return }
         let host = UIHostingController(rootView: RipulThemeRemapSheetView(targets: targets, tap: tap))
         if let sheet = host.sheetPresentationController {
             sheet.detents = [.medium(), .large()]
