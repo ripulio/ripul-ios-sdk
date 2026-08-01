@@ -608,11 +608,27 @@ enum ScreenActuationEngine {
                 return "\(name)@\(Self.short(f))"
             }.joined(separator: "|")
             trace.append("a11yPoint:noElement(pt=\(Self.short(CGRect(origin: screenPoint, size: .zero)))"
-                + " target=\(Self.short(viewScreen)) host=\(type(of: hostRoot))"
+                + " target=\(type(of: view))@\(Self.short(viewScreen)) host=\(type(of: hostRoot))"
                 + " seen=\(all.count){\(seen)})")
         } else {
             trace.append("a11yPoint:noneActivated(\(byPoint.count)){\(candidateNames)}")
         }
+
+        // 2c-bis. Tapping a text input MEANS focusing it. Nothing above can do
+        //     that: a text view is not a control, `accessibilityActivate()` on
+        //     one returns false, and it has no tap recognizer of its own — so a
+        //     notes field or search box was "not tappable by any path" despite
+        //     being the most obviously tappable thing on screen. The semantic a
+        //     real finger produces is first-responder, so produce that.
+        if let field = Self.textInput(in: hostRoot, containing: screenPoint), field.becomeFirstResponder() {
+            ScreenSnapshotStore.shared.invalidate()
+            trace.append("focus:activated(\(type(of: field)))")
+            return TapOutcome(success: true, via: "focus", error: nil,
+                              activatedIdentifier: field.accessibilityIdentifier,
+                              activatedLabel: field.accessibilityLabel,
+                              trace: trace.joined(separator: " "))
+        }
+        trace.append("focus:no")
 
         // 2d. The island publishes exactly ONE element. Then there is nothing to
         //     disambiguate and no point to need: that element IS the control.
@@ -735,6 +751,33 @@ enum ScreenActuationEngine {
         return nil
     }
 
+    /// The tightest focusable text input under `screenPoint` within `root`.
+    /// Views, not accessibility elements: a text view IS the thing that takes
+    /// focus, and SwiftUI's `TextField`/`TextEditor` are backed by exactly
+    /// these UIKit types.
+    private static func textInput(in root: UIView, containing screenPoint: CGPoint) -> UIView? {
+        var best: UIView?
+        var bestArea = CGFloat.greatestFiniteMagnitude
+        func walk(_ v: UIView, depth: Int) {
+            if depth > 60 { return }
+            for sub in v.subviews where !sub.isHidden && sub.alpha > 0.01 {
+                let f = UIAccessibility.convertToScreenCoordinates(sub.bounds, in: sub)
+                if f.contains(screenPoint), sub is UITextInput, sub.canBecomeFirstResponder {
+                    let area = f.width * f.height
+                    if area < bestArea { bestArea = area; best = sub }
+                }
+                walk(sub, depth: depth + 1)
+            }
+        }
+        if root is UITextInput, root.canBecomeFirstResponder,
+           UIAccessibility.convertToScreenCoordinates(root.bounds, in: root).contains(screenPoint) {
+            best = root
+            bestArea = root.bounds.width * root.bounds.height
+        }
+        walk(root, depth: 0)
+        return best
+    }
+
     /// Compact "x,y,w,h" for traces — full precision is noise in a one-line
     /// diagnostic that has to survive being pasted out of a UI.
     private static func short(_ r: CGRect) -> String {
@@ -751,9 +794,11 @@ enum ScreenActuationEngine {
     /// diagnostic reports so a miss can be told apart from an empty tree.
     private static func accessibilityElements(in root: NSObject, containing screenPoint: CGPoint?) -> [NSObject] {
         var hits: [(el: NSObject, area: CGFloat)] = []
+        var seen = Set<ObjectIdentifier>()
         var visited = 0
         func visit(_ obj: NSObject, depth: Int) {
             if depth > 60 || visited > 400 { return }
+            guard seen.insert(ObjectIdentifier(obj)).inserted else { return }
             visited += 1
 
             if obj.isAccessibilityElement {
@@ -770,10 +815,17 @@ enum ScreenActuationEngine {
                     for i in 0..<n { if let e = obj.accessibilityElement(at: i) as? NSObject { children.append(e) } }
                 }
             }
-            if !children.isEmpty {
-                for c in children { visit(c, depth: depth + 1) }
-                return
-            }
+            for c in children { visit(c, depth: depth + 1) }
+
+            // Subviews TOO, not "only if no published elements". A container's
+            // `accessibilityElements` array is VoiceOver's reading order, not an
+            // inventory of what is interactive — a hosting view that publishes
+            // [Add attachment, Notes] can still contain a text editor, and
+            // returning early on the published array made everything else
+            // invisible to the point search. That reported `seen=2` and read as
+            // "the app exposes nothing here" when the walk simply never looked.
+            // Deduped by identity, since a published element is usually a view
+            // in the subtree as well.
             if let v = obj as? UIView {
                 for sub in v.subviews where !sub.isHidden && sub.alpha > 0.01 { visit(sub, depth: depth + 1) }
             }

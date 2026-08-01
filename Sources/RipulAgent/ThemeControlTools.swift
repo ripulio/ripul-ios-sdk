@@ -68,7 +68,7 @@ public struct RipulGetThemeStyleTool: NativeTool {
         ["type": "object",
          "required": ["scope"],
          "properties": ["scope": ["type": "string",
-                                  "description": "Scope id, e.g. addShift.receipt.panel"]]]
+                                  "description": "Scope id — one of the ids list_theme_scopes returns"]]]
     }
 
     /// SDK-internal — see `RipulDeveloperOnlyTool`.
@@ -109,7 +109,7 @@ public struct RipulSetThemeKnobTool: NativeTool {
     public var name: String { "set_theme_knob" }
     public var description: String {
         "Set a single theme knob on a scope, applied LIVE with no rebuild "
-        + "(e.g. scope 'addShift.receipt.panel', knob 'legendClearance', value 3). "
+        + "(a scope id from list_theme_scopes, a knob that scope declares, and a value). "
         + "Writes a per-scope override, which beats any assigned named style. "
         + "Knob names are declared by each scope's kind — read them from get_theme_style's "
         + "resolved output. Use reset_theme_scope to undo."
@@ -118,7 +118,7 @@ public struct RipulSetThemeKnobTool: NativeTool {
         ["type": "object",
          "required": ["scope", "knob", "value"],
          "properties": [
-            "scope": ["type": "string", "description": "Scope id, e.g. addShift.receipt.panel"],
+            "scope": ["type": "string", "description": "Scope id — one of the ids list_theme_scopes returns"],
             "knob": ["type": "string", "description": "Knob name, e.g. legendClearance"],
             "value": ["type": ["string", "number", "boolean"],
                       "description": "New value for the knob"]]]
@@ -164,7 +164,7 @@ public struct RipulResetThemeScopeTool: NativeTool {
         ["type": "object",
          "required": ["scope"],
          "properties": ["scope": ["type": "string",
-                                  "description": "Scope id, e.g. addShift.receipt.panel"]]]
+                                  "description": "Scope id — one of the ids list_theme_scopes returns"]]]
     }
 
     /// SDK-internal — see `RipulDeveloperOnlyTool`.
