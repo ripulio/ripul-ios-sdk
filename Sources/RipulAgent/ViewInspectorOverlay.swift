@@ -9,7 +9,7 @@ let ripulViewExplorerOverlayTag = 0x5249_5055   // "RIPU"
 
 /// Marketing version of the RipulAgent SDK, surfaced in the inspector's copy output as `sdk: …`
 /// so we can always tell which build is actually running on the device. Bump on every release.
-let ripulSDKVersion = "0.5.8"
+let ripulSDKVersion = "0.7.27"
 
 // MARK: - View Inspector Overlay
 //
@@ -115,6 +115,14 @@ public final class UIKitIdentifierRegistry {
         }
         // Deeper view is "inside" the shallower one — treat deeper as in front
         return a.count - b.count
+    }
+
+    /// Whether `a` renders in front of `b` — the same lexicographic z-path
+    /// comparison `matches(at:)` sorts by, exposed so the inspector can tell
+    /// "the stamp is on top of what hitTest returned" from "hitTest is right
+    /// and the stamp is behind it".
+    static func isInFront(_ a: UIView, of b: UIView) -> Bool {
+        compareZPaths(zOrderPath(of: a), zOrderPath(of: b)) > 0
     }
 
     /// Returns true if any ancestor of `view` is effectively invisible
@@ -1097,15 +1105,34 @@ class ViewInspectorController: UIView {
         // its title label should inspect the BUTTON (headline "UIButton [addSick.save]"), not the
         // internal UIImageView/UIButtonLabel. Standalone labels — not inside a control — stay
         // themselves. `hitLeaf` records what was actually under the finger.
-        let target = controlToInspect(for: leaf)
-        currentTarget = target
-        let hitLeaf = (target !== leaf) ? leaf : nil
+        var target = controlToInspect(for: leaf)
 
         // Spatial lookup: ALL .uiKitIdentifier() stamps at this point, tightest first —
         // the first resolves the identity, the rest are surfaced as `stamps:` so nested
         // sub-element ids are discoverable from one tap.
         let stampMatches = UIKitIdentifierRegistry.shared.matches(at: windowPoint)
         let match = stampMatches.first
+
+        // hitTest can resolve into a DIFFERENT branch than what is visually on
+        // top. SwiftUI hosting content routinely declines a probe hit-test — its
+        // interactive platform views sit under zero-size layout containers — so
+        // hitTest falls THROUGH the control and lands on the legacy UIKit view
+        // behind it. On WAC's add-record screen that reported "class: UIStackView"
+        // for a glass time field, and the fire ladder then had a UIStackView to
+        // press, which is nothing: "not tappable" on a control that works fine
+        // under a real finger.
+        //
+        // The stamp covering this point is already what we HIGHLIGHT, so when the
+        // two disagree and the stamp is genuinely in front, the stamp wins. Its
+        // enclosing hosting view is the reported element: `_UIHostingView<Foo>`
+        // names the SwiftUI type, which is what someone needs to find it in source.
+        if let stamped = match?.view,
+           !stamped.isDescendant(of: target), !target.isDescendant(of: stamped),
+           UIKitIdentifierRegistry.isInFront(stamped, of: target) {
+            target = hostingAncestor(of: stamped) ?? stamped
+        }
+        currentTarget = target
+        let hitLeaf = (target !== leaf) ? leaf : nil
 
         // Highlight the registry match's frame if available, otherwise the inspected element
         let highlightView = match?.view ?? target
@@ -1132,6 +1159,23 @@ class ViewInspectorController: UIView {
             v = cur.superview
         }
         return leaf
+    }
+
+    /// The SwiftUI hosting view enclosing `view`, if any — the boundary of one
+    /// SwiftUI island in a UIKit hierarchy. Everything below it is SwiftUI's own
+    /// layout scaffolding (`_UIInheritedView`, platform view hosts, stamps), none
+    /// of which names anything a developer wrote; the hosting view's generic
+    /// parameter does. Matched by class name because the type is private to
+    /// SwiftUI.
+    private func hostingAncestor(of view: UIView) -> UIView? {
+        var cur: UIView? = view
+        var hops = 0
+        while let v = cur, hops < 12 {
+            if String(describing: type(of: v)).contains("HostingView") { return v }
+            cur = v.superview
+            hops += 1
+        }
+        return nil
     }
 
     /// True if `v` is part of the inspector's own overlay (the touch layer, the

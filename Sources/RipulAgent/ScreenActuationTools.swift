@@ -452,6 +452,38 @@ enum ScreenActuationEngine {
             return TapOutcome(success: true, via: "accessibilityElement", error: nil, trace: trace.joined(separator: " "))
         }
         trace.append("a11y:no")
+
+        // 2b. SwiftUI hosting boundary. A leaf inside a SwiftUI island — a
+        //     `.uiKitIdentifier` stamp, a text/image platform view — has no
+        //     accessibility element of its OWN: SwiftUI publishes the control's
+        //     element on the enclosing hosting view. Without this the whole rest
+        //     of the ladder is UIKit-shaped and finds nothing (SwiftUI buttons
+        //     are not UIControls and their recognizers are not
+        //     UITapGestureRecognizers), so pointing the View Explorer at a glass
+        //     field reported "not tappable" for a control that works under a
+        //     real finger.
+        //
+        //     Bounded two ways so it can never reach into unrelated UI: it stops
+        //     at the same container boundaries as the gesture path, and it is
+        //     STRICT — an actual id/text match, never the "only one element in
+        //     here" fallback that the direct call above allows.
+        let hasIdentity = (matchId?.isEmpty == false) || (matchText?.isEmpty == false)
+        if hasIdentity {
+            var a: UIView? = view.superview
+            while let cur = a, !(cur is UIScrollView), !(cur is UIWindow) {
+                if TapElementTool.activateAccessibilityElement(in: cur, id: matchId, text: matchText, strict: true) {
+                    ScreenSnapshotStore.shared.invalidate()
+                    trace.append("a11yAncestor:activated(\(type(of: cur)))")
+                    return TapOutcome(success: true, via: "accessibilityElement(ancestor)",
+                                      error: nil, trace: trace.joined(separator: " "))
+                }
+                a = cur.superview
+            }
+            trace.append("a11yAncestor:no")
+        } else {
+            trace.append("a11yAncestor:noIdentity")
+        }
+
         var v: UIView? = view
         while let cur = v {
             if cur.responds(to: #selector(UIResponder.accessibilityActivate)), cur.accessibilityActivate() {
@@ -639,7 +671,13 @@ public struct TapElementTool: NativeTool {
     /// element matching the requested id or text. Only presses something it can
     /// NAME: the matched element, or the single element the view exposes —
     /// never "the first of many".
-    static func activateAccessibilityElement(in view: UIView, id: String?, text: String?) -> Bool {
+    /// `strict`: require a real id/text match. The default allows a lone
+    /// accessibility element in the subtree to stand in for the match, which is
+    /// right when the caller already resolved THIS view as the element — and
+    /// wrong when climbing ancestors, where the one element found may belong to
+    /// something else entirely.
+    static func activateAccessibilityElement(in view: UIView, id: String?, text: String?,
+                                             strict: Bool = false) -> Bool {
         var matched: [NSObject] = []
         var all: [NSObject] = []
         func leafMatches(_ el: NSObject) -> Bool {
@@ -677,7 +715,7 @@ public struct TapElementTool: NativeTool {
             }
         }
         visit(view, depth: 0)
-        guard let el = matched.first ?? (all.count == 1 ? all.first : nil) else { return false }
+        guard let el = matched.first ?? (strict ? nil : (all.count == 1 ? all.first : nil)) else { return false }
         return el.accessibilityActivate()
     }
 
