@@ -592,6 +592,28 @@ enum ScreenActuationEngine {
         trace.append(byPoint.isEmpty ? "a11yPoint:noElement"
                                      : "a11yPoint:noneActivated(\(byPoint.count)){\(candidateNames)}")
 
+        // 2d. The island publishes exactly ONE element. Then there is nothing to
+        //     disambiguate and no point to need: that element IS the control.
+        //     This is the same "only one element in here" rule path 2 applies to
+        //     the target's own subtree, applied at the SwiftUI boundary — which
+        //     is where a stamped leaf's element actually lives. It is why
+        //     `tap_element id=addShift.jobField` worked (it resolved the ISLAND,
+        //     so path 2 saw the lone element) while recording the same control
+        //     failed: recording targets the STAMP, whose own subtree is empty,
+        //     and the strict climb above refuses a lone unnamed element.
+        //     Deliberately last: a menu with rows has many elements, so this
+        //     cannot fire there and steal from the point path.
+        if let host = hostRoot as UIView?, host !== view,
+           let el = TapElementTool.activateAccessibilityElement(in: host, id: matchId, text: matchText) {
+            ScreenSnapshotStore.shared.invalidate()
+            trace.append("a11yIsland:activated(\(el.accessibilityLabel ?? "unnamed"))")
+            return TapOutcome(success: true, via: "accessibilityElement(island)", error: nil,
+                              activatedIdentifier: InspectedView.objectAccessibilityIdentifier(el),
+                              activatedLabel: el.accessibilityLabel,
+                              trace: trace.joined(separator: " "))
+        }
+        trace.append("a11yIsland:no")
+
         var v: UIView? = view
         while let cur = v {
             if cur.responds(to: #selector(UIResponder.accessibilityActivate)), cur.accessibilityActivate() {
@@ -645,9 +667,13 @@ enum ScreenActuationEngine {
             return TapOutcome(success: true, via: detail, error: nil, trace: trace.joined(separator: " "))
         }
         trace.append("row:noCell")
+        // The trace IS the diagnosis — "not tappable by any path" on its own
+        // sends whoever reads it back to the device to find out which path and
+        // why. Carry it in the message so one report is enough.
+        let joined = trace.joined(separator: " ")
         return TapOutcome(success: false, via: nil,
-                          error: "Element found but not tappable by any path (not a control, no activatable accessibility element, no tap gesture, not inside a selectable cell).",
-                          trace: trace.joined(separator: " "))
+                          error: "Element found but not tappable by any path (not a control, no activatable accessibility element, no tap gesture, not inside a selectable cell). Trace: \(joined)",
+                          trace: joined)
     }
 
     /// Where the tap lands, in SCREEN coordinates — the space accessibility
