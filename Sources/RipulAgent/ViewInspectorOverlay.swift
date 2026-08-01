@@ -9,7 +9,7 @@ let ripulViewExplorerOverlayTag = 0x5249_5055   // "RIPU"
 
 /// Marketing version of the RipulAgent SDK, surfaced in the inspector's copy output as `sdk: …`
 /// so we can always tell which build is actually running on the device. Bump on every release.
-let ripulSDKVersion = "0.7.38"
+let ripulSDKVersion = "0.7.39"
 
 // MARK: - View Inspector Overlay
 //
@@ -1149,6 +1149,19 @@ class ViewInspectorController: UIView {
            UIKitIdentifierRegistry.isInFront(stamped, of: target) {
             target = hostingAncestor(of: stamped) ?? stamped
         }
+        // Last resort: the pick resolved something that cannot be pressed, but an
+        // actuatable view sits under the cursor in a branch the refinement never
+        // reached. That is the standing shape of the SwiftUI problem — the probe
+        // hit-test stops at anonymous scaffolding — and it is why the notes field
+        // reported a 360×93 container instead of the `UITextView` inside it.
+        // Guarded on the target being unactuatable so a correct pick is never
+        // second-guessed, and scoped to actuatable views so a full-screen
+        // passthrough layer can't win on area.
+        if !isActuatable(target), let window = hostWindow ?? self.window,
+           let pressable = actuatableView(in: window, at: windowPoint) {
+            target = pressable
+        }
+
         currentTarget = target
         let hitLeaf = (target !== leaf) ? leaf : nil
 
@@ -1165,18 +1178,66 @@ class ViewInspectorController: UIView {
         onInspect?(info)
     }
 
-    /// The element to inspect for a tapped `leaf`: the nearest enclosing `UIControl` (so a tap on a
-    /// button's gradient/title subview reports the button), else the leaf itself when it isn't inside
-    /// a control. Already-a-control leaves are returned unchanged.
+    /// The element to inspect for a tapped `leaf`: the nearest enclosing ACTUATABLE
+    /// view (so a tap on a button's gradient/title subview reports the button, and a
+    /// tap on a text view's internal layout subview reports the text view), else the
+    /// leaf itself. Already-actuatable leaves are returned unchanged.
+    ///
+    /// "Actuatable" is deliberately the same set the tap ladder can drive, not just
+    /// `UIControl`: a `UITextView` is a `UIScrollView`, never a control, so promoting
+    /// only to controls reported its private `_UITextLayoutView` — an anonymous
+    /// class with no id — for every tap on a notes field.
     private func controlToInspect(for leaf: UIView) -> UIView {
-        if leaf is UIControl { return leaf }
+        if isActuatable(leaf) { return leaf }
         var v = leaf.superview
-        while let cur = v {
+        var hops = 0
+        while let cur = v, hops < 8 {
             if isInspectorOwnView(cur) { break }
-            if cur is UIControl { return cur }
+            if isActuatable(cur) { return cur }
+            // Don't climb out through a scrolling container into unrelated UI —
+            // the same boundary the actuation engine's gesture path respects.
+            if cur is UIScrollView || cur is UIWindow { break }
             v = cur.superview
+            hops += 1
         }
         return leaf
+    }
+
+    /// Whether a tap on this view means something the actuation ladder can perform:
+    /// control actions, text focus, or a tap recognizer. Kept in step with
+    /// `ScreenActuationEngine.performTap`'s rungs — a view the explorer promotes to
+    /// but the engine can't press would just move the failure.
+    private func isActuatable(_ v: UIView) -> Bool {
+        if v is UIControl { return true }
+        if v is UITextInput, v.canBecomeFirstResponder { return true }
+        if v.gestureRecognizers?.contains(where: { $0.isEnabled && $0 is UITapGestureRecognizer }) == true { return true }
+        return false
+    }
+
+    /// The tightest actuatable view under `windowPoint`, anywhere in the window.
+    /// Used only when the pick landed on something that CANNOT be actuated: the
+    /// probe hit-test stops at SwiftUI's anonymous scaffolding, and the real
+    /// control can sit in a branch the downward refinement never reaches. Scoped
+    /// to actuatable views so full-screen passthrough layers (the system floating
+    /// bar host, `_UITouchPassthroughView`) can never win.
+    private func actuatableView(in root: UIView, at windowPoint: CGPoint) -> UIView? {
+        var best: UIView?
+        var bestArea = CGFloat.greatestFiniteMagnitude
+        func walk(_ v: UIView, depth: Int) {
+            if depth > 60 { return }
+            for sub in v.subviews where !sub.isHidden && sub.alpha > 0.01 && !isInspectorOwnView(sub) {
+                let local = sub.convert(windowPoint, from: nil)
+                if sub.bounds.contains(local) {
+                    if isActuatable(sub) {
+                        let area = sub.bounds.width * sub.bounds.height
+                        if area < bestArea { bestArea = area; best = sub }
+                    }
+                    walk(sub, depth: depth + 1)
+                }
+            }
+        }
+        walk(root, depth: 0)
+        return best
     }
 
     /// The SwiftUI hosting view enclosing `view`, if any — the boundary of one

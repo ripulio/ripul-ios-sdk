@@ -664,7 +664,16 @@ enum ScreenActuationEngine {
         trace.append("chain:no")
         var g: UIView? = view
         var gestureStoppedAtBoundary = false
+        var isTargetItself = true
         while let cur = g {
+            // The boundary rule exists to stop the CLIMB reaching a table's
+            // selection machinery or a window-level keyboard-dismiss gesture. It
+            // must not fire on the element itself: a UITextView IS a UIScrollView,
+            // so targeting one broke out before ever looking at its own
+            // recognizers — including the tap recognizer UIKit installs to place
+            // the caret, which is precisely the gesture a real tap uses.
+            let scrollBoundaryApplies = !isTargetItself
+            isTargetItself = false
             // STOP at container boundaries — not merely "don't fire on them":
             // scrolling up PAST a UITableView/UICollectionView reaches
             // recognizers that are never element semantics — the table's own
@@ -675,7 +684,7 @@ enum ScreenActuationEngine {
             // "gesture:fired(afterContainerSkip)" no-op that kept path 5 from
             // ever running). Recognizers on the element or its ancestors
             // BELOW the boundary still fire normally.
-            if cur is UIScrollView || cur is UIWindow {
+            if (scrollBoundaryApplies && cur is UIScrollView) || cur is UIWindow {
                 gestureStoppedAtBoundary = true
                 break
             }
