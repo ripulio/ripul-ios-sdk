@@ -9,7 +9,7 @@ let ripulViewExplorerOverlayTag = 0x5249_5055   // "RIPU"
 
 /// Marketing version of the RipulAgent SDK, surfaced in the inspector's copy output as `sdk: …`
 /// so we can always tell which build is actually running on the device. Bump on every release.
-let ripulSDKVersion = "0.7.36"
+let ripulSDKVersion = "0.7.37"
 
 // MARK: - View Inspector Overlay
 //
@@ -2888,8 +2888,12 @@ public struct ViewInspectorOverlay: View {
                     onFireOutcome: { outcome in
                         fireOutcome = outcome
                         Task {
-                            try? await Task.sleep(nanoseconds: 1_500_000_000)
-                            fireOutcome = nil
+                            // A successful fire is a glance; a FAILURE carries
+                            // the whole trace and is the thing worth reading and
+                            // copying, so it stays up long enough to tap.
+                            let visible: UInt64 = outcome.hasPrefix("via ") ? 1_500_000_000 : 8_000_000_000
+                            try? await Task.sleep(nanoseconds: visible)
+                            if fireOutcome == outcome { fireOutcome = nil }
                         }
                     }
                 )
@@ -2898,16 +2902,24 @@ public struct ViewInspectorOverlay: View {
                 // Fire-outcome pill — a dead tap reports itself ("not
                 // tappable") instead of silently doing nothing.
                 if let fireOutcome {
-                    Text(fireOutcome)
+                    // Tap to copy: the pill is the ONLY place a fire's trace
+                    // appears, and a trace is too long to retype off a phone.
+                    Text(fireOutcome + (fireOutcome.hasPrefix("via ") ? "" : "  ⧉ tap to copy"))
                         .font(.system(size: 11, design: .monospaced))
                         .foregroundStyle(.white)
+                        .multilineTextAlignment(.center)
                         .padding(.horizontal, 10)
                         .padding(.vertical, 5)
                         .background(Color.black.opacity(0.8))
-                        .clipShape(Capsule())
+                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                         .padding(.top, 60)
-                        .allowsHitTesting(false)
+                        .padding(.horizontal, 16)
+                        .allowsHitTesting(!fireOutcome.hasPrefix("via "))
+                        .onTapGesture {
+                            UIPasteboard.general.string = fireOutcome
+                            self.fireOutcome = "copied"
+                        }
                         .transition(.opacity)
                         .uiKitIdentifier("ViewInspectorOverlay.fireOutcomePill")
                 }
@@ -3017,6 +3029,14 @@ public struct ViewInspectorOverlay: View {
                     Text("This is typed into the field now, and replayed exactly the same way later.")
                 }
                 .alert("Couldn't record that step", isPresented: Binding(get: { recordingError != nil }, set: { if !$0 { recordingError = nil } })) {
+                    // The message carries the actuation trace, which is the
+                    // whole diagnosis and far too long to retype off a phone
+                    // screen — every hand-copied report so far arrived with
+                    // characters mangled.
+                    Button("Copy") {
+                        UIPasteboard.general.string = recordingError ?? ""
+                        recordingError = nil
+                    }
                     Button("OK", role: .cancel) { recordingError = nil }
                 } message: {
                     Text(recordingError ?? "")
