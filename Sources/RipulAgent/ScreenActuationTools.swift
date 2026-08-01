@@ -589,8 +589,26 @@ enum ScreenActuationEngine {
         let candidateNames = byPoint.prefix(6)
             .map { $0.accessibilityLabel ?? String(describing: type(of: $0)) }
             .joined(separator: "|")
-        trace.append(byPoint.isEmpty ? "a11yPoint:noElement"
-                                     : "a11yPoint:noneActivated(\(byPoint.count)){\(candidateNames)}")
+        if byPoint.isEmpty {
+            // "noElement" alone is not a diagnosis — it cannot distinguish "the
+            // point is wrong" from "the frames are wrong" from "there is
+            // nothing here", and each of those has a different fix. Report the
+            // numbers: where we looked, what the target occupies, and what was
+            // available with its frame. Deduced twice from the bare token and
+            // got it wrong twice; the arithmetic is cheaper than a round trip.
+            let all = Self.accessibilityElements(in: hostRoot, containing: nil)
+            let viewScreen = UIAccessibility.convertToScreenCoordinates(view.bounds, in: view)
+            let seen = all.prefix(4).map { el -> String in
+                let f = el.accessibilityFrame
+                let name = el.accessibilityLabel ?? String(describing: type(of: el))
+                return "\(name)@\(Self.short(f))"
+            }.joined(separator: "|")
+            trace.append("a11yPoint:noElement(pt=\(Self.short(CGRect(origin: screenPoint, size: .zero)))"
+                + " target=\(Self.short(viewScreen)) host=\(type(of: hostRoot))"
+                + " seen=\(all.count){\(seen)})")
+        } else {
+            trace.append("a11yPoint:noneActivated(\(byPoint.count)){\(candidateNames)}")
+        }
 
         // 2d. The island publishes exactly ONE element. Then there is nothing to
         //     disambiguate and no point to need: that element IS the control.
@@ -701,11 +719,21 @@ enum ScreenActuationEngine {
         return nil
     }
 
+    /// Compact "x,y,w,h" for traces — full precision is noise in a one-line
+    /// diagnostic that has to survive being pasted out of a UI.
+    private static func short(_ r: CGRect) -> String {
+        r.size == .zero ? "\(Int(r.origin.x)),\(Int(r.origin.y))"
+                        : "\(Int(r.origin.x)),\(Int(r.origin.y)),\(Int(r.width)),\(Int(r.height))"
+    }
+
     /// Every accessibility element under `root` whose screen frame contains
     /// `screenPoint`, tightest first. Tightest-first matters: a row and the
     /// label inside it both contain the point, and which one answers
     /// `accessibilityActivate()` is up to whoever built the tree.
-    private static func accessibilityElements(in root: NSObject, containing screenPoint: CGPoint) -> [NSObject] {
+    ///
+    /// `nil` point means "everything under here", which is what the failure
+    /// diagnostic reports so a miss can be told apart from an empty tree.
+    private static func accessibilityElements(in root: NSObject, containing screenPoint: CGPoint?) -> [NSObject] {
         var hits: [(el: NSObject, area: CGFloat)] = []
         var visited = 0
         func visit(_ obj: NSObject, depth: Int) {
@@ -714,7 +742,7 @@ enum ScreenActuationEngine {
 
             if obj.isAccessibilityElement {
                 let f = obj.accessibilityFrame
-                if f.contains(screenPoint) { hits.append((obj, f.width * f.height)) }
+                if screenPoint.map({ f.contains($0) }) ?? true { hits.append((obj, f.width * f.height)) }
             }
 
             var children: [NSObject] = []
