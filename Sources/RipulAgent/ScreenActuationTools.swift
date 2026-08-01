@@ -510,6 +510,10 @@ enum ScreenActuationEngine {
     static func performTap(on view: UIView, matchId: String?, matchText: String?,
                            at windowPoint: CGPoint? = nil) -> TapOutcome {
         var trace: [String] = []
+        // Worth naming: a detached target means every coordinate derived FROM
+        // it is meaningless, and it explains failures that otherwise look like
+        // empty space.
+        if view.window == nil { trace.append("detached") }
         if let control = view as? UIControl {
             control.sendActions(for: .touchUpInside)
             ScreenSnapshotStore.shared.invalidate()
@@ -698,9 +702,21 @@ enum ScreenActuationEngine {
     /// frames live in. `windowPoint` is in the view's window; with none, the
     /// view's own centre stands in.
     private static func screenPoint(for view: UIView, windowPoint: CGPoint?) -> CGPoint {
-        let inView = windowPoint.map { view.convert($0, from: nil) }
-            ?? CGPoint(x: view.bounds.midX, y: view.bounds.midY)
-        return UIAccessibility.convertToScreenCoordinates(CGRect(origin: inView, size: .zero), in: view).origin
+        // A window point converts through a WINDOW, never through the target
+        // view. The view can be DETACHED by the time it is actuated — macro
+        // recording captures the element on a double-tap and acts on it after
+        // the action chooser, and SwiftUI recycles its scaffolding views on any
+        // re-render in between. Both `convert(_:from: nil)` and
+        // `convertToScreenCoordinates(_:in:)` silently no-op on a window-less
+        // view, so the result stayed in the view's LOCAL space and was compared
+        // against SCREEN-space accessibility frames: nothing ever matched, and
+        // the failure looked like "there is nothing under the point".
+        if let wp = windowPoint, let anchor = view.window ?? ScreenElementFinder.hostWindow() {
+            return UIAccessibility.convertToScreenCoordinates(CGRect(origin: wp, size: .zero), in: anchor).origin
+        }
+        // No point given: the view's own centre, which needs the view itself.
+        let centre = CGPoint(x: view.bounds.midX, y: view.bounds.midY)
+        return UIAccessibility.convertToScreenCoordinates(CGRect(origin: centre, size: .zero), in: view).origin
     }
 
     /// The SwiftUI hosting view enclosing `view` — the boundary of one SwiftUI
