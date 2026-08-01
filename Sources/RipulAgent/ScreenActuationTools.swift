@@ -509,7 +509,12 @@ enum ScreenActuationEngine {
     /// "tap this element" means for a caller that resolved it by predicate.
     static func performTap(on view: UIView, matchId: String?, matchText: String?,
                            at windowPoint: CGPoint? = nil) -> TapOutcome {
-        var trace: [String] = []
+        // Stamp the SDK version FIRST. Three separate rounds have been spent
+        // deducing which build produced a trace from which tokens happened to
+        // be present in it — a fix shipped, a stale binary tested, and the
+        // result read as "the fix didn't work". A trace has to say what
+        // produced it.
+        var trace: [String] = ["sdk=\(ripulSDKVersion)"]
         // Worth naming: a detached target means every coordinate derived FROM
         // it is meaningless, and it explains failures that otherwise look like
         // empty space.
@@ -517,7 +522,9 @@ enum ScreenActuationEngine {
         if let control = view as? UIControl {
             control.sendActions(for: .touchUpInside)
             ScreenSnapshotStore.shared.invalidate()
-            return TapOutcome(success: true, via: "uicontrol", error: nil, trace: "control:fired")
+            trace.append("control:fired")
+            return TapOutcome(success: true, via: "uicontrol", error: nil,
+                              trace: trace.joined(separator: " "))
         }
         trace.append("control:no")
         if let el = TapElementTool.activateAccessibilityElement(in: view, id: matchId, text: matchText) {
