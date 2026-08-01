@@ -9,7 +9,7 @@ let ripulViewExplorerOverlayTag = 0x5249_5055   // "RIPU"
 
 /// Marketing version of the RipulAgent SDK, surfaced in the inspector's copy output as `sdk: …`
 /// so we can always tell which build is actually running on the device. Bump on every release.
-let ripulSDKVersion = "0.7.33"
+let ripulSDKVersion = "0.7.34"
 
 // MARK: - View Inspector Overlay
 //
@@ -929,12 +929,19 @@ class ViewInspectorController: UIView {
             pendingTapFire = nil
             suppressNextTapFire = true
             if let element = currentTokenAnchor ?? currentTarget {
-                // In the HOST window's space: the explorer now lives in its own
+                // The RETICULE, not the finger. The crosshair is a relative,
+                // accelerated cursor (touchesMoved integrates the delta), so
+                // `loc` is wherever the hand happens to rest and has no
+                // relation to what is being pointed at — it can be off the
+                // target entirely. `element` was resolved from `cursorPos`, so
+                // the point reported alongside it has to be `cursorPos` too or
+                // the payload describes two different places.
+                //
+                // In the HOST window's space: the explorer lives in its own
                 // overlay window, and every consumer (macro recording, the
                 // actuation engine's point path) resolves this against host
-                // views. Identical numbers today because both windows are
-                // full-screen and aligned — correct if they ever aren't.
-                let hostPoint = (hostWindow ?? window).map { convert(loc, to: $0) } ?? loc
+                // views.
+                let hostPoint = (hostWindow ?? window).map { convert(cursorPos, to: $0) } ?? cursorPos
                 let tap = RipulElementTap(view: element,
                                           targetView: currentTarget ?? element,
                                           point: hostPoint)

@@ -16,10 +16,14 @@ public struct RipulElementTap {
     /// The raw picked view under the reticule (deepest hit), before token-anchor
     /// resolution — same as `view` for plain UIKit elements.
     public let targetView: UIView
-    /// Where the confirming tap landed, in the HOST window's coordinates —
-    /// the space `view`/`targetView` live in, so it can be converted against
-    /// them directly (macro recording and the actuation engine's point path
-    /// both do).
+    /// Where the RETICULE was — the same point `view` was resolved from — in
+    /// the HOST window's coordinates, the space `view`/`targetView` live in, so
+    /// it can be converted against them directly (macro recording and the
+    /// actuation engine's point path both do).
+    ///
+    /// Deliberately NOT the touch location. The crosshair is a relative,
+    /// accelerated cursor, so the finger is wherever the hand rests and says
+    /// nothing about the target.
     public let point: CGPoint
 
     public init(view: UIView, targetView: UIView, point: CGPoint) {
