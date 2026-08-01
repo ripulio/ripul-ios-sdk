@@ -54,7 +54,12 @@ public struct InspectScreenTool: NativeTool {
         guard let window = Self.hostKeyWindow() else {
             return ["success": false, "error": "No host window found"]
         }
-        let root: UIView = window.rootViewController?.view ?? window
+        // The window, not `rootViewController.view`: a modally presented view
+        // controller's view sits in a presentation container that is a SIBLING
+        // of the root controller's view, so rooting the walk at the root
+        // controller reported the screen UNDERNEATH any presented menu, sheet
+        // or dialog — and never the thing the user was actually looking at.
+        let root: UIView = window
 
         var elements: [[String: Any]] = []
         var visited = 0

@@ -223,7 +223,9 @@ extension ScreenElementFinder {
     /// tools use the predicate-based `find(_:within:)` below.
     static func find(id: String?, text: String?) -> [Match] {
         guard let window = hostWindow() else { return [] }
-        let root: UIView = window.rootViewController?.view ?? window
+        // The window — presented content is a sibling of the root controller's
+        // view, not a descendant. See `find(_:within:)`.
+        let root: UIView = window
         var matches: [Match] = []
         walk(root) { view in
             let vid = identifier(of: view)
@@ -321,7 +323,14 @@ extension ScreenElementFinder {
     static func find(_ query: Query, within anchor: UIView? = nil) -> [Match] {
         guard query.hasAnyPredicate else { return [] }
         guard let window = anchor?.window ?? hostWindow() else { return [] }
-        let root: UIView = anchor ?? window.rootViewController?.view ?? window
+        // The WINDOW, not `rootViewController.view`: UIKit puts a modally
+        // presented view controller's view in a presentation container that is
+        // a SIBLING of the root controller's view, so a walk rooted at the root
+        // controller cannot see presented content at all. That is why a
+        // recorded tap on a presented menu could never be resolved on replay
+        // while the View Explorer could still pick it — the explorer hit-tests
+        // the window.
+        let root: UIView = anchor ?? window
         var matches: [Match] = []
         walk(root) { view in
             if let anchor, view === anchor { return }
