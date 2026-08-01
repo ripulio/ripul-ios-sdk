@@ -9,7 +9,7 @@ let ripulViewExplorerOverlayTag = 0x5249_5055   // "RIPU"
 
 /// Marketing version of the RipulAgent SDK, surfaced in the inspector's copy output as `sdk: …`
 /// so we can always tell which build is actually running on the device. Bump on every release.
-let ripulSDKVersion = "0.7.39"
+let ripulSDKVersion = "0.7.40"
 
 // MARK: - View Inspector Overlay
 //
@@ -1227,13 +1227,21 @@ class ViewInspectorController: UIView {
             if depth > 60 { return }
             for sub in v.subviews where !sub.isHidden && sub.alpha > 0.01 && !isInspectorOwnView(sub) {
                 let local = sub.convert(windowPoint, from: nil)
-                if sub.bounds.contains(local) {
-                    if isActuatable(sub) {
-                        let area = sub.bounds.width * sub.bounds.height
-                        if area < bestArea { bestArea = area; best = sub }
-                    }
-                    walk(sub, depth: depth + 1)
+                let contains = sub.bounds.contains(local)
+                // Descend through DEGENERATE containers even when they don't
+                // contain the point. SwiftUI routinely nests a full-size view
+                // under a zero-size `_UIInheritedView` (observed directly:
+                // (40,296,0,0) wrapping a 113×68 child), and such a parent
+                // never "contains" anything — gating recursion on containment
+                // is precisely why hitTest can't reach these controls either.
+                // A zero-area view clips nothing, so it must not gate the walk.
+                let degenerate = sub.bounds.width < 1 || sub.bounds.height < 1
+                guard contains || degenerate else { continue }
+                if contains, isActuatable(sub) {
+                    let area = sub.bounds.width * sub.bounds.height
+                    if area < bestArea { bestArea = area; best = sub }
                 }
+                walk(sub, depth: depth + 1)
             }
         }
         walk(root, depth: 0)
@@ -1294,10 +1302,13 @@ class ViewInspectorController: UIView {
             for sub in v.subviews {
                 guard !sub.isHidden, sub.alpha > 0.01, !isInspectorOwnView(sub) else { continue }
                 let local = sub.convert(windowPoint, from: nil)
-                if sub.bounds.contains(local) {
-                    best = sub
-                    walk(sub)
-                }
+                let contains = sub.bounds.contains(local)
+                // Zero-area containers clip nothing and must not gate the
+                // descent — SwiftUI nests full-size content under them. See
+                // `actuatableView`.
+                guard contains || sub.bounds.width < 1 || sub.bounds.height < 1 else { continue }
+                if contains { best = sub }
+                walk(sub)
             }
         }
         walk(root)
@@ -1316,10 +1327,13 @@ class ViewInspectorController: UIView {
             for sub in v.subviews {
                 guard !sub.isHidden, sub.alpha > 0.01, !isInspectorOwnView(sub) else { continue }
                 let local = sub.convert(windowPoint, from: nil)
-                if sub.bounds.contains(local) {
-                    best = sub
-                    walk(sub)
-                }
+                let contains = sub.bounds.contains(local)
+                // As above: a zero-area SwiftUI wrapper must be walked THROUGH,
+                // not treated as a miss, or everything it contains is
+                // unreachable to the refinement.
+                guard contains || sub.bounds.width < 1 || sub.bounds.height < 1 else { continue }
+                if contains { best = sub }
+                walk(sub)
             }
         }
         walk(view)
