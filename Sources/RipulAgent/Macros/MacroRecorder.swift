@@ -46,8 +46,13 @@ public extension MacroSelector {
         // button or icon-button keeps its name). `contentText` covers the
         // first and third rungs; the middle one isn't part of it because
         // matching reads own-or-descendant, not the a11y label.
+        // NOT for a SwiftUI island: `contentText` answers a hosting view with
+        // every accessibility label it publishes, JOINED — the right fact for
+        // matching the island, a useless name for a selector. Such a tap is
+        // named from the element it activates instead (see `upgrade`).
         let textPredicate: String? = (text?.isEmpty == false) ? text
             : (label?.isEmpty == false) ? label
+            : ScreenElementFinder.isHostingView(view) ? nil
             : ScreenElementFinder.contentText(of: view)
 
         var selector = MacroSelector(text: textPredicate, role: role, className: className)
@@ -95,7 +100,16 @@ enum MacroRecorder {
         switch action {
         case .tap:
             let outcome = ScreenActuationEngine.performTap(on: view, matchId: selector.id, matchText: selector.text)
-            let step = MacroStep(kind: .tap, selector: selector, recordedLabel: "Tap \(label)")
+            // Record what was ACTUATED, not what happened to be under the
+            // cursor. An anonymous SwiftUI leaf is unnameable from the view
+            // tree, so the synthesised selector degrades to a bare class name
+            // — `class=_UIInheritedView` matches nothing (or everything) on
+            // replay, which is exactly how a recorded menu tap failed to
+            // resolve. The activated accessibility element carries the name
+            // the user actually pointed at ("KFC"), and `contentText` now
+            // makes that name findable again through the enclosing island.
+            let (upgraded, upgradedLabel) = Self.upgrade(selector, label: label, with: outcome)
+            let step = MacroStep(kind: .tap, selector: upgraded, recordedLabel: "Tap \(upgradedLabel)")
             return (step, outcome.success ? nil : outcome.error)
 
         case .type:
@@ -148,6 +162,23 @@ enum MacroRecorder {
         }
         let className = String(describing: type(of: view))
         return qualifier.isEmpty ? className : "\(className) (\(qualifier))"
+    }
+
+    /// Replace a selector that names nothing durable — no id, no text, just a
+    /// class — with the identity of the accessibility element the tap actually
+    /// activated. Only fires when the view-derived selector is that weak, so a
+    /// well-identified element is never second-guessed.
+    private static func upgrade(_ selector: MacroSelector, label: String,
+                                with outcome: ScreenActuationEngine.TapOutcome) -> (MacroSelector, String) {
+        let hasIdentity = (selector.id?.isEmpty == false) || (selector.text?.isEmpty == false)
+        guard !hasIdentity else { return (selector, label) }
+        if let id = outcome.activatedIdentifier, !id.isEmpty {
+            return (MacroSelector(id: id), "'\(id)'")
+        }
+        if let name = outcome.activatedLabel?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty {
+            return (MacroSelector(text: name), "'\(name)'")
+        }
+        return (selector, label)
     }
 
     /// "N of M" when the selector needed an `nth` to pick this element out of

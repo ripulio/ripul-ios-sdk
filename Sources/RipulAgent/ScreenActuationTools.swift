@@ -167,8 +167,54 @@ extension ScreenElementFinder {
     /// `descendantLabelText`.
     static func contentText(of view: UIView) -> String? {
         if let own = InspectedView.textContent(of: view), !own.isEmpty { return own }
-        guard view is UIControl else { return nil }
-        return descendantLabelText(of: view)
+        if view is UIControl { return descendantLabelText(of: view) }
+        // A SwiftUI island has no text a UIKit walk can see: `Text` does not
+        // render into a UILabel, so every view inside a hosting view is
+        // textless and a text query could never match one. SwiftUI publishes
+        // that text in the ACCESSIBILITY tree instead, so for a hosting view
+        // the queryable text is its accessibility labels. Matching the island
+        // is enough to actuate correctly — `performTap` narrows to the right
+        // element inside it by the same label (path 2).
+        if isHostingView(view) { return accessibilityLabelText(of: view) }
+        return nil
+    }
+
+    /// A SwiftUI hosting view — the boundary of one SwiftUI island in a UIKit
+    /// hierarchy. Matched by class name because the type is private to SwiftUI.
+    static func isHostingView(_ view: UIView) -> Bool {
+        String(describing: type(of: view)).contains("HostingView")
+    }
+
+    /// Every accessibility label published under `view`, joined. Used as the
+    /// text fact for a SwiftUI island (see `contentText`).
+    static func accessibilityLabelText(of view: UIView, limit: Int = 60) -> String? {
+        var labels: [String] = []
+        func visit(_ obj: NSObject, depth: Int) {
+            if depth > 40 || labels.count >= limit { return }
+            if obj.isAccessibilityElement,
+               let l = obj.accessibilityLabel?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !l.isEmpty {
+                labels.append(l)
+            }
+            var children: [NSObject] = []
+            if let els = obj.accessibilityElements as? [NSObject] {
+                children = els
+            } else {
+                let n = obj.accessibilityElementCount()
+                if n > 0 && n != NSNotFound {
+                    for i in 0..<n { if let e = obj.accessibilityElement(at: i) as? NSObject { children.append(e) } }
+                }
+            }
+            if !children.isEmpty {
+                for c in children { visit(c, depth: depth + 1) }
+                return
+            }
+            if let v = obj as? UIView {
+                for sub in v.subviews where !sub.isHidden && sub.alpha > 0.01 { visit(sub, depth: depth + 1) }
+            }
+        }
+        visit(view, depth: 0)
+        return labels.isEmpty ? nil : labels.joined(separator: " ")
     }
 
     /// Find elements by accessibility id (exact, then case-insensitive) or
@@ -424,6 +470,13 @@ enum ScreenActuationEngine {
         let success: Bool
         let via: String?
         let error: String?
+        /// Identity of the accessibility element actually activated, when the
+        /// tap went through one. An anonymous SwiftUI leaf (`_UIInheritedView`,
+        /// no id, no UILabel text) is unnameable from the view tree, and the
+        /// macro recorder was writing `class=_UIInheritedView` selectors that
+        /// nothing could resolve on replay. This is the name it should record.
+        var activatedIdentifier: String? = nil
+        var activatedLabel: String? = nil
         /// One token per ladder path in order — what each tried and what it
         /// did (e.g. "control:no a11y:no gesture:containerSkipped row:HomeCell[0:0]").
         /// Turns "it didn't click through" from a shrug into a diagnosis:
@@ -454,10 +507,13 @@ enum ScreenActuationEngine {
             return TapOutcome(success: true, via: "uicontrol", error: nil, trace: "control:fired")
         }
         trace.append("control:no")
-        if TapElementTool.activateAccessibilityElement(in: view, id: matchId, text: matchText) {
+        if let el = TapElementTool.activateAccessibilityElement(in: view, id: matchId, text: matchText) {
             ScreenSnapshotStore.shared.invalidate()
             trace.append("a11y:activated")
-            return TapOutcome(success: true, via: "accessibilityElement", error: nil, trace: trace.joined(separator: " "))
+            return TapOutcome(success: true, via: "accessibilityElement", error: nil,
+                              activatedIdentifier: InspectedView.objectAccessibilityIdentifier(el),
+                              activatedLabel: el.accessibilityLabel,
+                              trace: trace.joined(separator: " "))
         }
         trace.append("a11y:no")
 
@@ -479,11 +535,14 @@ enum ScreenActuationEngine {
         if hasIdentity {
             var a: UIView? = view.superview
             while let cur = a, !(cur is UIScrollView), !(cur is UIWindow) {
-                if TapElementTool.activateAccessibilityElement(in: cur, id: matchId, text: matchText, strict: true) {
+                if let el = TapElementTool.activateAccessibilityElement(in: cur, id: matchId,
+                                                                       text: matchText, strict: true) {
                     ScreenSnapshotStore.shared.invalidate()
                     trace.append("a11yAncestor:activated(\(type(of: cur)))")
-                    return TapOutcome(success: true, via: "accessibilityElement(ancestor)",
-                                      error: nil, trace: trace.joined(separator: " "))
+                    return TapOutcome(success: true, via: "accessibilityElement(ancestor)", error: nil,
+                                      activatedIdentifier: InspectedView.objectAccessibilityIdentifier(el),
+                                      activatedLabel: el.accessibilityLabel,
+                                      trace: trace.joined(separator: " "))
                 }
                 a = cur.superview
             }
@@ -508,8 +567,10 @@ enum ScreenActuationEngine {
             ScreenSnapshotStore.shared.invalidate()
             let name = el.accessibilityLabel ?? String(describing: type(of: el))
             trace.append("a11yPoint:activated(\(name))")
-            return TapOutcome(success: true, via: "accessibilityElement(point)",
-                              error: nil, trace: trace.joined(separator: " "))
+            return TapOutcome(success: true, via: "accessibilityElement(point)", error: nil,
+                              activatedIdentifier: InspectedView.objectAccessibilityIdentifier(el),
+                              activatedLabel: el.accessibilityLabel,
+                              trace: trace.joined(separator: " "))
         }
         trace.append(byPoint.isEmpty ? "a11yPoint:noElement" : "a11yPoint:noneActivated(\(byPoint.count))")
 
@@ -767,8 +828,14 @@ public struct TapElementTool: NativeTool {
     /// right when the caller already resolved THIS view as the element — and
     /// wrong when climbing ancestors, where the one element found may belong to
     /// something else entirely.
+    ///
+    /// Returns the element it activated (nil when nothing did), not just a
+    /// Bool: for an anonymous SwiftUI leaf the activated element is the only
+    /// thing carrying a NAME, and the macro recorder needs that name to write
+    /// down a selector that can be resolved again later.
+    @discardableResult
     static func activateAccessibilityElement(in view: UIView, id: String?, text: String?,
-                                             strict: Bool = false) -> Bool {
+                                             strict: Bool = false) -> NSObject? {
         var matched: [NSObject] = []
         var all: [NSObject] = []
         func leafMatches(_ el: NSObject) -> Bool {
@@ -806,8 +873,8 @@ public struct TapElementTool: NativeTool {
             }
         }
         visit(view, depth: 0)
-        guard let el = matched.first ?? (strict ? nil : (all.count == 1 ? all.first : nil)) else { return false }
-        return el.accessibilityActivate()
+        guard let el = matched.first ?? (strict ? nil : (all.count == 1 ? all.first : nil)) else { return nil }
+        return el.accessibilityActivate() ? el : nil
     }
 
     /// Invoke a tap gesture recognizer's registered target/action pairs with the
