@@ -436,9 +436,17 @@ enum ScreenActuationEngine {
         let contentSize: CGSize
     }
 
-    /// The 4-path tap ladder (see the file header). `matchId`/`matchText` feed
-    /// path 2's leaf matching within the view's own accessibility subtree.
-    static func performTap(on view: UIView, matchId: String?, matchText: String?) -> TapOutcome {
+    /// The tap ladder (see the file header). `matchId`/`matchText` feed path 2's
+    /// leaf matching within the view's own accessibility subtree.
+    ///
+    /// `windowPoint` — where the user actually pointed, in the view's window
+    /// coordinates — is what makes path 2c possible: SwiftUI leaves are often
+    /// anonymous scaffolding (`_UIInheritedView` with no id, no text, no
+    /// control), and then the POINT is the only thing that identifies which
+    /// element was meant. Defaults to the view's own centre, which is what
+    /// "tap this element" means for a caller that resolved it by predicate.
+    static func performTap(on view: UIView, matchId: String?, matchText: String?,
+                           at windowPoint: CGPoint? = nil) -> TapOutcome {
         var trace: [String] = []
         if let control = view as? UIControl {
             control.sendActions(for: .touchUpInside)
@@ -483,6 +491,27 @@ enum ScreenActuationEngine {
         } else {
             trace.append("a11yAncestor:noIdentity")
         }
+
+        // 2c. Point-targeted accessibility activation. A SwiftUI leaf is often
+        //     anonymous scaffolding — `_UIInheritedView`, no id, no text, not a
+        //     control — so there is nothing to match on and every path below is
+        //     UIKit-shaped. But accessibility elements carry SCREEN-space
+        //     frames, so the thing the user pointed AT is answerable even when
+        //     the view tree names nothing: take the tightest element containing
+        //     the point and activate it. Tried tightest-first because a row and
+        //     the label inside it both contain the point and only one of them
+        //     may be activatable.
+        let screenPoint = Self.screenPoint(for: view, windowPoint: windowPoint)
+        let hostRoot: UIView = Self.hostingAncestor(of: view) ?? view
+        let byPoint = Self.accessibilityElements(in: hostRoot, containing: screenPoint)
+        for el in byPoint.prefix(4) where el.accessibilityActivate() {
+            ScreenSnapshotStore.shared.invalidate()
+            let name = el.accessibilityLabel ?? String(describing: type(of: el))
+            trace.append("a11yPoint:activated(\(name))")
+            return TapOutcome(success: true, via: "accessibilityElement(point)",
+                              error: nil, trace: trace.joined(separator: " "))
+        }
+        trace.append(byPoint.isEmpty ? "a11yPoint:noElement" : "a11yPoint:noneActivated(\(byPoint.count))")
 
         var v: UIView? = view
         while let cur = v {
@@ -540,6 +569,68 @@ enum ScreenActuationEngine {
         return TapOutcome(success: false, via: nil,
                           error: "Element found but not tappable by any path (not a control, no activatable accessibility element, no tap gesture, not inside a selectable cell).",
                           trace: trace.joined(separator: " "))
+    }
+
+    /// Where the tap lands, in SCREEN coordinates — the space accessibility
+    /// frames live in. `windowPoint` is in the view's window; with none, the
+    /// view's own centre stands in.
+    private static func screenPoint(for view: UIView, windowPoint: CGPoint?) -> CGPoint {
+        let inView = windowPoint.map { view.convert($0, from: nil) }
+            ?? CGPoint(x: view.bounds.midX, y: view.bounds.midY)
+        return UIAccessibility.convertToScreenCoordinates(CGRect(origin: inView, size: .zero), in: view).origin
+    }
+
+    /// The SwiftUI hosting view enclosing `view` — the boundary of one SwiftUI
+    /// island. Everything under it is SwiftUI's own scaffolding, and the
+    /// accessibility elements for the whole island hang off the hosting view,
+    /// not off the leaves. Matched by class name because the type is private to
+    /// SwiftUI. Bounded so a deep UIKit hierarchy can't walk to the window.
+    private static func hostingAncestor(of view: UIView) -> UIView? {
+        var cur: UIView? = view
+        var hops = 0
+        while let v = cur, hops < 12 {
+            if String(describing: type(of: v)).contains("HostingView") { return v }
+            cur = v.superview
+            hops += 1
+        }
+        return nil
+    }
+
+    /// Every accessibility element under `root` whose screen frame contains
+    /// `screenPoint`, tightest first. Tightest-first matters: a row and the
+    /// label inside it both contain the point, and which one answers
+    /// `accessibilityActivate()` is up to whoever built the tree.
+    private static func accessibilityElements(in root: NSObject, containing screenPoint: CGPoint) -> [NSObject] {
+        var hits: [(el: NSObject, area: CGFloat)] = []
+        var visited = 0
+        func visit(_ obj: NSObject, depth: Int) {
+            if depth > 60 || visited > 400 { return }
+            visited += 1
+
+            if obj.isAccessibilityElement {
+                let f = obj.accessibilityFrame
+                if f.contains(screenPoint) { hits.append((obj, f.width * f.height)) }
+            }
+
+            var children: [NSObject] = []
+            if let els = obj.accessibilityElements as? [NSObject] {
+                children = els
+            } else {
+                let n = obj.accessibilityElementCount()
+                if n > 0 && n != NSNotFound {
+                    for i in 0..<n { if let e = obj.accessibilityElement(at: i) as? NSObject { children.append(e) } }
+                }
+            }
+            if !children.isEmpty {
+                for c in children { visit(c, depth: depth + 1) }
+                return
+            }
+            if let v = obj as? UIView {
+                for sub in v.subviews where !sub.isHidden && sub.alpha > 0.01 { visit(sub, depth: depth + 1) }
+            }
+        }
+        visit(root, depth: 0)
+        return hits.sorted { $0.area < $1.area }.map(\.el)
     }
 
     /// Walk up to the nearest table/collection cell, then to its owning

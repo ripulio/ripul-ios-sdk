@@ -9,7 +9,7 @@ let ripulViewExplorerOverlayTag = 0x5249_5055   // "RIPU"
 
 /// Marketing version of the RipulAgent SDK, surfaced in the inspector's copy output as `sdk: …`
 /// so we can always tell which build is actually running on the device. Bump on every release.
-let ripulSDKVersion = "0.7.27"
+let ripulSDKVersion = "0.7.28"
 
 // MARK: - View Inspector Overlay
 //
@@ -1017,11 +1017,16 @@ class ViewInspectorController: UIView {
         guard let element = currentTokenAnchor ?? currentTarget else { return }
         UISelectionFeedbackGenerator().selectionChanged()
         let frameInSelf = convert(element.convert(element.bounds, to: nil), from: nil)
+        // Where the reticule actually is, in the HOST window's space. An
+        // anonymous SwiftUI leaf carries no id and no text, so the point is the
+        // only thing that says WHICH element was meant (actuation path 2c).
+        let firePoint = (hostWindow ?? self.window).map { convert(cursorPos, to: $0) }
         Task { @MainActor in
             let outcome = ScreenActuationEngine.performTap(
                 on: element,
                 matchId: ScreenElementFinder.identifier(of: element),
-                matchText: ScreenElementFinder.contentText(of: element))
+                matchText: ScreenElementFinder.contentText(of: element),
+                at: firePoint)
             NSLog("[RipulViewExplorer] single-tap fire via=%@ trace=%@", outcome.via ?? "none", outcome.trace)
             let headline = outcome.via.map { "via \($0)" } ?? "not tappable"
             self.onFireOutcome?("\(headline)  [\(outcome.trace)]")
