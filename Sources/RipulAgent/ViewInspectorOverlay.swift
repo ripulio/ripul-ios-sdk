@@ -9,7 +9,7 @@ let ripulViewExplorerOverlayTag = 0x5249_5055   // "RIPU"
 
 /// Marketing version of the RipulAgent SDK, surfaced in the inspector's copy output as `sdk: …`
 /// so we can always tell which build is actually running on the device. Bump on every release.
-let ripulSDKVersion = "0.7.31"
+let ripulSDKVersion = "0.7.32"
 
 // MARK: - View Inspector Overlay
 //
@@ -929,9 +929,15 @@ class ViewInspectorController: UIView {
             pendingTapFire = nil
             suppressNextTapFire = true
             if let element = currentTokenAnchor ?? currentTarget {
+                // In the HOST window's space: the explorer now lives in its own
+                // overlay window, and every consumer (macro recording, the
+                // actuation engine's point path) resolves this against host
+                // views. Identical numbers today because both windows are
+                // full-screen and aligned — correct if they ever aren't.
+                let hostPoint = (hostWindow ?? window).map { convert(loc, to: $0) } ?? loc
                 let tap = RipulElementTap(view: element,
                                           targetView: currentTarget ?? element,
-                                          point: loc)
+                                          point: hostPoint)
                 NSLog("[RipulViewExplorer] element tap anchor=%@ target=%@ action=%d",
                       String(describing: type(of: element)),
                       String(describing: type(of: tap.targetView)), onElementTap != nil)
@@ -3027,7 +3033,10 @@ public struct ViewInspectorOverlay: View {
             showTypeTextAlert = true
             return
         }
-        guard let result = MacroRecorder.record(action, on: tap.view) else {
+        // `tap.point` is the whole reason this presses the right thing: see
+        // MacroRecorder.record. Recording without it pressed the centre of the
+        // island instead of the row under the finger.
+        guard let result = MacroRecorder.record(action, on: tap.view, at: tap.point) else {
             recordingError = "\(action.rawValue) isn't available for \(MacroRecorder.describeTarget(tap.view))."
             return
         }

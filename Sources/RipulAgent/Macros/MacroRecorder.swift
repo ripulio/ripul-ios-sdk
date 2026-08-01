@@ -93,13 +93,22 @@ enum MacroRecordingAction: String, CaseIterable {
 /// never replay.
 @MainActor
 enum MacroRecorder {
-    static func record(_ action: MacroRecordingAction, on view: UIView, typedText: String = "") -> (step: MacroStep, error: String?)? {
+    /// `windowPoint` — where the developer actually pointed, in the view's
+    /// window coordinates. Recording MUST pass it for the same reason the
+    /// single-tap fire does: an anonymous SwiftUI leaf covers the whole island
+    /// (a menu panel is one `_UIInheritedView`), so without a point the tap
+    /// falls back to the view's CENTRE and presses whatever sits in the middle
+    /// — the middle row, not the row under the finger. That also poisoned the
+    /// recorded selector, which is named after whatever was activated.
+    static func record(_ action: MacroRecordingAction, on view: UIView, typedText: String = "",
+                       at windowPoint: CGPoint? = nil) -> (step: MacroStep, error: String?)? {
         let selector = MacroSelector(describing: view)
         let label = describeTarget(view, ordinal: ordinalSuffix(for: view, selector: selector))
 
         switch action {
         case .tap:
-            let outcome = ScreenActuationEngine.performTap(on: view, matchId: selector.id, matchText: selector.text)
+            let outcome = ScreenActuationEngine.performTap(on: view, matchId: selector.id,
+                                                           matchText: selector.text, at: windowPoint)
             // Record what was ACTUATED, not what happened to be under the
             // cursor. An anonymous SwiftUI leaf is unnameable from the view
             // tree, so the synthesised selector degrades to a bare class name
