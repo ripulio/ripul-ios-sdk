@@ -9,7 +9,7 @@ let ripulViewExplorerOverlayTag = 0x5249_5055   // "RIPU"
 
 /// Marketing version of the RipulAgent SDK, surfaced in the inspector's copy output as `sdk: …`
 /// so we can always tell which build is actually running on the device. Bump on every release.
-let ripulSDKVersion = "0.7.42"
+let ripulSDKVersion = "0.7.43"
 
 // MARK: - View Inspector Overlay
 //
@@ -1180,7 +1180,23 @@ class ViewInspectorController: UIView {
         // outlined and pressed must be one element or none of them can be
         // trusted. The stamp keeps its real job: `tokenAnchorView`, which is
         // what the Design-token section reads.
-        let highlightView = target
+        //
+        // Which of the two is the truer box depends on the element, and BOTH
+        // shapes occur in one panel:
+        //   notes field  — target `NotesUITextView` 284×44 beats the only
+        //                  stamps present, `notes.panel` 360×93 (an ancestor).
+        //   attach button — stamp 44×44 beats the SwiftUI scaffolding the pick
+        //                  resolves to, an `_UIInheritedView` spanning 336×44.
+        // Preferring either one unconditionally is wrong for the other, so take
+        // the TIGHTER. Both already contain the cursor — `matches(at:)`
+        // guarantees it for the stamp — so the smaller is simply the more
+        // precise statement of the same element.
+        let highlightView: UIView = {
+            guard let stamped = match?.view else { return target }
+            let stampArea = stamped.bounds.width * stamped.bounds.height
+            let targetArea = target.bounds.width * target.bounds.height
+            return (stampArea > 0 && stampArea < targetArea) ? stamped : target
+        }()
         let frameInWindow = highlightView.convert(highlightView.bounds, to: nil)
         let frameInSelf = convert(frameInWindow, from: nil)
         highlightLayer.path = UIBezierPath(roundedRect: frameInSelf, cornerRadius: highlightView.layer.cornerRadius).cgPath
