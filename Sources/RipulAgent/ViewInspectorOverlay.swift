@@ -9,7 +9,7 @@ let ripulViewExplorerOverlayTag = 0x5249_5055   // "RIPU"
 
 /// Marketing version of the RipulAgent SDK, surfaced in the inspector's copy output as `sdk: …`
 /// so we can always tell which build is actually running on the device. Bump on every release.
-let ripulSDKVersion = "0.7.43"
+let ripulSDKVersion = "0.7.44"
 
 // MARK: - View Inspector Overlay
 //
@@ -1164,8 +1164,19 @@ class ViewInspectorController: UIView {
         // Guarded on the target being unactuatable so a correct pick is never
         // second-guessed, and scoped to actuatable views so a full-screen
         // passthrough layer can't win on area.
+        // It may only ever REFINE the pick, never widen it. `isActuatable` is
+        // true of any view carrying a tap recognizer, and a keyboard-dismiss
+        // gesture on a view controller's root view is full-screen and sits
+        // under every point — so for anything unactuatable (a panel, a label,
+        // a background: most of what the theme tools select) the "tightest
+        // actuatable view" was the root view, and the element's identity became
+        // whatever diagnostic string was parked on it. Requiring the candidate
+        // to be strictly tighter keeps the useful case (a 284×44 text view
+        // inside a 360×93 container) and refuses the harmful one.
         if !isActuatable(target), let window = hostWindow ?? self.window,
-           let pressable = actuatableView(in: window, at: windowPoint) {
+           let pressable = actuatableView(in: window, at: windowPoint),
+           pressable.bounds.width * pressable.bounds.height
+             < target.bounds.width * target.bounds.height {
             target = pressable
         }
 
