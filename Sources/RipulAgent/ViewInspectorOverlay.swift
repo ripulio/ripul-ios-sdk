@@ -9,7 +9,7 @@ let ripulViewExplorerOverlayTag = 0x5249_5055   // "RIPU"
 
 /// Marketing version of the RipulAgent SDK, surfaced in the inspector's copy output as `sdk: …`
 /// so we can always tell which build is actually running on the device. Bump on every release.
-let ripulSDKVersion = "0.7.49"
+let ripulSDKVersion = "0.7.50"
 
 // MARK: - View Inspector Overlay
 //
@@ -889,6 +889,13 @@ class ViewInspectorController: UIView {
     private let highlightLayer = CAShapeLayer()
 
     // Double-tap detection state
+    /// The on-screen explorer, when one is up — the handle `explorer_probe`
+    /// drives. Weak: the controller's lifetime is the overlay's.
+    static weak var live: ViewInspectorController?
+    /// The last resolution, kept so a probe can report exactly the readout a
+    /// human would be looking at rather than a reconstruction of it.
+    private var currentInfo: InspectedView?
+
     private var currentTarget: UIView?
     private var currentTokenAnchor: UIView?
     /// What a tap will actually drive — see `actionableTarget`. Distinct from
@@ -924,6 +931,7 @@ class ViewInspectorController: UIView {
     override init(frame: CGRect) {
         cursorPos = CGPoint(x: frame.width / 2, y: frame.height / 2)
         super.init(frame: frame)
+        Self.live = self
         backgroundColor = .clear
         isMultipleTouchEnabled = false
 
@@ -1067,6 +1075,70 @@ class ViewInspectorController: UIView {
     /// look identical without it.
     private func fireHighlightedElement() {
         pendingTapFire = nil
+        fireNow()
+    }
+
+    /// Move the reticule to a point in HOST-WINDOW coordinates — the same space
+    /// `inspect_screen` reports frames in — re-resolve, and report exactly what
+    /// a human at the crosshair would be looking at. `fire` presses afterwards
+    /// through the identical path a tap takes.
+    ///
+    /// This exists because every diagnosis today has gone through a human
+    /// reading a readout off a phone and retyping it. The reticule is a
+    /// relative accelerated cursor with no absolute addressing, so it could not
+    /// be driven from a tool, so the one path that actually fails — resolution
+    /// by POINT — was the one path neither of us could test directly.
+    func probe(atWindowPoint windowPoint: CGPoint, fire: Bool) -> [String: Any] {
+        let local = (hostWindow ?? window).map { convert(windowPoint, from: $0) } ?? windowPoint
+        cursorPos = CGPoint(x: max(0, min(bounds.width - 1, local.x)),
+                            y: max(0, min(bounds.height - 1, local.y)))
+        onCursorMoved?(cursorPos)
+        pickAt(cursorPos)
+
+        func describe(_ v: UIView?) -> [String: Any]? {
+            guard let v else { return nil }
+            let f = v.convert(v.bounds, to: nil)
+            var d: [String: Any] = ["class": String(describing: type(of: v)),
+                                    "frame": ["x": Double(f.minX), "y": Double(f.minY),
+                                              "w": Double(f.width), "h": Double(f.height)]]
+            if let id = ScreenElementFinder.identifier(of: v) { d["id"] = id }
+            return d
+        }
+
+        var result: [String: Any] = [
+            "success": true,
+            "reticule": ["x": Double(windowPoint.x), "y": Double(windowPoint.y)],
+            // The readout verbatim — the exact text the Copy button yields, so a
+            // tool-driven check and a human report are the same artefact.
+            "readout": currentInfo?.sourceReference() ?? "",
+            "outline": currentActionable == nil ? "grey (nothing here responds to a tap)" : "pink",
+        ]
+        if let e = describe(currentTarget) { result["element"] = e }
+        if let a = describe(currentActionable) { result["actionable"] = a }
+        result["diverges"] = currentActionable != nil && currentActionable !== currentTarget
+
+        if fire {
+            if let outcome = fireNow() {
+                result["fired"] = ["via": outcome.via as Any,
+                                   "activated": outcome.activatedLabel as Any,
+                                   "activatedId": outcome.activatedIdentifier as Any,
+                                   "success": outcome.success,
+                                   "trace": outcome.trace]
+            } else {
+                result["fired"] = ["success": false,
+                                   "error": "nothing resolved under the reticule to press"]
+            }
+        }
+        return result
+    }
+
+    /// The fire itself, callable without a touch so the reticule can be driven
+    /// programmatically (`explorer_probe`). Everything a human tap does happens
+    /// here — same re-pick, same target choice, same ladder, same pill — so a
+    /// tool-driven test exercises the real path rather than a replica of it.
+    /// Testing a replica is how several of today's "fixed" claims were wrong.
+    @discardableResult
+    func fireNow() -> ScreenActuationEngine.TapOutcome? {
         // Re-resolve FIRST. The stored target is whatever was under the
         // crosshair when the pick last ran, and the pick only runs when the
         // reticule MOVES — so anything that changes the app's layout without a
@@ -1086,30 +1158,29 @@ class ViewInspectorController: UIView {
         // the target itself.
         // The ACTIONABLE view — what a tap drives — falling back to the
         // selection when they're the same or nothing there is pressable.
-        guard let element = currentActionable ?? currentTarget ?? currentTokenAnchor else { return }
+        guard let element = currentActionable ?? currentTarget ?? currentTokenAnchor else { return nil }
         UISelectionFeedbackGenerator().selectionChanged()
         let frameInSelf = convert(element.convert(element.bounds, to: nil), from: nil)
         // Where the reticule actually is, in the HOST window's space. An
         // anonymous SwiftUI leaf carries no id and no text, so the point is the
         // only thing that says WHICH element was meant (actuation path 2c).
         let firePoint = (hostWindow ?? self.window).map { convert(cursorPos, to: $0) }
-        Task { @MainActor in
-            let outcome = ScreenActuationEngine.performTap(
-                on: element,
-                matchId: ScreenElementFinder.identifier(of: element),
-                matchText: ScreenElementFinder.contentText(of: element),
-                at: firePoint)
-            NSLog("[RipulViewExplorer] single-tap fire via=%@ trace=%@", outcome.via ?? "none", outcome.trace)
-            let headline = outcome.via.map { "via \($0)" } ?? "not tappable"
-            self.onFireOutcome?("\(headline)  [\(outcome.trace)]")
-            self.flashFireOutcome(at: frameInSelf, success: outcome.success)
-        }
+        let outcome = ScreenActuationEngine.performTap(
+            on: element,
+            matchId: ScreenElementFinder.identifier(of: element),
+            matchText: ScreenElementFinder.contentText(of: element),
+            at: firePoint)
+        NSLog("[RipulViewExplorer] single-tap fire via=%@ trace=%@", outcome.via ?? "none", outcome.trace)
+        let headline = outcome.via.map { "via \($0)" } ?? "not tappable"
+        onFireOutcome?("\(headline)  [\(outcome.trace)]")
+        flashFireOutcome(at: frameInSelf, success: outcome.success)
         // The screen may navigate/re-render — re-pick shortly after so the
         // highlight reflects the new reality.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
             guard let self else { return }
             self.pickAt(self.cursorPos)
         }
+        return outcome
     }
 
     /// Two quick border pulses around the frame the fire actuated — the
@@ -1292,6 +1363,7 @@ class ViewInspectorController: UIView {
         let info = InspectedView.inspect(target, depth: viewDepth(target), resolvedIdentifier: match?.identifier, hitLeaf: hitLeaf, registryStamps: stampMatches.map(\.identifier), registryMatchView: match?.view, actionableSummary: actionableSummary)
         currentTarget = target
         currentTokenAnchor = info.tokenAnchorView
+        currentInfo = info
         onInspect?(info)
     }
 

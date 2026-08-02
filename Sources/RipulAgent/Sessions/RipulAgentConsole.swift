@@ -140,6 +140,7 @@ public struct RipulAgentConsole: View {
                 TypeTextTool(),
                 ScrollElementTool(),
                 WaitForElementTool(),
+                ExplorerProbeTool(),
             ] + RipulDevToolCollectionTools.all(
                 isEnabled: true,
                 catalogs: { [configuration, bridge] in
