@@ -134,10 +134,43 @@ extension ScreenElementFinder {
     /// `<screen>.<element>`), then a uiKitIdentifier stamp, then a SwiftUI
     /// accessibility-tree id.
     static func identifier(of view: UIView) -> String? {
-        var vid = view.accessibilityIdentifier
+        var vid = ownAccessibilityIdentifier(of: view)
         if vid?.isEmpty ?? true { vid = UIKitIdentifierRegistry.shared.identifier(for: view) }
         if vid?.isEmpty ?? true { vid = InspectedView.accessibilityIdInTree(view) }
         return (vid?.isEmpty == false) ? vid : nil
+    }
+
+    /// `accessibilityIdentifier`, but only when the view actually OWNS it.
+    ///
+    /// SwiftUI applies `.accessibilityIdentifier` (and therefore
+    /// `.uiKitIdentifier`) to a whole subtree: every descendant UIView ends up
+    /// carrying the island's identifier as its own property. WAC's notes field
+    /// reported `addShift.notes.root` — the PANEL's id — in place of the
+    /// `addShift.notes.field` its own code had set, intermittently, depending
+    /// on when SwiftUI last re-rendered. Acted on as identity, that sent the
+    /// actuation ladder climbing to the panel and collapsing it.
+    ///
+    /// An id shared with an ancestor was inherited FROM that ancestor and names
+    /// it, not this view. The outermost view carrying a given id owns it;
+    /// everything below has borrowed it. Bounded climb — an id is only
+    /// interesting relative to nearby structure.
+    static func ownAccessibilityIdentifier(of view: UIView) -> String? {
+        guard let id = view.accessibilityIdentifier, !id.isEmpty else { return nil }
+        var ancestor = view.superview
+        var hops = 0
+        while let cur = ancestor, hops < 12 {
+            if cur.accessibilityIdentifier == id { return nil }   // inherited
+            ancestor = cur.superview
+            hops += 1
+        }
+        return id
+    }
+
+    /// Whether `view`'s identifier came from an ancestor rather than itself —
+    /// surfaced in the explorer readout so a borrowed id is visible as such
+    /// rather than read as the element's own name.
+    static func hasInheritedIdentifier(_ view: UIView) -> Bool {
+        (view.accessibilityIdentifier?.isEmpty == false) && ownAccessibilityIdentifier(of: view) == nil
     }
 
     /// The first non-empty `UILabel.text` in `view`'s subtree — the label a

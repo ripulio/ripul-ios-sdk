@@ -9,7 +9,7 @@ let ripulViewExplorerOverlayTag = 0x5249_5055   // "RIPU"
 
 /// Marketing version of the RipulAgent SDK, surfaced in the inspector's copy output as `sdk: …`
 /// so we can always tell which build is actually running on the device. Bump on every release.
-let ripulSDKVersion = "0.7.52"
+let ripulSDKVersion = "0.7.53"
 
 // MARK: - View Inspector Overlay
 //
@@ -244,6 +244,10 @@ struct InspectedView {
     /// Surfaced whenever they diverge so the difference is visible rather than
     /// deduced from the aftermath.
     let actionableSummary: String?
+    /// Whether `accessibilityId` was borrowed from an ancestor rather than set
+    /// on this element — computed at inspect time, where the main-actor view
+    /// hierarchy is available.
+    let identifierIsInherited: Bool
                                        // (first = the resolved one) — makes nested sub-element ids
                                        // discoverable from a single tap on a SwiftUI row
     let registryMatchView: UIView?     // the resolved stamp's own view — carries the declared token
@@ -311,6 +315,7 @@ struct InspectedView {
             hitLeafClass: hitLeaf.map { String(describing: type(of: $0)) },
             registryStamps: registryStamps,
             actionableSummary: actionableSummary,
+            identifierIsInherited: Self.identifierIsInherited(view),
             registryMatchView: registryMatchView
         )
     }
@@ -554,6 +559,24 @@ struct InspectedView {
     /// (where a `.accessibilityElement(children: .combine)` row stores its id), then descendant views'
     /// own identifiers. Depth-bounded; callers restrict it to a bounded SwiftUI cell/leaf (see
     /// `isSwiftUIHostedLeaf`) so the id belongs to THIS element.
+    /// Whether this view's `accessibilityIdentifier` was inherited from an
+    /// ancestor. SwiftUI applies `.accessibilityIdentifier` to a whole subtree,
+    /// so a descendant carries the island's id as its own property; an id an
+    /// ancestor also has names the ANCESTOR. Mirrors
+    /// `ScreenElementFinder.ownAccessibilityIdentifier`, inline here because
+    /// `inspect` is not main-actor isolated.
+    static func identifierIsInherited(_ view: UIView) -> Bool {
+        guard let id = view.accessibilityIdentifier, !id.isEmpty else { return false }
+        var ancestor = view.superview
+        var hops = 0
+        while let cur = ancestor, hops < 12 {
+            if cur.accessibilityIdentifier == id { return true }
+            ancestor = cur.superview
+            hops += 1
+        }
+        return false
+    }
+
     static func accessibilityIdInTree(_ view: UIView, maxDepth: Int = 6) -> String? {
         if let id = firstElementIdentifier(of: view) { return id }
         guard maxDepth > 0 else { return nil }
@@ -714,7 +737,13 @@ struct InspectedView {
         if let ctrl = enclosingControl { lines.append("control: \(ctrl)") }
         if let t = text { lines.append("text: \"\(t)\"") }
         if let img = imageName { lines.append("image: \(img)") }
-        if let aid = accessibilityId, !aid.isEmpty { lines.append("a11yId: \(aid)") }
+        if let aid = accessibilityId, !aid.isEmpty {
+            // Flag a borrowed id. SwiftUI stamps a whole island's descendants
+            // with the island's identifier, so an id here may name the
+            // CONTAINER rather than this element — worth seeing before writing
+            // a macro selector against it.
+            lines.append("a11yId: \(aid)\(identifierIsInherited ? "  (inherited from an ancestor)" : "")")
+        }
         // Nested stamps under the same tap (front-to-back): a SwiftUI row and the
         // title/subtitle inside it — tap the smaller region to select a sub-element
         // directly; this line makes those ids discoverable without pixel-hunting.

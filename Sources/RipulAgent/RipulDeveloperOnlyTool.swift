@@ -28,6 +28,7 @@ extension TypeTextTool: RipulDeveloperOnlyTool {}
 extension ScrollElementTool: RipulDeveloperOnlyTool {}
 extension WaitForElementTool: RipulDeveloperOnlyTool {}
 extension ExplorerProbeTool: RipulDeveloperOnlyTool {}
+extension ExplorerConformanceTool: RipulDeveloperOnlyTool {}
 #endif
 
 // MARK: - Theme control (ThemeControlTools.swift is #if os(iOS) — mirror that here)
