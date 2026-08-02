@@ -9,7 +9,7 @@ let ripulViewExplorerOverlayTag = 0x5249_5055   // "RIPU"
 
 /// Marketing version of the RipulAgent SDK, surfaced in the inspector's copy output as `sdk: …`
 /// so we can always tell which build is actually running on the device. Bump on every release.
-let ripulSDKVersion = "0.7.47"
+let ripulSDKVersion = "0.7.48"
 
 // MARK: - View Inspector Overlay
 //
@@ -1056,6 +1056,16 @@ class ViewInspectorController: UIView {
     /// look identical without it.
     private func fireHighlightedElement() {
         pendingTapFire = nil
+        // Re-resolve FIRST. The stored target is whatever was under the
+        // crosshair when the pick last ran, and the pick only runs when the
+        // reticule MOVES — so anything that changes the app's layout without a
+        // reticule move leaves it stale. Focusing a text field does exactly
+        // that: the keyboard raises, the panel reflows, the keyboard dismisses
+        // and it reflows back, all while the crosshair sits still. The next
+        // fire then pressed an element resolved against a layout that no longer
+        // existed, which is why a second tap on the notes field closed the
+        // panel instead of entering it. Press what is under the cursor NOW.
+        pickAt(cursorPos)
         // Press the SELECTED element, not the stamp. The token anchor is a
         // 0.01-alpha, non-interactive marker view spanning whatever it labels,
         // so preferring it handed the ladder something unpressable — every rung
