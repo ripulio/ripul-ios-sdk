@@ -44,12 +44,29 @@ public struct ExplorerProbeTool: NativeTool {
             return ["success": false, "error": "x and y are required (window-space coordinates)"]
         }
         let fire = args["fire"] as? Bool ?? false
+
+        // Open the explorer if it isn't up. Asking a human to open it first
+        // reintroduces exactly the manual step this tool exists to remove —
+        // and "point the reticule" implies having one.
+        let opened = await MainActor.run { () -> Bool in
+            if let live = ViewInspectorController.live, live.window != nil { return false }
+            if #available(iOS 16.0, *) { return RipulViewExplorer.present() }
+            return false
+        }
+        if opened {
+            // The controller is created when the SwiftUI overlay mounts, a
+            // runloop or two later.
+            try? await Task.sleep(nanoseconds: 400_000_000)
+        }
+
         return await MainActor.run { () -> Any in
             guard let live = ViewInspectorController.live, live.window != nil else {
                 return ["success": false,
-                        "error": "The View Explorer isn't open on the device. Open it, then probe."]
+                        "error": "The View Explorer could not be opened (needs iOS 16+ and a foreground scene)."]
             }
-            return live.probe(atWindowPoint: CGPoint(x: x, y: y), fire: fire)
+            var result = live.probe(atWindowPoint: CGPoint(x: x, y: y), fire: fire)
+            if opened { result["openedExplorer"] = true }
+            return result
         }
         #else
         return ["success": false, "error": "explorer_probe requires UIKit"]

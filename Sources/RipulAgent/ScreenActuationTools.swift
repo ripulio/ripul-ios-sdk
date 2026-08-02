@@ -555,6 +555,28 @@ enum ScreenActuationEngine {
         }
         trace.append("a11y:no")
 
+        // 2a. The target IS a text input. Then tapping it means focusing it —
+        //     unambiguously, with no search and no identity involved — and that
+        //     must be settled before any path that climbs to an ancestor.
+        //
+        //     Proven on device: SwiftUI propagates a `.uiKitIdentifier` from an
+        //     enclosing island DOWN onto a child's accessibilityIdentifier, so
+        //     WAC's notes field reports the PANEL's id (`addShift.notes.root`)
+        //     instead of its own. The strict climb below then matched that id
+        //     honestly and activated the panel's own element — collapsing the
+        //     panel instead of entering the field. Identity that has been
+        //     inherited from an ancestor points AT the ancestor; a text input
+        //     needs no identity at all.
+        if let field = view as? UIView & UITextInput, field.canBecomeFirstResponder,
+           field.becomeFirstResponder() {
+            ScreenSnapshotStore.shared.invalidate()
+            trace.append("focusSelf:activated(\(type(of: view)))")
+            return TapOutcome(success: true, via: "focus", error: nil,
+                              activatedIdentifier: view.accessibilityIdentifier,
+                              activatedLabel: view.accessibilityLabel,
+                              trace: trace.joined(separator: " "))
+        }
+
         // 2b. SwiftUI hosting boundary. A leaf inside a SwiftUI island — a
         //     `.uiKitIdentifier` stamp, a text/image platform view — has no
         //     accessibility element of its OWN: SwiftUI publishes the control's
@@ -571,10 +593,23 @@ enum ScreenActuationEngine {
         //     here" fallback that the direct call above allows.
         let hasIdentity = (matchId?.isEmpty == false) || (matchText?.isEmpty == false)
         if hasIdentity {
+            // An ancestor's element may only stand in for the target if it
+            // occupies roughly the same SPACE. An id can be inherited from an
+            // enclosing SwiftUI island, so matching on it alone led straight to
+            // the island's own element — a 360×93 panel activated on behalf of
+            // a 284×44 field. Space cannot be inherited: if the element found
+            // is far bigger than what was aimed at, it is a different control.
+            let targetArea = max(1, view.bounds.width * view.bounds.height)
+            func representsTarget(_ el: NSObject) -> Bool {
+                let f = el.accessibilityFrame
+                guard f.width > 0, f.height > 0 else { return true }  // no frame to judge by
+                return (f.width * f.height) <= targetArea * 3
+            }
             var a: UIView? = view.superview
             while let cur = a, !(cur is UIScrollView), !(cur is UIWindow) {
                 if let el = TapElementTool.activateAccessibilityElement(in: cur, id: matchId,
-                                                                       text: matchText, strict: true) {
+                                                                       text: matchText, strict: true,
+                                                                       accept: representsTarget) {
                     ScreenSnapshotStore.shared.invalidate()
                     trace.append("a11yAncestor:activated(\(type(of: cur)))")
                     return TapOutcome(success: true, via: "accessibilityElement(ancestor)", error: nil,
@@ -1018,8 +1053,11 @@ public struct TapElementTool: NativeTool {
     /// thing carrying a NAME, and the macro recorder needs that name to write
     /// down a selector that can be resolved again later.
     @discardableResult
+    /// `accept`: an extra veto on a matched element — used by the ancestor
+    /// climb to refuse an element that is far larger than what was aimed at.
     static func activateAccessibilityElement(in view: UIView, id: String?, text: String?,
-                                             strict: Bool = false) -> NSObject? {
+                                             strict: Bool = false,
+                                             accept: ((NSObject) -> Bool)? = nil) -> NSObject? {
         var matched: [NSObject] = []
         var all: [NSObject] = []
         func leafMatches(_ el: NSObject) -> Bool {
@@ -1057,7 +1095,8 @@ public struct TapElementTool: NativeTool {
             }
         }
         visit(view, depth: 0)
-        guard let el = matched.first ?? (strict ? nil : (all.count == 1 ? all.first : nil)) else { return nil }
+        let candidates = matched.isEmpty && !strict && all.count == 1 ? all : matched
+        guard let el = candidates.first(where: { accept?($0) ?? true }) else { return nil }
         return el.accessibilityActivate() ? el : nil
     }
 
