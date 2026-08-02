@@ -9,7 +9,7 @@ let ripulViewExplorerOverlayTag = 0x5249_5055   // "RIPU"
 
 /// Marketing version of the RipulAgent SDK, surfaced in the inspector's copy output as `sdk: …`
 /// so we can always tell which build is actually running on the device. Bump on every release.
-let ripulSDKVersion = "0.7.48"
+let ripulSDKVersion = "0.7.49"
 
 // MARK: - View Inspector Overlay
 //
@@ -73,7 +73,18 @@ public final class UIKitIdentifierRegistry {
         var candidates: [Candidate] = []
         let enumerator = map.keyEnumerator()
         while let view = enumerator.nextObject() as? UIView {
-            guard view.window != nil, !view.isHidden else { continue }
+            guard let window = view.window, !view.isHidden else { continue }
+            // Never match the SDK's own chrome. The explorer stamps 19 of its
+            // own views — the HUD, the fire pill — and the overlay window is
+            // full-screen and aligned with the host's, so a point over any of
+            // them matched an inspector stamp as though it were app content:
+            // the reticule could select itself, name its own pill as the
+            // element, and (since the tighter box wins) steal the outline from
+            // whatever was actually under the cursor. Every geometric walk
+            // guards this with `isInspectorOwnView`; the spatial registry never
+            // did.
+            guard window.accessibilityIdentifier != RipulInspection.excludedOverlayWindowIdentifier,
+                  !(window is RipulChromeWindow) else { continue }
             guard !Self.isOccludedByAncestor(view) else { continue }
             let frame = view.convert(view.bounds, to: nil)
             guard frame.contains(windowPoint) else { continue }

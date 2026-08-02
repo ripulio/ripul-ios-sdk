@@ -518,7 +518,10 @@ enum ScreenActuationEngine {
         // Worth naming: a detached target means every coordinate derived FROM
         // it is meaningless, and it explains failures that otherwise look like
         // empty space.
-        if view.window == nil { trace.append("detached") }
+        // A UIWindow's own `window` is nil, so the naive check called every
+        // window detached — a misleading token in exactly the diagnostics that
+        // are supposed to be trustworthy.
+        if view.window == nil, !(view is UIWindow) { trace.append("detached") }
         if let control = view as? UIControl {
             // Only claim this path if something is actually WIRED to the event.
             // SwiftUI ships its own UIControl shells — `HostingUIButton` — that
