@@ -9,7 +9,7 @@ let ripulViewExplorerOverlayTag = 0x5249_5055   // "RIPU"
 
 /// Marketing version of the RipulAgent SDK, surfaced in the inspector's copy output as `sdk: …`
 /// so we can always tell which build is actually running on the device. Bump on every release.
-let ripulSDKVersion = "0.7.54"
+let ripulSDKVersion = "0.7.55"
 
 // MARK: - View Inspector Overlay
 //
@@ -3157,6 +3157,9 @@ public struct ViewInspectorOverlay: View {
     /// chooser. Cleared once an action is picked (or the dialog is dismissed).
     @State private var pendingRecordTap: RipulElementTap?
     @State private var showTypeTextAlert = false
+    /// Value-entry prompt for a `.setValue` step — same deferred-alert shape as
+    /// the type prompt: the chooser must dismiss before an alert can present.
+    @State private var showSetValueAlert = false
     @State private var typeTextInput = ""
     /// The view a Type step targets — held separately from `pendingRecordTap`
     /// because the text-entry alert presents AFTER the chooser dialog
@@ -3305,6 +3308,8 @@ public struct ViewInspectorOverlay: View {
             .modifier(RecordingPresentationModifier(
                 pendingRecordTap: $pendingRecordTap,
                 showTypeTextAlert: $showTypeTextAlert,
+                showSetValueAlert: $showSetValueAlert,
+                onCommitSetValueStep: commitSetValueStep,
                 typeTextInput: $typeTextInput,
                 recordingError: $recordingError,
                 showSaveSheet: $showSaveSheet,
@@ -3324,6 +3329,8 @@ public struct ViewInspectorOverlay: View {
     private struct RecordingPresentationModifier: ViewModifier {
         @Binding var pendingRecordTap: RipulElementTap?
         @Binding var showTypeTextAlert: Bool
+        @Binding var showSetValueAlert: Bool
+        let onCommitSetValueStep: () -> Void
         @Binding var typeTextInput: String
         @Binding var recordingError: String?
         @Binding var showSaveSheet: Bool
@@ -3341,7 +3348,13 @@ public struct ViewInspectorOverlay: View {
                     titleVisibility: .visible
                 ) {
                     if let tap = pendingRecordTap {
-                        ForEach(MacroRecordingAction.allCases, id: \.self) { action in
+                        // Only offer actions this element can actually take.
+                        // Listing "Set value" on something with no value-bearing
+                        // control just produces a refusal the user has to read.
+                        ForEach(MacroRecordingAction.allCases.filter {
+                            $0 != .setValue
+                                || ScreenActuationEngine.hasValueControl(at: tap.actionableView ?? tap.targetView)
+                        }, id: \.self) { action in
                             Button(action.rawValue) { onChooseAction(action, tap) }
                         }
                     }
@@ -3353,6 +3366,14 @@ public struct ViewInspectorOverlay: View {
                     Button("Cancel", role: .cancel) { pendingRecordTap = nil; typeTextInput = "" }
                 } message: {
                     Text("This is typed into the field now, and replayed exactly the same way later.")
+                }
+                .alert("Value to set", isPresented: $showSetValueAlert) {
+                    TextField("09:00 · 2026-08-02 09:00 · on · {{name}}", text: $typeTextInput)
+                    Button("Record") { onCommitSetValueStep() }
+                    Button("Cancel", role: .cancel) { pendingRecordTap = nil; typeTextInput = "" }
+                } message: {
+                    Text("Set on the control now, and replayed the same way later. "
+                        + "Dates accept ISO8601, \"yyyy-MM-dd HH:mm\" or a bare \"HH:mm\".")
                 }
                 .alert("Couldn't record that step", isPresented: Binding(get: { recordingError != nil }, set: { if !$0 { recordingError = nil } })) {
                     // The message carries the actuation trace, which is the
@@ -3378,6 +3399,15 @@ public struct ViewInspectorOverlay: View {
     /// it couldn't be recorded instead of silently dropping it.
     private func chooseRecordingAction(_ action: MacroRecordingAction, for tap: RipulElementTap) {
         pendingRecordTap = nil
+        if action == .setValue {
+            // Same deferral as `.type`: the value alert can only present after
+            // the chooser dialog has dismissed, and the target has to survive
+            // until then.
+            typeTextTarget = tap.actionableView ?? tap.targetView
+            typeTextInput = ""
+            showSetValueAlert = true
+            return
+        }
         if action == .type {
             // Deferred: the alert needs to be presented AFTER this dialog
             // dismisses, and it needs the target view kept around.
@@ -3403,6 +3433,18 @@ public struct ViewInspectorOverlay: View {
             recordingError = "\(action.rawValue) isn't available for \(MacroRecorder.describeTarget(tap.targetView))."
             return
         }
+        if let error = result.error {
+            recordingError = error
+        } else {
+            recordedSteps = MacroRecordingAssembly.appending(result.step, to: recordedSteps,
+                                                             autoPauseSeconds: autoPauseSeconds)
+        }
+    }
+
+    private func commitSetValueStep() {
+        guard let view = typeTextTarget else { return }
+        defer { typeTextTarget = nil; typeTextInput = "" }
+        guard let result = MacroRecorder.record(.setValue, on: view, typedText: typeTextInput) else { return }
         if let error = result.error {
             recordingError = error
         } else {

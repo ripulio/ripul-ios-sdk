@@ -79,6 +79,10 @@ public extension MacroSelector {
 enum MacroRecordingAction: String, CaseIterable {
     case tap = "Tap"
     case type = "Type text"
+    /// Set a value-bearing control directly (date picker, switch, slider,
+    /// segmented control). Offered only where such a control exists — see
+    /// `ScreenActuationEngine.hasValueControl`.
+    case setValue = "Set value"
     case scroll = "Scroll"
     case waitForGone = "Wait for this to disappear"
 }
@@ -119,6 +123,12 @@ enum MacroRecorder {
             // makes that name findable again through the enclosing island.
             let (upgraded, upgradedLabel) = Self.upgrade(selector, label: label, with: outcome)
             let step = MacroStep(kind: .tap, selector: upgraded, recordedLabel: "Tap \(upgradedLabel)")
+            return (step, outcome.success ? nil : outcome.error)
+
+        case .setValue:
+            let outcome = ScreenActuationEngine.performSetValue(on: view, value: typedText)
+            let step = MacroStep(kind: .setValue, selector: selector, text: typedText,
+                                 recordedLabel: "Set \(label) = \(typedText)")
             return (step, outcome.success ? nil : outcome.error)
 
         case .type:

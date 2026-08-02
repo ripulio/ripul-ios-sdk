@@ -1014,6 +1014,16 @@ enum ScreenActuationEngine {
                           trace: trace.joined(separator: " "))
     }
 
+    /// Whether a value-bearing control exists at, below, or in the same
+    /// SwiftUI island as `view` — so the recording chooser can offer "Set
+    /// value" only where it means something, rather than listing an action
+    /// that will refuse.
+    static func hasValueControl(at view: UIView) -> Bool {
+        if valueControl(in: view) != nil { return true }
+        if let island = hostingAncestor(of: view) { return valueControl(in: island) != nil }
+        return false
+    }
+
     /// The first control in `root`'s subtree that carries a value.
     private static func valueControl(in root: UIView) -> UIView? {
         if Self.isValueBearing(root) { return root }
