@@ -92,6 +92,11 @@ public struct MacroSelector: Codable, Equatable {
 
 public enum MacroStepKind: String, Codable {
     case tap, type, scroll, wait
+    /// Set a value-bearing control directly — a date picker, switch, slider,
+    /// stepper, segmented control or picker wheel. Recorded as the VALUE
+    /// rather than as a gesture: spinning a wheel cannot be replayed through
+    /// public API, and the value is what the step actually means.
+    case setValue
     /// A fixed-duration pause ("settle time") — not an element wait: it
     /// always succeeds after `seconds`, never fails on a condition. Inserted
     /// from the macro editor between steps (e.g. let an animation finish).

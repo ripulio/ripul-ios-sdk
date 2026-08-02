@@ -67,6 +67,8 @@ public protocol MacroElementResolving {
     func performTapDetailed(_ element: ResolvedElement, matchId: String?, matchText: String?) -> (success: Bool, via: String?, error: String?)
     func performType(_ element: ResolvedElement, text: String, append: Bool) -> (success: Bool, error: String?)
     func performScroll(_ element: ResolvedElement, direction: String, amount: Double) -> Bool
+    /// Set a value-bearing control directly — see `ScreenActuationEngine.performSetValue`.
+    func performSetValue(_ element: ResolvedElement, value: String) -> (success: Bool, via: String?, error: String?)
 
     /// A compact one-line identity for a resolved element — class, role,
     /// id, text, window-space frame — recorded into each step's result so a
@@ -126,6 +128,11 @@ public struct LiveScreenResolver: MacroElementResolving {
 
     public func performType(_ element: UIView, text: String, append: Bool) -> (success: Bool, error: String?) {
         ScreenActuationEngine.performType(on: element, text: text, append: append)
+    }
+
+    public func performSetValue(_ element: UIView, value: String) -> (success: Bool, via: String?, error: String?) {
+        let o = ScreenActuationEngine.performSetValue(on: element, value: value)
+        return (o.success, o.via, o.error)
     }
 
     public func performScroll(_ element: UIView, direction: String, amount: Double) -> Bool {

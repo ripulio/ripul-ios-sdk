@@ -982,6 +982,160 @@ enum ScreenActuationEngine {
     /// Set a text field/view's content, firing the same change notification
     /// real typing would. `nil` return means no text-input view was found at
     /// or below `view`.
+    /// Set the VALUE of a value-bearing control, rather than pretending to
+    /// operate it.
+    ///
+    /// A date picker's wheels cannot be meaningfully driven through public API,
+    /// and mechanically simulating a spin would be an elaborate way to produce
+    /// what one property assignment produces exactly. `UIDatePicker.date` plus
+    /// `.valueChanged` IS what a real spin delivers to the app — the same
+    /// handler, the same value — so a macro should record the VALUE, which is
+    /// also the thing worth re-reading later ("set the clock-in to 09:00"),
+    /// where a gesture recording would be unreadable and brittle.
+    ///
+    /// Dates are simply the first instance: every UIKit control that carries a
+    /// value has this shape, and none of them were reachable before.
+    static func performSetValue(on view: UIView, value: String) -> TapOutcome {
+        var trace: [String] = ["sdk=\(ripulSDKVersion)"]
+        // At-or-below, then the enclosing SwiftUI island — the same reach the
+        // tap and type paths needed, for the same reason: the target is often
+        // scaffolding and the control is a sibling within the island.
+        let scope: [UIView] = [view] + (Self.hostingAncestor(of: view).map { [$0] } ?? [])
+        for root in scope {
+            guard let control = Self.valueControl(in: root) else { continue }
+            trace.append("found:\(type(of: control))")
+            if let outcome = Self.apply(value, to: control, trace: &trace) { return outcome }
+        }
+        trace.append("setValue:noControl")
+        return TapOutcome(success: false, via: nil,
+                          error: "No value-bearing control at or below this element (date picker, switch, "
+                               + "slider, stepper, segmented control, picker or text field). Trace: "
+                               + trace.joined(separator: " "),
+                          trace: trace.joined(separator: " "))
+    }
+
+    /// The first control in `root`'s subtree that carries a value.
+    private static func valueControl(in root: UIView) -> UIView? {
+        if Self.isValueBearing(root) { return root }
+        for sub in root.subviews where !sub.isHidden && sub.alpha > 0.01 {
+            if let found = valueControl(in: sub) { return found }
+        }
+        return nil
+    }
+
+    private static func isValueBearing(_ v: UIView) -> Bool {
+        v is UIDatePicker || v is UISwitch || v is UISlider || v is UIStepper
+            || v is UISegmentedControl || v is UIPickerView || v is UITextField || v is UITextView
+    }
+
+    /// Apply `value` to a control, then fire `.valueChanged` — the notification
+    /// a real interaction produces, and the thing the app's handler listens to.
+    /// Setting the property alone would change the display and tell nobody.
+    private static func apply(_ value: String, to control: UIView, trace: inout [String]) -> TapOutcome? {
+        func done(_ via: String, _ shown: String) -> TapOutcome {
+            (control as? UIControl)?.sendActions(for: .valueChanged)
+            ScreenSnapshotStore.shared.invalidate()
+            trace.append("setValue:\(via)")
+            return TapOutcome(success: true, via: "setValue(\(via))", error: nil,
+                              activatedIdentifier: control.accessibilityIdentifier,
+                              activatedLabel: shown, trace: trace.joined(separator: " "))
+        }
+
+        switch control {
+        case let picker as UIDatePicker:
+            guard let date = Self.parseDate(value, mode: picker.datePickerMode) else {
+                trace.append("setValue:unparsableDate")
+                return TapOutcome(success: false, via: nil,
+                                  error: "Could not read \"\(value)\" as a date/time. Accepts ISO8601 "
+                                       + "(2026-08-02T09:00), \"yyyy-MM-dd HH:mm\", \"yyyy-MM-dd\" or \"HH:mm\".",
+                                  trace: trace.joined(separator: " "))
+            }
+            picker.setDate(date, animated: true)
+            return done("date", ISO8601DateFormatter().string(from: date))
+
+        case let s as UISwitch:
+            let on = ["1", "true", "on", "yes"].contains(value.lowercased())
+            s.setOn(on, animated: true)
+            return done("switch", on ? "on" : "off")
+
+        case let slider as UISlider:
+            guard let n = Float(value) else { return nil }
+            slider.setValue(n, animated: true)
+            return done("slider", value)
+
+        case let stepper as UIStepper:
+            guard let n = Double(value) else { return nil }
+            stepper.value = n
+            return done("stepper", value)
+
+        case let seg as UISegmentedControl:
+            if let i = Int(value), i >= 0, i < seg.numberOfSegments {
+                seg.selectedSegmentIndex = i
+                return done("segment", "index \(i)")
+            }
+            for i in 0..<seg.numberOfSegments where seg.titleForSegment(at: i)?
+                .caseInsensitiveCompare(value) == .orderedSame {
+                seg.selectedSegmentIndex = i
+                return done("segment", seg.titleForSegment(at: i) ?? value)
+            }
+            trace.append("setValue:noSuchSegment")
+            return nil
+
+        case let picker as UIPickerView:
+            // Row index only: titles live in the delegate and reading them back
+            // is not reliably available.
+            guard let row = Int(value), picker.numberOfComponents > 0,
+                  row >= 0, row < picker.numberOfRows(inComponent: 0) else {
+                trace.append("setValue:badRow")
+                return nil
+            }
+            picker.selectRow(row, inComponent: 0, animated: true)
+            picker.delegate?.pickerView?(picker, didSelectRow: row, inComponent: 0)
+            ScreenSnapshotStore.shared.invalidate()
+            trace.append("setValue:pickerRow")
+            return TapOutcome(success: true, via: "setValue(pickerRow)", error: nil,
+                              activatedIdentifier: picker.accessibilityIdentifier,
+                              activatedLabel: "row \(row)", trace: trace.joined(separator: " "))
+
+        case is UITextField, is UITextView:
+            let (ok, err) = Self.performType(on: control, text: value, append: false)
+            trace.append(ok ? "setValue:text" : "setValue:textFailed")
+            return TapOutcome(success: ok, via: ok ? "setValue(text)" : nil, error: err,
+                              activatedIdentifier: control.accessibilityIdentifier,
+                              activatedLabel: value, trace: trace.joined(separator: " "))
+
+        default:
+            return nil
+        }
+    }
+
+    /// Lenient on format, because a macro author writes what they mean rather
+    /// than what a formatter wants.
+    private static func parseDate(_ raw: String, mode: UIDatePicker.Mode) -> Date? {
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime]
+        if let d = iso.date(from: raw) { return d }
+        iso.formatOptions = [.withFullDate, .withTime, .withDashSeparatorInDate, .withColonSeparatorInTime]
+        if let d = iso.date(from: raw) { return d }
+        let patterns = ["yyyy-MM-dd HH:mm", "yyyy-MM-dd'T'HH:mm", "yyyy-MM-dd", "HH:mm", "HH:mm:ss"]
+        for p in patterns {
+            let f = DateFormatter()
+            f.locale = Locale(identifier: "en_US_POSIX")
+            f.dateFormat = p
+            guard let parsed = f.date(from: raw) else { continue }
+            // A bare time means "today at that time" — a time picker set to
+            // 1970 would be technically correct and useless.
+            if p.hasPrefix("HH") {
+                let cal = Calendar.current
+                let t = cal.dateComponents([.hour, .minute, .second], from: parsed)
+                return cal.date(bySettingHour: t.hour ?? 0, minute: t.minute ?? 0,
+                                second: t.second ?? 0, of: Date())
+            }
+            return parsed
+        }
+        return nil
+    }
+
     static func performType(on view: UIView, text: String, append: Bool) -> (success: Bool, error: String?) {
         // At-or-below first, then the enclosing SwiftUI island. A target inside
         // an island is routinely scaffolding with nothing beneath it — a stamp,

@@ -160,6 +160,22 @@ public enum MacroReplayEngine {
             return StepOutcome(success: outcome.success, via: nil, error: outcome.error,
                                detail: detail, resolveMs: resolveMs, durationMs: ms(since: stepStart))
 
+        case .setValue:
+            let resolution = try await pollResolveTap(step.selector, resolver: resolver, resolutionTimeout: resolutionTimeout)
+            let resolveMs = ms(since: stepStart)
+            guard case .resolved(let element) = resolution else {
+                return StepOutcome(success: false, via: nil,
+                                   error: notResolved(step, resolution, resolutionTimeout),
+                                   resolveMs: resolveMs, durationMs: ms(since: stepStart))
+            }
+            let detail = resolver.describe(element)
+            // Parameterised like `.type`, so "set the clock-in to {{start}}"
+            // is a macro you can drive with different values.
+            let value = MacroParameterSubstitution.apply(step.text ?? "", parameters: parameters)
+            let outcome = resolver.performSetValue(element, value: value)
+            return StepOutcome(success: outcome.success, via: outcome.via, error: outcome.error,
+                               detail: detail, resolveMs: resolveMs, durationMs: ms(since: stepStart))
+
         case .scroll:
             let resolution = try await pollResolveScrollView(step.selector, resolver: resolver, resolutionTimeout: resolutionTimeout)
             let resolveMs = ms(since: stepStart)

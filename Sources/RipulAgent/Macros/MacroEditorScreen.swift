@@ -240,6 +240,7 @@ struct MacroEditScreen: View {
     private func icon(for kind: MacroStepKind) -> String {
         switch kind {
         case .tap: return "hand.tap"
+        case .setValue: return "slider.horizontal.3"
         case .type: return "keyboard"
         case .scroll: return "arrow.up.arrow.down"
         case .wait: return "hourglass"
@@ -249,6 +250,8 @@ struct MacroEditScreen: View {
 
     private func summary(for step: MacroStep) -> String {
         switch step.kind {
+        case .setValue:
+            return "= \(step.text ?? "?")"
         case .type:
             return step.text ?? step.selector.compactSummary
         case .scroll:
@@ -449,6 +452,10 @@ private struct MacroStepEditSheet: View {
                 }
 
                 switch step.kind {
+                case .setValue:
+                    Section("Value ({{name}} = filled at call time)") {
+                        TextField("e.g. 09:00, 2026-08-02 09:00, on, 2", text: $payloadText)
+                    }
                 case .type:
                     Section("Text to type ({{name}} = filled at call time)") {
                         TextField("Text", text: $payloadText, axis: .vertical)
