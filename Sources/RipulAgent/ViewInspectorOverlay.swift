@@ -9,7 +9,7 @@ let ripulViewExplorerOverlayTag = 0x5249_5055   // "RIPU"
 
 /// Marketing version of the RipulAgent SDK, surfaced in the inspector's copy output as `sdk: …`
 /// so we can always tell which build is actually running on the device. Bump on every release.
-let ripulSDKVersion = "0.7.45"
+let ripulSDKVersion = "0.7.46"
 
 // MARK: - View Inspector Overlay
 //
@@ -1239,6 +1239,14 @@ class ViewInspectorController: UIView {
         let frameInWindow = highlightView.convert(highlightView.bounds, to: nil)
         let frameInSelf = convert(frameInWindow, from: nil)
         highlightLayer.path = UIBezierPath(roundedRect: frameInSelf, cornerRadius: highlightView.layer.cornerRadius).cgPath
+        // Grey the selection when nothing there answers a tap, so "I can select
+        // this but pressing it will do nothing" is legible at a glance rather
+        // than only in the text. Theme work selects such elements constantly —
+        // a label, a background — and they are perfectly valid selections.
+        let inert = currentActionable == nil
+        highlightLayer.strokeColor = (inert ? UIColor.systemGray : UIColor.systemPink).cgColor
+        highlightLayer.fillColor = (inert ? UIColor.systemGray : UIColor.systemPink)
+            .withAlphaComponent(0.12).cgColor
 
         // The second box, only when a tap would hit something else.
         if let actionable = currentActionable, actionable !== highlightView, actionable !== target {
@@ -1250,8 +1258,13 @@ class ViewInspectorController: UIView {
         }
 
         // Inspect — pass the resolved identifier from spatial lookup
+        // ALWAYS stated, because silence used to mean two opposite things:
+        // "this is pressable and it's what you selected" and "nothing here is
+        // pressable at all" both rendered as no line. Three states, three
+        // answers.
         let actionableSummary: String? = {
-            guard let a = currentActionable, a !== target else { return nil }
+            guard let a = currentActionable else { return "none — nothing here responds to a tap" }
+            if a === target { return "this element" }
             let id = ScreenElementFinder.identifier(of: a).map { " [\($0)]" } ?? ""
             return "\(type(of: a))\(id)"
         }()
@@ -1309,8 +1322,15 @@ class ViewInspectorController: UIView {
     /// you pointed at — then a bounded climb, stopping before any scrolling
     /// container so it cannot escape into unrelated UI.
     private func actionableTarget(for element: UIView, at windowPoint: CGPoint) -> UIView? {
-        if isActuatable(element) { return element }
+        // INSIDE first, even when the element itself is actionable. A panel can
+        // carry its own disclosure gesture while containing a text field, and
+        // short-circuiting on the container meant pointing anywhere in the
+        // panel pressed the panel — collapsing it instead of entering the
+        // field. The tightest actionable thing at the point wins; the container
+        // is the answer only where nothing more specific sits under the cursor,
+        // which is exactly the behaviour a finger has.
         if let inside = actuatableView(in: element, at: windowPoint) { return inside }
+        if isActuatable(element) { return element }
         var cur = element.superview
         var hops = 0
         while let v = cur, hops < 6 {
