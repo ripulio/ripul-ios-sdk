@@ -9,7 +9,7 @@ let ripulViewExplorerOverlayTag = 0x5249_5055   // "RIPU"
 
 /// Marketing version of the RipulAgent SDK, surfaced in the inspector's copy output as `sdk: …`
 /// so we can always tell which build is actually running on the device. Bump on every release.
-let ripulSDKVersion = "0.7.41"
+let ripulSDKVersion = "0.7.42"
 
 // MARK: - View Inspector Overlay
 //
@@ -1027,7 +1027,14 @@ class ViewInspectorController: UIView {
     /// look identical without it.
     private func fireHighlightedElement() {
         pendingTapFire = nil
-        guard let element = currentTokenAnchor ?? currentTarget else { return }
+        // Press the SELECTED element, not the stamp. The token anchor is a
+        // 0.01-alpha, non-interactive marker view spanning whatever it labels,
+        // so preferring it handed the ladder something unpressable — every rung
+        // declined, and the point derived from that marker went through the
+        // coordinate conversion that silently no-ops inside a SwiftUI island.
+        // "Not tappable by any path" for a field that focuses fine when it is
+        // the target itself.
+        guard let element = currentTarget ?? currentTokenAnchor else { return }
         UISelectionFeedbackGenerator().selectionChanged()
         let frameInSelf = convert(element.convert(element.bounds, to: nil), from: nil)
         // Where the reticule actually is, in the HOST window's space. An
@@ -1165,8 +1172,15 @@ class ViewInspectorController: UIView {
         currentTarget = target
         let hitLeaf = (target !== leaf) ? leaf : nil
 
-        // Highlight the registry match's frame if available, otherwise the inspected element
-        let highlightView = match?.view ?? target
+        // Outline what was SELECTED, not the stamp that helped resolve it. The
+        // stamp is frequently a whole panel (`addShift.notes.panel` is 360×93
+        // around a 284×44 field), so preferring it drew the box round the
+        // container while the readout named the field — the reticule and the
+        // text disagreeing about which element you had. Whatever is named,
+        // outlined and pressed must be one element or none of them can be
+        // trusted. The stamp keeps its real job: `tokenAnchorView`, which is
+        // what the Design-token section reads.
+        let highlightView = target
         let frameInWindow = highlightView.convert(highlightView.bounds, to: nil)
         let frameInSelf = convert(frameInWindow, from: nil)
         highlightLayer.path = UIBezierPath(roundedRect: frameInSelf, cornerRadius: highlightView.layer.cornerRadius).cgPath
@@ -3138,8 +3152,12 @@ public struct ViewInspectorOverlay: View {
         // `tap.point` is the whole reason this presses the right thing: see
         // MacroRecorder.record. Recording without it pressed the centre of the
         // island instead of the row under the finger.
-        guard let result = MacroRecorder.record(action, on: tap.view, at: tap.point) else {
-            recordingError = "\(action.rawValue) isn't available for \(MacroRecorder.describeTarget(tap.view))."
+        // `targetView`, not `view`: the payload's `view` is deliberately the
+        // token anchor so a host's theme action reads the same element the Edit
+        // tab does — that contract stays. Recording wants the element that was
+        // SELECTED and can actually be pressed, which is `targetView`.
+        guard let result = MacroRecorder.record(action, on: tap.targetView, at: tap.point) else {
+            recordingError = "\(action.rawValue) isn't available for \(MacroRecorder.describeTarget(tap.targetView))."
             return
         }
         if let error = result.error {
