@@ -520,13 +520,28 @@ enum ScreenActuationEngine {
         // empty space.
         if view.window == nil { trace.append("detached") }
         if let control = view as? UIControl {
-            control.sendActions(for: .touchUpInside)
-            ScreenSnapshotStore.shared.invalidate()
-            trace.append("control:fired")
-            return TapOutcome(success: true, via: "uicontrol", error: nil,
-                              trace: trace.joined(separator: " "))
+            // Only claim this path if something is actually WIRED to the event.
+            // SwiftUI ships its own UIControl shells — `HostingUIButton` — that
+            // handle the press internally rather than through target/action, so
+            // `sendActions` is a silent no-op on them. Firing regardless made
+            // the ladder stop at path 1 and report `via uicontrol` for a button
+            // that did nothing, which is worse than failing: it hides the
+            // accessibility activation below that would have worked, and it
+            // tells the caller the tap landed.
+            let wired = control.allTargets.contains { target in
+                control.actions(forTarget: target, forControlEvent: .touchUpInside)?.isEmpty == false
+            }
+            if wired {
+                control.sendActions(for: .touchUpInside)
+                ScreenSnapshotStore.shared.invalidate()
+                trace.append("control:fired")
+                return TapOutcome(success: true, via: "uicontrol", error: nil,
+                                  trace: trace.joined(separator: " "))
+            }
+            trace.append("control:noTargets(\(type(of: control)))")
+        } else {
+            trace.append("control:no")
         }
-        trace.append("control:no")
         if let el = TapElementTool.activateAccessibilityElement(in: view, id: matchId, text: matchText) {
             ScreenSnapshotStore.shared.invalidate()
             trace.append("a11y:activated")
