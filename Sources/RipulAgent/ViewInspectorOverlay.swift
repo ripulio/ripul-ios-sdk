@@ -9,7 +9,7 @@ let ripulViewExplorerOverlayTag = 0x5249_5055   // "RIPU"
 
 /// Marketing version of the RipulAgent SDK, surfaced in the inspector's copy output as `sdk: …`
 /// so we can always tell which build is actually running on the device. Bump on every release.
-let ripulSDKVersion = "0.7.51"
+let ripulSDKVersion = "0.7.52"
 
 // MARK: - View Inspector Overlay
 //
@@ -3352,7 +3352,12 @@ public struct ViewInspectorOverlay: View {
         if action == .type {
             // Deferred: the alert needs to be presented AFTER this dialog
             // dismisses, and it needs the target view kept around.
-            typeTextTarget = tap.view
+            // The ACTIONABLE view, for the same reason the tap path uses it:
+            // `tap.view` is the token anchor — a 0.01-alpha stamp with no text
+            // input anywhere beneath it, which is exactly the "no text input at
+            // or below it" refusal. Fixing the tap consumers and leaving this
+            // one behind is how the same bug came back wearing a different hat.
+            typeTextTarget = tap.actionableView ?? tap.targetView
             typeTextInput = ""
             showTypeTextAlert = true
             return

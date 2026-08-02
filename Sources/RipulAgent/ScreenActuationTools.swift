@@ -950,8 +950,16 @@ enum ScreenActuationEngine {
     /// real typing would. `nil` return means no text-input view was found at
     /// or below `view`.
     static func performType(on view: UIView, text: String, append: Bool) -> (success: Bool, error: String?) {
-        guard let input = TypeTextTool.textInput(in: view) else {
-            return (false, "Element found but no text input at or below it. Match the field itself (role=\"field\", or its accessibility id).")
+        // At-or-below first, then the enclosing SwiftUI island. A target inside
+        // an island is routinely scaffolding with nothing beneath it — a stamp,
+        // an `_UIInheritedView` — while the real field is a sibling branch
+        // within the same hosting view. The tap ladder already reaches it that
+        // way (the focus path); typing refused instead, which made "type into
+        // this field" fail on a field the explorer had selected correctly.
+        let input = TypeTextTool.textInput(in: view)
+            ?? Self.hostingAncestor(of: view).flatMap { TypeTextTool.textInput(in: $0) }
+        guard let input else {
+            return (false, "Element found but no text input at or below it, nor anywhere in its SwiftUI island. Match the field itself (role=\"field\", or its accessibility id).")
         }
         _ = input.view.becomeFirstResponder()
         let newText = append ? (input.currentText + text) : text
