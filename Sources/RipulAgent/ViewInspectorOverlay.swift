@@ -9,7 +9,7 @@ let ripulViewExplorerOverlayTag = 0x5249_5055   // "RIPU"
 
 /// Marketing version of the RipulAgent SDK, surfaced in the inspector's copy output as `sdk: …`
 /// so we can always tell which build is actually running on the device. Bump on every release.
-let ripulSDKVersion = "0.7.44"
+let ripulSDKVersion = "0.7.45"
 
 // MARK: - View Inspector Overlay
 //
@@ -224,6 +224,15 @@ struct InspectedView {
     let hitLeafClass: String?          // the actual view under the finger when it differs from the
                                        // inspected element (i.e. selection was promoted to a control)
     let registryStamps: [String]       // ALL .uiKitIdentifier stamps under the tap point, front-to-back
+    /// The tightest thing at this point that can actually be PRESSED, when it
+    /// isn't the selected element itself. Two masters, two answers: the theme
+    /// tools want the closest element whether or not it is interactive, and
+    /// actuation wants the closest thing a tap would drive. Collapsing those
+    /// into one value is what made a panel highlight while a stamp got pressed
+    /// — every attempt to satisfy one consumer quietly stole from the other.
+    /// Surfaced whenever they diverge so the difference is visible rather than
+    /// deduced from the aftermath.
+    let actionableSummary: String?
                                        // (first = the resolved one) — makes nested sub-element ids
                                        // discoverable from a single tap on a SwiftUI row
     let registryMatchView: UIView?     // the resolved stamp's own view — carries the declared token
@@ -241,7 +250,7 @@ struct InspectedView {
         let shadowOpacity: Float
     }
 
-    static func inspect(_ view: UIView, depth: Int = 0, resolvedIdentifier: String? = nil, hitLeaf: UIView? = nil, registryStamps: [String] = [], registryMatchView: UIView? = nil) -> InspectedView {
+    static func inspect(_ view: UIView, depth: Int = 0, resolvedIdentifier: String? = nil, hitLeaf: UIView? = nil, registryStamps: [String] = [], registryMatchView: UIView? = nil, actionableSummary: String? = nil) -> InspectedView {
         let rawClassName = String(describing: type(of: view))
         // A tap that resolves a SwiftUI stamp often lands on the stamp's own host container —
         // "UIKitPlatformViewHost<…UIKitIdentifierStamper>" is inspector plumbing, not the
@@ -290,6 +299,7 @@ struct InspectedView {
             enclosingControl: nearestControl(of: view, excluding: className),
             hitLeafClass: hitLeaf.map { String(describing: type(of: $0)) },
             registryStamps: registryStamps,
+            actionableSummary: actionableSummary,
             registryMatchView: registryMatchView
         )
     }
@@ -682,6 +692,10 @@ struct InspectedView {
         // at a glance, not a bare class with the id buried further down.
         let idBadge = (accessibilityId?.isEmpty == false) ? " [\(accessibilityId!)]" : ""
         var lines = ["class: \(className)\(idBadge)", "sdk: \(ripulSDKVersion)"]
+        // What a tap would actually drive, when that is NOT the selected
+        // element. Printed second so it reads as a warning: you have selected
+        // one thing and pressing will hit another.
+        if let actionable = actionableSummary { lines.append("actionable: \(actionable)") }
         if let leaf = hitLeafClass { lines.append("tapped: \(leaf)") }   // actual view under the finger
         if let p = propertyRef { lines.append("property: \(p)") }
         if let c = container { lines.append("container: \(c)") }
@@ -866,6 +880,12 @@ class ViewInspectorController: UIView {
     // Double-tap detection state
     private var currentTarget: UIView?
     private var currentTokenAnchor: UIView?
+    /// What a tap will actually drive — see `actionableTarget`. Distinct from
+    /// `currentTarget`, which is what is selected, outlined and themed.
+    private var currentActionable: UIView?
+    /// Second outline, drawn only when the actionable view differs from the
+    /// selected one, so a divergence is visible on screen and not just in text.
+    private let actionableLayer = CAShapeLayer()
     private var lastTapTime: TimeInterval?
     private var lastTapPosition: CGPoint?
     private let doubleTapInterval: TimeInterval = 0.45
@@ -900,6 +920,14 @@ class ViewInspectorController: UIView {
         highlightLayer.strokeColor = UIColor.systemPink.cgColor
         highlightLayer.lineWidth = 2
         layer.addSublayer(highlightLayer)
+        // Dashed cyan, no fill: unmistakably a different statement from the
+        // pink selection box. Only ever drawn when a tap would hit something
+        // other than what is selected.
+        actionableLayer.fillColor = UIColor.clear.cgColor
+        actionableLayer.strokeColor = UIColor.systemTeal.cgColor
+        actionableLayer.lineWidth = 2
+        actionableLayer.lineDashPattern = [5, 3]
+        layer.addSublayer(actionableLayer)
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -944,7 +972,8 @@ class ViewInspectorController: UIView {
                 let hostPoint = (hostWindow ?? window).map { convert(cursorPos, to: $0) } ?? cursorPos
                 let tap = RipulElementTap(view: element,
                                           targetView: currentTarget ?? element,
-                                          point: hostPoint)
+                                          point: hostPoint,
+                                          actionableView: currentActionable)
                 NSLog("[RipulViewExplorer] element tap anchor=%@ target=%@ action=%d",
                       String(describing: type(of: element)),
                       String(describing: type(of: tap.targetView)), onElementTap != nil)
@@ -1034,7 +1063,9 @@ class ViewInspectorController: UIView {
         // coordinate conversion that silently no-ops inside a SwiftUI island.
         // "Not tappable by any path" for a field that focuses fine when it is
         // the target itself.
-        guard let element = currentTarget ?? currentTokenAnchor else { return }
+        // The ACTIONABLE view — what a tap drives — falling back to the
+        // selection when they're the same or nothing there is pressable.
+        guard let element = currentActionable ?? currentTarget ?? currentTokenAnchor else { return }
         UISelectionFeedbackGenerator().selectionChanged()
         let frameInSelf = convert(element.convert(element.bounds, to: nil), from: nil)
         // Where the reticule actually is, in the HOST window's space. An
@@ -1164,21 +1195,18 @@ class ViewInspectorController: UIView {
         // Guarded on the target being unactuatable so a correct pick is never
         // second-guessed, and scoped to actuatable views so a full-screen
         // passthrough layer can't win on area.
-        // It may only ever REFINE the pick, never widen it. `isActuatable` is
-        // true of any view carrying a tap recognizer, and a keyboard-dismiss
-        // gesture on a view controller's root view is full-screen and sits
-        // under every point — so for anything unactuatable (a panel, a label,
-        // a background: most of what the theme tools select) the "tightest
-        // actuatable view" was the root view, and the element's identity became
-        // whatever diagnostic string was parked on it. Requiring the candidate
-        // to be strictly tighter keeps the useful case (a 284×44 text view
-        // inside a 360×93 container) and refuses the harmful one.
-        if !isActuatable(target), let window = hostWindow ?? self.window,
-           let pressable = actuatableView(in: window, at: windowPoint),
-           pressable.bounds.width * pressable.bounds.height
-             < target.bounds.width * target.bounds.height {
-            target = pressable
-        }
+        // TWO answers, not one compromise. `target` stays the closest ELEMENT —
+        // interactivity irrelevant — because that is what the theme tools
+        // select and what the outline and identity describe. Alongside it sits
+        // the closest ACTIONABLE view, which is what a tap will drive. They are
+        // frequently the same object; when they aren't, both are reported and
+        // the user can see the discrepancy instead of discovering it by having
+        // the wrong thing pressed.
+        //
+        // Every fix from 0.7.42 to 0.7.44 was this one value being pulled
+        // between those two masters, and each one satisfied a consumer by
+        // taking from another.
+        currentActionable = actionableTarget(for: target, at: windowPoint)
 
         currentTarget = target
         let hitLeaf = (target !== leaf) ? leaf : nil
@@ -1212,8 +1240,22 @@ class ViewInspectorController: UIView {
         let frameInSelf = convert(frameInWindow, from: nil)
         highlightLayer.path = UIBezierPath(roundedRect: frameInSelf, cornerRadius: highlightView.layer.cornerRadius).cgPath
 
+        // The second box, only when a tap would hit something else.
+        if let actionable = currentActionable, actionable !== highlightView, actionable !== target {
+            let f = convert(actionable.convert(actionable.bounds, to: nil), from: nil)
+            actionableLayer.path = UIBezierPath(roundedRect: f,
+                                                cornerRadius: actionable.layer.cornerRadius).cgPath
+        } else {
+            actionableLayer.path = nil
+        }
+
         // Inspect — pass the resolved identifier from spatial lookup
-        let info = InspectedView.inspect(target, depth: viewDepth(target), resolvedIdentifier: match?.identifier, hitLeaf: hitLeaf, registryStamps: stampMatches.map(\.identifier), registryMatchView: match?.view)
+        let actionableSummary: String? = {
+            guard let a = currentActionable, a !== target else { return nil }
+            let id = ScreenElementFinder.identifier(of: a).map { " [\($0)]" } ?? ""
+            return "\(type(of: a))\(id)"
+        }()
+        let info = InspectedView.inspect(target, depth: viewDepth(target), resolvedIdentifier: match?.identifier, hitLeaf: hitLeaf, registryStamps: stampMatches.map(\.identifier), registryMatchView: match?.view, actionableSummary: actionableSummary)
         currentTarget = target
         currentTokenAnchor = info.tokenAnchorView
         onInspect?(info)
@@ -1253,6 +1295,32 @@ class ViewInspectorController: UIView {
         if v is UITextInput, v.canBecomeFirstResponder { return true }
         if v.gestureRecognizers?.contains(where: { $0.isEnabled && $0 is UITapGestureRecognizer }) == true { return true }
         return false
+    }
+
+    /// The view a tap at `windowPoint` would actually drive, given that
+    /// `element` is what the user selected. Nil when nothing there is pressable
+    /// — which is an honest answer worth reporting, not a failure to hide.
+    ///
+    /// SCOPED, deliberately. Searching the whole window for "the tightest
+    /// actionable view" finds a view controller's full-screen keyboard-dismiss
+    /// recognizer whenever nothing better exists, so every unpressable element
+    /// resolved to the root view and inherited its identity. The search is the
+    /// element's own subtree first — the real control usually lives inside what
+    /// you pointed at — then a bounded climb, stopping before any scrolling
+    /// container so it cannot escape into unrelated UI.
+    private func actionableTarget(for element: UIView, at windowPoint: CGPoint) -> UIView? {
+        if isActuatable(element) { return element }
+        if let inside = actuatableView(in: element, at: windowPoint) { return inside }
+        var cur = element.superview
+        var hops = 0
+        while let v = cur, hops < 6 {
+            if isInspectorOwnView(v) { break }
+            if v is UIScrollView || v is UIWindow { break }
+            if isActuatable(v) { return v }
+            cur = v.superview
+            hops += 1
+        }
+        return nil
     }
 
     /// The tightest actuatable view under `windowPoint`, anywhere in the window.
@@ -3183,7 +3251,8 @@ public struct ViewInspectorOverlay: View {
         // token anchor so a host's theme action reads the same element the Edit
         // tab does — that contract stays. Recording wants the element that was
         // SELECTED and can actually be pressed, which is `targetView`.
-        guard let result = MacroRecorder.record(action, on: tap.targetView, at: tap.point) else {
+        guard let result = MacroRecorder.record(action, on: tap.actionableView ?? tap.targetView,
+                                                at: tap.point) else {
             recordingError = "\(action.rawValue) isn't available for \(MacroRecorder.describeTarget(tap.targetView))."
             return
         }

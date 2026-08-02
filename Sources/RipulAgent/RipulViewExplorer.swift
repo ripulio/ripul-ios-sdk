@@ -26,10 +26,17 @@ public struct RipulElementTap {
     /// nothing about the target.
     public let point: CGPoint
 
-    public init(view: UIView, targetView: UIView, point: CGPoint) {
+    /// The view a tap would actually drive, when that differs from the selected
+    /// element — a control inside it, or an interactive ancestor. Nil when the
+    /// selection is itself pressable, or when nothing there is. Macro recording
+    /// targets this; the theme actions keep using `view`.
+    public let actionableView: UIView?
+
+    public init(view: UIView, targetView: UIView, point: CGPoint, actionableView: UIView? = nil) {
         self.view = view
         self.targetView = targetView
         self.point = point
+        self.actionableView = actionableView
     }
 }
 
