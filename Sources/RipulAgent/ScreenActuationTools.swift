@@ -254,6 +254,23 @@ extension ScreenElementFinder {
     /// visible text (case-insensitive substring). Returns in walk (z) order.
     /// Kept for simple id/text lookups (wait_for_element polls); the actuation
     /// tools use the predicate-based `find(_:within:)` below.
+    /// Matches ranked MOST SPECIFIC FIRST, which for a shared identifier means
+    /// the control rather than the scaffolding that adopted its name.
+    ///
+    /// An identifier propagates in BOTH directions and tree position cannot tell
+    /// you which. SwiftUI pushes a `.uiKitIdentifier` DOWN onto descendants, so
+    /// there the outermost view is the owner — that is the rule 0.7.53 encoded.
+    /// UIKit hosting containers adopt their content's identifier UPWARD, so
+    /// there the outermost view is a full-screen wrapper and the innermost is
+    /// the owner. Six views carried `ripul.conformance.uikit.button`, the
+    /// outermost being a 440x894 UIViewControllerWrapperView; taking the first
+    /// match aimed the reticule at the middle of the SCREEN, 254pt below the
+    /// 408x44 button. Every rung then correctly reported nothing actionable
+    /// there, including hitTest.
+    ///
+    /// So rank by what the view IS, not where it sits: a control or a view with
+    /// its own text beats a container, and a tight frame beats a loose one. Both
+    /// propagation directions land on the same answer under that rule.
     static func find(id: String?, text: String?) -> [Match] {
         guard let window = hostWindow() else { return [] }
         // The window — presented content is a sibling of the root controller's
@@ -261,9 +278,14 @@ extension ScreenElementFinder {
         let root: UIView = window
         var matches: [Match] = []
         walk(root) { view in
-            let vid = identifier(of: view)
+            // Match on the RAW identifier, not `identifier(of:)`. That helper
+            // deliberately suppresses a borrowed id so the readout never names
+            // an ancestor's identity as the element's own — right for display,
+            // fatal for lookup, because it suppresses exactly the innermost
+            // view that owns the name when propagation ran upward.
+            let vid = view.accessibilityIdentifier
             let vtext = InspectedView.textContent(of: view)
-            if let id, !id.isEmpty, let vid {
+            if let id, !id.isEmpty, let vid, !vid.isEmpty {
                 if vid == id || vid.caseInsensitiveCompare(id) == .orderedSame {
                     matches.append(Match(view: view, window: window, id: vid, text: vtext))
                 }
@@ -272,7 +294,29 @@ extension ScreenElementFinder {
                 matches.append(Match(view: view, window: window, id: vid, text: vtext))
             }
         }
-        return matches
+        // Most specific first. Stable, so equally-specific matches keep tree
+        // order and an `nth` selector still means what it meant.
+        return matches.enumerated()
+            .sorted { a, b in
+                let sa = specificity(of: a.element.view), sb = specificity(of: b.element.view)
+                if sa != sb { return sa > sb }
+                let fa = a.element.view.bounds.width * a.element.view.bounds.height
+                let fb = b.element.view.bounds.width * b.element.view.bounds.height
+                if fa != fb { return fa < fb }
+                return a.offset < b.offset
+            }
+            .map(\.element)
+    }
+
+    /// How strongly a view claims to BE the thing an identifier names. A control
+    /// is the thing; a view with its own text is probably the thing; a hosting
+    /// container that merely adopted the name is not.
+    private static func specificity(of view: UIView) -> Int {
+        if view is UIControl { return 3 }
+        if view is UITextInput { return 3 }
+        if let t = InspectedView.textContent(of: view), !t.isEmpty { return 2 }
+        if view.isAccessibilityElement { return 1 }
+        return 0
     }
 
     private static func walk(_ view: UIView, _ visit: (UIView) -> Void) {
