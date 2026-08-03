@@ -778,8 +778,27 @@ enum ScreenActuationEngine {
         //     and the strict climb above refuses a lone unnamed element.
         //     Deliberately last: a menu with rows has many elements, so this
         //     cannot fire there and steal from the point path.
-        if let host = hostRoot as UIView?, host !== view,
-           let el = TapElementTool.activateAccessibilityElement(in: host, id: matchId, text: matchText) {
+        //
+        //     LOCALITY IS REQUIRED. "The only element in the island" was safe
+        //     only by accident: in a List every row is its own hosting island,
+        //     so the lone element was always the row pointed at. On a screen
+        //     that is ONE island — the common SwiftUI shape — the island
+        //     publishes one element and this rule pressed it from anywhere.
+        //     Eight archetypes at y=439 through y=639 all fired the same button
+        //     at y=651. A rule with no reference to the point cannot be part of
+        //     a point-resolution ladder; being last does not make it safe, only
+        //     late. So the lone element must still be level with where the user
+        //     actually pointed.
+        let islandY = windowPoint.map { Self.screenPoint(for: view, windowPoint: $0).y }
+        if hostRoot !== view,
+           let el = TapElementTool.activateAccessibilityElement(
+               in: hostRoot, id: matchId, text: matchText,
+               accept: { candidate in
+                   guard let islandY else { return true }
+                   let f = candidate.accessibilityFrame
+                   guard f.height > 0 else { return true }
+                   return f.minY - 8 <= islandY && islandY <= f.maxY + 8
+               }) {
             ScreenSnapshotStore.shared.invalidate()
             trace.append("a11yIsland:activated(\(el.accessibilityLabel ?? "unnamed"))")
             return TapOutcome(success: true, via: "accessibilityElement(island)", error: nil,

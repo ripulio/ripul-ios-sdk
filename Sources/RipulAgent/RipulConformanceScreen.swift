@@ -169,6 +169,10 @@ struct RipulConformanceView: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                         .uiKitIdentifier(RipulConformance.prefix + "swiftui.nested")
                     }
+                    // Needs an explicit height: a UIViewControllerRepresentable
+                    // has no intrinsic size in a VStack, so it measured zero and
+                    // the sweep reported this archetype as not-on-screen.
+                    .frame(height: 44)
                 }
                 if !log.fired.isEmpty {
                     Text("Activations").font(.headline)
