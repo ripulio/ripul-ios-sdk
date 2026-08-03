@@ -5761,6 +5761,88 @@ public final class AgentBridge: NSObject, ObservableObject {
         }
     }
 
+    /// Purge THIS machine's entire local state for a chat: actions (memory +
+    /// KV), the SessionChannel DO, thread/agent-run data, every per-chat CLI
+    /// bookkeeping key (cliSessionMap / cliImportedUuids / cliWindow /
+    /// cliSeenCount), and the tab itself.
+    ///
+    /// Exists because "Remove from Ripul" is DEVICE-LOCAL. Run on a viewer it
+    /// clears the viewer and empties the server store, but the owning host keeps
+    /// its bookkeeping and in-memory actions — and its own server-store repair
+    /// then refills the server from that memory within one catch-up cycle. So a
+    /// viewer-side remove cannot leave the host cold, and the next open takes
+    /// the idempotency-guard skip instead of a real import.
+    ///
+    /// `keepRemote: true` is always passed: this forgets Ripul's state only and
+    /// never archives or touches the underlying CLI session's JSONL.
+    ///
+    /// DESTRUCTIVE on this machine. Purging the chat a running CLI session lives
+    /// in will disrupt that session.
+    @available(iOS 15.0, macOS 13.0, *)
+    public func forgetChat(tabId: String) async -> [String: Any]? {
+        guard let webView else { return nil }
+        do {
+            let result = try await webView.callAsyncJavaScript(
+                """
+                if (!window.__ripulDeleteSession) return {success:false, error:'\(Self.callableMissingError)'};
+                return await window.__ripulDeleteSession(tabId, null, null, true);
+                """,
+                arguments: ["tabId": tabId],
+                contentWorld: .page
+            )
+            return result as? [String: Any]
+        } catch {
+            NSLog("[AgentBridge] forgetChat(%@) error: %@", tabId, error.localizedDescription)
+            return nil
+        }
+    }
+
+    /// Read the remotely-settable host settings (an allowlist maintained on the
+    /// web side, not the whole UserSettings object).
+    @available(iOS 15.0, macOS 13.0, *)
+    public func getHostSettings() async -> [String: Any]? {
+        guard let webView else { return nil }
+        do {
+            let result = try await webView.callAsyncJavaScript(
+                """
+                if (!window.__ripulGetHostSettings) return {success:false, error:'\(Self.callableMissingError)'};
+                return await window.__ripulGetHostSettings();
+                """,
+                contentWorld: .page
+            )
+            return result as? [String: Any]
+        } catch {
+            NSLog("[AgentBridge] getHostSettings error: %@", error.localizedDescription)
+            return nil
+        }
+    }
+
+    /// Set one allowlisted host setting. `value` must be a JSON-representable
+    /// scalar (Bool / NSNumber); the web side rejects unknown keys and type
+    /// mismatches rather than coercing them.
+    ///
+    /// Chief use: turning `disableLogging` back OFF. ConsoleWrapper no-ops every
+    /// console.* while it is on, which starves the very log buffer you would
+    /// otherwise use to diagnose the problem.
+    @available(iOS 15.0, macOS 13.0, *)
+    public func setHostSetting(key: String, value: Any) async -> [String: Any]? {
+        guard let webView else { return nil }
+        do {
+            let result = try await webView.callAsyncJavaScript(
+                """
+                if (!window.__ripulSetHostSetting) return {success:false, error:'\(Self.callableMissingError)'};
+                return await window.__ripulSetHostSetting(key, value);
+                """,
+                arguments: ["key": key, "value": value],
+                contentWorld: .page
+            )
+            return result as? [String: Any]
+        } catch {
+            NSLog("[AgentBridge] setHostSetting(%@) error: %@", key, error.localizedDescription)
+            return nil
+        }
+    }
+
     /// Get the current relay host status from the web app.
     @available(iOS 15.0, macOS 13.0, *)
     public func getHostStatus() async -> [String: Any]? {

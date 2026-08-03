@@ -311,34 +311,50 @@ extension ScreenElementFinder {
             if vid?.isEmpty ?? true { vid = UIKitIdentifierRegistry.shared.identifier(for: view) }
             if vid?.isEmpty ?? true { vid = InspectedView.accessibilityIdInTree(view) }
             let vtext = InspectedView.textContent(of: view)
-            if let id, !id.isEmpty, let vid, !vid.isEmpty,
-               vid == id || vid.caseInsensitiveCompare(id) == .orderedSame {
-                matches.append(Match(view: view, window: window, id: vid, text: vtext))
-            } else if let id, !id.isEmpty, isHostingView(view),
-                      let el = accessibilityElement(withId: id, in: view) {
-                // The CONTAINMENT rung. The three rungs above all ask "what is
-                // THIS view's id?" — a projection. For a SwiftUI control
-                // identified with a plain `.accessibilityIdentifier` the id
-                // exists only on the accessibility ELEMENT, and its host is
-                // the whole island, so the projection answers with whichever
-                // element happens to come first and never with the one being
-                // looked up. Measured: the plain-id Button was unfindable by
-                // id while `wait_for_element text=` located the same row in
-                // 7ms. That breaks `tap_element id=`, `wait_for_element id=`
-                // and macro replay by id for any client that identified its
-                // controls the plain SwiftUI way — i.e. any client that never
-                // imported `.uiKitIdentifier`.
-                //
-                // So ask the containment question instead: does this island
-                // publish an element with the id we want? Gated to hosting
-                // views because that is where SwiftUI publishes, which also
-                // keeps this off the hot path for ordinary UIKit trees.
-                matches.append(Match(view: view, window: window, id: id,
-                                     text: el.accessibilityLabel ?? vtext,
-                                     elementFrame: windowRect(fromScreen: el.accessibilityFrame, in: window)))
+            if let id, !id.isEmpty, let vid, !vid.isEmpty {
+                if vid == id || vid.caseInsensitiveCompare(id) == .orderedSame {
+                    matches.append(Match(view: view, window: window, id: vid, text: vtext))
+                }
             } else if let text, !text.isEmpty, let vtext, !vtext.isEmpty,
                       vtext.range(of: text, options: .caseInsensitive) != nil {
                 matches.append(Match(view: view, window: window, id: vid, text: vtext))
+            }
+        }
+
+        // The CONTAINMENT rung — a STRICT FALLBACK, and it has to be.
+        //
+        // The rungs above all ask "what is THIS view's id?" — a projection.
+        // For a SwiftUI control identified with a plain
+        // `.accessibilityIdentifier` the id exists only on the accessibility
+        // ELEMENT, whose host is the whole island, so the projection answers
+        // with whichever element comes first and never the one being looked
+        // up. Measured: the plain-id Button was unfindable by id while
+        // `wait_for_element text=` located the same row in 7ms. That breaks
+        // `tap_element id=`, `wait_for_element id=` and macro replay by id for
+        // any client that never imported `.uiKitIdentifier`.
+        //
+        // Running it INLINE alongside the view rungs — the first cut — was a
+        // regression, and the sweep caught it: coverage fell 12→8. Published
+        // elements outranked the correct, tighter view match (blanket
+        // specificity 3), and sorting by ascending area put ZERO-area elements
+        // first, so three UIKit rows that had passed reported `not-on-screen`
+        // and the split control re-resolved to (0,0 440×956) — the whole
+        // screen — which silently broke the anchor proof by making every point
+        // "inside" it.
+        //
+        // So: only consult it when the view planes found NOTHING, and refuse a
+        // degenerate frame. A rung that adds reach must never be able to
+        // outrank a correct answer — the same locality lesson as path 2d, in a
+        // different plane.
+        if matches.isEmpty, let id, !id.isEmpty {
+            walk(root) { view in
+                guard matches.isEmpty, isHostingView(view),
+                      let el = accessibilityElement(withId: id, in: view) else { return }
+                let f = windowRect(fromScreen: el.accessibilityFrame, in: window)
+                guard f.width > 0, f.height > 0 else { return }
+                matches.append(Match(view: view, window: window, id: id,
+                                     text: el.accessibilityLabel ?? InspectedView.textContent(of: view),
+                                     elementFrame: f))
             }
         }
         // Most specific first. Stable, so equally-specific matches keep tree
