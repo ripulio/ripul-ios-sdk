@@ -839,10 +839,30 @@ enum ScreenActuationEngine {
                 // candidate's NEAREST EDGE, which is zero for anything the
                 // point is level with and grows only as you leave it.
                 let gap = max(0, max(f.minX - windowPoint.x, windowPoint.x - f.maxX))
-                guard gap <= 96 else { continue }
                 candidates.append((cur, gap))
             }
             candidates.sort { $0.1 < $1.1 }
+            // AMBIGUITY is the danger, not distance. A distance cap gets this
+            // wrong both ways: 300pt pressed a UISwitch 148pt away in the wrong
+            // row, and 96pt then refused a leading-aligned switch 119pt from the
+            // centre of its OWN row — the very case the band exists for. Neither
+            // number is discoverable, because "how far is too far" depends
+            // entirely on the layout.
+            //
+            // What actually distinguishes them: when the point is level with one
+            // control, that control is what was meant however wide the row is.
+            // When it is level with several, no distance argument can say which,
+            // and pressing the nearest is a guess that has already been wrong.
+            // So: reach anything the point is level with, and refuse when the
+            // band is ambiguous unless one candidate is clearly nearest.
+            let nearest = candidates.first?.1 ?? 0
+            let contested = candidates.dropFirst().contains { $0.1 < nearest + 44 }
+            if contested, nearest > 8 {
+                let names = candidates.prefix(3)
+                    .map { "\(type(of: $0.0))@\(Int($0.1))" }.joined(separator: "|")
+                trace.append("viewBand:ambiguous(\(candidates.count)){\(names)}")
+                candidates = []
+            }
             for (candidate, dx) in candidates.prefix(3) {
                 guard Self.actuateControl(candidate) else { continue }
                 ScreenSnapshotStore.shared.invalidate()

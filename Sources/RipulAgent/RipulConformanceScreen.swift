@@ -126,8 +126,10 @@ struct RipulConformanceView: View {
 
     var body: some View {
         NavigationStack {
-            List {
-                Section("UIKit") {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                Group {
+                    Text("UIKit").font(.headline)
                     RipulUIKitButtonRow(id: RipulConformance.prefix + "uikit.button") { note("uikit.button") }
                         .frame(height: 44)
                     RipulUIKitTextFieldRow(id: RipulConformance.prefix + "uikit.textfield", text: $uikitText)
@@ -137,35 +139,44 @@ struct RipulConformanceView: View {
                     RipulUIKitSwitchRow(id: RipulConformance.prefix + "uikit.switch")
                         .frame(height: 44)
                 }
-                Section("SwiftUI") {
+                Group {
+                    Text("SwiftUI").font(.headline)
                     Button("SwiftUI Button") { note("swiftui.button") }
+                        .frame(maxWidth: .infinity, alignment: .leading)
                         .uiKitIdentifier(RipulConformance.prefix + "swiftui.button")
                     TextField("SwiftUI TextField", text: $swiftuiText)
                         .focused($swiftuiFieldFocused)
                         .onChange(of: swiftuiFieldFocused) { if $1 { note("swiftui.textfield") } }
+                        .frame(maxWidth: .infinity, alignment: .leading)
                         .uiKitIdentifier(RipulConformance.prefix + "swiftui.textfield")
                     Toggle("SwiftUI Toggle", isOn: $toggleOn)
                         .onChange(of: toggleOn) { note("swiftui.toggle") }
+                        .frame(maxWidth: .infinity, alignment: .leading)
                         .uiKitIdentifier(RipulConformance.prefix + "swiftui.toggle")
                     Text("Tap gesture only")
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .contentShape(Rectangle())
                         .onTapGesture { note("swiftui.ontap") }
+                        .frame(maxWidth: .infinity, alignment: .leading)
                         .uiKitIdentifier(RipulConformance.prefix + "swiftui.ontap")
                     Text("Inert label — theme-selectable, never pressable")
+                        .frame(maxWidth: .infinity, alignment: .leading)
                         .uiKitIdentifier(RipulConformance.prefix + "swiftui.label")
                     // A button inside a nested hosting island — the shape that
                     // defeated hit-testing for most of this SDK's life.
                     RipulNestedIsland {
                         Button("Nested island button") { note("swiftui.nested") }
-                            .uiKitIdentifier(RipulConformance.prefix + "swiftui.nested")
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        .uiKitIdentifier(RipulConformance.prefix + "swiftui.nested")
                     }
                 }
                 if !log.fired.isEmpty {
-                    Section("Activations") {
-                        ForEach(log.fired, id: \.self) { Text($0).font(.caption.monospaced()) }
-                    }
+                    Text("Activations").font(.headline)
+                    ForEach(log.fired, id: \.self) { Text($0).font(.caption.monospaced()) }
                 }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding()
             }
             .navigationTitle("Ripul conformance")
         }
