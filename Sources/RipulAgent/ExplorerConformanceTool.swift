@@ -87,7 +87,7 @@ public struct ExplorerConformanceTool: NativeTool {
             try? await Task.sleep(nanoseconds: 250_000_000)
         }
 
-        let passed = rows.filter { ($0["result"] as? String) == "pass" }.count
+        let passed = rows.filter { ($0["result"] as? String)?.hasPrefix("pass") == true }.count
         return [
             "success": true,
             "coverage": "\(passed)/\(rows.count)",
@@ -107,32 +107,61 @@ public struct ExplorerConformanceTool: NativeTool {
         row["element"] = (probe["element"] as? [String: Any])?["class"] ?? "—"
         row["actionable"] = actionable?["class"] ?? "none"
 
+        // Score the PRESS, never the prediction. `actionable` is what the
+        // explorer expects to be pressable, computed from the view tree; the
+        // engine's ladder also reaches accessibility elements, which are not
+        // views and are routinely the only representation a SwiftUI control
+        // has. Gating the fire on a non-nil `actionable` meant a whole release
+        // whose entire purpose was a new engine path scored without that path
+        // ever running once, and read as a regression.
+        //
+        // The prediction is still worth reporting — a persistent disagreement
+        // between `actionable: none` and a successful press is a real defect in
+        // the readout — but it is evidence, not the verdict.
+        let f = probe["fired"] as? [String: Any]
+        if let f {
+            row["via"] = f["via"] ?? "none"
+            row["trace"] = f["trace"] ?? ""
+        }
+        let pressed = (f?["success"] as? Bool) == true
+
         // An archetype declared inert passes by being inert. Theme tools select
         // labels and backgrounds constantly, and "nothing here responds to a
-        // tap" is the correct answer for them, not a miss.
+        // tap" is the correct answer for them, not a miss. It has to survive the
+        // PRESS too: predicting nothing and then pressing something is the
+        // false-success failure mode, not a pass.
         guard a.expectActionable else {
-            row["result"] = actionable == nil ? "pass" : "unexpected-actionable"
+            if pressed {
+                row["result"] = "unexpected-actionable"
+                row["detail"] = "declared inert, but the press succeeded via \(f?["via"] ?? "?")"
+            } else if actionable != nil {
+                row["result"] = "unexpected-actionable"
+                row["detail"] = "declared inert, but the readout claims something here is pressable"
+            } else {
+                row["result"] = "pass"
+            }
             return row
         }
-        guard actionable != nil else {
+        guard fired, f != nil else {
+            row["result"] = actionable != nil ? "pass" : "fail"   // resolution only; not asked to press
+            return row
+        }
+        guard pressed else {
             row["result"] = "fail"
-            row["detail"] = "no actionable element resolved — the tap path can't reach this archetype"
+            row["detail"] = actionable == nil
+                ? "no actionable element resolved and the press was refused"
+                : "resolved but the press was refused"
             return row
         }
-        guard fired, let f = probe["fired"] as? [String: Any] else {
-            row["result"] = "pass"   // resolution only; not asked to press
+        if actionable == nil {
+            row["result"] = "pass-readout-pessimistic"
+            row["detail"] = "pressed via \(f?["via"] ?? "?") but the readout said nothing here responds "
+                + "to a tap — the engine reached it, the explorer did not predict it"
             return row
         }
-        row["via"] = f["via"] ?? "none"
-        row["trace"] = f["trace"] ?? ""
-        guard (f["success"] as? Bool) == true else {
-            row["result"] = "fail"
-            row["detail"] = "resolved but the press was refused"
-            return row
-        }
-        if let expected = a.expectVia, (f["via"] as? String) != expected {
+        if let expected = a.expectVia, (f?["via"] as? String) != expected {
             row["result"] = "pass-different-path"
-            row["detail"] = "pressed via \(f["via"] ?? "?"), expected \(expected) — works, but not the route assumed"
+            row["detail"] = "pressed via \(f?["via"] ?? "?"), expected \(expected) — works, but not the route assumed"
             return row
         }
         row["result"] = "pass"
