@@ -375,8 +375,10 @@ run until they match what was just installed.
 
 ## 5. Where we are, and the path to 100%
 
-Current (0.7.69, resolve/actuate split): **12/14** — ten archetypes plus the
-four anchor rows, every pass confirmed by the app's own handler firing.
+Current (0.7.70): **12/15** — eleven archetypes plus the four anchor rows,
+every pass confirmed by the app's own handler firing. The count went UP by a
+failing row on purpose: the plain-`.accessibilityIdentifier` Button added in
+0.7.70 turned an assumption into a visible red row (see (a-bis)).
 
 | Archetype | Status |
 |---|---|
@@ -389,6 +391,7 @@ four anchor rows, every pass confirmed by the app's own handler firing.
 | Nested-island button | pass — readout pessimistic (a11y candidates are try-and-see) |
 | All four anchor rows | pass — locality, exception gating, replay-after-move, stale-point proof |
 | SwiftUI `Button` | **fail — honestly now**: the pick lands on the 17pt stamp, whose island publishes one element belonging to a *different* island 166pt away, so nothing is level with the point — see (a) |
+| SwiftUI `Button` (plain `.accessibilityIdentifier`) | **fail — not even findable by id**, though findable by text. See (a-bis): this one is a *lookup* gap, not an actuation one |
 | SwiftUI `onTapGesture` | **platform limit** — now declines instead of falsely succeeding |
 
 ### The three open problems
@@ -415,6 +418,27 @@ returns exactly one element, which belongs to a **different island 166pt away**
 point rung correctly finds nothing level with the point, and only the blind
 `chain` candidate survives. The fix is in *resolution* — reaching the real
 button's island from the stamp — not in adding another actuation rung.
+
+**(a-bis) A plain `.accessibilityIdentifier` is invisible to `find(id:)`.** Found
+by adding an A/B archetype — the same `Button`, identified with SwiftUI's own
+`.accessibilityIdentifier` instead of `.uiKitIdentifier`, to test whether the
+stamp was the culprit in (a). The experiment could not run, and that *is* the
+finding: the row reports `not-on-screen`, yet `wait_for_element` locates it by
+**text** in 7ms inside `_UIHostingView<RipulConformanceView>`. It is on screen;
+it simply cannot be addressed by its own id.
+
+The cause is the same both-planes problem the doc opens with: SwiftUI's
+`.accessibilityIdentifier` lands on the accessibility **element**, not on any
+`UIView.accessibilityIdentifier`, and not in the `UIKitIdentifierRegistry`. The
+identity ladder's third rung (`accessibilityIdInTree`) is meant to cover this
+and evidently does not reach it.
+
+This is worse than (a) in blast radius, because it is a **lookup** gap, not a
+point-resolution one: `tap_element id=…`, `wait_for_element id=…` and macro
+replay by id all fail for any control identified the plain SwiftUI way — which
+is what a client app that never imported our stamp modifier will naturally
+write. The fix is to match a view's published accessibility elements'
+identifiers as a rung of `find(id:)`, resolving back to the host view.
 
 **(b) `onTapGesture` is a genuine platform limit.** SwiftUI registers no
 accessibility action for a bare `onTapGesture` and attaches the recognizer to a

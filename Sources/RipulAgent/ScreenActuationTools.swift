@@ -123,6 +123,22 @@ extension ScreenElementFinder {
         let window: UIWindow
         let id: String?
         let text: String?
+        /// Set when the match came from an accessibility ELEMENT published by
+        /// `view` rather than from `view` itself — SwiftUI's
+        /// `.accessibilityIdentifier` lands on the element, and the element's
+        /// host is routinely the whole island. In window coordinates.
+        ///
+        /// Consumers must prefer it over the view's frame for anything
+        /// spatial: aiming at the centre of a 440x894 island is the exact
+        /// misfire that made eleven conformance runs report "unreachable" for
+        /// a control that was sitting right there.
+        var elementFrame: CGRect? = nil
+
+        /// The frame this match denotes, in window coordinates — the element's
+        /// when it has one, else the view's.
+        var effectiveFrame: CGRect {
+            elementFrame ?? view.convert(view.bounds, to: window)
+        }
     }
 
     /// The window actuation drives: the HOST's, never SDK chrome.
@@ -295,10 +311,31 @@ extension ScreenElementFinder {
             if vid?.isEmpty ?? true { vid = UIKitIdentifierRegistry.shared.identifier(for: view) }
             if vid?.isEmpty ?? true { vid = InspectedView.accessibilityIdInTree(view) }
             let vtext = InspectedView.textContent(of: view)
-            if let id, !id.isEmpty, let vid, !vid.isEmpty {
-                if vid == id || vid.caseInsensitiveCompare(id) == .orderedSame {
-                    matches.append(Match(view: view, window: window, id: vid, text: vtext))
-                }
+            if let id, !id.isEmpty, let vid, !vid.isEmpty,
+               vid == id || vid.caseInsensitiveCompare(id) == .orderedSame {
+                matches.append(Match(view: view, window: window, id: vid, text: vtext))
+            } else if let id, !id.isEmpty, isHostingView(view),
+                      let el = accessibilityElement(withId: id, in: view) {
+                // The CONTAINMENT rung. The three rungs above all ask "what is
+                // THIS view's id?" — a projection. For a SwiftUI control
+                // identified with a plain `.accessibilityIdentifier` the id
+                // exists only on the accessibility ELEMENT, and its host is
+                // the whole island, so the projection answers with whichever
+                // element happens to come first and never with the one being
+                // looked up. Measured: the plain-id Button was unfindable by
+                // id while `wait_for_element text=` located the same row in
+                // 7ms. That breaks `tap_element id=`, `wait_for_element id=`
+                // and macro replay by id for any client that identified its
+                // controls the plain SwiftUI way — i.e. any client that never
+                // imported `.uiKitIdentifier`.
+                //
+                // So ask the containment question instead: does this island
+                // publish an element with the id we want? Gated to hosting
+                // views because that is where SwiftUI publishes, which also
+                // keeps this off the hot path for ordinary UIKit trees.
+                matches.append(Match(view: view, window: window, id: id,
+                                     text: el.accessibilityLabel ?? vtext,
+                                     elementFrame: windowRect(fromScreen: el.accessibilityFrame, in: window)))
             } else if let text, !text.isEmpty, let vtext, !vtext.isEmpty,
                       vtext.range(of: text, options: .caseInsensitive) != nil {
                 matches.append(Match(view: view, window: window, id: vid, text: vtext))
@@ -308,20 +345,77 @@ extension ScreenElementFinder {
         // order and an `nth` selector still means what it meant.
         return matches.enumerated()
             .sorted { a, b in
-                let sa = specificity(of: a.element.view), sb = specificity(of: b.element.view)
+                let sa = specificity(of: a.element), sb = specificity(of: b.element)
                 if sa != sb { return sa > sb }
-                let fa = a.element.view.bounds.width * a.element.view.bounds.height
-                let fb = b.element.view.bounds.width * b.element.view.bounds.height
+                // The ELEMENT's frame when the match came from one — ranking a
+                // published element by its island's bounds would sort the
+                // tightest answer last, since the island is the whole screen.
+                let ra = a.element.effectiveFrame, rb = b.element.effectiveFrame
+                let fa = ra.width * ra.height, fb = rb.width * rb.height
                 if fa != fb { return fa < fb }
                 return a.offset < b.offset
             }
             .map(\.element)
     }
 
+    /// Screen space → window space. UIKit publishes only the forward direction
+    /// (`UIAccessibility.convertToScreenCoordinates`), so the inverse goes
+    /// through the screen's fixed coordinate space, which is what an
+    /// `accessibilityFrame` is expressed in. Falls back to the rect unchanged
+    /// when there is no scene to ask — for a full-screen window the two spaces
+    /// coincide, so that degrades to correct rather than to nonsense.
+    static func windowRect(fromScreen rect: CGRect, in window: UIWindow) -> CGRect {
+        guard let space = window.windowScene?.screen.fixedCoordinateSpace else { return rect }
+        return window.convert(rect, from: space)
+    }
+
+    /// The accessibility element published under `view` carrying exactly `id`.
+    ///
+    /// The containment question — deliberately NOT
+    /// `InspectedView.accessibilityIdInTree`, which projects a view to its
+    /// FIRST element id and therefore cannot answer "is the one I'm looking
+    /// for in here?". Walks both SwiftUI exposures (the `accessibilityElements`
+    /// array and the container protocol) plus subviews, bounded the same way
+    /// the actuation engine's element walk is.
+    static func accessibilityElement(withId id: String, in view: UIView) -> NSObject? {
+        var seen = Set<ObjectIdentifier>()
+        var visited = 0
+        func visit(_ obj: NSObject, depth: Int) -> NSObject? {
+            if depth > 40 || visited > 400 { return nil }
+            guard seen.insert(ObjectIdentifier(obj)).inserted else { return nil }
+            visited += 1
+            if let eid = InspectedView.objectAccessibilityIdentifier(obj),
+               eid == id || eid.caseInsensitiveCompare(id) == .orderedSame {
+                return obj
+            }
+            var children: [NSObject] = []
+            if let els = obj.accessibilityElements as? [NSObject] {
+                children = els
+            } else {
+                let n = obj.accessibilityElementCount()
+                if n > 0 && n != NSNotFound {
+                    for i in 0..<n { if let e = obj.accessibilityElement(at: i) as? NSObject { children.append(e) } }
+                }
+            }
+            for c in children { if let hit = visit(c, depth: depth + 1) { return hit } }
+            if let v = obj as? UIView {
+                for sub in v.subviews where !sub.isHidden && sub.alpha > 0.01 {
+                    if let hit = visit(sub, depth: depth + 1) { return hit }
+                }
+            }
+            return nil
+        }
+        return visit(view, depth: 0)
+    }
+
     /// How strongly a view claims to BE the thing an identifier names. A control
     /// is the thing; a view with its own text is probably the thing; a hosting
     /// container that merely adopted the name is not.
-    private static func specificity(of view: UIView) -> Int {
+    private static func specificity(of match: Match) -> Int {
+        // A published element carrying the exact id IS the thing, however
+        // anonymous its host island looks from the view tree.
+        if match.elementFrame != nil { return 3 }
+        let view = match.view
         if view is UIControl { return 3 }
         if view is UITextInput { return 3 }
         if let t = InspectedView.textContent(of: view), !t.isEmpty { return 2 }
@@ -546,8 +640,12 @@ extension ScreenElementFinder {
         if let r = role(of: m.view) { d["role"] = r }
         if let id = m.id { d["id"] = id }
         if let text = m.text { d["text"] = text }
-        let f = m.view.convert(m.view.bounds, to: m.window)
+        // The element's frame when the match came from a published element —
+        // reporting the island's would name a 440x894 rectangle for a 44pt
+        // control and send every spatial consumer to the middle of the screen.
+        let f = m.effectiveFrame
         d["frame"] = ["x": Double(f.minX), "y": Double(f.minY), "w": Double(f.width), "h": Double(f.height)]
+        if m.elementFrame != nil { d["matchedVia"] = "accessibilityElement" }
         return d
     }
 }

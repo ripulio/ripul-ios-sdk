@@ -71,7 +71,11 @@ public struct ExplorerConformanceTool: NativeTool {
             // the reticule is aimed at where the element used to be.
             let probe = await MainActor.run { () -> [String: Any]? in
                 guard let match = ScreenElementFinder.find(id: archetype.id, text: nil).first else { return nil }
-                let frame = match.view.convert(match.view.bounds, to: nil)
+                // `effectiveFrame`, not the view's — a control identified by a
+                // plain SwiftUI `.accessibilityIdentifier` matches through its
+                // published ELEMENT, whose host is the whole island. Aiming at
+                // the island's centre is the 0.7.67 misfire exactly.
+                let frame = match.effectiveFrame
                 guard frame.width > 0, frame.height > 0 else { return nil }
                 guard let live = ViewInspectorController.live else { return [:] }
                 return live.probe(atWindowPoint: CGPoint(x: frame.midX, y: frame.midY), fire: fire)
@@ -155,7 +159,7 @@ public struct ExplorerConformanceTool: NativeTool {
         // the sheet is too short, or every row below reports not-on-screen.
         await MainActor.run {
             guard let m = ScreenElementFinder.find(id: splitId, text: nil).first else { return }
-            let f = m.view.convert(m.view.bounds, to: nil)
+            let f = m.effectiveFrame
             if f.maxY > m.window.bounds.height - 40,
                let sv = ScrollElementTool.enclosingScrollView(of: m.view) {
                 _ = ScreenActuationEngine.performScroll(on: sv, direction: "down", amount: 0.6)
@@ -169,7 +173,7 @@ public struct ExplorerConformanceTool: NativeTool {
         let probeTrace = await MainActor.run { () -> String in
             guard let m = ScreenElementFinder.find(id: splitId, text: nil).first,
                   let live = ViewInspectorController.live else { return "split control or explorer missing" }
-            let f = m.view.convert(m.view.bounds, to: nil)
+            let f = m.effectiveFrame
             let probe = live.probe(atWindowPoint: CGPoint(x: f.minX + f.width * 0.8, y: f.midY), fire: true)
             return ((probe["fired"] as? [String: Any])?["trace"] as? String) ?? "no fire result"
         }
@@ -187,12 +191,12 @@ public struct ExplorerConformanceTool: NativeTool {
         let shapes = await MainActor.run { () -> (split: Bool?, button: Bool?) in
             var split: Bool?, button: Bool?
             if let m = ScreenElementFinder.find(id: splitId, text: nil).first {
-                let f = m.view.convert(m.view.bounds, to: nil)
+                let f = m.effectiveFrame
                 split = ScreenActuationEngine.resolveTap(on: m.view, matchId: splitId, matchText: nil,
                                                          at: CGPoint(x: f.minX + f.width * 0.8, y: f.midY)).pointMattered
             }
             if let m = ScreenElementFinder.find(id: buttonId, text: nil).first {
-                let f = m.view.convert(m.view.bounds, to: nil)
+                let f = m.effectiveFrame
                 button = ScreenActuationEngine.resolveTap(on: m.view, matchId: buttonId, matchText: nil,
                                                           at: CGPoint(x: f.minX + f.width * 0.85, y: f.midY)).pointMattered
             }
@@ -210,7 +214,7 @@ public struct ExplorerConformanceTool: NativeTool {
         struct Recorded { let selector: MacroSelector; let anchor: MacroAnchor?; let frame: CGRect; let point: CGPoint }
         let recorded = await MainActor.run { () -> Recorded? in
             guard let m = ScreenElementFinder.find(id: splitId, text: nil).first else { return nil }
-            let f = m.view.convert(m.view.bounds, to: nil)
+            let f = m.effectiveFrame
             let p = CGPoint(x: f.minX + f.width * 0.8, y: f.midY)
             let rtl = m.view.effectiveUserInterfaceLayoutDirection == .rightToLeft
             return Recorded(selector: MacroSelector(describing: m.view),
