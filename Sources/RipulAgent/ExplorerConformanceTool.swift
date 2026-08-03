@@ -61,7 +61,8 @@ public struct ExplorerConformanceTool: NativeTool {
             guard let frame, frame.width > 0, frame.height > 0 else {
                 rows.append(["archetype": archetype.title, "id": archetype.id,
                              "result": "not-on-screen",
-                             "detail": "no view carries this id — the harness may need scrolling"])
+                             "detail": "no view carries this id — the harness sheet may not be presented in the APP window, "
+                                 + "or the row is scrolled out of view"])
                 continue
             }
             let centre = CGPoint(x: frame.midX, y: frame.midY)

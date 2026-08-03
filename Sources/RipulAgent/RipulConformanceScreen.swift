@@ -52,11 +52,23 @@ public enum RipulConformance {
     /// Present the harness. Deliberately a plain modal — presented content was
     /// itself invisible to the element layer until recently, so the harness
     /// exercising a modal is the point rather than an inconvenience.
+    ///
+    /// Presented into the APP's window, explicitly NOT via
+    /// `RipulChrome.presentationRoot()`. That resolver prefers the top-most
+    /// interactive chrome window so SDK sheets land above the explorer — right
+    /// for a remap sheet, exactly wrong here: the harness must be app content,
+    /// because the element machinery under test walks `appWindow()` and
+    /// deliberately refuses to look inside chrome. Using it put the whole
+    /// harness somewhere the sweep is forbidden to see, and scored 0/10 on ten
+    /// controls that were never examined.
     @available(iOS 16.0, *)
     @discardableResult
     @MainActor
     public static func present() -> Bool {
-        guard let top = RipulChrome.presentationRoot() else { return false }
+        guard let appRoot = RipulChrome.appWindow()?.rootViewController else { return false }
+        var top = appRoot
+        while let presented = top.presentedViewController, !presented.isBeingDismissed { top = presented }
+        if top is UIHostingController<RipulConformanceView> { return false }   // already up
         let host = UIHostingController(rootView: RipulConformanceView())
         host.modalPresentationStyle = .pageSheet
         top.present(host, animated: true)
