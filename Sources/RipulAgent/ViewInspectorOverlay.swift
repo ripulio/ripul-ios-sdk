@@ -9,7 +9,7 @@ let ripulViewExplorerOverlayTag = 0x5249_5055   // "RIPU"
 
 /// Marketing version of the RipulAgent SDK, surfaced in the inspector's copy output as `sdk: …`
 /// so we can always tell which build is actually running on the device. Bump on every release.
-let ripulSDKVersion = "0.7.56"
+let ripulSDKVersion = "0.7.57"
 
 // MARK: - View Inspector Overlay
 //
@@ -1428,6 +1428,17 @@ class ViewInspectorController: UIView {
     private func isActuatable(_ v: UIView) -> Bool {
         if v is UIControl { return true }
         if v is UITextInput, v.canBecomeFirstResponder { return true }
+        // A scrolling container's own tap recognizers are scroll and selection
+        // machinery, not this element's semantics. Counting them made the
+        // readout promise something the engine then refused: every miss inside
+        // a List reported `actionable: UpdateCoalescingCollectionView` while
+        // the trace said `gesture:stoppedAtBoundary`, and an inert label — the
+        // one archetype whose correct answer is "nothing here responds to a
+        // tap" — claimed to be pressable. `performTap` already draws this
+        // boundary; drawing it in only one of the two places is what let them
+        // disagree. Note a UITextView IS a UIScrollView and its caret-placing
+        // recognizer IS real: the text-input rung above claims it first.
+        if v is UIScrollView { return false }
         if v.gestureRecognizers?.contains(where: { $0.isEnabled && $0 is UITapGestureRecognizer }) == true { return true }
         return false
     }

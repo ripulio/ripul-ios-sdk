@@ -54,21 +54,33 @@ public struct ExplorerConformanceTool: NativeTool {
         for archetype in RipulConformance.archetypes {
             // Locate it by id to get its frame, then drive the RETICULE to the
             // centre of that frame — the point path, not the predicate path.
-            let frame = await MainActor.run { () -> CGRect? in
-                ScreenElementFinder.find(id: archetype.id, text: nil).first
-                    .map { $0.view.convert($0.view.bounds, to: nil) }
+            // Put the screen back to a known state first. Pressing a text field
+            // raises the keyboard, which scrolls the List — so every archetype
+            // after the first text field was aimed with a frame that had since
+            // moved, and scored as unreachable when it was merely somewhere
+            // else. A sweep whose earlier rows perturb its later ones measures
+            // its own ordering, not the SDK.
+            await MainActor.run {
+                RipulChrome.appWindow()?.endEditing(true)
             }
-            guard let frame, frame.width > 0, frame.height > 0 else {
+            try? await Task.sleep(nanoseconds: 450_000_000)
+
+            // Locate and probe in ONE hop onto the main actor. Split across two,
+            // the layout is free to settle, scroll or animate in between, and
+            // the reticule is aimed at where the element used to be.
+            let probe = await MainActor.run { () -> [String: Any]? in
+                guard let match = ScreenElementFinder.find(id: archetype.id, text: nil).first else { return nil }
+                let frame = match.view.convert(match.view.bounds, to: nil)
+                guard frame.width > 0, frame.height > 0 else { return nil }
+                guard let live = ViewInspectorController.live else { return [:] }
+                return live.probe(atWindowPoint: CGPoint(x: frame.midX, y: frame.midY), fire: fire)
+            }
+            guard let probe else {
                 rows.append(["archetype": archetype.title, "id": archetype.id,
                              "result": "not-on-screen",
                              "detail": "no view carries this id — the harness sheet may not be presented in the APP window, "
                                  + "or the row is scrolled out of view"])
                 continue
-            }
-            let centre = CGPoint(x: frame.midX, y: frame.midY)
-            let probe = await MainActor.run { () -> [String: Any] in
-                guard let live = ViewInspectorController.live else { return [:] }
-                return live.probe(atWindowPoint: centre, fire: fire)
             }
             rows.append(Self.score(archetype, probe: probe, fired: fire))
             // Let any focus/keyboard/navigation settle before the next probe.

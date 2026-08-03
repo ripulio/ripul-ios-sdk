@@ -681,6 +681,50 @@ enum ScreenActuationEngine {
                               activatedLabel: el.accessibilityLabel,
                               trace: trace.joined(separator: " "))
         }
+        // 2c-band. Same row, beside the point. An accessibility frame hugs its
+        //     CONTENT, but a row is full width: a leading-aligned button in a
+        //     440pt list row publishes a 93pt frame at x=40, so pointing at the
+        //     middle of the row lands 87pt to its right and contains-the-point
+        //     finds nothing. That is not an exotic layout, it is the commonest
+        //     one on the platform, and it was scoring three archetypes as
+        //     unreachable when the element was sitting right there.
+        //
+        //     The band is what makes this safe rather than a guess: require the
+        //     element to CONTAIN the point vertically, which in a list is
+        //     precisely the set of elements in the row the user pointed at, then
+        //     take the horizontally nearest. Never reaches into another row, and
+        //     an element genuinely elsewhere on screen is excluded by the y-test
+        //     rather than by a distance heuristic.
+        //     Reaching here already means the contains-the-point loop above
+        //     activated nothing — do NOT re-test it, `accessibilityActivate()`
+        //     performs the action rather than reporting whether it could.
+        do {
+            let band = Self.accessibilityElements(in: hostRoot, containing: nil)
+                .filter { el in
+                    let f = el.accessibilityFrame
+                    guard f.width > 0, f.height > 0 else { return false }
+                    guard f.minY - 4 <= screenPoint.y, screenPoint.y <= f.maxY + 4 else { return false }
+                    return abs(f.midX - screenPoint.x) <= max(hostRoot.bounds.width, 320) * 0.75
+                }
+                .sorted { abs($0.accessibilityFrame.midX - screenPoint.x) < abs($1.accessibilityFrame.midX - screenPoint.x) }
+            for el in band.prefix(3) where el.accessibilityActivate() {
+                ScreenSnapshotStore.shared.invalidate()
+                let name = el.accessibilityLabel ?? String(describing: type(of: el))
+                let dx = Int(abs(el.accessibilityFrame.midX - screenPoint.x))
+                trace.append("a11yBand:activated(\(name) dx=\(dx))")
+                return TapOutcome(success: true, via: "accessibilityElement(row)", error: nil,
+                                  activatedIdentifier: InspectedView.objectAccessibilityIdentifier(el),
+                                  activatedLabel: el.accessibilityLabel,
+                                  trace: trace.joined(separator: " "))
+            }
+            if !band.isEmpty {
+                let names = band.prefix(4)
+                    .map { $0.accessibilityLabel ?? String(describing: type(of: $0)) }
+                    .joined(separator: "|")
+                trace.append("a11yBand:noneActivated(\(band.count)){\(names)}")
+            }
+        }
+
         // Name the losers too. "It tapped the wrong thing" is only debuggable
         // if you can see what else was under the point and in what order.
         let candidateNames = byPoint.prefix(6)
