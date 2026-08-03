@@ -976,14 +976,18 @@ public final class RipulSessionListModel: ObservableObject {
             return
         }
 
-        // The WebSocket killAck is sent by the guardian only AFTER the process
-        // death is confirmed — with it, "online again" proves a real restart.
-        // The KV path (httpKill) merely ENQUEUES a signal, so on that path a
-        // host that never went down would immediately read as "online" and the
-        // old code showed "Restarted" for a restart that never happened (a
-        // stale guardian silently dropping kills). Without a confirmed kill,
-        // require an observed offline→online transition before claiming success.
-        let killConfirmed = webResult.success
+        // NEITHER result proves the host died. Both channels end in the same
+        // HTTP POST that stores a kill signal in KV: `webResult` is the web
+        // app's killMachine, which returns success the moment that POST
+        // returns 200, and `httpKill` is this model making the same POST
+        // directly. The guardian does send a real `machine:killAck` after
+        // confirming process death, but nothing correlates it back to a
+        // request — so success here means "signal enqueued", nothing more.
+        //
+        // An enqueued signal that no guardian ever reads looks identical to a
+        // completed restart if you only check that the host is online. So the
+        // only honest evidence is an observed offline→online transition, and
+        // that is what we require.
         let deadline = Date().addingTimeInterval(60)
         var wentOffline = false
         while Date() < deadline {
@@ -995,7 +999,7 @@ public final class RipulSessionListModel: ObservableObject {
             }
             if !updated.isOnline {
                 wentOffline = true
-            } else if killConfirmed || wentOffline {
+            } else if wentOffline {
                 restartingMachineId = nil
                 restartSucceededId = machine.machineId
                 Task {

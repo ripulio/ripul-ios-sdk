@@ -20,6 +20,27 @@ import UIKit
 // control resolves through entirely different machinery in each, and it is the
 // SwiftUI side that has been consistently unreachable.
 
+/// Ground truth for "did the press actually do anything".
+///
+/// The engine reporting success is not evidence. `itemSelection` selected a
+/// SwiftUI List row - which does nothing whatever without a selection binding -
+/// and reported success for a UIButton, a UISwitch and an onTapGesture view,
+/// scoring 9/10 while three of those controls were never touched. The same
+/// fallback also "pressed" the inert label, and only its declared expectation
+/// made that one show up as a failure.
+///
+/// So the app records what genuinely ran - a control action, a delegate
+/// callback, a state change - and the sweep checks for THAT. A press that
+/// leaves no trace in here did not happen, whatever the ladder claims.
+@MainActor
+final class RipulConformanceLog: ObservableObject {
+    static let shared = RipulConformanceLog()
+    @Published private(set) var fired: [String] = []
+    func note(_ token: String) { fired.append(token) }
+    func clear() { fired.removeAll() }
+    func contains(_ token: String) -> Bool { fired.contains(token) }
+}
+
 /// One row under test: what it is, and what the SDK should be able to do with it.
 struct RipulArchetype: Identifiable {
     let id: String            // stamped identifier, "ripul.conformance.<name>"
@@ -30,6 +51,10 @@ struct RipulArchetype: Identifiable {
     let expectActionable: Bool
     /// The `via` we expect, when we can predict it. Nil means "any success".
     let expectVia: String?
+    /// The token this control writes to `RipulConformanceLog` when its REAL
+    /// handler runs. Nil for an archetype with no handler to run - the inert
+    /// label, whose correct outcome is that nothing anywhere fires.
+    let effectToken: String?
 }
 
 public enum RipulConformance {
@@ -37,16 +62,26 @@ public enum RipulConformance {
 
     /// The declared expectations, matched by id to what's on screen.
     static let archetypes: [RipulArchetype] = [
-        .init(id: prefix + "uikit.button", title: "UIKit UIButton", expectActionable: true, expectVia: "uicontrol"),
-        .init(id: prefix + "uikit.textfield", title: "UIKit UITextField", expectActionable: true, expectVia: nil),
-        .init(id: prefix + "uikit.textview", title: "UIKit UITextView", expectActionable: true, expectVia: "focus"),
-        .init(id: prefix + "uikit.switch", title: "UIKit UISwitch", expectActionable: true, expectVia: nil),
-        .init(id: prefix + "swiftui.button", title: "SwiftUI Button", expectActionable: true, expectVia: nil),
-        .init(id: prefix + "swiftui.textfield", title: "SwiftUI TextField", expectActionable: true, expectVia: nil),
-        .init(id: prefix + "swiftui.toggle", title: "SwiftUI Toggle", expectActionable: true, expectVia: nil),
-        .init(id: prefix + "swiftui.ontap", title: "SwiftUI onTapGesture view", expectActionable: true, expectVia: nil),
-        .init(id: prefix + "swiftui.label", title: "SwiftUI Text (inert)", expectActionable: false, expectVia: nil),
-        .init(id: prefix + "swiftui.nested", title: "SwiftUI button in a nested island", expectActionable: true, expectVia: nil),
+        .init(id: prefix + "uikit.button", title: "UIKit UIButton", expectActionable: true,
+              expectVia: nil, effectToken: "uikit.button"),
+        .init(id: prefix + "uikit.textfield", title: "UIKit UITextField", expectActionable: true,
+              expectVia: nil, effectToken: "uikit.textfield"),
+        .init(id: prefix + "uikit.textview", title: "UIKit UITextView", expectActionable: true,
+              expectVia: "focus", effectToken: "uikit.textview"),
+        .init(id: prefix + "uikit.switch", title: "UIKit UISwitch", expectActionable: true,
+              expectVia: nil, effectToken: "uikit.switch"),
+        .init(id: prefix + "swiftui.button", title: "SwiftUI Button", expectActionable: true,
+              expectVia: nil, effectToken: "swiftui.button"),
+        .init(id: prefix + "swiftui.textfield", title: "SwiftUI TextField", expectActionable: true,
+              expectVia: nil, effectToken: "swiftui.textfield"),
+        .init(id: prefix + "swiftui.toggle", title: "SwiftUI Toggle", expectActionable: true,
+              expectVia: nil, effectToken: "swiftui.toggle"),
+        .init(id: prefix + "swiftui.ontap", title: "SwiftUI onTapGesture view", expectActionable: true,
+              expectVia: nil, effectToken: "swiftui.ontap"),
+        .init(id: prefix + "swiftui.label", title: "SwiftUI Text (inert)", expectActionable: false,
+              expectVia: nil, effectToken: nil),
+        .init(id: prefix + "swiftui.nested", title: "SwiftUI button in a nested island", expectActionable: true,
+              expectVia: nil, effectToken: "swiftui.nested"),
     ]
 
     /// Present the harness. Deliberately a plain modal — presented content was
@@ -81,9 +116,13 @@ struct RipulConformanceView: View {
     @State private var uikitText = ""
     @State private var swiftuiText = ""
     @State private var toggleOn = false
-    @State private var log: [String] = []
+    @FocusState private var swiftuiFieldFocused: Bool
+    @ObservedObject private var log = RipulConformanceLog.shared
 
-    private func note(_ s: String) { log.append(s) }
+    // Every archetype reports the effect the PLATFORM produced, not the effect
+    // the engine believes it caused. Focus counts for a text control, a value
+    // change counts for a toggle, an action counts for a button.
+    private func note(_ s: String) { RipulConformanceLog.shared.note(s) }
 
     var body: some View {
         NavigationStack {
@@ -102,8 +141,11 @@ struct RipulConformanceView: View {
                     Button("SwiftUI Button") { note("swiftui.button") }
                         .uiKitIdentifier(RipulConformance.prefix + "swiftui.button")
                     TextField("SwiftUI TextField", text: $swiftuiText)
+                        .focused($swiftuiFieldFocused)
+                        .onChange(of: swiftuiFieldFocused) { if $1 { note("swiftui.textfield") } }
                         .uiKitIdentifier(RipulConformance.prefix + "swiftui.textfield")
                     Toggle("SwiftUI Toggle", isOn: $toggleOn)
+                        .onChange(of: toggleOn) { note("swiftui.toggle") }
                         .uiKitIdentifier(RipulConformance.prefix + "swiftui.toggle")
                     Text("Tap gesture only")
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -119,9 +161,9 @@ struct RipulConformanceView: View {
                             .uiKitIdentifier(RipulConformance.prefix + "swiftui.nested")
                     }
                 }
-                if !log.isEmpty {
+                if !log.fired.isEmpty {
                     Section("Activations") {
-                        ForEach(log, id: \.self) { Text($0).font(.caption.monospaced()) }
+                        ForEach(log.fired, id: \.self) { Text($0).font(.caption.monospaced()) }
                     }
                 }
             }
@@ -165,14 +207,21 @@ struct RipulUIKitButtonRow: UIViewRepresentable {
 struct RipulUIKitTextFieldRow: UIViewRepresentable {
     let id: String
     @Binding var text: String
+    func makeCoordinator() -> Coordinator { Coordinator() }
     func makeUIView(context: Context) -> UITextField {
         let f = UITextField()
         f.placeholder = "UIKit UITextField"
         f.accessibilityIdentifier = id
         f.borderStyle = .roundedRect
+        f.delegate = context.coordinator
         return f
     }
     func updateUIView(_ uiView: UITextField, context: Context) { uiView.text = text }
+    final class Coordinator: NSObject, UITextFieldDelegate {
+        func textFieldDidBeginEditing(_ textField: UITextField) {
+            RipulConformanceLog.shared.note("uikit.textfield")
+        }
+    }
 }
 
 struct RipulUIKitTextViewRow: UIViewRepresentable {
@@ -184,9 +233,16 @@ struct RipulUIKitTextViewRow: UIViewRepresentable {
         v.font = .preferredFont(forTextStyle: .body)
         v.layer.borderWidth = 1
         v.layer.borderColor = UIColor.separator.cgColor
+        v.delegate = context.coordinator
         return v
     }
     func updateUIView(_ uiView: UITextView, context: Context) {}
+    func makeCoordinator() -> Coordinator { Coordinator() }
+    final class Coordinator: NSObject, UITextViewDelegate {
+        func textViewDidBeginEditing(_ textView: UITextView) {
+            RipulConformanceLog.shared.note("uikit.textview")
+        }
+    }
 }
 
 struct RipulUIKitSwitchRow: UIViewRepresentable {
@@ -194,6 +250,7 @@ struct RipulUIKitSwitchRow: UIViewRepresentable {
     func makeUIView(context: Context) -> UISwitch {
         let s = UISwitch()
         s.accessibilityIdentifier = id
+        s.addAction(UIAction { _ in RipulConformanceLog.shared.note("uikit.switch") }, for: .valueChanged)
         return s
     }
     func updateUIView(_ uiView: UISwitch, context: Context) {}

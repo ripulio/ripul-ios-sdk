@@ -64,6 +64,7 @@ public struct ExplorerConformanceTool: NativeTool {
                 RipulChrome.appWindow()?.endEditing(true)
             }
             try? await Task.sleep(nanoseconds: 450_000_000)
+            await MainActor.run { RipulConformanceLog.shared.clear() }
 
             // Locate and probe in ONE hop onto the main actor. Split across two,
             // the layout is free to settle, scroll or animate in between, and
@@ -82,7 +83,10 @@ public struct ExplorerConformanceTool: NativeTool {
                                  + "or the row is scrolled out of view"])
                 continue
             }
-            rows.append(Self.score(archetype, probe: probe, fired: fire))
+            // Read the app's own record of what ran. This is the only evidence
+            // that distinguishes pressing the control from pressing NEAR it.
+            let effects = await MainActor.run { RipulConformanceLog.shared.fired }
+            rows.append(Self.score(archetype, probe: probe, fired: fire, effects: effects))
             // Let any focus/keyboard/navigation settle before the next probe.
             try? await Task.sleep(nanoseconds: 250_000_000)
         }
@@ -101,7 +105,8 @@ public struct ExplorerConformanceTool: NativeTool {
     }
 
     #if canImport(UIKit)
-    private static func score(_ a: RipulArchetype, probe: [String: Any], fired: Bool) -> [String: Any] {
+    private static func score(_ a: RipulArchetype, probe: [String: Any], fired: Bool,
+                              effects: [String]) -> [String: Any] {
         var row: [String: Any] = ["archetype": a.title, "id": a.id]
         let actionable = probe["actionable"] as? [String: Any]
         row["element"] = (probe["element"] as? [String: Any])?["class"] ?? "—"
@@ -123,7 +128,16 @@ public struct ExplorerConformanceTool: NativeTool {
             row["via"] = f["via"] ?? "none"
             row["trace"] = f["trace"] ?? ""
         }
-        let pressed = (f?["success"] as? Bool) == true
+        // The ENGINE's claim. Necessary, never sufficient.
+        let claimed = (f?["success"] as? Bool) == true
+        // The APP's record. `itemSelection` selects a SwiftUI List row, which
+        // does nothing without a selection binding, yet reported success for a
+        // UIButton, a UISwitch and an onTapGesture view - three controls that
+        // were never touched, scored as passes. An archetype with a handler
+        // passes only when that handler ran.
+        let observed = a.effectToken.map(effects.contains) ?? false
+        let pressed = a.effectToken == nil ? claimed : observed
+        if !effects.isEmpty { row["observed"] = effects.joined(separator: ",") }
 
         // An archetype declared inert passes by being inert. Theme tools select
         // labels and backgrounds constantly, and "nothing here responds to a
@@ -131,9 +145,9 @@ public struct ExplorerConformanceTool: NativeTool {
         // PRESS too: predicting nothing and then pressing something is the
         // false-success failure mode, not a pass.
         guard a.expectActionable else {
-            if pressed {
+            if !effects.isEmpty {
                 row["result"] = "unexpected-actionable"
-                row["detail"] = "declared inert, but the press succeeded via \(f?["via"] ?? "?")"
+                row["detail"] = "declared inert, but pressing it ran \(effects.joined(separator: ","))"
             } else if actionable != nil {
                 row["result"] = "unexpected-actionable"
                 row["detail"] = "declared inert, but the readout claims something here is pressable"
@@ -148,9 +162,12 @@ public struct ExplorerConformanceTool: NativeTool {
         }
         guard pressed else {
             row["result"] = "fail"
-            row["detail"] = actionable == nil
-                ? "no actionable element resolved and the press was refused"
-                : "resolved but the press was refused"
+            row["detail"] = claimed
+                ? "the engine reported success via \(f?["via"] ?? "?") but the control's handler never ran"
+                    + " - it pressed something else"
+                : (actionable == nil
+                    ? "no actionable element resolved and the press was refused"
+                    : "resolved but the press was refused")
             return row
         }
         if actionable == nil {
