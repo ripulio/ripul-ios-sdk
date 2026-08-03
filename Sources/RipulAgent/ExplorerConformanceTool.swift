@@ -85,7 +85,25 @@ public struct ExplorerConformanceTool: NativeTool {
             }
             // Read the app's own record of what ran. This is the only evidence
             // that distinguishes pressing the control from pressing NEAR it.
-            let effects = await MainActor.run { RipulConformanceLog.shared.fired }
+            var effects = await MainActor.run { RipulConformanceLog.shared.fired }
+            // First-responder state is PLATFORM ground truth and a better oracle
+            // than any binding. SwiftUI's @FocusState tracks SwiftUI's own focus
+            // system, so focusing the backing UIKit field directly - which is
+            // exactly what the engine does, and what makes typing work - can
+            // leave the binding untouched. That scored a genuine focus as a
+            // miss. Ask the responder chain instead: if the archetype's own view
+            // (or something inside it) is first responder, it was focused.
+            let focused = await MainActor.run { () -> Bool in
+                guard let token = archetype.effectToken, token.hasSuffix("textfield") || token.hasSuffix("textview"),
+                      let match = ScreenElementFinder.find(id: archetype.id, text: nil).first else { return false }
+                var stack: [UIView] = [match.view]
+                while let cur = stack.popLast() {
+                    if cur.isFirstResponder { return true }
+                    stack.append(contentsOf: cur.subviews)
+                }
+                return false
+            }
+            if focused, let token = archetype.effectToken, !effects.contains(token) { effects.append(token) }
             rows.append(Self.score(archetype, probe: probe, fired: fire, effects: effects))
             // Let any focus/keyboard/navigation settle before the next probe.
             try? await Task.sleep(nanoseconds: 250_000_000)

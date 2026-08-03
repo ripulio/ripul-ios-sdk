@@ -799,6 +799,52 @@ enum ScreenActuationEngine {
             v = cur.superview
         }
         trace.append("chain:no")
+
+        // 3-bis. The VIEW band — a real control beside the point.
+        //
+        // The a11y band (2c-band) only sees accessibility elements, and two very
+        // ordinary archetypes are invisible to it: a UIButton inside a SwiftUI
+        // List row published NO accessibility element at all (`seen=0`), and a
+        // UISwitch published one whose `accessibilityActivate()` declined. Both
+        // are perfectly real UIControls sitting in the view tree with actions
+        // wired — the ladder simply had no rung that reached a control BESIDE
+        // the point rather than under it, so both fell through to selecting the
+        // list row and reported success for a control that never moved.
+        //
+        // Same band rule as 2c-band, applied to views: vertically contain the
+        // point (which in a list means the row pointed at), then nearest
+        // horizontally. And actuate each control the way the PLATFORM does —
+        // a switch toggles and sends .valueChanged, a button sends
+        // .touchUpInside — because that is what the app's handler is waiting
+        // for. Only where something is genuinely wired: an unwired control
+        // reporting success is the false-success bug this ladder already
+        // learned once (0.7.47, HostingUIButton).
+        if let windowPoint {
+            var candidates: [(UIView, CGFloat)] = []
+            var stack: [UIView] = [view]
+            while let cur = stack.popLast() {
+                stack.append(contentsOf: cur.subviews)
+                guard !cur.isHidden, cur.alpha > 0.01, cur.isUserInteractionEnabled else { continue }
+                guard Self.isBandActuatable(cur) else { continue }
+                let f = cur.convert(cur.bounds, to: nil)
+                guard f.width > 0, f.height > 0 else { continue }
+                guard f.minY - 4 <= windowPoint.y, windowPoint.y <= f.maxY + 4 else { continue }
+                candidates.append((cur, abs(f.midX - windowPoint.x)))
+            }
+            candidates.sort { $0.1 < $1.1 }
+            for (candidate, dx) in candidates.prefix(3) {
+                guard Self.actuateControl(candidate) else { continue }
+                ScreenSnapshotStore.shared.invalidate()
+                trace.append("viewBand:fired(\(type(of: candidate)) dx=\(Int(dx)))")
+                return TapOutcome(success: true, via: "control(row)", error: nil,
+                                  activatedIdentifier: ScreenElementFinder.identifier(of: candidate),
+                                  activatedLabel: candidate.accessibilityLabel
+                                      ?? InspectedView.textContent(of: candidate),
+                                  trace: trace.joined(separator: " "))
+            }
+            trace.append(candidates.isEmpty ? "viewBand:none" : "viewBand:noneFired(\(candidates.count))")
+        }
+
         var g: UIView? = view
         var gestureStoppedAtBoundary = false
         var isTargetItself = true
@@ -863,6 +909,42 @@ enum ScreenActuationEngine {
     /// Where the tap lands, in SCREEN coordinates — the space accessibility
     /// frames live in. `windowPoint` is in the view's window; with none, the
     /// view's own centre stands in.
+    /// Eligible for the view band: a control the platform can actuate, or a view
+    /// carrying its own tap recognizer. Scroll views are excluded for the same
+    /// reason the gesture climb stops at them — their recognizers are scroll and
+    /// selection machinery, not this element's semantics.
+    static func isBandActuatable(_ v: UIView) -> Bool {
+        if v is UIScrollView { return false }
+        if v is UIControl { return true }
+        return v.gestureRecognizers?.contains { $0.isEnabled && $0 is UITapGestureRecognizer } == true
+    }
+
+    /// Actuate a control the way the PLATFORM does, and report honestly whether
+    /// anything was wired to receive it. `sendActions` on a control with no
+    /// targets is a silent no-op — reporting that as success is the bug this
+    /// ladder already learned once with SwiftUI's HostingUIButton.
+    static func actuateControl(_ v: UIView) -> Bool {
+        if let sw = v as? UISwitch {
+            guard !sw.allTargets.isEmpty else { return false }
+            sw.setOn(!sw.isOn, animated: true)
+            sw.sendActions(for: .valueChanged)
+            return true
+        }
+        if let control = v as? UIControl {
+            let wired = control.allTargets.contains { target in
+                !(control.actions(forTarget: target, forControlEvent: .touchUpInside) ?? []).isEmpty
+            }
+            guard wired else { return false }
+            control.sendActions(for: .touchUpInside)
+            return true
+        }
+        for gr in v.gestureRecognizers ?? [] where gr.isEnabled {
+            guard let tap = gr as? UITapGestureRecognizer else { continue }
+            if TapElementTool.fireTapTargets(of: tap) { return true }
+        }
+        return false
+    }
+
     private static func screenPoint(for view: UIView, windowPoint: CGPoint?) -> CGPoint {
         // A window point converts through a WINDOW, never through the target
         // view. The view can be DETACHED by the time it is actuated — macro
