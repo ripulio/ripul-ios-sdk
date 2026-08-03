@@ -24,9 +24,10 @@ final class MacroReplayHUDControllerTests: XCTestCase {
             .resolved(FakeElement(id: selector.id ?? "x"))
         }
         func performTap(_ element: FakeElement, matchId: String?, matchText: String?) -> (success: Bool, error: String?) { (true, nil) }
-        func performTapDetailed(_ element: FakeElement, matchId: String?, matchText: String?) -> (success: Bool, via: String?, error: String?) { (true, "fake", nil) }
+        func performTapDetailed(_ element: FakeElement, matchId: String?, matchText: String?, anchor: MacroAnchor?) -> (success: Bool, via: String?, error: String?) { (true, "fake", nil) }
         func performType(_ element: FakeElement, text: String, append: Bool) -> (success: Bool, error: String?) { (true, nil) }
         func performScroll(_ element: FakeElement, direction: String, amount: Double) -> Bool { true }
+        func performSetValue(_ element: FakeElement, value: String) -> (success: Bool, via: String?, error: String?) { (true, "fake", nil) }
         func describe(_ element: FakeElement) -> String? { "FakeElement(\(element.id))" }
     }
 

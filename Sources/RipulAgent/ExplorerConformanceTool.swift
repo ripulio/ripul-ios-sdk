@@ -117,6 +117,19 @@ public struct ExplorerConformanceTool: NativeTool {
             try? await Task.sleep(nanoseconds: 250_000_000)
         }
 
+        // ---- Anchor phase ----------------------------------------------
+        // Proves the one sanctioned exception to "no coordinates past
+        // resolve": an element-relative anchor recorded against the split
+        // container must (a) have been needed at all (`pointMattered`), (b)
+        // stay absent for a tap identity alone can replay, and (c) still
+        // press the SAME half after the container moves and resizes —
+        // resolved against the live frame, while the stale screen point
+        // provably no longer covers that half.
+        if fire {
+            rows.append(contentsOf: await Self.anchorPhase())
+            await MainActor.run { RipulConformanceState.shared.splitShifted = false }
+        }
+
         let passed = rows.filter { ($0["result"] as? String)?.hasPrefix("pass") == true }.count
         return [
             "success": true,
@@ -131,6 +144,137 @@ public struct ExplorerConformanceTool: NativeTool {
     }
 
     #if canImport(UIKit)
+    /// The anchor proof. All geometry is read from LIVE frames on the main
+    /// actor — nothing here assumes padding values or screen sizes.
+    private static func anchorPhase() async -> [[String: Any]] {
+        var rows: [[String: Any]] = []
+        let splitId = RipulConformance.prefix + "uikit.split"
+        let buttonId = RipulConformance.prefix + "uikit.button"
+
+        // The split row is the last row of the sheet — scroll it into view if
+        // the sheet is too short, or every row below reports not-on-screen.
+        await MainActor.run {
+            guard let m = ScreenElementFinder.find(id: splitId, text: nil).first else { return }
+            let f = m.view.convert(m.view.bounds, to: nil)
+            if f.maxY > m.window.bounds.height - 40,
+               let sv = ScrollElementTool.enclosingScrollView(of: m.view) {
+                _ = ScreenActuationEngine.performScroll(on: sv, direction: "down", amount: 0.6)
+            }
+        }
+        try? await Task.sleep(nanoseconds: 500_000_000)
+
+        // (a) Locality: the reticule pointed at the right half must fire the
+        // right half — through the full pick → resolve → actuate path.
+        await MainActor.run { RipulConformanceLog.shared.clear() }
+        let probeTrace = await MainActor.run { () -> String in
+            guard let m = ScreenElementFinder.find(id: splitId, text: nil).first,
+                  let live = ViewInspectorController.live else { return "split control or explorer missing" }
+            let f = m.view.convert(m.view.bounds, to: nil)
+            let probe = live.probe(atWindowPoint: CGPoint(x: f.minX + f.width * 0.8, y: f.midY), fire: true)
+            return ((probe["fired"] as? [String: Any])?["trace"] as? String) ?? "no fire result"
+        }
+        let localityEffects = await MainActor.run { RipulConformanceLog.shared.fired }
+        rows.append(["archetype": "Anchor: point picks the half it is over", "id": splitId,
+                     "result": localityEffects.contains("split.right") && !localityEffects.contains("split.left")
+                         ? "pass" : "fail",
+                     "detail": "fired [\(localityEffects.joined(separator: ","))] — \(probeTrace)"])
+        try? await Task.sleep(nanoseconds: 250_000_000)
+
+        // (b) The exception stays exceptional: `pointMattered` must be TRUE
+        // for the anonymous split (two point-eligible controls, nothing
+        // nameable) and FALSE for an off-centre tap on a named UIButton —
+        // that is the rule that keeps anchors off ordinary semantic steps.
+        let shapes = await MainActor.run { () -> (split: Bool?, button: Bool?) in
+            var split: Bool?, button: Bool?
+            if let m = ScreenElementFinder.find(id: splitId, text: nil).first {
+                let f = m.view.convert(m.view.bounds, to: nil)
+                split = ScreenActuationEngine.resolveTap(on: m.view, matchId: splitId, matchText: nil,
+                                                         at: CGPoint(x: f.minX + f.width * 0.8, y: f.midY)).pointMattered
+            }
+            if let m = ScreenElementFinder.find(id: buttonId, text: nil).first {
+                let f = m.view.convert(m.view.bounds, to: nil)
+                button = ScreenActuationEngine.resolveTap(on: m.view, matchId: buttonId, matchText: nil,
+                                                          at: CGPoint(x: f.minX + f.width * 0.85, y: f.midY)).pointMattered
+            }
+            return (split, button)
+        }
+        rows.append(["archetype": "Anchor: recorded only when the point disambiguated", "id": splitId,
+                     "result": shapes.split == true && shapes.button == false ? "pass" : "fail",
+                     "detail": "pointMattered — split: \(shapes.split.map(String.init) ?? "unresolved"), "
+                         + "uikit.button off-centre: \(shapes.button.map(String.init) ?? "unresolved") (want true / false)"])
+
+        // (c) Element-grounded replay: synthesize the recorded form (durable
+        // selector + element-relative anchor), MOVE AND RESIZE the container,
+        // then replay through the production path — selector → live view →
+        // anchor → live frame → point → resolve → actuate.
+        struct Recorded { let selector: MacroSelector; let anchor: MacroAnchor?; let frame: CGRect; let point: CGPoint }
+        let recorded = await MainActor.run { () -> Recorded? in
+            guard let m = ScreenElementFinder.find(id: splitId, text: nil).first else { return nil }
+            let f = m.view.convert(m.view.bounds, to: nil)
+            let p = CGPoint(x: f.minX + f.width * 0.8, y: f.midY)
+            let rtl = m.view.effectiveUserInterfaceLayoutDirection == .rightToLeft
+            return Recorded(selector: MacroSelector(describing: m.view),
+                            anchor: MacroAnchor.fraction(x: p.x, y: p.y, frameX: f.minX, frameY: f.minY,
+                                                         width: f.width, height: f.height, rightToLeft: rtl),
+                            frame: f, point: p)
+        }
+        guard let recorded, let anchor = recorded.anchor else {
+            rows.append(["archetype": "Anchor: replay after the element moves", "id": splitId,
+                         "result": "fail", "detail": "could not record selector + anchor"])
+            return rows
+        }
+
+        await MainActor.run { RipulConformanceState.shared.splitShifted = true }
+        try? await Task.sleep(nanoseconds: 600_000_000)
+        await MainActor.run { RipulConformanceLog.shared.clear() }
+
+        let replay = await MainActor.run { () -> (ok: Bool, via: String?, newFrame: CGRect?, error: String?) in
+            let resolver = LiveScreenResolver()
+            guard case .resolved(let view) = resolver.resolveTap(recorded.selector) else {
+                return (false, nil, nil, "selector \(recorded.selector.compactSummary) did not resolve after the move")
+            }
+            let newFrame = view.convert(view.bounds, to: nil)
+            let out = resolver.performTapDetailed(view, matchId: recorded.selector.id,
+                                                  matchText: recorded.selector.text, anchor: anchor)
+            return (out.success, out.via, newFrame, out.error)
+        }
+        let replayEffects = await MainActor.run { RipulConformanceLog.shared.fired }
+
+        var frameMoved = false
+        var derivedIn = false
+        var staleIn = true
+        var stalePointProof = "no post-move frame"
+        if let nf = replay.newFrame {
+            frameMoved = abs(nf.minX - recorded.frame.minX) > 40 || abs(nf.width - recorded.frame.width) > 40
+            // The geometric statement of why screen coordinates are banned:
+            // the anchored point follows the element into its new right half;
+            // the stale screen point no longer covers it.
+            let rightHalf = CGRect(x: nf.midX, y: nf.minY, width: nf.width / 2, height: nf.height)
+            let derived = anchor.point(frameX: nf.minX, frameY: nf.minY,
+                                       width: nf.width, height: nf.height, rightToLeft: false)
+            derivedIn = rightHalf.contains(CGPoint(x: derived.x, y: derived.y))
+            staleIn = rightHalf.contains(recorded.point)
+            stalePointProof = "anchored point (\(Int(derived.x)),\(Int(derived.y))) in new right half: \(derivedIn); "
+                + "stale screen point (\(Int(recorded.point.x)),\(Int(recorded.point.y))) in new right half: \(staleIn)"
+        }
+
+        let replayPassed = replay.ok && frameMoved
+            && replayEffects.contains("split.right") && !replayEffects.contains("split.left")
+        rows.append(["archetype": "Anchor: replay after the element moves", "id": splitId,
+                     "result": replayPassed ? "pass" : "fail",
+                     "detail": "frame \(short(recorded.frame)) → \(replay.newFrame.map(short) ?? "?"), "
+                         + "moved: \(frameMoved), fired [\(replayEffects.joined(separator: ","))] via \(replay.via ?? "none")"
+                         + (replay.error.map { " — \($0)" } ?? "")])
+        rows.append(["archetype": "Anchor: stale screen point would miss", "id": splitId,
+                     "result": derivedIn && !staleIn ? "pass" : "fail",
+                     "detail": stalePointProof])
+        return rows
+    }
+
+    private static func short(_ r: CGRect) -> String {
+        "(\(Int(r.minX)),\(Int(r.minY)) \(Int(r.width))×\(Int(r.height)))"
+    }
+
     private static func score(_ a: RipulArchetype, probe: [String: Any], fired: Bool,
                               effects: [String]) -> [String: Any] {
         var row: [String: Any] = ["archetype": a.title, "id": a.id]

@@ -90,6 +90,58 @@ public struct MacroSelector: Codable, Equatable {
     }
 }
 
+/// An element-relative tap point — the ONE sanctioned exception to "no
+/// coordinates past resolve". Fractions of the element's own bounds, measured
+/// from the LEADING edge (not left — an anchor recorded in an LTR layout lands
+/// on the mirrored control under RTL) and the top edge. Resolved against the
+/// element's LIVE frame at the moment of firing, never against a stored screen
+/// position: the element moving or resizing between record and replay is the
+/// normal case, not the edge case.
+///
+/// Recorded only when the point genuinely disambiguated the tap (two wired
+/// controls inside one nameable container — see
+/// `ScreenActuationEngine.ResolvedTarget.pointMattered`). A tap whose target
+/// is fully named by its selector carries no anchor: the exception must stay
+/// exceptional, or every step silently becomes a coordinate tap again.
+public struct MacroAnchor: Codable, Equatable {
+    /// Fraction of the element's width from its leading edge, clamped 0…1.
+    public var leading: Double
+    /// Fraction of the element's height from its top edge, clamped 0…1.
+    public var top: Double
+
+    public init(leading: Double, top: Double) {
+        self.leading = min(max(leading, 0), 1)
+        self.top = min(max(top, 0), 1)
+    }
+
+    /// Synthesize from an absolute point and the element's frame, both in the
+    /// same coordinate space. Nil for a degenerate frame — a zero-area element
+    /// has no interior to be a fraction of.
+    public static func fraction(x: Double, y: Double,
+                                frameX: Double, frameY: Double,
+                                width: Double, height: Double,
+                                rightToLeft: Bool) -> MacroAnchor? {
+        guard width > 0, height > 0 else { return nil }
+        let fromLeft = (x - frameX) / width
+        return MacroAnchor(leading: rightToLeft ? 1 - fromLeft : fromLeft,
+                           top: (y - frameY) / height)
+    }
+
+    /// The absolute point this anchor names inside a (live) frame, in the
+    /// frame's own coordinate space.
+    public func point(frameX: Double, frameY: Double,
+                      width: Double, height: Double,
+                      rightToLeft: Bool) -> (x: Double, y: Double) {
+        let fromLeft = rightToLeft ? 1 - leading : leading
+        return (x: frameX + width * fromLeft, y: frameY + height * top)
+    }
+
+    /// "80%,50%" — for step labels and replay logs.
+    public var compactSummary: String {
+        "\(Int((leading * 100).rounded()))%,\(Int((top * 100).rounded()))%"
+    }
+}
+
 public enum MacroStepKind: String, Codable {
     case tap, type, scroll, wait
     /// Set a value-bearing control directly — a date picker, switch, slider,
@@ -130,6 +182,10 @@ public struct MacroStep: Codable, Equatable, Identifiable {
     /// `.pause` — seconds to sleep. Kept separate from `timeout`: a pause
     /// always succeeds after this long, it is not a deadline on a condition.
     public var seconds: Double?
+    /// `.tap` — element-relative tap point, present only when the recorded
+    /// point disambiguated between several pressable things inside the
+    /// selector's element. See `MacroAnchor`.
+    public var anchor: MacroAnchor?
 
     /// Human-readable, captured at record time (e.g. "Tap 'Clock In' (button)")
     /// — shown in the recording UI's step list and folded into the synthesized
@@ -139,7 +195,8 @@ public struct MacroStep: Codable, Equatable, Identifiable {
 
     public init(id: String = UUID().uuidString, kind: MacroStepKind, selector: MacroSelector,
                text: String? = nil, append: Bool? = nil, direction: String? = nil, amount: Double? = nil,
-               state: String? = nil, timeout: Double? = nil, seconds: Double? = nil, recordedLabel: String) {
+               state: String? = nil, timeout: Double? = nil, seconds: Double? = nil,
+               anchor: MacroAnchor? = nil, recordedLabel: String) {
         self.id = id
         self.kind = kind
         self.selector = selector
@@ -150,6 +207,7 @@ public struct MacroStep: Codable, Equatable, Identifiable {
         self.state = state
         self.timeout = timeout
         self.seconds = seconds
+        self.anchor = anchor
         self.recordedLabel = recordedLabel
     }
 }

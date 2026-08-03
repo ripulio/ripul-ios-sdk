@@ -41,6 +41,16 @@ final class RipulConformanceLog: ObservableObject {
     func contains(_ token: String) -> Bool { fired.contains(token) }
 }
 
+/// Layout state the sweep's anchor phase toggles. Moving AND resizing the
+/// split control between an anchored record and its replay is the whole test:
+/// an element-relative anchor follows the element; a screen-grounded
+/// coordinate keeps pointing at where it used to be.
+@MainActor
+final class RipulConformanceState: ObservableObject {
+    static let shared = RipulConformanceState()
+    @Published var splitShifted = false
+}
+
 /// One row under test: what it is, and what the SDK should be able to do with it.
 struct RipulArchetype: Identifiable {
     let id: String            // stamped identifier, "ripul.conformance.<name>"
@@ -118,6 +128,7 @@ struct RipulConformanceView: View {
     @State private var toggleOn = false
     @FocusState private var swiftuiFieldFocused: Bool
     @ObservedObject private var log = RipulConformanceLog.shared
+    @ObservedObject private var state = RipulConformanceState.shared
 
     // Every archetype reports the effect the PLATFORM produced, not the effect
     // the engine believes it caused. Focus counts for a text control, a value
@@ -173,6 +184,20 @@ struct RipulConformanceView: View {
                     // has no intrinsic size in a VStack, so it measured zero and
                     // the sweep reported this archetype as not-on-screen.
                     .frame(height: 44)
+                }
+                Group {
+                    Text("Anchor").font(.headline)
+                    // Two wired but deliberately ANONYMOUS controls in one
+                    // stamped container — no id, no title, no accessibility
+                    // element on either half, so the tap POINT is the only
+                    // thing that can say which was meant. The sweep's anchor
+                    // phase records an element-relative anchor against the
+                    // container, flips `splitShifted` (moving AND resizing the
+                    // row), and replays — the anchor must follow the element.
+                    RipulSplitControlRow(id: RipulConformance.prefix + "uikit.split")
+                        .padding(.leading, state.splitShifted ? 96 : 0)
+                        .padding(.trailing, state.splitShifted ? 120 : 0)
+                        .frame(height: 44)
                 }
                 if !log.fired.isEmpty {
                     Text("Activations").font(.headline)
@@ -258,6 +283,48 @@ struct RipulUIKitTextViewRow: UIViewRepresentable {
             RipulConformanceLog.shared.note("uikit.textview")
         }
     }
+}
+
+/// A wired control with NO identity of any kind — no accessibilityIdentifier,
+/// no title, no accessibility element. The half that fires is decidable only
+/// by where the tap landed, which is precisely the shape the element-relative
+/// anchor exists for.
+final class RipulHalfControl: UIControl {
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        isAccessibilityElement = false
+    }
+    required init?(coder: NSCoder) { fatalError() }
+}
+
+struct RipulSplitControlRow: UIViewRepresentable {
+    let id: String
+    func makeUIView(context: Context) -> UIView {
+        let container = UIView()
+        container.accessibilityIdentifier = id
+        let left = RipulHalfControl()
+        left.backgroundColor = UIColor.systemIndigo.withAlphaComponent(0.35)
+        left.addAction(UIAction { _ in RipulConformanceLog.shared.note("split.left") }, for: .touchUpInside)
+        let right = RipulHalfControl()
+        right.backgroundColor = UIColor.systemOrange.withAlphaComponent(0.35)
+        right.addAction(UIAction { _ in RipulConformanceLog.shared.note("split.right") }, for: .touchUpInside)
+        for half in [left, right] {
+            half.translatesAutoresizingMaskIntoConstraints = false
+            container.addSubview(half)
+        }
+        NSLayoutConstraint.activate([
+            left.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            left.topAnchor.constraint(equalTo: container.topAnchor),
+            left.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+            left.widthAnchor.constraint(equalTo: container.widthAnchor, multiplier: 0.5),
+            right.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            right.topAnchor.constraint(equalTo: container.topAnchor),
+            right.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+            right.widthAnchor.constraint(equalTo: container.widthAnchor, multiplier: 0.5),
+        ])
+        return container
+    }
+    func updateUIView(_ uiView: UIView, context: Context) {}
 }
 
 struct RipulUIKitSwitchRow: UIViewRepresentable {

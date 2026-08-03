@@ -55,7 +55,7 @@ final class MacroReplayEngineTests: XCTestCase {
             return (true, nil)
         }
 
-        func performTapDetailed(_ element: FakeElement, matchId: String?, matchText: String?) -> (success: Bool, via: String?, error: String?) {
+        func performTapDetailed(_ element: FakeElement, matchId: String?, matchText: String?, anchor: MacroAnchor?) -> (success: Bool, via: String?, error: String?) {
             performTapCalls.append(element.selectorId)
             if let id = element.selectorId, actuationFails.contains(id) {
                 return (false, nil, "fake actuation failure for \(id)")
@@ -73,6 +73,13 @@ final class MacroReplayEngineTests: XCTestCase {
 
         func performScroll(_ element: FakeElement, direction: String, amount: Double) -> Bool {
             true
+        }
+
+        func performSetValue(_ element: FakeElement, value: String) -> (success: Bool, via: String?, error: String?) {
+            if let id = element.selectorId, actuationFails.contains(id) {
+                return (false, nil, "fake actuation failure for \(id)")
+            }
+            return (true, "setValue(fake)", nil)
         }
 
         func describe(_ element: FakeElement) -> String? {

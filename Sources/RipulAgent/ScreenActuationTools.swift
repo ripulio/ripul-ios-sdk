@@ -575,107 +575,173 @@ enum ScreenActuationEngine {
         let contentSize: CGSize
     }
 
-    /// The tap ladder (see the file header). `matchId`/`matchText` feed path 2's
-    /// leaf matching within the view's own accessibility subtree.
+    // MARK: Resolve → actuate (two stages, one currency)
+    //
+    // Coordinates get exactly two legal homes: inside `resolveTap`, and inside
+    // an explicit element-relative `MacroAnchor` that is converted back to a
+    // point against the element's LIVE frame immediately before resolve runs.
+    // `actuate` never sees a coordinate — it consumes the candidate list the
+    // resolve stage discovered, in the same rung order the old single-pass
+    // ladder tried, so behaviour is preserved while the point stops leaking
+    // past resolution. The explorer's readout and the fire consume the SAME
+    // `ResolvedTarget`, so the prediction cannot drift from the behaviour.
+
+    /// One way the tap could land, discovered at resolve time.
+    struct TapCandidate {
+        enum Kind {
+            /// A platform control (or tap-recognizer view found by the band /
+            /// hit-test rungs) — wiring re-checked at fire via `actuateControl`.
+            case control(UIView)
+            /// A text input — tapping it MEANS focusing it.
+            case focus(UIView)
+            /// An accessibility element. Activation IS the probe: there is no
+            /// public "could activate" check, so firing is try-and-see.
+            case a11y(NSObject)
+            /// The legacy `accessibilityActivate()` climb, starting here.
+            case chainActivate(UIView)
+            /// A view carrying its own enabled tap recognizers.
+            case gesture(UIView)
+            /// Container row selection, walking up from here.
+            case rowSelect(UIView)
+        }
+        let kind: Kind
+        /// The `via` string reported if this candidate fires — the historical
+        /// ladder's vocabulary, kept so traces stay comparable across releases.
+        let via: String
+        /// Trace token stem naming how this candidate was discovered.
+        let token: String
+        /// Whether the readout may PROMISE this will press: true only where
+        /// firing is checkable without side effects (a wired control, a
+        /// focusable input, a live recognizer, a selectable row). `a11y` and
+        /// `chainActivate` are never promised — `accessibilityActivate()`
+        /// performs the action rather than reporting whether it could.
+        let promised: Bool
+        /// Whether the POINT chose this candidate (point / band / hit-test
+        /// rungs). Drives `pointMattered`, which drives anchor recording.
+        let pointDerived: Bool
+    }
+
+    /// Everything `actuate` needs, and the single value every consumer of a
+    /// resolution reads — readout, teal outline, fire, macro record. Nothing
+    /// in this struct is a screen position: coordinates stop at resolve.
+    struct ResolvedTarget {
+        let target: UIView
+        let matchId: String?
+        let matchText: String?
+        let candidates: [TapCandidate]
+        /// True when the tap position genuinely disambiguated — the first
+        /// meaningful candidate was chosen by the point AND more than one
+        /// point-eligible object was in reach. This is the "custom control
+        /// that needs the exact tap point" exception: only such a tap records
+        /// a `MacroAnchor`; everything else replays purely by identity.
+        let pointMattered: Bool
+        let resolveTrace: [String]
+
+        /// The first candidate whose firing can be promised without a side
+        /// effect — what the explorer outlines in teal and names in the
+        /// readout, and the first thing `actuate` will genuinely try to drive.
+        var promise: TapCandidate? { candidates.first(where: { $0.promised }) }
+
+        /// The view a promised candidate would drive, when it is view-backed —
+        /// feeds the explorer's teal outline and the record chooser.
+        var promisedView: UIView? {
+            switch promise?.kind {
+            case .control(let v), .focus(let v), .gesture(let v), .rowSelect(let v): return v
+            default: return nil
+            }
+        }
+    }
+
+    /// Whether anything is genuinely listening to this view. For a control,
+    /// `allControlEvents` — the only wiring test that sees a block-based
+    /// `addAction` handler, and empty for SwiftUI's `HostingUIButton`, which
+    /// handles presses internally and silently swallows `sendActions`. For a
+    /// plain view, an enabled tap recognizer. Mirrors `actuateControl` exactly
+    /// — one wiring policy, both stages.
+    static func controlIsWired(_ v: UIView) -> Bool {
+        guard let control = v as? UIControl else {
+            return v.gestureRecognizers?.contains { $0.isEnabled && $0 is UITapGestureRecognizer } == true
+        }
+        if control is UISwitch { return control.allControlEvents.contains(.valueChanged) }
+        return [UIControl.Event.touchUpInside, .primaryActionTriggered, .valueChanged]
+            .contains { control.allControlEvents.contains($0) }
+    }
+
+    /// RESOLVE: what could this tap drive? Side-effect free — nothing here
+    /// fires, focuses or selects. `windowPoint` (where the user actually
+    /// pointed, in the view's window coordinates) is only consulted here;
+    /// with none, the view's own centre stands in for the accessibility point
+    /// rungs, and the view-band / hit-test rungs stay off exactly as the old
+    /// ladder kept them for predicate-addressed taps.
     ///
-    /// `windowPoint` — where the user actually pointed, in the view's window
-    /// coordinates — is what makes path 2c possible: SwiftUI leaves are often
-    /// anonymous scaffolding (`_UIInheritedView` with no id, no text, no
-    /// control), and then the POINT is the only thing that identifies which
-    /// element was meant. Defaults to the view's own centre, which is what
-    /// "tap this element" means for a caller that resolved it by predicate.
-    static func performTap(on view: UIView, matchId: String?, matchText: String?,
-                           at windowPoint: CGPoint? = nil) -> TapOutcome {
-        // Stamp the SDK version FIRST. Three separate rounds have been spent
-        // deducing which build produced a trace from which tokens happened to
-        // be present in it — a fix shipped, a stale binary tested, and the
-        // result read as "the fix didn't work". A trace has to say what
-        // produced it.
+    /// Candidates are appended in the historical rung order (1, 2, 2a, 2b,
+    /// 2c, 2c-band, 2c-bis, 2d, 3, 3-bis, 3-ter, 4, 5 — see the file header
+    /// and docs/element-resolution-and-actuation.md), deduped by object so an
+    /// element that declined once is never re-probed by a later rung.
+    static func resolveTap(on view: UIView, matchId: String?, matchText: String?,
+                           at windowPoint: CGPoint? = nil) -> ResolvedTarget {
+        // Stamp the SDK version FIRST — a trace has to say what produced it.
         var trace: [String] = ["sdk=\(ripulSDKVersion)"]
-        // Worth naming: a detached target means every coordinate derived FROM
-        // it is meaningless, and it explains failures that otherwise look like
-        // empty space.
-        // A UIWindow's own `window` is nil, so the naive check called every
-        // window detached — a misleading token in exactly the diagnostics that
-        // are supposed to be trustworthy.
+        // A detached target means every coordinate derived FROM it is
+        // meaningless. (A UIWindow's own `window` is nil — not detached.)
         if view.window == nil, !(view is UIWindow) { trace.append("detached") }
+
+        var candidates: [TapCandidate] = []
+        var seenA11y = Set<ObjectIdentifier>()
+        var seenControls = Set<ObjectIdentifier>()
+        var seenFocus = Set<ObjectIdentifier>()
+        var pointDerivedObjects = Set<ObjectIdentifier>()
+
+        func addA11y(_ el: NSObject, via: String, token: String, pointDerived: Bool) {
+            guard seenA11y.insert(ObjectIdentifier(el)).inserted else { return }
+            if pointDerived { pointDerivedObjects.insert(ObjectIdentifier(el)) }
+            candidates.append(TapCandidate(kind: .a11y(el), via: via, token: token,
+                                           promised: false, pointDerived: pointDerived))
+        }
+        func addControl(_ v: UIView, via: String, token: String, pointDerived: Bool) {
+            guard seenControls.insert(ObjectIdentifier(v)).inserted else { return }
+            if pointDerived { pointDerivedObjects.insert(ObjectIdentifier(v)) }
+            candidates.append(TapCandidate(kind: .control(v), via: via, token: token,
+                                           promised: controlIsWired(v), pointDerived: pointDerived))
+        }
+        func addFocus(_ v: UIView, token: String, pointDerived: Bool) {
+            guard seenFocus.insert(ObjectIdentifier(v)).inserted else { return }
+            if pointDerived { pointDerivedObjects.insert(ObjectIdentifier(v)) }
+            candidates.append(TapCandidate(kind: .focus(v), via: "focus", token: token,
+                                           promised: true, pointDerived: pointDerived))
+        }
+
+        // 1. The target IS a platform control. Wiring (`controlIsWired`) is
+        //    what decides whether this is promised; an unwired control still
+        //    stays a candidate so the trace can say `unwired` at fire time.
         if let control = view as? UIControl {
-            // Only claim this path if something is actually WIRED to the event.
-            // SwiftUI ships its own UIControl shells — `HostingUIButton` — that
-            // handle the press internally rather than through target/action, so
-            // `sendActions` is a silent no-op on them. Firing regardless made
-            // the ladder stop at path 1 and report `via uicontrol` for a button
-            // that did nothing, which is worse than failing: it hides the
-            // accessibility activation below that would have worked, and it
-            // tells the caller the tap landed.
-            let wired = control.allTargets.contains { target in
-                control.actions(forTarget: target, forControlEvent: .touchUpInside)?.isEmpty == false
-            }
-            if wired {
-                control.sendActions(for: .touchUpInside)
-                ScreenSnapshotStore.shared.invalidate()
-                trace.append("control:fired")
-                return TapOutcome(success: true, via: "uicontrol", error: nil,
-                                  trace: trace.joined(separator: " "))
-            }
-            trace.append("control:noTargets(\(type(of: control)))")
+            addControl(control, via: "uicontrol", token: "control", pointDerived: false)
+            if !controlIsWired(control) { trace.append("control:noTargets(\(type(of: control)))") }
         } else {
             trace.append("control:no")
         }
-        if let el = TapElementTool.activateAccessibilityElement(in: view, id: matchId, text: matchText) {
-            ScreenSnapshotStore.shared.invalidate()
-            trace.append("a11y:activated")
-            return TapOutcome(success: true, via: "accessibilityElement", error: nil,
-                              activatedIdentifier: InspectedView.objectAccessibilityIdentifier(el),
-                              activatedLabel: el.accessibilityLabel,
-                              trace: trace.joined(separator: " "))
-        }
-        trace.append("a11y:no")
 
-        // 2a. The target IS a text input. Then tapping it means focusing it —
-        //     unambiguously, with no search and no identity involved — and that
-        //     must be settled before any path that climbs to an ancestor.
-        //
-        //     Proven on device: SwiftUI propagates a `.uiKitIdentifier` from an
-        //     enclosing island DOWN onto a child's accessibilityIdentifier, so
-        //     WAC's notes field reports the PANEL's id (`addShift.notes.root`)
-        //     instead of its own. The strict climb below then matched that id
-        //     honestly and activated the panel's own element — collapsing the
-        //     panel instead of entering the field. Identity that has been
-        //     inherited from an ancestor points AT the ancestor; a text input
-        //     needs no identity at all.
-        if let field = view as? UIView & UITextInput, field.canBecomeFirstResponder,
-           field.becomeFirstResponder() {
-            ScreenSnapshotStore.shared.invalidate()
-            trace.append("focusSelf:activated(\(type(of: view)))")
-            return TapOutcome(success: true, via: "focus", error: nil,
-                              activatedIdentifier: view.accessibilityIdentifier,
-                              activatedLabel: view.accessibilityLabel,
-                              trace: trace.joined(separator: " "))
+        // 2. An accessibility element in the target's own subtree matching the
+        //    requested identity (or the lone element the subtree exposes).
+        if let el = TapElementTool.findAccessibilityElement(in: view, id: matchId, text: matchText) {
+            addA11y(el, via: "accessibilityElement", token: "a11y", pointDerived: false)
+        } else {
+            trace.append("a11y:no")
         }
 
-        // 2b. SwiftUI hosting boundary. A leaf inside a SwiftUI island — a
-        //     `.uiKitIdentifier` stamp, a text/image platform view — has no
-        //     accessibility element of its OWN: SwiftUI publishes the control's
-        //     element on the enclosing hosting view. Without this the whole rest
-        //     of the ladder is UIKit-shaped and finds nothing (SwiftUI buttons
-        //     are not UIControls and their recognizers are not
-        //     UITapGestureRecognizers), so pointing the View Explorer at a glass
-        //     field reported "not tappable" for a control that works under a
-        //     real finger.
-        //
-        //     Bounded two ways so it can never reach into unrelated UI: it stops
-        //     at the same container boundaries as the gesture path, and it is
-        //     STRICT — an actual id/text match, never the "only one element in
-        //     here" fallback that the direct call above allows.
+        // 2a. The target IS a text input — tapping it means focusing it,
+        //     settled before any path that climbs to an ancestor. Identity
+        //     inherited from an enclosing island points AT the island; a text
+        //     input needs no identity at all.
+        if let field = view as? UIView & UITextInput, field.canBecomeFirstResponder {
+            addFocus(view, token: "focusSelf(\(type(of: view)))", pointDerived: false)
+        }
+
+        // 2b. Ancestor climb, STRICT identity match, space-vetoed: an
+        //     ancestor's element may only stand in for the target if it
+        //     occupies roughly the same space. Space cannot be inherited.
         let hasIdentity = (matchId?.isEmpty == false) || (matchText?.isEmpty == false)
         if hasIdentity {
-            // An ancestor's element may only stand in for the target if it
-            // occupies roughly the same SPACE. An id can be inherited from an
-            // enclosing SwiftUI island, so matching on it alone led straight to
-            // the island's own element — a 360×93 panel activated on behalf of
-            // a 284×44 field. Space cannot be inherited: if the element found
-            // is far bigger than what was aimed at, it is a different control.
             let targetArea = max(1, view.bounds.width * view.bounds.height)
             func representsTarget(_ el: NSObject) -> Bool {
                 let f = el.accessibilityFrame
@@ -684,158 +750,76 @@ enum ScreenActuationEngine {
             }
             var a: UIView? = view.superview
             while let cur = a, !(cur is UIScrollView), !(cur is UIWindow) {
-                if let el = TapElementTool.activateAccessibilityElement(in: cur, id: matchId,
-                                                                       text: matchText, strict: true,
-                                                                       accept: representsTarget) {
-                    ScreenSnapshotStore.shared.invalidate()
-                    trace.append("a11yAncestor:activated(\(type(of: cur)))")
-                    return TapOutcome(success: true, via: "accessibilityElement(ancestor)", error: nil,
-                                      activatedIdentifier: InspectedView.objectAccessibilityIdentifier(el),
-                                      activatedLabel: el.accessibilityLabel,
-                                      trace: trace.joined(separator: " "))
+                if let el = TapElementTool.findAccessibilityElement(in: cur, id: matchId, text: matchText,
+                                                                    strict: true, accept: representsTarget) {
+                    addA11y(el, via: "accessibilityElement(ancestor)",
+                            token: "a11yAncestor(\(type(of: cur)))", pointDerived: false)
+                    break
                 }
                 a = cur.superview
             }
-            trace.append("a11yAncestor:no")
         } else {
             trace.append("a11yAncestor:noIdentity")
         }
 
-        // 2c. Point-targeted accessibility activation. A SwiftUI leaf is often
-        //     anonymous scaffolding — `_UIInheritedView`, no id, no text, not a
-        //     control — so there is nothing to match on and every path below is
-        //     UIKit-shaped. But accessibility elements carry SCREEN-space
-        //     frames, so the thing the user pointed AT is answerable even when
-        //     the view tree names nothing: take the tightest element containing
-        //     the point and activate it. Tried tightest-first because a row and
-        //     the label inside it both contain the point and only one of them
-        //     may be activatable.
+        // 2c. Point-targeted accessibility elements, tightest first — for
+        //     anonymous SwiftUI leaves the point is the only signal. The
+        //     screen point is the reticule when one was given, else the
+        //     view's own centre (what "tap this element" means for a caller
+        //     that resolved it by predicate).
         let screenPoint = Self.screenPoint(for: view, windowPoint: windowPoint)
         let hostRoot: UIView = Self.hostingAncestor(of: view) ?? view
         let byPoint = Self.accessibilityElements(in: hostRoot, containing: screenPoint)
-        for el in byPoint.prefix(4) where el.accessibilityActivate() {
-            ScreenSnapshotStore.shared.invalidate()
+        let allElements = Self.accessibilityElements(in: hostRoot, containing: nil)
+        for el in byPoint.prefix(4) {
             let name = el.accessibilityLabel ?? String(describing: type(of: el))
-            let others = byPoint.prefix(6).dropFirst()
-                .map { $0.accessibilityLabel ?? String(describing: type(of: $0)) }
-                .joined(separator: "|")
-            trace.append("a11yPoint:activated(\(name)) over{\(others)}")
-            return TapOutcome(success: true, via: "accessibilityElement(point)", error: nil,
-                              activatedIdentifier: InspectedView.objectAccessibilityIdentifier(el),
-                              activatedLabel: el.accessibilityLabel,
-                              trace: trace.joined(separator: " "))
+            addA11y(el, via: "accessibilityElement(point)", token: "a11yPoint(\(name))", pointDerived: true)
         }
-        // 2c-band. Same row, beside the point. An accessibility frame hugs its
-        //     CONTENT, but a row is full width: a leading-aligned button in a
-        //     440pt list row publishes a 93pt frame at x=40, so pointing at the
-        //     middle of the row lands 87pt to its right and contains-the-point
-        //     finds nothing. That is not an exotic layout, it is the commonest
-        //     one on the platform, and it was scoring three archetypes as
-        //     unreachable when the element was sitting right there.
-        //
-        //     The band is what makes this safe rather than a guess: require the
-        //     element to CONTAIN the point vertically, which in a list is
-        //     precisely the set of elements in the row the user pointed at, then
-        //     take the horizontally nearest. Never reaches into another row, and
-        //     an element genuinely elsewhere on screen is excluded by the y-test
-        //     rather than by a distance heuristic.
-        //     Reaching here already means the contains-the-point loop above
-        //     activated nothing — do NOT re-test it, `accessibilityActivate()`
-        //     performs the action rather than reporting whether it could.
-        do {
-            let band = Self.accessibilityElements(in: hostRoot, containing: nil)
-                .filter { el in
-                    let f = el.accessibilityFrame
-                    guard f.width > 0, f.height > 0 else { return false }
-                    guard f.minY - 4 <= screenPoint.y, screenPoint.y <= f.maxY + 4 else { return false }
-                    return abs(f.midX - screenPoint.x) <= max(hostRoot.bounds.width, 320) * 0.75
-                }
-                .sorted { abs($0.accessibilityFrame.midX - screenPoint.x) < abs($1.accessibilityFrame.midX - screenPoint.x) }
-            for el in band.prefix(3) where el.accessibilityActivate() {
-                ScreenSnapshotStore.shared.invalidate()
-                let name = el.accessibilityLabel ?? String(describing: type(of: el))
-                let dx = Int(abs(el.accessibilityFrame.midX - screenPoint.x))
-                trace.append("a11yBand:activated(\(name) dx=\(dx))")
-                return TapOutcome(success: true, via: "accessibilityElement(row)", error: nil,
-                                  activatedIdentifier: InspectedView.objectAccessibilityIdentifier(el),
-                                  activatedLabel: el.accessibilityLabel,
-                                  trace: trace.joined(separator: " "))
-            }
-            if !band.isEmpty {
-                let names = band.prefix(4)
-                    .map { $0.accessibilityLabel ?? String(describing: type(of: $0)) }
-                    .joined(separator: "|")
-                trace.append("a11yBand:noneActivated(\(band.count)){\(names)}")
-            }
-        }
-
-        // Name the losers too. "It tapped the wrong thing" is only debuggable
-        // if you can see what else was under the point and in what order.
-        let candidateNames = byPoint.prefix(6)
-            .map { $0.accessibilityLabel ?? String(describing: type(of: $0)) }
-            .joined(separator: "|")
         if byPoint.isEmpty {
-            // "noElement" alone is not a diagnosis — it cannot distinguish "the
-            // point is wrong" from "the frames are wrong" from "there is
-            // nothing here", and each of those has a different fix. Report the
-            // numbers: where we looked, what the target occupies, and what was
-            // available with its frame. Deduced twice from the bare token and
-            // got it wrong twice; the arithmetic is cheaper than a round trip.
-            let all = Self.accessibilityElements(in: hostRoot, containing: nil)
+            // Report the numbers — "noElement" alone cannot distinguish "the
+            // point is wrong" from "the frames are wrong" from "nothing here".
             let viewScreen = UIAccessibility.convertToScreenCoordinates(view.bounds, in: view)
-            let seen = all.prefix(4).map { el -> String in
+            let seen = allElements.prefix(4).map { el -> String in
                 let f = el.accessibilityFrame
                 let name = el.accessibilityLabel ?? String(describing: type(of: el))
                 return "\(name)@\(Self.short(f))"
             }.joined(separator: "|")
-            trace.append("a11yPoint:noElement(pt=\(Self.short(CGRect(origin: screenPoint, size: .zero)))"
+            trace.append("a11yPoint:none(pt=\(Self.short(CGRect(origin: screenPoint, size: .zero)))"
                 + " target=\(type(of: view))@\(Self.short(viewScreen)) host=\(type(of: hostRoot))"
-                + " seen=\(all.count){\(seen)})")
-        } else {
-            trace.append("a11yPoint:noneActivated(\(byPoint.count)){\(candidateNames)}")
+                + " seen=\(allElements.count){\(seen)})")
         }
 
-        // 2c-bis. Tapping a text input MEANS focusing it. Nothing above can do
-        //     that: a text view is not a control, `accessibilityActivate()` on
-        //     one returns false, and it has no tap recognizer of its own — so a
-        //     notes field or search box was "not tappable by any path" despite
-        //     being the most obviously tappable thing on screen. The semantic a
-        //     real finger produces is first-responder, so produce that.
-        if let field = Self.textInput(in: hostRoot, containing: screenPoint), field.becomeFirstResponder() {
-            ScreenSnapshotStore.shared.invalidate()
-            trace.append("focus:activated(\(type(of: field)))")
-            return TapOutcome(success: true, via: "focus", error: nil,
-                              activatedIdentifier: field.accessibilityIdentifier,
-                              activatedLabel: field.accessibilityLabel,
-                              trace: trace.joined(separator: " "))
+        // 2c-band. Accessibility elements BESIDE the point: contain it
+        //     vertically (the row pointed at), nearest horizontally. The
+        //     dedupe in `addA11y` keeps anything from 2c from being re-probed.
+        let band = allElements
+            .filter { el in
+                let f = el.accessibilityFrame
+                guard f.width > 0, f.height > 0 else { return false }
+                guard f.minY - 4 <= screenPoint.y, screenPoint.y <= f.maxY + 4 else { return false }
+                return abs(f.midX - screenPoint.x) <= max(hostRoot.bounds.width, 320) * 0.75
+            }
+            .sorted { abs($0.accessibilityFrame.midX - screenPoint.x) < abs($1.accessibilityFrame.midX - screenPoint.x) }
+        for el in band.prefix(3) {
+            let name = el.accessibilityLabel ?? String(describing: type(of: el))
+            let dx = Int(abs(el.accessibilityFrame.midX - screenPoint.x))
+            addA11y(el, via: "accessibilityElement(row)", token: "a11yBand(\(name) dx=\(dx))", pointDerived: true)
         }
-        trace.append("focus:no")
 
-        // 2d. The island publishes exactly ONE element. Then there is nothing to
-        //     disambiguate and no point to need: that element IS the control.
-        //     This is the same "only one element in here" rule path 2 applies to
-        //     the target's own subtree, applied at the SwiftUI boundary — which
-        //     is where a stamped leaf's element actually lives. It is why
-        //     `tap_element id=addShift.jobField` worked (it resolved the ISLAND,
-        //     so path 2 saw the lone element) while recording the same control
-        //     failed: recording targets the STAMP, whose own subtree is empty,
-        //     and the strict climb above refuses a lone unnamed element.
-        //     Deliberately last: a menu with rows has many elements, so this
-        //     cannot fire there and steal from the point path.
-        //
-        //     LOCALITY IS REQUIRED. "The only element in the island" was safe
-        //     only by accident: in a List every row is its own hosting island,
-        //     so the lone element was always the row pointed at. On a screen
-        //     that is ONE island — the common SwiftUI shape — the island
-        //     publishes one element and this rule pressed it from anywhere.
-        //     Eight archetypes at y=439 through y=639 all fired the same button
-        //     at y=651. A rule with no reference to the point cannot be part of
-        //     a point-resolution ladder; being last does not make it safe, only
-        //     late. So the lone element must still be level with where the user
-        //     actually pointed.
+        // 2c-bis. The tightest focusable text input under the point — a text
+        //     view is not a control and activates nothing, but tapping one
+        //     MEANS focusing it.
+        if let field = Self.textInput(in: hostRoot, containing: screenPoint) {
+            addFocus(field, token: "focusAtPoint(\(type(of: field)))", pointDerived: true)
+        }
+
+        // 2d. The lone element the enclosing island publishes — still level
+        //     with where the user pointed. LOCALITY IS REQUIRED: a rule with
+        //     no reference to the point pressed one button from anywhere on a
+        //     single-island screen. Being last makes a rung late, not safe.
         let islandY = windowPoint.map { Self.screenPoint(for: view, windowPoint: $0).y }
         if hostRoot !== view,
-           let el = TapElementTool.activateAccessibilityElement(
+           let el = TapElementTool.findAccessibilityElement(
                in: hostRoot, id: matchId, text: matchText,
                accept: { candidate in
                    guard let islandY else { return true }
@@ -843,59 +827,19 @@ enum ScreenActuationEngine {
                    guard f.height > 0 else { return true }
                    return f.minY - 8 <= islandY && islandY <= f.maxY + 8
                }) {
-            ScreenSnapshotStore.shared.invalidate()
-            trace.append("a11yIsland:activated(\(el.accessibilityLabel ?? "unnamed"))")
-            return TapOutcome(success: true, via: "accessibilityElement(island)", error: nil,
-                              activatedIdentifier: InspectedView.objectAccessibilityIdentifier(el),
-                              activatedLabel: el.accessibilityLabel,
-                              trace: trace.joined(separator: " "))
+            addA11y(el, via: "accessibilityElement(island)",
+                    token: "a11yIsland(\(el.accessibilityLabel ?? "unnamed"))", pointDerived: true)
         }
-        trace.append("a11yIsland:no")
 
-        var v: UIView? = view
-        while let cur = v {
-            if cur.responds(to: #selector(UIResponder.accessibilityActivate)), cur.accessibilityActivate() {
-                ScreenSnapshotStore.shared.invalidate()
-                trace.append("chain:activated")
-                return TapOutcome(success: true, via: "accessibilityActivate", error: nil, trace: trace.joined(separator: " "))
-            }
-            v = cur.superview
-        }
-        trace.append("chain:no")
+        // 3. The `accessibilityActivate()` climb — a blind probe, never
+        //    promised, coordinate-free, so the climb itself runs at fire time.
+        candidates.append(TapCandidate(kind: .chainActivate(view), via: "accessibilityActivate",
+                                       token: "chain", promised: false, pointDerived: false))
 
-        // 3-bis. The VIEW band — a real control beside the point.
-        //
-        // The a11y band (2c-band) only sees accessibility elements, and two very
-        // ordinary archetypes are invisible to it: a UIButton inside a SwiftUI
-        // List row published NO accessibility element at all (`seen=0`), and a
-        // UISwitch published one whose `accessibilityActivate()` declined. Both
-        // are perfectly real UIControls sitting in the view tree with actions
-        // wired — the ladder simply had no rung that reached a control BESIDE
-        // the point rather than under it, so both fell through to selecting the
-        // list row and reported success for a control that never moved.
-        //
-        // Same band rule as 2c-band, applied to views: vertically contain the
-        // point (which in a list means the row pointed at), then nearest
-        // horizontally. And actuate each control the way the PLATFORM does —
-        // a switch toggles and sends .valueChanged, a button sends
-        // .touchUpInside — because that is what the app's handler is waiting
-        // for. Only where something is genuinely wired: an unwired control
-        // reporting success is the false-success bug this ladder already
-        // learned once (0.7.47, HostingUIButton).
+        // 3-bis / 3-ter. The VIEW band and the platform's own hit-test — only
+        // when the caller really pointed somewhere (the old ladder's gate).
         if let windowPoint {
-            var candidates: [(UIView, CGFloat)] = []
-            // Search the ISLAND, not just the resolved element's subtree.
-            // `.uiKitIdentifier` stamps a BACKGROUND SIBLING, not an ancestor,
-            // so pointing at a stamped control resolves a 17pt-tall stamper view
-            // whose subtree is empty — the real UIButton is its sibling. A
-            // downward-only search finds nothing and declines a control that is
-            // sitting right there.
-            //
-            // Widening the root is only safe because the two rules that make
-            // this band trustworthy are already in place: the candidate must be
-            // LEVEL with the point, and an ambiguous band is refused rather than
-            // guessed at. Without those this would be the 148pt misfire again,
-            // with a bigger radius.
+            var bandControls: [(UIView, CGFloat)] = []
             var stack: [UIView] = [hostRoot]
             while let cur = stack.popLast() {
                 stack.append(contentsOf: cur.subviews)
@@ -904,152 +848,195 @@ enum ScreenActuationEngine {
                 let f = cur.convert(cur.bounds, to: nil)
                 guard f.width > 0, f.height > 0 else { continue }
                 guard f.minY - 4 <= windowPoint.y, windowPoint.y <= f.maxY + 4 else { continue }
-                // BESIDE the point, not merely somewhere in the same row. The
-                // first cut allowed 0.75x the container width - 300pt on a
-                // 400pt row - and pressed a UISwitch 148pt away while aiming at
-                // a UIButton, in the same cell. A leading-aligned control sits
-                // within a few tens of points of where you pointed; anything
-                // further is a different control, and actuating it is worse
-                // than refusing. Allow the gap between the point and the
-                // candidate's NEAREST EDGE, which is zero for anything the
-                // point is level with and grows only as you leave it.
+                // Gap to the NEAREST EDGE — zero for anything the point is
+                // level with, growing only as you leave it.
                 let gap = max(0, max(f.minX - windowPoint.x, windowPoint.x - f.maxX))
-                candidates.append((cur, gap))
+                bandControls.append((cur, gap))
             }
-            candidates.sort { $0.1 < $1.1 }
-            // AMBIGUITY is the danger, not distance. A distance cap gets this
-            // wrong both ways: 300pt pressed a UISwitch 148pt away in the wrong
-            // row, and 96pt then refused a leading-aligned switch 119pt from the
-            // centre of its OWN row — the very case the band exists for. Neither
-            // number is discoverable, because "how far is too far" depends
-            // entirely on the layout.
-            //
-            // What actually distinguishes them: when the point is level with one
-            // control, that control is what was meant however wide the row is.
-            // When it is level with several, no distance argument can say which,
-            // and pressing the nearest is a guess that has already been wrong.
-            // So: reach anything the point is level with, and refuse when the
-            // band is ambiguous unless one candidate is clearly nearest.
-            let nearest = candidates.first?.1 ?? 0
-            let contested = candidates.dropFirst().contains { $0.1 < nearest + 44 }
+            bandControls.sort { $0.1 < $1.1 }
+            // AMBIGUITY is the danger, not distance: when the point is level
+            // with exactly one control, that control is what was meant however
+            // wide the row is; level with several, refuse and name them.
+            let nearest = bandControls.first?.1 ?? 0
+            let contested = bandControls.dropFirst().contains { $0.1 < nearest + 44 }
             if contested, nearest > 8 {
-                let names = candidates.prefix(3)
+                let names = bandControls.prefix(3)
                     .map { "\(type(of: $0.0))@\(Int($0.1))" }.joined(separator: "|")
-                trace.append("viewBand:ambiguous(\(candidates.count)){\(names)}")
-                candidates = []
+                trace.append("viewBand:ambiguous(\(bandControls.count)){\(names)}")
+                bandControls = []
             }
-            for (candidate, dx) in candidates.prefix(3) {
-                guard Self.actuateControl(candidate) else { continue }
-                ScreenSnapshotStore.shared.invalidate()
-                trace.append("viewBand:fired(\(type(of: candidate)) dx=\(Int(dx)))")
-                return TapOutcome(success: true, via: "control(row)", error: nil,
-                                  activatedIdentifier: ScreenElementFinder.identifier(of: candidate),
-                                  activatedLabel: candidate.accessibilityLabel
-                                      ?? InspectedView.textContent(of: candidate),
-                                  trace: trace.joined(separator: " "))
+            for (candidate, dx) in bandControls.prefix(3) {
+                addControl(candidate, via: "control(row)",
+                           token: "viewBand(\(type(of: candidate)) dx=\(Int(dx)))", pointDerived: true)
             }
-            // Ask the PLATFORM what is under the point, if our own search found
-            // nothing. `hitTest` is the resolution a real finger triggers — the
-            // one authoritative answer to "what is here" — and this ladder had
-            // eleven rungs of geometric and accessibility inference without ever
-            // consulting it. The UIKit button case is exactly why: the
-            // `.uiKitIdentifier` stamp lives in its OWN 17pt hosting island, so
-            // neither the stamp's subtree nor its island contains the control,
-            // and no amount of widening reaches a sibling that shares no
-            // ancestor short of the root. hitTest does not care about any of
-            // that.
-            //
-            // Still subject to the same two rules, so it cannot become a
-            // press-from-anywhere: the result must be actuatable and genuinely
-            // wired, and the climb is bounded.
-            // `windowPoint` is already in the host window's space, so no
-            // conversion — converting again is how the coordinate bugs earlier
-            // in this arc happened.
-            if candidates.isEmpty, let hostWindow = view.window ?? ScreenElementFinder.hostWindow() {
+            // Ask the PLATFORM what is under the point when our own search
+            // found nothing — hitTest is the resolution a real finger
+            // triggers. `windowPoint` is already in the host window's space.
+            if bandControls.isEmpty, let hostWindow = view.window ?? ScreenElementFinder.hostWindow() {
                 var hit = hostWindow.hitTest(windowPoint, with: nil)
                 var hops = 0
+                var added = 0
                 while let cur = hit, hops < 5 {
-                    if Self.isBandActuatable(cur), Self.actuateControl(cur) {
-                        ScreenSnapshotStore.shared.invalidate()
-                        trace.append("hitTest:fired(\(type(of: cur)))")
-                        return TapOutcome(success: true, via: "control(hitTest)", error: nil,
-                                          activatedIdentifier: ScreenElementFinder.identifier(of: cur),
-                                          activatedLabel: cur.accessibilityLabel
-                                              ?? InspectedView.textContent(of: cur),
-                                          trace: trace.joined(separator: " "))
+                    if Self.isBandActuatable(cur) {
+                        addControl(cur, via: "control(hitTest)",
+                                   token: "hitTest(\(type(of: cur)))", pointDerived: true)
+                        added += 1
                     }
                     hit = cur.superview
                     hops += 1
                 }
-                trace.append("hitTest:no")
+                if added == 0 { trace.append("hitTest:no viewBand:none") }
             }
-
-            let declined = candidates.prefix(3)
-                .map { "\(type(of: $0.0))@\(Int($0.1))" }
-                .joined(separator: "|")
-            trace.append(candidates.isEmpty ? "viewBand:none"
-                : "viewBand:noneFired(\(candidates.count)){\(declined)}")
         }
 
+        // 4. Tap gesture recognizers up the chain, stopping at container
+        //    boundaries (a table's recognizers are selection machinery with a
+        //    STALE location; above it live global gestures like
+        //    keyboard-dismiss that claim hollow successes). The boundary must
+        //    not fire on the element itself: a UITextView IS a UIScrollView,
+        //    and its caret-placing recognizer is real.
         var g: UIView? = view
         var gestureStoppedAtBoundary = false
         var isTargetItself = true
+        var foundGesture = false
         while let cur = g {
-            // The boundary rule exists to stop the CLIMB reaching a table's
-            // selection machinery or a window-level keyboard-dismiss gesture. It
-            // must not fire on the element itself: a UITextView IS a UIScrollView,
-            // so targeting one broke out before ever looking at its own
-            // recognizers — including the tap recognizer UIKit installs to place
-            // the caret, which is precisely the gesture a real tap uses.
             let scrollBoundaryApplies = !isTargetItself
             isTargetItself = false
-            // STOP at container boundaries — not merely "don't fire on them":
-            // scrolling up PAST a UITableView/UICollectionView reaches
-            // recognizers that are never element semantics — the table's own
-            // selection machinery (stale-location row selection) and, above
-            // it, global gestures like a keyboard-dismiss recognizer on the
-            // root/window view, which fires `resignFirstResponder` and claims
-            // a hollow success (exactly the observed
-            // "gesture:fired(afterContainerSkip)" no-op that kept path 5 from
-            // ever running). Recognizers on the element or its ancestors
-            // BELOW the boundary still fire normally.
             if (scrollBoundaryApplies && cur is UIScrollView) || cur is UIWindow {
                 gestureStoppedAtBoundary = true
                 break
             }
-            for gr in cur.gestureRecognizers ?? [] where gr.isEnabled {
-                guard let tap = gr as? UITapGestureRecognizer else { continue }
-                if TapElementTool.fireTapTargets(of: tap) {
-                    ScreenSnapshotStore.shared.invalidate()
-                    trace.append("gesture:fired")
-                    return TapOutcome(success: true, via: "tapGesture", error: nil, trace: trace.joined(separator: " "))
-                }
+            if cur.gestureRecognizers?.contains(where: { $0.isEnabled && $0 is UITapGestureRecognizer }) == true {
+                candidates.append(TapCandidate(kind: .gesture(cur), via: "tapGesture",
+                                               token: "gesture(\(type(of: cur)))",
+                                               promised: !foundGesture, pointDerived: false))
+                foundGesture = true
             }
             g = cur.superview
         }
-        trace.append(gestureStoppedAtBoundary ? "gesture:stoppedAtBoundary" : "gesture:no")
-
-        // 5. Container selection — a plain view inside a UITableViewCell /
-        //    UICollectionViewCell whose tap means "select this row". There is
-        //    no per-cell gesture recognizer to fire: selection lives in the
-        //    container's delegate call, which is the semantic a real tap
-        //    drives. Public API only; the broadest fallback, so it runs last
-        //    (a button inside the cell or an explicit gesture on a subview
-        //    must win first). The via string names the row selected, so a
-        //    wrong-target selection is visible in the fire pill / logs.
-        if let detail = Self.selectContainerRow(of: view) {
-            ScreenSnapshotStore.shared.invalidate()
-            trace.append("row:\(detail)")
-            return TapOutcome(success: true, via: detail, error: nil, trace: trace.joined(separator: " "))
+        if !foundGesture {
+            trace.append(gestureStoppedAtBoundary ? "gesture:stoppedAtBoundary" : "gesture:no")
         }
-        trace.append("row:noCell")
-        // The trace IS the diagnosis — "not tappable by any path" on its own
-        // sends whoever reads it back to the device to find out which path and
-        // why. Carry it in the message so one report is enough.
+
+        // 5. Container row selection — the broadest fallback, so it stays
+        //    last. Dry-run here (find the cell, the owner, the delegate);
+        //    the selection itself happens at fire time.
+        if let detail = Self.selectContainerRow(of: view, dryRun: true) {
+            candidates.append(TapCandidate(kind: .rowSelect(view), via: "rowSelection",
+                                           token: "row(\(detail))", promised: true, pointDerived: false))
+        }
+
+        // The point "mattered" when it, and not identity, chose the outcome:
+        // the first meaningful candidate is point-derived AND more than one
+        // point-eligible object was in reach (with one, any point inside the
+        // element would have found the same answer). `chainActivate` is a
+        // blind probe and doesn't count as meaningful.
+        let firstMeaningful = candidates.first { $0.promised || $0.pointDerived }
+        let pointMattered = (firstMeaningful?.pointDerived == true) && pointDerivedObjects.count >= 2
+
+        trace.append("resolve:\(candidates.count)cand["
+            + candidates.prefix(8).map(\.token).joined(separator: ",")
+            + (candidates.count > 8 ? ",…" : "") + "]"
+            + (pointMattered ? " pointMattered" : ""))
+
+        return ResolvedTarget(target: view, matchId: matchId, matchText: matchText,
+                              candidates: candidates, pointMattered: pointMattered,
+                              resolveTrace: trace)
+    }
+
+    /// ACTUATE: make the resolved thing do its thing. Walks the candidates in
+    /// resolve order and returns the first that genuinely works — with the
+    /// same wiring honesty the old ladder learned (`sendActions` on an
+    /// unwired control is a silent no-op; reporting it as success is worse
+    /// than failing). No coordinates: every candidate was already chosen, by
+    /// identity or by locality, at resolve time.
+    static func actuate(_ resolved: ResolvedTarget) -> TapOutcome {
+        var trace = resolved.resolveTrace
+
+        func success(via: String, token: String, id: String?, label: String?) -> TapOutcome {
+            ScreenSnapshotStore.shared.invalidate()
+            trace.append(token)
+            return TapOutcome(success: true, via: via, error: nil,
+                              activatedIdentifier: id, activatedLabel: label,
+                              trace: trace.joined(separator: " "))
+        }
+
+        for c in resolved.candidates {
+            switch c.kind {
+            case .control(let v):
+                if Self.actuateControl(v) {
+                    return success(via: c.via, token: "\(c.token):fired",
+                                   id: ScreenElementFinder.identifier(of: v),
+                                   label: v.accessibilityLabel ?? InspectedView.textContent(of: v))
+                }
+                trace.append("\(c.token):unwired")
+
+            case .focus(let v):
+                if v.canBecomeFirstResponder, v.becomeFirstResponder() {
+                    return success(via: c.via, token: "\(c.token):activated",
+                                   id: v.accessibilityIdentifier, label: v.accessibilityLabel)
+                }
+                trace.append("\(c.token):declined")
+
+            case .a11y(let el):
+                if el.accessibilityActivate() {
+                    return success(via: c.via, token: "\(c.token):activated",
+                                   id: InspectedView.objectAccessibilityIdentifier(el),
+                                   label: el.accessibilityLabel)
+                }
+                trace.append("\(c.token):declined")
+
+            case .chainActivate(let from):
+                var v: UIView? = from
+                var activated: UIView?
+                while let cur = v {
+                    if cur.responds(to: #selector(UIResponder.accessibilityActivate)), cur.accessibilityActivate() {
+                        activated = cur
+                        break
+                    }
+                    v = cur.superview
+                }
+                if let cur = activated {
+                    return success(via: c.via, token: "chain:activated(\(type(of: cur)))", id: nil, label: nil)
+                }
+                trace.append("chain:no")
+
+            case .gesture(let v):
+                var fired = false
+                for gr in v.gestureRecognizers ?? [] where gr.isEnabled {
+                    guard let tap = gr as? UITapGestureRecognizer else { continue }
+                    if TapElementTool.fireTapTargets(of: tap) { fired = true; break }
+                }
+                if fired {
+                    return success(via: c.via, token: "gesture:fired(\(type(of: v)))", id: nil, label: nil)
+                }
+                trace.append("gesture:noFire(\(type(of: v)))")
+
+            case .rowSelect(let v):
+                if let detail = Self.selectContainerRow(of: v) {
+                    ScreenSnapshotStore.shared.invalidate()
+                    trace.append("row:\(detail)")
+                    return TapOutcome(success: true, via: detail, error: nil,
+                                      trace: trace.joined(separator: " "))
+                }
+                trace.append("row:noCell")
+            }
+        }
+
+        // The trace IS the diagnosis — carry it in the message so one report
+        // is enough.
         let joined = trace.joined(separator: " ")
         return TapOutcome(success: false, via: nil,
                           error: "Element found but not tappable by any path (not a control, no activatable accessibility element, no tap gesture, not inside a selectable cell). Trace: \(joined)",
                           trace: joined)
+    }
+
+    /// The tap, as one call — resolve then actuate. `windowPoint` is where the
+    /// user actually pointed, in the view's window coordinates; it is consumed
+    /// entirely inside `resolveTap` and never crosses into actuation.
+    static func performTap(on view: UIView, matchId: String?, matchText: String?,
+                           at windowPoint: CGPoint? = nil) -> TapOutcome {
+        actuate(resolveTap(on: view, matchId: matchId, matchText: matchText, at: windowPoint))
     }
 
     /// Where the tap lands, in SCREEN coordinates — the space accessibility
@@ -1224,7 +1211,10 @@ enum ScreenActuationEngine {
     /// and `responds(to:)` so a non-selectable list is correctly not a tap.
     /// Returns a via string naming WHAT was selected (cell class +
     /// section:row), so a wrong-target selection is immediately visible.
-    private static func selectContainerRow(of view: UIView) -> String? {
+    /// `dryRun` answers "would this select, and what?" without selecting —
+    /// the resolve stage's discovery mode. One implementation, two modes, so
+    /// the promise and the act can never encode different policies.
+    private static func selectContainerRow(of view: UIView, dryRun: Bool = false) -> String? {
         var cell: UIView?
         var v: UIView? = view
         while let cur = v {
@@ -1241,8 +1231,10 @@ enum ScreenActuationEngine {
                let indexPath = table.indexPath(for: tableCell),
                let delegate = table.delegate,
                delegate.responds(to: #selector(UITableViewDelegate.tableView(_:didSelectRowAt:))) {
-                table.selectRow(at: indexPath, animated: true, scrollPosition: .none)
-                delegate.tableView?(table, didSelectRowAt: indexPath)
+                if !dryRun {
+                    table.selectRow(at: indexPath, animated: true, scrollPosition: .none)
+                    delegate.tableView?(table, didSelectRowAt: indexPath)
+                }
                 return "rowSelection \(String(describing: type(of: tableCell)))[\(indexPath.section):\(indexPath.row)]"
             }
             if let collection = cur as? UICollectionView,
@@ -1251,8 +1243,10 @@ enum ScreenActuationEngine {
                let indexPath = collection.indexPath(for: collectionCell),
                let delegate = collection.delegate,
                delegate.responds(to: #selector(UICollectionViewDelegate.collectionView(_:didSelectItemAt:))) {
-                collection.selectItem(at: indexPath, animated: true, scrollPosition: [])
-                delegate.collectionView?(collection, didSelectItemAt: indexPath)
+                if !dryRun {
+                    collection.selectItem(at: indexPath, animated: true, scrollPosition: [])
+                    delegate.collectionView?(collection, didSelectItemAt: indexPath)
+                }
                 return "itemSelection \(String(describing: type(of: collectionCell)))[\(indexPath.section):\(indexPath.item)]"
             }
             owner = cur.superview
@@ -1524,8 +1518,10 @@ public struct TapElementTool: NativeTool {
     }
 
     /// Walk the accessibility tree under `view` (elements array / container
-    /// protocol / subviews — same traversal as the inspector) and activate the
-    /// element matching the requested id or text. Only presses something it can
+    /// protocol / subviews — same traversal as the inspector) and FIND the
+    /// element matching the requested id or text. Find-only, no activation —
+    /// this is the resolve stage's discovery primitive; `actuate` performs
+    /// the activation on the returned element. Only names something it can
     /// NAME: the matched element, or the single element the view exposes —
     /// never "the first of many".
     /// `strict`: require a real id/text match. The default allows a lone
@@ -1533,17 +1529,12 @@ public struct TapElementTool: NativeTool {
     /// right when the caller already resolved THIS view as the element — and
     /// wrong when climbing ancestors, where the one element found may belong to
     /// something else entirely.
-    ///
-    /// Returns the element it activated (nil when nothing did), not just a
-    /// Bool: for an anonymous SwiftUI leaf the activated element is the only
-    /// thing carrying a NAME, and the macro recorder needs that name to write
-    /// down a selector that can be resolved again later.
-    @discardableResult
     /// `accept`: an extra veto on a matched element — used by the ancestor
-    /// climb to refuse an element that is far larger than what was aimed at.
-    static func activateAccessibilityElement(in view: UIView, id: String?, text: String?,
-                                             strict: Bool = false,
-                                             accept: ((NSObject) -> Bool)? = nil) -> NSObject? {
+    /// climb to refuse an element that is far larger than what was aimed at,
+    /// and by the island rung to require the element level with the point.
+    static func findAccessibilityElement(in view: UIView, id: String?, text: String?,
+                                         strict: Bool = false,
+                                         accept: ((NSObject) -> Bool)? = nil) -> NSObject? {
         var matched: [NSObject] = []
         var all: [NSObject] = []
         func leafMatches(_ el: NSObject) -> Bool {
@@ -1582,8 +1573,7 @@ public struct TapElementTool: NativeTool {
         }
         visit(view, depth: 0)
         let candidates = matched.isEmpty && !strict && all.count == 1 ? all : matched
-        guard let el = candidates.first(where: { accept?($0) ?? true }) else { return nil }
-        return el.accessibilityActivate() ? el : nil
+        return candidates.first(where: { accept?($0) ?? true })
     }
 
     /// Invoke a tap gesture recognizer's registered target/action pairs with the

@@ -9,7 +9,7 @@ let ripulViewExplorerOverlayTag = 0x5249_5055   // "RIPU"
 
 /// Marketing version of the RipulAgent SDK, surfaced in the inspector's copy output as `sdk: …`
 /// so we can always tell which build is actually running on the device. Bump on every release.
-let ripulSDKVersion = "0.7.67"
+let ripulSDKVersion = "0.7.68"
 
 // MARK: - View Inspector Overlay
 //
@@ -927,8 +927,15 @@ class ViewInspectorController: UIView {
 
     private var currentTarget: UIView?
     private var currentTokenAnchor: UIView?
-    /// What a tap will actually drive — see `actionableTarget`. Distinct from
-    /// `currentTarget`, which is what is selected, outlined and themed.
+    /// The engine's resolution for the current pick — ONE object that the
+    /// readout, the teal outline AND the fire all consume, so the prediction
+    /// cannot drift from the behaviour (the "two places encoding one policy"
+    /// failure this file used to have its own copy of).
+    private var currentResolution: ScreenActuationEngine.ResolvedTarget?
+    /// What a tap will actually drive, when the engine can PROMISE it (a wired
+    /// control, a focusable input, a live recognizer, a selectable row) —
+    /// `currentResolution.promisedView`. Distinct from `currentTarget`, which
+    /// is what is selected, outlined and themed.
     private var currentActionable: UIView?
     /// Second outline, drawn only when the actionable view differs from the
     /// selected one, so a divergence is visible on screen and not just in text.
@@ -1145,6 +1152,15 @@ class ViewInspectorController: UIView {
         if let e = describe(currentTarget) { result["element"] = e }
         if let a = describe(currentActionable) { result["actionable"] = a }
         result["diverges"] = currentActionable != nil && currentActionable !== currentTarget
+        // The resolve stage's own account — candidate count, how many are
+        // try-and-see, and whether the POINT (rather than identity) chose the
+        // outcome. `pointMattered` is what decides anchor recording, so the
+        // conformance sweep can assert it directly.
+        if let r = currentResolution {
+            result["candidates"] = r.candidates.count
+            result["untested"] = r.candidates.filter { !$0.promised }.count
+            result["pointMattered"] = r.pointMattered
+        }
 
         if fire {
             if let outcome = fireNow() {
@@ -1178,27 +1194,16 @@ class ViewInspectorController: UIView {
         // existed, which is why a second tap on the notes field closed the
         // panel instead of entering it. Press what is under the cursor NOW.
         pickAt(cursorPos)
-        // Press the SELECTED element, not the stamp. The token anchor is a
-        // 0.01-alpha, non-interactive marker view spanning whatever it labels,
-        // so preferring it handed the ladder something unpressable — every rung
-        // declined, and the point derived from that marker went through the
-        // coordinate conversion that silently no-ops inside a SwiftUI island.
-        // "Not tappable by any path" for a field that focuses fine when it is
-        // the target itself.
-        // The ACTIONABLE view — what a tap drives — falling back to the
-        // selection when they're the same or nothing there is pressable.
-        guard let element = currentActionable ?? currentTarget ?? currentTokenAnchor else { return nil }
+        // Fire the SAME `ResolvedTarget` the pick just computed and the
+        // readout just described. The readout is a promise the actuator keeps
+        // by construction — there is no second resolution to drift from the
+        // first, and no coordinate crosses this line: the reticule point was
+        // consumed inside `resolveTap`, during the pick.
+        guard let resolution = currentResolution else { return nil }
+        let element = resolution.promisedView ?? resolution.target
         UISelectionFeedbackGenerator().selectionChanged()
         let frameInSelf = convert(element.convert(element.bounds, to: nil), from: nil)
-        // Where the reticule actually is, in the HOST window's space. An
-        // anonymous SwiftUI leaf carries no id and no text, so the point is the
-        // only thing that says WHICH element was meant (actuation path 2c).
-        let firePoint = (hostWindow ?? self.window).map { convert(cursorPos, to: $0) }
-        let outcome = ScreenActuationEngine.performTap(
-            on: element,
-            matchId: ScreenElementFinder.identifier(of: element),
-            matchText: ScreenElementFinder.contentText(of: element),
-            at: firePoint)
+        let outcome = ScreenActuationEngine.actuate(resolution)
         NSLog("[RipulViewExplorer] single-tap fire via=%@ trace=%@", outcome.via ?? "none", outcome.trace)
         let headline = outcome.via.map { "via \($0)" } ?? "not tappable"
         onFireOutcome?("\(headline)  [\(outcome.trace)]")
@@ -1238,7 +1243,12 @@ class ViewInspectorController: UIView {
         // Pick against the HOST window when the explorer runs in its own
         // overlay window (self.window is the overlay, not the host); for
         // embedded mounts, self.window IS the host window.
-        guard let window = hostWindow ?? self.window else { highlightLayer.path = nil; return }
+        guard let window = hostWindow ?? self.window else {
+            highlightLayer.path = nil
+            currentResolution = nil
+            currentActionable = nil
+            return
+        }
         let windowPoint = convert(point, to: window)
 
         // Probe what's under the cursor. We must make the ENTIRE inspector overlay
@@ -1267,6 +1277,11 @@ class ViewInspectorController: UIView {
 
         guard let hitView = hit, !isInspectorOwnView(hitView) else {
             highlightLayer.path = nil
+            // A failed pick must not leave a STALE resolution for the next
+            // fire — nil here makes fireNow refuse instead of pressing
+            // whatever the previous pick resolved.
+            currentResolution = nil
+            currentActionable = nil
             return
         }
 
@@ -1319,15 +1334,21 @@ class ViewInspectorController: UIView {
         // TWO answers, not one compromise. `target` stays the closest ELEMENT —
         // interactivity irrelevant — because that is what the theme tools
         // select and what the outline and identity describe. Alongside it sits
-        // the closest ACTIONABLE view, which is what a tap will drive. They are
-        // frequently the same object; when they aren't, both are reported and
-        // the user can see the discrepancy instead of discovering it by having
-        // the wrong thing pressed.
+        // the ACTIONABLE answer — and that answer is now the ENGINE's own
+        // resolution, not a parallel computation of it. The readout, the teal
+        // box and the fire all read this one `ResolvedTarget`, so what the
+        // explorer promises is by construction what `actuate` will try.
         //
-        // Every fix from 0.7.42 to 0.7.44 was this one value being pulled
-        // between those two masters, and each one satisfied a consumer by
-        // taking from another.
-        currentActionable = actionableTarget(for: target, at: windowPoint)
+        // Every fix from 0.7.42 to 0.7.44 was one value being pulled between
+        // two masters; the 0.7.5x arc was the explorer and the engine encoding
+        // the actionability policy twice and disagreeing. One fact, one place.
+        let resolution = ScreenActuationEngine.resolveTap(
+            on: target,
+            matchId: ScreenElementFinder.identifier(of: target),
+            matchText: ScreenElementFinder.contentText(of: target),
+            at: windowPoint)
+        currentResolution = resolution
+        currentActionable = resolution.promisedView
 
         currentTarget = target
         let hitLeaf = (target !== leaf) ? leaf : nil
@@ -1384,10 +1405,17 @@ class ViewInspectorController: UIView {
         // pressable at all" both rendered as no line. Three states, three
         // answers.
         let actionableSummary: String? = {
-            guard let a = currentActionable else { return "none — nothing here responds to a tap" }
-            if a === target { return "this element" }
-            let id = ScreenElementFinder.identifier(of: a).map { " [\($0)]" } ?? ""
-            return "\(type(of: a))\(id)"
+            if let a = currentActionable {
+                if a === target { return "this element" }
+                let id = ScreenElementFinder.identifier(of: a).map { " [\($0)]" } ?? ""
+                return "\(type(of: a))\(id)"
+            }
+            // No promise, but the resolution still holds try-and-see candidates
+            // (accessibility activation cannot be predicted, only performed).
+            // Say so — "untested" and "nothing" are different answers.
+            let tryable = currentResolution?.candidates.filter { !$0.promised }.count ?? 0
+            if tryable > 0 { return "untested — \(tryable) accessibility candidate\(tryable == 1 ? "" : "s") a tap will try" }
+            return "none — nothing here responds to a tap"
         }()
         let info = InspectedView.inspect(target, depth: viewDepth(target), resolvedIdentifier: match?.identifier, hitLeaf: hitLeaf, registryStamps: stampMatches.map(\.identifier), registryMatchView: match?.view, actionableSummary: actionableSummary)
         currentTarget = target
@@ -1443,72 +1471,14 @@ class ViewInspectorController: UIView {
         return false
     }
 
-    /// The view a tap at `windowPoint` would actually drive, given that
-    /// `element` is what the user selected. Nil when nothing there is pressable
-    /// — which is an honest answer worth reporting, not a failure to hide.
-    ///
-    /// SCOPED, deliberately. Searching the whole window for "the tightest
-    /// actionable view" finds a view controller's full-screen keyboard-dismiss
-    /// recognizer whenever nothing better exists, so every unpressable element
-    /// resolved to the root view and inherited its identity. The search is the
-    /// element's own subtree first — the real control usually lives inside what
-    /// you pointed at — then a bounded climb, stopping before any scrolling
-    /// container so it cannot escape into unrelated UI.
-    private func actionableTarget(for element: UIView, at windowPoint: CGPoint) -> UIView? {
-        // INSIDE first, even when the element itself is actionable. A panel can
-        // carry its own disclosure gesture while containing a text field, and
-        // short-circuiting on the container meant pointing anywhere in the
-        // panel pressed the panel — collapsing it instead of entering the
-        // field. The tightest actionable thing at the point wins; the container
-        // is the answer only where nothing more specific sits under the cursor,
-        // which is exactly the behaviour a finger has.
-        if let inside = actuatableView(in: element, at: windowPoint) { return inside }
-        if isActuatable(element) { return element }
-        var cur = element.superview
-        var hops = 0
-        while let v = cur, hops < 6 {
-            if isInspectorOwnView(v) { break }
-            if v is UIScrollView || v is UIWindow { break }
-            if isActuatable(v) { return v }
-            cur = v.superview
-            hops += 1
-        }
-        return nil
-    }
-
-    /// The tightest actuatable view under `windowPoint`, anywhere in the window.
-    /// Used only when the pick landed on something that CANNOT be actuated: the
-    /// probe hit-test stops at SwiftUI's anonymous scaffolding, and the real
-    /// control can sit in a branch the downward refinement never reaches. Scoped
-    /// to actuatable views so full-screen passthrough layers (the system floating
-    /// bar host, `_UITouchPassthroughView`) can never win.
-    private func actuatableView(in root: UIView, at windowPoint: CGPoint) -> UIView? {
-        var best: UIView?
-        var bestArea = CGFloat.greatestFiniteMagnitude
-        func walk(_ v: UIView, depth: Int) {
-            if depth > 60 { return }
-            for sub in v.subviews where !sub.isHidden && sub.alpha > 0.01 && !isInspectorOwnView(sub) {
-                let local = sub.convert(windowPoint, from: nil)
-                let contains = sub.bounds.contains(local)
-                // Descend through DEGENERATE containers even when they don't
-                // contain the point. SwiftUI routinely nests a full-size view
-                // under a zero-size `_UIInheritedView` (observed directly:
-                // (40,296,0,0) wrapping a 113×68 child), and such a parent
-                // never "contains" anything — gating recursion on containment
-                // is precisely why hitTest can't reach these controls either.
-                // A zero-area view clips nothing, so it must not gate the walk.
-                let degenerate = sub.bounds.width < 1 || sub.bounds.height < 1
-                guard contains || degenerate else { continue }
-                if contains, isActuatable(sub) {
-                    let area = sub.bounds.width * sub.bounds.height
-                    if area < bestArea { bestArea = area; best = sub }
-                }
-                walk(sub, depth: depth + 1)
-            }
-        }
-        walk(root, depth: 0)
-        return best
-    }
+    // `actionableTarget` / `actuatableView` are GONE, deliberately: they were
+    // this file's second, parallel encoding of the actionability policy, and
+    // the explorer's promise and the engine's behaviour drifted every time one
+    // changed without the other. The promise now comes from
+    // `ScreenActuationEngine.resolveTap` — the same computation the fire
+    // actuates. `isActuatable` below survives only for target SELECTION
+    // (promoting a decorative leaf to the control that owns it), which is a
+    // picking concern, not an actionability one.
 
     /// The SwiftUI hosting view enclosing `view`, if any — the boundary of one
     /// SwiftUI island in a UIKit hierarchy. Everything below it is SwiftUI's own

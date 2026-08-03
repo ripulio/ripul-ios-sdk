@@ -64,7 +64,11 @@ public protocol MacroElementResolving {
     /// `R: MacroElementResolving` call sites — conformances never see it
     /// called. (Caught by MacroReplayEngineTests: the fake's `via` never
     /// surfaced until this became a requirement.)
-    func performTapDetailed(_ element: ResolvedElement, matchId: String?, matchText: String?) -> (success: Bool, via: String?, error: String?)
+    /// `anchor`: the step's element-relative tap point, when one was recorded
+    /// — converted to an absolute point against the element's LIVE frame by
+    /// the conformance, immediately before resolution consumes it. Never a
+    /// stored screen position.
+    func performTapDetailed(_ element: ResolvedElement, matchId: String?, matchText: String?, anchor: MacroAnchor?) -> (success: Bool, via: String?, error: String?)
     func performType(_ element: ResolvedElement, text: String, append: Bool) -> (success: Bool, error: String?)
     func performScroll(_ element: ResolvedElement, direction: String, amount: Double) -> Bool
     /// Set a value-bearing control directly — see `ScreenActuationEngine.performSetValue`.
@@ -83,9 +87,10 @@ public extension MacroElementResolving {
     /// Via-aware tap outcome — reports WHICH actuation path fired
     /// (`uicontrol` / `accessibilityElement` / `tapGesture` / …), so a replay
     /// sheet can show "pressed, but only via the weakest path" instead of a
-    /// bare success. Default maps the original `performTap` (via unknown);
-    /// the live conformance overrides with the real value.
-    func performTapDetailed(_ element: ResolvedElement, matchId: String?, matchText: String?) -> (success: Bool, via: String?, error: String?) {
+    /// bare success. Default maps the original `performTap` (via unknown,
+    /// anchor unsupported); the live conformance overrides with the real
+    /// behaviour.
+    func performTapDetailed(_ element: ResolvedElement, matchId: String?, matchText: String?, anchor: MacroAnchor?) -> (success: Bool, via: String?, error: String?) {
         let (success, error) = performTap(element, matchId: matchId, matchText: matchText)
         return (success, nil, error)
     }
@@ -121,8 +126,23 @@ public struct LiveScreenResolver: MacroElementResolving {
         return (outcome.success, outcome.error)
     }
 
-    public func performTapDetailed(_ element: UIView, matchId: String?, matchText: String?) -> (success: Bool, via: String?, error: String?) {
-        let outcome = ScreenActuationEngine.performTap(on: element, matchId: matchId, matchText: matchText)
+    public func performTapDetailed(_ element: UIView, matchId: String?, matchText: String?,
+                                   anchor: MacroAnchor?) -> (success: Bool, via: String?, error: String?) {
+        // The ONLY moment an anchor may become a point: against the element's
+        // LIVE frame, immediately before resolve consumes it. The element
+        // moving or resizing since record time is the normal case — a stored
+        // screen position would aim at where it USED to be, which is exactly
+        // the class of bug the element-relative encoding exists to kill.
+        var windowPoint: CGPoint?
+        if let anchor, element.window != nil {
+            let f = element.convert(element.bounds, to: nil)
+            let rtl = element.effectiveUserInterfaceLayoutDirection == .rightToLeft
+            let p = anchor.point(frameX: f.minX, frameY: f.minY,
+                                 width: f.width, height: f.height, rightToLeft: rtl)
+            windowPoint = CGPoint(x: p.x, y: p.y)
+        }
+        let outcome = ScreenActuationEngine.performTap(on: element, matchId: matchId,
+                                                       matchText: matchText, at: windowPoint)
         return (outcome.success, outcome.via, outcome.error)
     }
 

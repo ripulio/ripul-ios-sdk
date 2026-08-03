@@ -111,8 +111,9 @@ enum MacroRecorder {
 
         switch action {
         case .tap:
-            let outcome = ScreenActuationEngine.performTap(on: view, matchId: selector.id,
-                                                           matchText: selector.text, at: windowPoint)
+            let resolution = ScreenActuationEngine.resolveTap(on: view, matchId: selector.id,
+                                                              matchText: selector.text, at: windowPoint)
+            let outcome = ScreenActuationEngine.actuate(resolution)
             // Record what was ACTUATED, not what happened to be under the
             // cursor. An anonymous SwiftUI leaf is unnameable from the view
             // tree, so the synthesised selector degrades to a bare class name
@@ -122,7 +123,28 @@ enum MacroRecorder {
             // the user actually pointed at ("KFC"), and `contentText` now
             // makes that name findable again through the enclosing island.
             let (upgraded, upgradedLabel) = Self.upgrade(selector, label: label, with: outcome)
-            let step = MacroStep(kind: .tap, selector: upgraded, recordedLabel: "Tap \(upgradedLabel)")
+            // The element-relative anchor — the ONE sanctioned exception to
+            // "no coordinates past resolve". Recorded only when the POINT
+            // genuinely disambiguated the tap (`pointMattered`: several
+            // point-eligible things inside the selector's element) AND the
+            // selector still names the container the point chose within. An
+            // upgraded selector names the activated element itself, so
+            // identity replays it and an anchor would be noise. Fractions of
+            // the element's own bounds from its LEADING edge — resolved
+            // against the LIVE frame at replay, never a screen position.
+            var anchor: MacroAnchor?
+            if resolution.pointMattered, upgraded == selector,
+               let wp = windowPoint, view.window != nil {
+                let f = view.convert(view.bounds, to: nil)
+                let rtl = view.effectiveUserInterfaceLayoutDirection == .rightToLeft
+                anchor = MacroAnchor.fraction(x: wp.x, y: wp.y,
+                                              frameX: f.minX, frameY: f.minY,
+                                              width: f.width, height: f.height,
+                                              rightToLeft: rtl)
+            }
+            let stepLabel = anchor.map { "Tap \(upgradedLabel) (anchored \($0.compactSummary))" }
+                ?? "Tap \(upgradedLabel)"
+            let step = MacroStep(kind: .tap, selector: upgraded, anchor: anchor, recordedLabel: stepLabel)
             return (step, outcome.success ? nil : outcome.error)
 
         case .setValue:

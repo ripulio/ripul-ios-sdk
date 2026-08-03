@@ -142,7 +142,8 @@ public enum MacroReplayEngine {
                                    resolveMs: resolveMs, durationMs: ms(since: stepStart))
             }
             let detail = resolver.describe(element)
-            let outcome = resolver.performTapDetailed(element, matchId: step.selector.id, matchText: step.selector.text)
+            let outcome = resolver.performTapDetailed(element, matchId: step.selector.id,
+                                                      matchText: step.selector.text, anchor: step.anchor)
             return StepOutcome(success: outcome.success, via: outcome.via, error: outcome.error,
                                detail: detail, resolveMs: resolveMs, durationMs: ms(since: stepStart))
 
