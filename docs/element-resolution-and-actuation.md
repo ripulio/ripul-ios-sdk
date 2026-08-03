@@ -361,33 +361,60 @@ leaving the old revision hash shipped 0.7.55 source under a 0.7.56 label, with
 every file we looked at reading correct. The only signal that catches it is the
 **running** `sdk:` stamp on the device.
 
+There is a second flavour of this, and it cost a whole run: **measuring the
+wrong app.** WAC ships prod (`com.WAC`) and beta (`com.WAC.beta`) side by side
+with separate bundle ids, and `ship-wac.sh`'s device path installs **prod
+only** — so a sweep aimed at "the device" answered from a beta build pinned to
+an SDK two releases old and scored 5/10. Nothing in the number said so; the
+`sdk=0.7.67` stamp and a missing anchor phase did. A sweep runner should
+therefore **gate on the target's identity before it fires**: ask
+`device_get_app_diagnostics` for the bundle id and build number, and refuse to
+run until they match what was just installed.
+
 ---
 
 ## 5. Where we are, and the path to 100%
 
-Current: **7/10 archetypes**, every pass confirmed by the app's own handler
-firing.
+Current (0.7.69, resolve/actuate split): **12/14** — ten archetypes plus the
+four anchor rows, every pass confirmed by the app's own handler firing.
 
 | Archetype | Status |
 |---|---|
+| UIKit `UIButton` | pass — rung-1 wiring now sees block `addAction` handlers |
 | UIKit `UITextField`, `UITextView` | pass — `focus` |
-| UIKit `UISwitch` | pass — view band, `dx=0` |
+| UIKit `UISwitch` | pass — rung 1 toggles + `.valueChanged` directly |
 | SwiftUI `TextField` | pass — `focus`, verified via first responder |
-| SwiftUI `Button`, nested-island button | pass — but see the false-pass note below |
+| SwiftUI `Toggle` | **pass — real press** (was the false-pass family) |
 | SwiftUI inert `Text` | pass by correctly staying inert |
-| UIKit `UIButton` | **aim was wrong** — being fixed by specificity ranking |
-| SwiftUI `Toggle` | **false-pass family** — activates a group container |
-| SwiftUI `onTapGesture` | **platform limit** |
+| Nested-island button | pass — readout pessimistic (a11y candidates are try-and-see) |
+| All four anchor rows | pass — locality, exception gating, replay-after-move, stale-point proof |
+| SwiftUI `Button` | **fail — honestly now**: the pick lands on the 17pt stamp, whose island publishes one element belonging to a *different* island 166pt away, so nothing is level with the point — see (a) |
+| SwiftUI `onTapGesture` | **platform limit** — now declines instead of falsely succeeding |
 
 ### The three open problems
 
-**(a) `a11yAncestor` activates containers.** `SwiftUI Button` currently passes by
-activating `PlatformGroupContainer` and happening to be the first element inside
-it; `Toggle` takes the identical route and fails because it isn't first. This is
-the same family as the island bug — a rung that activates something *near* the
-answer and is scored by whether it got lucky. It needs the same locality
-treatment: an ancestor may stand in for the target only when it occupies roughly
-the same space.
+**(a) `SwiftUI Button` resolves no candidate at all.** This has inverted since
+the space veto landed. `Toggle` now **passes for real** via
+`accessibilityElement(ancestor)`, and `Button` **fails honestly** where it used
+to pass by container-luck (activating `PlatformGroupContainer` and happening to
+be the first element inside it — scored by whether it got lucky).
+
+The measured trace names the cause precisely, and it is *not* the ancestor rung:
+
+```
+target=UIKitPlatformViewHost<PlatformViewRepresentableAdaptor<UIKitIdentifierStamper>>@0,0,408,17
+host=HostingView  pt=220,510  seen=1{Nested island button@16,676,134,17}
+resolve:1cand[chain]  chain:no
+```
+
+Two facts to chase. The pick lands on the **stamp** — a 17pt-tall
+`UIKitIdentifierStamper` platform view, not the button — so `hostingAncestor`
+returns the stamp's own tiny island. And that island's accessibility walk
+returns exactly one element, which belongs to a **different island 166pt away**
+(the nested-island button at y=676, while the point is at y=510). So every
+point rung correctly finds nothing level with the point, and only the blind
+`chain` candidate survives. The fix is in *resolution* — reaching the real
+button's island from the stamp — not in adding another actuation rung.
 
 **(b) `onTapGesture` is a genuine platform limit.** SwiftUI registers no
 accessibility action for a bare `onTapGesture` and attaches the recognizer to a

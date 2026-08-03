@@ -82,6 +82,16 @@ public enum RipulConformance {
               expectVia: nil, effectToken: "uikit.switch"),
         .init(id: prefix + "swiftui.button", title: "SwiftUI Button", expectActionable: true,
               expectVia: nil, effectToken: "swiftui.button"),
+        // The A/B control for the stamped Button's failure. IDENTICAL Button,
+        // identified with SwiftUI's own `.accessibilityIdentifier` instead of
+        // `.uiKitIdentifier` — so there is no `UIKitIdentifierStamper`
+        // background sibling, and therefore no 17pt micro-island for the pick
+        // to land in. One variable. If this passes while the stamped one
+        // fails, the defect is scoped to stamped controls; if both fail, every
+        // SwiftUI button in every client app is unreachable by point, which is
+        // a different severity and a different fix.
+        .init(id: prefix + "swiftui.button.plain", title: "SwiftUI Button (plain a11y id, no stamp)",
+              expectActionable: true, expectVia: nil, effectToken: "swiftui.button.plain"),
         .init(id: prefix + "swiftui.textfield", title: "SwiftUI TextField", expectActionable: true,
               expectVia: nil, effectToken: "swiftui.textfield"),
         .init(id: prefix + "swiftui.toggle", title: "SwiftUI Toggle", expectActionable: true,
@@ -155,6 +165,11 @@ struct RipulConformanceView: View {
                     Button("SwiftUI Button") { note("swiftui.button") }
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .uiKitIdentifier(RipulConformance.prefix + "swiftui.button")
+                    // Same Button, plain SwiftUI id — no stamper sibling. See
+                    // the archetype list for why this row exists.
+                    Button("Plain SwiftUI Button") { note("swiftui.button.plain") }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .accessibilityIdentifier(RipulConformance.prefix + "swiftui.button.plain")
                     TextField("SwiftUI TextField", text: $swiftuiText)
                         .focused($swiftuiFieldFocused)
                         .onChange(of: swiftuiFieldFocused) { if $1 { note("swiftui.textfield") } }
