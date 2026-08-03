@@ -842,7 +842,11 @@ enum ScreenActuationEngine {
                                       ?? InspectedView.textContent(of: candidate),
                                   trace: trace.joined(separator: " "))
             }
-            trace.append(candidates.isEmpty ? "viewBand:none" : "viewBand:noneFired(\(candidates.count))")
+            let declined = candidates.prefix(3)
+                .map { "\(type(of: $0.0))@\(Int($0.1))" }
+                .joined(separator: "|")
+            trace.append(candidates.isEmpty ? "viewBand:none"
+                : "viewBand:noneFired(\(candidates.count)){\(declined)}")
         }
 
         var g: UIView? = view
@@ -924,19 +928,28 @@ enum ScreenActuationEngine {
     /// targets is a silent no-op — reporting that as success is the bug this
     /// ladder already learned once with SwiftUI's HostingUIButton.
     static func actuateControl(_ v: UIView) -> Bool {
+        // `allControlEvents` is the right wiring test, and the only one that
+        // sees a BLOCK handler. The first cut asked
+        // `actions(forTarget:forControlEvent:)`, which reports target/action
+        // pairs only — so a control wired with `addAction(UIAction { … })`, the
+        // modern idiom and most current UIKit code, looked unwired and was
+        // refused. A guard against false success turned into a false refusal.
+        // This still excludes SwiftUI's HostingUIButton, which registers no
+        // control events at all because it handles the press internally, so the
+        // protection that guard existed for is intact.
         if let sw = v as? UISwitch {
-            guard !sw.allTargets.isEmpty else { return false }
+            guard sw.allControlEvents.contains(.valueChanged) else { return false }
             sw.setOn(!sw.isOn, animated: true)
             sw.sendActions(for: .valueChanged)
             return true
         }
         if let control = v as? UIControl {
-            let wired = control.allTargets.contains { target in
-                !(control.actions(forTarget: target, forControlEvent: .touchUpInside) ?? []).isEmpty
+            for event in [UIControl.Event.touchUpInside, .primaryActionTriggered, .valueChanged]
+            where control.allControlEvents.contains(event) {
+                control.sendActions(for: event)
+                return true
             }
-            guard wired else { return false }
-            control.sendActions(for: .touchUpInside)
-            return true
+            return false
         }
         for gr in v.gestureRecognizers ?? [] where gr.isEnabled {
             guard let tap = gr as? UITapGestureRecognizer else { continue }
