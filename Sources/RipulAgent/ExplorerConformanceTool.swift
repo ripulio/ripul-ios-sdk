@@ -96,9 +96,17 @@ public struct ExplorerConformanceTool: NativeTool {
             let focused = await MainActor.run { () -> Bool in
                 guard let token = archetype.effectToken, token.hasSuffix("textfield") || token.hasSuffix("textview"),
                       let match = ScreenElementFinder.find(id: archetype.id, text: nil).first else { return false }
-                var stack: [UIView] = [match.view]
+                // Scan the ISLAND, not the stamped view's subtree.
+                // `.uiKitIdentifier` stamps a background SIBLING, so the field
+                // that actually took focus is not underneath the stamp - the
+                // oracle reported 'never focused' for a field the trace shows
+                // becoming first responder. An oracle that looks in the wrong
+                // place fails exactly like the bug it is meant to detect.
+                var root = match.view
+                for _ in 0..<6 { root = root.superview ?? root }
+                var stack: [UIView] = [root]
                 while let cur = stack.popLast() {
-                    if cur.isFirstResponder { return true }
+                    if cur.isFirstResponder, cur is UITextInput { return true }
                     stack.append(contentsOf: cur.subviews)
                 }
                 return false

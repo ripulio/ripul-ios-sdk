@@ -840,7 +840,19 @@ enum ScreenActuationEngine {
         // learned once (0.7.47, HostingUIButton).
         if let windowPoint {
             var candidates: [(UIView, CGFloat)] = []
-            var stack: [UIView] = [view]
+            // Search the ISLAND, not just the resolved element's subtree.
+            // `.uiKitIdentifier` stamps a BACKGROUND SIBLING, not an ancestor,
+            // so pointing at a stamped control resolves a 17pt-tall stamper view
+            // whose subtree is empty — the real UIButton is its sibling. A
+            // downward-only search finds nothing and declines a control that is
+            // sitting right there.
+            //
+            // Widening the root is only safe because the two rules that make
+            // this band trustworthy are already in place: the candidate must be
+            // LEVEL with the point, and an ambiguous band is refused rather than
+            // guessed at. Without those this would be the 148pt misfire again,
+            // with a bigger radius.
+            var stack: [UIView] = [hostRoot]
             while let cur = stack.popLast() {
                 stack.append(contentsOf: cur.subviews)
                 guard !cur.isHidden, cur.alpha > 0.01, cur.isUserInteractionEnabled else { continue }
