@@ -904,6 +904,42 @@ enum ScreenActuationEngine {
                                       ?? InspectedView.textContent(of: candidate),
                                   trace: trace.joined(separator: " "))
             }
+            // Ask the PLATFORM what is under the point, if our own search found
+            // nothing. `hitTest` is the resolution a real finger triggers — the
+            // one authoritative answer to "what is here" — and this ladder had
+            // eleven rungs of geometric and accessibility inference without ever
+            // consulting it. The UIKit button case is exactly why: the
+            // `.uiKitIdentifier` stamp lives in its OWN 17pt hosting island, so
+            // neither the stamp's subtree nor its island contains the control,
+            // and no amount of widening reaches a sibling that shares no
+            // ancestor short of the root. hitTest does not care about any of
+            // that.
+            //
+            // Still subject to the same two rules, so it cannot become a
+            // press-from-anywhere: the result must be actuatable and genuinely
+            // wired, and the climb is bounded.
+            // `windowPoint` is already in the host window's space, so no
+            // conversion — converting again is how the coordinate bugs earlier
+            // in this arc happened.
+            if candidates.isEmpty, let hostWindow = view.window ?? ScreenElementFinder.hostWindow() {
+                var hit = hostWindow.hitTest(windowPoint, with: nil)
+                var hops = 0
+                while let cur = hit, hops < 5 {
+                    if Self.isBandActuatable(cur), Self.actuateControl(cur) {
+                        ScreenSnapshotStore.shared.invalidate()
+                        trace.append("hitTest:fired(\(type(of: cur)))")
+                        return TapOutcome(success: true, via: "control(hitTest)", error: nil,
+                                          activatedIdentifier: ScreenElementFinder.identifier(of: cur),
+                                          activatedLabel: cur.accessibilityLabel
+                                              ?? InspectedView.textContent(of: cur),
+                                          trace: trace.joined(separator: " "))
+                    }
+                    hit = cur.superview
+                    hops += 1
+                }
+                trace.append("hitTest:no")
+            }
+
             let declined = candidates.prefix(3)
                 .map { "\(type(of: $0.0))@\(Int($0.1))" }
                 .joined(separator: "|")
