@@ -278,12 +278,22 @@ extension ScreenElementFinder {
         let root: UIView = window
         var matches: [Match] = []
         walk(root) { view in
-            // Match on the RAW identifier, not `identifier(of:)`. That helper
-            // deliberately suppresses a borrowed id so the readout never names
-            // an ancestor's identity as the element's own — right for display,
-            // fatal for lookup, because it suppresses exactly the innermost
-            // view that owns the name when propagation ran upward.
-            let vid = view.accessibilityIdentifier
+            // Match WITHOUT the ownership suppression, but with the FULL
+            // identity ladder. `identifier(of:)` does two separable things:
+            // (a) suppresses a borrowed id — right for display, fatal for
+            // lookup (it hides exactly the innermost view that owns the name
+            // when propagation ran upward); (b) falls back to the
+            // `.uiKitIdentifier` registry stamp and the accessibility-tree id
+            // — and those are the ONLY carriers a SwiftUI `Button`/`Toggle`
+            // has, because SwiftUI's `.accessibilityIdentifier` lands on the
+            // accessibility element, not on any UIView property. Dropping (a)
+            // and (b) together made every `.uiKitIdentifier`-stamped SwiftUI
+            // control unfindable by id — six conformance rows reported
+            // not-on-screen while provably on screen. Keep the ladder, drop
+            // only the suppression.
+            var vid = view.accessibilityIdentifier
+            if vid?.isEmpty ?? true { vid = UIKitIdentifierRegistry.shared.identifier(for: view) }
+            if vid?.isEmpty ?? true { vid = InspectedView.accessibilityIdInTree(view) }
             let vtext = InspectedView.textContent(of: view)
             if let id, !id.isEmpty, let vid, !vid.isEmpty {
                 if vid == id || vid.caseInsensitiveCompare(id) == .orderedSame {
@@ -714,7 +724,11 @@ enum ScreenActuationEngine {
         // 1. The target IS a platform control. Wiring (`controlIsWired`) is
         //    what decides whether this is promised; an unwired control still
         //    stays a candidate so the trace can say `unwired` at fire time.
-        if let control = view as? UIControl {
+        //    NOT for a text input, even though UITextField is a UIControl:
+        //    `actuateControl` fires `primaryActionTriggered` where wired,
+        //    which on a field with a return-key handler means "submit" — but
+        //    tapping a field MEANS focusing it (rung 2a), never submitting.
+        if let control = view as? UIControl, !(view is UITextInput) {
             addControl(control, via: "uicontrol", token: "control", pointDerived: false)
             if !controlIsWired(control) { trace.append("control:noTargets(\(type(of: control)))") }
         } else {
