@@ -829,7 +829,18 @@ enum ScreenActuationEngine {
                 let f = cur.convert(cur.bounds, to: nil)
                 guard f.width > 0, f.height > 0 else { continue }
                 guard f.minY - 4 <= windowPoint.y, windowPoint.y <= f.maxY + 4 else { continue }
-                candidates.append((cur, abs(f.midX - windowPoint.x)))
+                // BESIDE the point, not merely somewhere in the same row. The
+                // first cut allowed 0.75x the container width - 300pt on a
+                // 400pt row - and pressed a UISwitch 148pt away while aiming at
+                // a UIButton, in the same cell. A leading-aligned control sits
+                // within a few tens of points of where you pointed; anything
+                // further is a different control, and actuating it is worse
+                // than refusing. Allow the gap between the point and the
+                // candidate's NEAREST EDGE, which is zero for anything the
+                // point is level with and grows only as you leave it.
+                let gap = max(0, max(f.minX - windowPoint.x, windowPoint.x - f.maxX))
+                guard gap <= 96 else { continue }
+                candidates.append((cur, gap))
             }
             candidates.sort { $0.1 < $1.1 }
             for (candidate, dx) in candidates.prefix(3) {
