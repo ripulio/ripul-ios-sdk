@@ -248,7 +248,18 @@ public struct RipulStyleKind {
     }
 
     public let name: String
-    public let scopes: [RipulThemeScope]
+    /// Scopes fixed at registration; empty when the kind vends them dynamically.
+    let staticScopes: [RipulThemeScope]
+    /// A kind whose ELEMENT SET is data rather than code (tips authored in the theme, say)
+    /// vends its scopes through this, so elements added after `configure()` still get an
+    /// editor screen. `nil` = the fixed list above.
+    let scopesProvider: (() -> [RipulThemeScope])?
+    /// Child scopes synthesized at `configure()` for composite slots. Held apart from the
+    /// two above so folding them in cannot freeze a dynamic kind into a snapshot.
+    let synthesizedScopes: [RipulThemeScope]
+    public var scopes: [RipulThemeScope] {
+        (scopesProvider?() ?? staticScopes) + synthesizedScopes
+    }
     /// This kind's knob schema — descriptors driving the generic style editor
     /// (`RipulStyleKindEditorView`) and any future surface. Resolution itself is open.
     public let knobs: [RipulStyleKnob]
@@ -299,8 +310,49 @@ public struct RipulStyleKind {
         self.path = path
         self.defaultStyleLabel = defaultStyleLabel
         self.supportsNamedStyles = supportsNamedStyles
-        self.scopes = scopes; self.knobs = knobs; self.slots = slots
+        self.staticScopes = scopes; self.scopesProvider = nil; self.synthesizedScopes = []
+        self.knobs = knobs; self.slots = slots
         self.builtIns = builtIns; self.defaultTier = defaultTier; self.persistedKeys = persistedKeys
+    }
+
+    /// A kind whose ELEMENTS are data: `scopes` is re-read on every access, so elements the
+    /// user adds after launch get an editor screen without re-registering the spec.
+    public init(name: String, label: String? = nil, path: [String] = [],
+                defaultStyleLabel: String = "Default",
+                supportsNamedStyles: Bool = true,
+                scopes: @escaping () -> [RipulThemeScope], knobs: [RipulStyleKnob],
+                slots: [RipulStyleSlot] = [],
+                builtIns: [String: [String: RipulKnob]] = [:],
+                defaultTier: @escaping (RipulThemeDocument, _ element: String) -> [String: RipulKnob],
+                persistedKeys: PersistedKeys? = nil) {
+        self.name = name
+        self.label = label ?? (name.prefix(1).uppercased() + name.dropFirst())
+        self.path = path
+        self.defaultStyleLabel = defaultStyleLabel
+        self.supportsNamedStyles = supportsNamedStyles
+        self.staticScopes = []; self.scopesProvider = scopes; self.synthesizedScopes = []
+        self.knobs = knobs; self.slots = slots
+        self.builtIns = builtIns; self.defaultTier = defaultTier; self.persistedKeys = persistedKeys
+    }
+
+    /// Internal copy-with, used by `configure()` to prune cyclic slots and fold in
+    /// synthesized child scopes without collapsing a dynamic kind to a fixed list.
+    init(_ base: RipulStyleKind,
+         slots: [RipulStyleSlot]? = nil,
+         addingSynthesized: [RipulThemeScope] = []) {
+        self.name = base.name
+        self.label = base.label
+        self.path = base.path
+        self.defaultStyleLabel = base.defaultStyleLabel
+        self.supportsNamedStyles = base.supportsNamedStyles
+        self.staticScopes = base.staticScopes
+        self.scopesProvider = base.scopesProvider
+        self.synthesizedScopes = base.synthesizedScopes + addingSynthesized
+        self.knobs = base.knobs
+        self.slots = slots ?? base.slots
+        self.builtIns = base.builtIns
+        self.defaultTier = base.defaultTier
+        self.persistedKeys = base.persistedKeys
     }
 }
 
@@ -407,12 +459,7 @@ public enum RipulThemeEngine {
                 return true
             }
             guard kept.count != kind.slots.count else { return kind }
-            return RipulStyleKind(name: kind.name, label: kind.label, path: kind.path,
-                                  defaultStyleLabel: kind.defaultStyleLabel,
-                                  supportsNamedStyles: kind.supportsNamedStyles,
-                                  scopes: kind.scopes, knobs: kind.knobs,
-                                  slots: kept, builtIns: kind.builtIns,
-                                  defaultTier: kind.defaultTier, persistedKeys: kind.persistedKeys)
+            return RipulStyleKind(kind, slots: kept)
         }
     }
 
@@ -444,12 +491,7 @@ public enum RipulThemeEngine {
 
         return kinds.map { kind in
             guard let add = extra[kind.name], !add.isEmpty else { return kind }
-            return RipulStyleKind(name: kind.name, label: kind.label, path: kind.path,
-                                  defaultStyleLabel: kind.defaultStyleLabel,
-                                  supportsNamedStyles: kind.supportsNamedStyles,
-                                  scopes: kind.scopes + add, knobs: kind.knobs,
-                                  slots: kind.slots, builtIns: kind.builtIns,
-                                  defaultTier: kind.defaultTier, persistedKeys: kind.persistedKeys)
+            return RipulStyleKind(kind, addingSynthesized: add)
         }
     }
 
