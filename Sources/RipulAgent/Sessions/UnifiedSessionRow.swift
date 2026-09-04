@@ -11,6 +11,18 @@ struct SessionTitleLozenge: View {
     enum Content {
         case tool(AgentActivityEvent)
         case plan(TodoState)
+
+        /// Whether the lozenge renders its glyph. A `.tool` lozenge is only
+        /// ever on screen while that same tool is live (both call sites gate
+        /// on `latestToolActivity != nil`), and the row's leading slot already
+        /// renders the identical `ToolIconMap` glyph for a live tool — so the
+        /// lozenge carries just the name (it exists to hold the names too
+        /// long to fit under the leading icon). The plan glyph appears
+        /// nowhere else on the row, so `.plan` keeps its icon.
+        var showsIcon: Bool {
+            if case .tool = self { return false }
+            return true
+        }
     }
 
     let content: Content
@@ -38,10 +50,12 @@ struct SessionTitleLozenge: View {
 
     public var body: some View {
         HStack(spacing: 3) {
-            Image(systemName: iconName)
-                .font(.caption2)
-                .contentTransition(.symbolEffect(.replace))
-                .uiKitIdentifier("SessionTitleLozenge.icon")
+            if content.showsIcon {
+                Image(systemName: iconName)
+                    .font(.caption2)
+                    .contentTransition(.symbolEffect(.replace))
+                    .uiKitIdentifier("SessionTitleLozenge.icon")
+            }
             Text(label)
                 .font(.caption2.monospacedDigit())
                 .lineLimit(1)
@@ -63,7 +77,12 @@ struct SessionTitleLozenge: View {
 
 /// A user-authored tag, rendered as a small accent-tinted pill after the
 /// repo/branch on the subtitle line. Mirrors the web session-row lozenges.
-@available(iOS 26.0, macOS 26.0, *)
+///
+/// Availability deliberately tracks the OLDEST surface that renders tags, not
+/// the session row's — this is Text + Capsule + Color and touches no iOS 26
+/// API, and the plans list (iOS 17 / macOS 14) shows the same lozenges. Shared
+/// chrome, not Sessions-private chrome.
+@available(iOS 17.0, macOS 14.0, *)
 struct TagLozenge: View {
     let text: String
     public var body: some View {
@@ -82,8 +101,31 @@ struct TagLozenge: View {
 public struct UnifiedSessionRow: View {
     /// Row observes only the session-list leaf store so body re-runs are
     /// scoped to session-list data changes (activity, phases, todo states).
+    /// Where this row is being rendered. Same identity resolution, same
+    /// subtitle state machine, same live activity — only the chrome and the
+    /// type scale differ.
+    ///
+    /// `.lozenge` is the chat screen's top-bar pill. It exists so the header
+    /// and the session list cannot drift: the header used to derive its model
+    /// from the picker cache alone, which falls back to the provider's DEFAULT
+    /// model when the user has never picked one, and so routinely named a
+    /// model the session wasn't running.
+    public enum Presentation {
+        case list
+        case lozenge
+
+        var isLozenge: Bool { self == .lozenge }
+    }
+
     @ObservedObject var sessionStore: SessionListStore
     let session: UnifiedSession
+    var presentation: Presentation = .list
+    /// The user's explicit model pick for this session, when there is one.
+    /// Beats `session.model` (the model of the last assistant message in the
+    /// transcript, which lags a fresh pick by a whole turn) — but only if it
+    /// resolves to a known family, so an unrecognised catalog id can't replace
+    /// a good scanned value with a raw string.
+    var modelIdOverride: String? = nil
     /// Resolved last-active time from the session-id cache (survives cold start).
     var cachedLastActive: Date? = nil
     var isOpening: Bool = false
@@ -97,11 +139,19 @@ public struct UnifiedSessionRow: View {
     var hideProjectName: Bool = false
     var isSelectMode: Bool = false
     var isSelected: Bool = false
+    /// Lines the title may occupy. 1 everywhere except the agent screen's
+    /// EXPANDED title lozenge, where showing more of a long title is the
+    /// point of expanding — and growing this row's line count (rather than
+    /// swapping in a different title view) is what keeps the expansion a
+    /// height animation on one view instead of a snap between two.
+    var titleLineLimit: Int = 1
     var onSessionAction: ((SessionRowAction) -> Void)? = nil
 
     public init(
         sessionStore: SessionListStore,
         session: UnifiedSession,
+        presentation: Presentation = .list,
+        modelIdOverride: String? = nil,
         cachedLastActive: Date? = nil,
         isOpening: Bool = false,
         isArchiving: Bool = false,
@@ -111,10 +161,13 @@ public struct UnifiedSessionRow: View {
         hideProjectName: Bool = false,
         isSelectMode: Bool = false,
         isSelected: Bool = false,
+        titleLineLimit: Int = 1,
         onSessionAction: ((SessionRowAction) -> Void)? = nil
     ) {
         self.sessionStore = sessionStore
         self.session = session
+        self.presentation = presentation
+        self.modelIdOverride = modelIdOverride
         self.cachedLastActive = cachedLastActive
         self.isOpening = isOpening
         self.isArchiving = isArchiving
@@ -124,6 +177,7 @@ public struct UnifiedSessionRow: View {
         self.hideProjectName = hideProjectName
         self.isSelectMode = isSelectMode
         self.isSelected = isSelected
+        self.titleLineLimit = titleLineLimit
         self.onSessionAction = onSessionAction
     }
 
@@ -135,6 +189,22 @@ public struct UnifiedSessionRow: View {
     private var phase: AgentTurnPhase? {
         guard let sourceChatId = session.ripulSession?.sourceChatId else { return nil }
         return sessionStore.turnPhase(for: sourceChatId)
+    }
+
+    /// Whether this session's last agent turn has gone unlooked-at.
+    ///
+    /// Deliberately NOT derived from `phase`. The hand says the agent is
+    /// waiting on you; this says you have not seen what it said. A session you
+    /// opened, read, and left without replying is still awaiting input but is
+    /// no longer unread — and before this the list had no way to show that
+    /// difference, so everything waiting looked equally new.
+    ///
+    /// Every alias is offered because CLI sessions are keyed inconsistently
+    /// (`cli_<uuid>` live, bare uuid from the scanner) and matchKeys is exactly
+    /// the set of names this row answers to.
+    private var isUnread: Bool {
+        sessionStore.isUnread(anyOf: [session.id, session.ripulSession?.sourceChatId, session.ripulSession?.id]
+            + session.matchKeys.map { Optional($0) })
     }
 
     /// Live in-progress TodoWrite plan for this row. Uses the *plain*
@@ -202,17 +272,32 @@ public struct UnifiedSessionRow: View {
         ProviderConstants.color(for: session.provider, providerLabel: session.providerLabel)
     }
 
+    /// Resolved identity of the MODEL in use (glyph, colour, label) — e.g. a
+    /// Kimi-via-env-swap session inside the Claude Code harness resolves to
+    /// ☾ teal "Kimi K3", not the harness identity. nil when the model is
+    /// unknown → the row falls back to the harness icon/label.
+    private var modelIdentity: ModelIdentity? {
+        ModelIdentity.resolve(modelId: modelIdOverride) ?? ModelIdentity.resolve(modelId: session.model)
+    }
+
+    // MARK: - Presentation metrics
+
+    private var iconSize: CGFloat { presentation.isLozenge ? 13 : 16 }
+    private var iconWidth: CGFloat { presentation.isLozenge ? 20 : 28 }
+    private var titleFont: Font { presentation.isLozenge ? .caption.weight(.semibold) : .body }
+    private var detailFont: Font { presentation.isLozenge ? .caption2 : .caption }
+
     /// Text for the leading slot of the idle detail row: the model in use
-    /// (e.g. "Opus 4.6") when the host resolved one, else the harness label.
-    /// The leading icon already identifies the harness, so repeating the
-    /// harness name in text was redundant — the slot now carries the model.
+    /// (e.g. "Opus 4.6", "Kimi K3") when one resolved, else the harness
+    /// label. The leading icon is model-aligned too, so both slots agree.
     private var modelOrProviderName: String {
-        session.modelDisplayName
+        modelIdentity?.label
+            ?? session.modelDisplayName
             ?? ProviderConstants.label(for: session.provider, providerLabel: session.providerLabel)
     }
 
     public var body: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: presentation.isLozenge ? 6 : 12) {
             // Selection checkmark
             if isSelectMode {
                 Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
@@ -223,8 +308,9 @@ public struct UnifiedSessionRow: View {
             }
 
             // Leading icon — tool icon while a tool activity event is
-            // present (both toolStart and toolEnd), otherwise machine icon
-            // (in provider color) or provider icon.
+            // present (both toolStart and toolEnd); otherwise the model
+            // family glyph (in the model's colour) when the model resolves,
+            // falling back to the harness provider icon when it doesn't.
             VStack(spacing: 2) {
                 let toolIcon: String? = latestToolActivity != nil
                     ? ToolIconMap.symbol(for: latestToolActivity?.toolNameForIcon)
@@ -237,16 +323,36 @@ public struct UnifiedSessionRow: View {
                 }()
 
                 ZStack(alignment: .bottomTrailing) {
-                    Image(systemName: toolIcon ?? providerIcon)
-                        .font(.system(size: 16))
-                        .foregroundStyle(toolIcon != nil ? .secondary : providerColor)
-                        .frame(width: 28)
-                        .contentTransition(.symbolEffect(.replace))
-                        .animation(.easeInOut(duration: 0.175), value: toolIcon)
-                        .uiKitIdentifier("UnifiedSessionRow.leadingIcon")
+                    if let toolIcon {
+                        Image(systemName: toolIcon)
+                            .font(.system(size: iconSize))
+                            .foregroundStyle(.secondary)
+                            .frame(width: iconWidth)
+                            .contentTransition(.symbolEffect(.replace))
+                            .uiKitIdentifier("UnifiedSessionRow.leadingIcon")
+                    } else if let identity = modelIdentity {
+                        // Model-aligned: family glyph + colour, matching the
+                        // chat-stream respondent lozenges (web
+                        // modelIdentity.ts) — keyed off the model, not the
+                        // CLI harness that carried it.
+                        Text(identity.glyph)
+                            .font(.system(size: iconSize))
+                            .foregroundStyle(identity.color)
+                            .frame(width: iconWidth)
+                            .uiKitIdentifier("UnifiedSessionRow.leadingIcon")
+                    } else {
+                        Image(systemName: providerIcon)
+                            .font(.system(size: iconSize))
+                            .foregroundStyle(providerColor)
+                            .frame(width: iconWidth)
+                            .contentTransition(.symbolEffect(.replace))
+                            .uiKitIdentifier("UnifiedSessionRow.leadingIcon")
+                    }
 
-                    // Green dot = already open in Ripul
-                    if session.isOpenInRipul && toolIcon == nil {
+                    // Green dot = already open in Ripul. Meaningless in the
+                    // top bar, where the session on screen is open by
+                    // definition.
+                    if session.isOpenInRipul && toolIcon == nil && !presentation.isLozenge {
                         Circle()
                             .fill(.green)
                             .frame(width: 8, height: 8)
@@ -254,8 +360,11 @@ public struct UnifiedSessionRow: View {
                             .uiKitIdentifier("UnifiedSessionRow.openIndicatorDot")
                     }
                 }
+                .animation(.easeInOut(duration: 0.175), value: toolIcon)
 
-                if let toolLabel {
+                // The label under the icon needs a second line the top-bar
+                // pill doesn't have; there the tool name stays in the subtitle.
+                if let toolLabel, !presentation.isLozenge {
                     Text(toolLabel)
                         .font(.system(size: 8, weight: .medium))
                         .foregroundStyle(.secondary)
@@ -264,7 +373,7 @@ public struct UnifiedSessionRow: View {
                         .uiKitIdentifier("UnifiedSessionRow.toolLabel")
                 }
             }
-            .frame(width: 28)
+            .frame(width: iconWidth)
             .animation(.easeInOut(duration: 0.175), value: latestToolActivity != nil)
 
             VStack(alignment: .leading, spacing: 3) {
@@ -279,7 +388,8 @@ public struct UnifiedSessionRow: View {
                 // the leading icon — when true, the subtitle tool lozenge
                 // is suppressed to avoid duplication.
                 let toolLabelShownUnderIcon: Bool = {
-                    guard latestToolActivity != nil,
+                    guard !presentation.isLozenge,
+                          latestToolActivity != nil,
                           let name = latestToolActivity?.displayName else { return false }
                     return name.count <= 5
                 }()
@@ -305,10 +415,13 @@ public struct UnifiedSessionRow: View {
 
                 let subtitleKey = subtitleState.subtitleKey(inlineToolActivity: inlineToolActivity)
 
-                // Title row: name only (truncates).
+                // Title row: name only (truncates). Unread is carried by the
+                // row's shading, not by the title — the title is how you find
+                // a session, and re-weighting it made the list read as two
+                // different typographic ranks rather than one list.
                 Text(session.title)
-                    .font(.body)
-                    .lineLimit(1)
+                    .font(titleFont)
+                    .lineLimit(titleLineLimit)
                     .truncationMode(.tail)
                     .uiKitIdentifier("UnifiedSessionRow.title")
 
@@ -323,7 +436,7 @@ public struct UnifiedSessionRow: View {
                             }
                             if let subtitleDetail {
                                 Text(subtitleDetail)
-                                    .font(.caption)
+                                    .font(detailFont)
                                     .foregroundStyle(.secondary)
                                     .lineLimit(1)
                                     .truncationMode(.middle)
@@ -341,16 +454,22 @@ public struct UnifiedSessionRow: View {
                                     .uiKitIdentifier("UnifiedSessionRow.subtitle.machineIcon")
                             }
                             Text(modelOrProviderName)
-                                .font(.caption)
-                                .foregroundStyle(providerColor)
+                                .font(detailFont)
+                                .foregroundStyle(modelIdentity?.color ?? providerColor)
+                                .lineLimit(1)
+                                // The most identifying fact on the line: in the
+                                // top bar's ~150pt slot the project and branch
+                                // truncate before the model name does.
+                                .layoutPriority(1)
                                 .uiKitIdentifier("UnifiedSessionRow.subtitle.providerName")
 
                             if let project = session.projectName, !hideProjectName {
                                 Text("·").foregroundStyle(.secondary)
                                     .uiKitIdentifier("UnifiedSessionRow.subtitle.projectSeparator")
                                 Text(project)
-                                    .font(.caption)
+                                    .font(detailFont)
                                     .foregroundStyle(.secondary)
+                                    .lineLimit(1)
                                     .uiKitIdentifier("UnifiedSessionRow.subtitle.projectName")
                             }
 
@@ -362,23 +481,35 @@ public struct UnifiedSessionRow: View {
                                     .foregroundStyle(.secondary)
                                     .uiKitIdentifier("UnifiedSessionRow.subtitle.branchIcon")
                                 Text(branch)
-                                    .font(.caption)
+                                    .font(detailFont)
                                     .foregroundStyle(.secondary)
+                                    .lineLimit(1)
                                     .uiKitIdentifier("UnifiedSessionRow.subtitle.branchName")
                             }
 
-                            // Tag lozenges — after the repo/branch label.
-                            ForEach(session.tags, id: \.self) { tag in
-                                TagLozenge(text: tag)
+                            // Tag lozenges — after the repo/branch label. Left
+                            // out of the pill: user-authored labels are how you
+                            // pick a session OUT of a list, and they'd eat the
+                            // width the model and project need.
+                            if !presentation.isLozenge {
+                                // Plan link tags are machine identity — the
+                                // plan screen renders that relationship; the
+                                // row never shows the raw key.
+                                ForEach(PlanTagConvention.userTags(session.tags), id: \.self) { tag in
+                                    TagLozenge(text: tag)
+                                }
                             }
                         }
+                        .lineLimit(1)
+                        .truncationMode(.tail)
                     }
                 }
                 .animation(.easeInOut(duration: 0.175), value: subtitleKey)
 
                 // Third row: only when a plan is driving the row AND a tool
-                // call is live underneath it.
-                if let inlineToolActivity {
+                // call is live underneath it. The top-bar pill is two lines
+                // tall, so it keeps the plan line and drops this one.
+                if let inlineToolActivity, !presentation.isLozenge {
                     HStack(spacing: 6) {
                         if !toolLabelShownUnderIcon {
                             SessionTitleLozenge(content: .tool(inlineToolActivity))
@@ -398,8 +529,40 @@ public struct UnifiedSessionRow: View {
             }
             .animation(.easeInOut(duration: 0.175), value: hasInlineToolActivity)
 
-            Spacer()
+            // List-only trailing chrome. The top-bar pill hugs its content and
+            // sits between two 44pt buttons — there is no room for a running
+            // indicator, tool action buttons or a timestamp, and the chat
+            // screen states all three itself.
+            if !presentation.isLozenge {
+                Spacer()
+                listTrailingChrome
+            }
+        }
+        .padding(.vertical, presentation.isLozenge ? 0 : 2)
+        .background(unreadShading)
+        .uiKitIdentifier("UnifiedSessionRow.container")
+    }
 
+    /// Unread, as a band behind the whole row.
+    ///
+    /// Bled past the content on both axes so it reads as the ROW being tinted
+    /// rather than a box drawn around the text. Kept faint (and skipped in the
+    /// lozenge presentation, which is a top-bar pill rather than a list row)
+    /// so it layers under selection and hover instead of fighting them.
+    @ViewBuilder
+    private var unreadShading: some View {
+        if isUnread && !presentation.isLozenge {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color.accentColor.opacity(0.12))
+                .padding(.horizontal, -10)
+                .padding(.vertical, -4)
+                .uiKitIdentifier("UnifiedSessionRow.unreadShading")
+        }
+    }
+
+    @ViewBuilder
+    private var listTrailingChrome: some View {
+        Group {
             // Per-session busy / awaiting-input indicator.
             switch phase {
             case .running:
@@ -483,7 +646,5 @@ public struct UnifiedSessionRow: View {
                 }
             }
         }
-        .padding(.vertical, 2)
-        .uiKitIdentifier("UnifiedSessionRow.container")
     }
 }

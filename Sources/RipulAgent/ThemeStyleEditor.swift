@@ -88,6 +88,44 @@ public struct RipulStyleKnobRows: View {
             }
         case .color(let fallback):
             colorRow(knob, fallback: fallback)
+        case .text(let fallback, let multiline):
+            textRow(knob, fallback: fallback, multiline: multiline)
+        }
+    }
+
+    /// A free-text knob: the toggle flips Inherit (unset) ↔ Set, and the field edits the
+    /// pinned string. Unset shows the inherited text greyed, so the row always reflects
+    /// what the element actually renders.
+    @ViewBuilder private func textRow(_ knob: RipulStyleKnob, fallback: String,
+                                      multiline: Bool) -> some View {
+        let isSet = working[knob.key] != nil
+        let binding = Binding(
+            get: { working[knob.key]?.string ?? fallback },
+            set: { set(knob.key, .string($0)) })
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(knob.label)
+                Spacer()
+                if !isSet { Text("Inherit").font(.caption2).foregroundColor(.secondary) }
+                Toggle("", isOn: Binding(
+                    get: { isSet },
+                    set: { on in set(knob.key, on ? .string(fallback) : nil) }))
+                    .labelsHidden()
+            }
+            if isSet {
+                if multiline {
+                    TextEditor(text: binding)
+                        .frame(minHeight: 72)
+                        .font(.callout)
+                } else {
+                    TextField(knob.label, text: binding)
+                        .textFieldStyle(.roundedBorder)
+                }
+            } else {
+                Text(fallback)
+                    .font(.callout).foregroundColor(.secondary)
+                    .lineLimit(multiline ? 4 : 1)
+            }
         }
     }
 

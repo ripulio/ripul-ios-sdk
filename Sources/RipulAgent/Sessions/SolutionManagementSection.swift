@@ -51,8 +51,12 @@ struct SolutionManagementSection: View {
     @State private var showingCollections = false
     @State private var showingContexts = false
     @State private var showingSiteKeys = false
+    @State private var showingModels = false
+    @State private var showingUsers = false
+    @State private var showingVoiceProfiles = false
     @State private var showingMacros = false
     @State private var showingBuilds = false
+    @State private var showingBilling = false
     /// Phase-2 absorption confirmation + collision alert (moved here from the
     /// console DevTools Tools tab).
     @State private var confirmAbsorption = false
@@ -123,6 +127,38 @@ struct SolutionManagementSection: View {
                         icon: "key",
                         identifier: "SolutionManagement.siteKeys"
                     ) { showingSiteKeys = true }
+
+                    Divider().padding(.leading, 44)
+                    row(
+                        title: "Models",
+                        subtitle: "The model catalog — pricing, tiers, defaults",
+                        icon: "cube",
+                        identifier: "SolutionManagement.models"
+                    ) { showingModels = true }
+
+                    Divider().padding(.leading, 44)
+                    row(
+                        title: "Users",
+                        subtitle: "Ripul accounts from Clerk — role, tier, usage",
+                        icon: "person.2",
+                        identifier: "SolutionManagement.users"
+                    ) { showingUsers = true }
+
+                    Divider().padding(.leading, 44)
+                    row(
+                        title: "Voice Profiles",
+                        subtitle: "Speech config site keys bind to — voice, language, terms",
+                        icon: "person.wave.2",
+                        identifier: "SolutionManagement.voiceProfiles"
+                    ) { showingVoiceProfiles = true }
+
+                    Divider().padding(.leading, 44)
+                    row(
+                        title: "Row Billing",
+                        subtitle: "Bill CRM rows via Stripe — account, rules, prices",
+                        icon: "creditcard",
+                        identifier: "SolutionManagement.billing"
+                    ) { showingBilling = true }
                 }
 
                 if bridge.audience == .developer {
@@ -245,6 +281,82 @@ struct SolutionManagementSection: View {
                         Button("Done") { showingSiteKeys = false }
                     }
                 }
+            }
+        }
+        .sheet(isPresented: $showingModels) {
+            NavigationStack {
+                RipulModelCatalogScreen(
+                    client: RipulModelCatalogClient(
+                        baseURL: management.baseURL,
+                        tokenProvider: management.tokenProvider
+                    )
+                )
+                .toolbar {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button("Done") { showingModels = false }
+                    }
+                }
+            }
+        }
+        .sheet(isPresented: $showingUsers) {
+            NavigationStack {
+                RipulUsersScreen(
+                    client: RipulUsersClient(
+                        baseURL: management.baseURL,
+                        tokenProvider: management.tokenProvider
+                    )
+                )
+                .toolbar {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button("Done") { showingUsers = false }
+                    }
+                }
+            }
+        }
+        .sheet(isPresented: $showingVoiceProfiles) {
+            NavigationStack {
+                VoiceProfilesScreen(
+                    baseURL: management.baseURL,
+                    tokenProvider: management.tokenProvider
+                )
+                .toolbar {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button("Done") { showingVoiceProfiles = false }
+                    }
+                }
+            }
+        }
+        .sheet(isPresented: $showingBilling) {
+            NavigationStack {
+                RipulBillingScreen(
+                    billingClient: RipulBillingClient(
+                        baseURL: management.baseURL,
+                        tokenProvider: management.tokenProvider
+                    ),
+                    siteKeysClient: RipulSiteKeysClient(
+                        baseURL: management.baseURL,
+                        tokenProvider: management.tokenProvider
+                    )
+                )
+                .toolbar {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button("Done") { showingBilling = false }
+                    }
+                }
+            }
+        }
+        // ripul://billing lands here: notification when already mounted,
+        // latch consumed at appear when the deep link beat the mount.
+        .onReceive(NotificationCenter.default.publisher(for: RipulBillingDeepLink.notification)) { _ in
+            RipulBillingDeepLink.pending = false
+            isExpanded = true
+            showingBilling = true
+        }
+        .onAppear {
+            if RipulBillingDeepLink.pending {
+                RipulBillingDeepLink.pending = false
+                isExpanded = true
+                showingBilling = true
             }
         }
         .confirmationDialog(

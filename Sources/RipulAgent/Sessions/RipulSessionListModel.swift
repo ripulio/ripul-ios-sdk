@@ -12,6 +12,13 @@ import UIKit
 @MainActor
 public final class RipulSessionListModel: ObservableObject {
 
+    /// Stable error-code prefix the web app stamps on open failures where the
+    /// host PROVED the session is gone (deleted or archived there) — see
+    /// `AgentOpenSessionResponse.errorCode` in relayProtocol.ts. AgentBridge
+    /// prefixes the human message with `code: `, so a prefix match classifies
+    /// without string-sniffing the message itself.
+    private static let sessionNotFoundPrefix = "session-not-found:"
+
     // MARK: - Published (view observes these)
 
     @Published public private(set) var unifiedSessions: [UnifiedSession]
@@ -54,12 +61,14 @@ public final class RipulSessionListModel: ObservableObject {
 
     // MARK: - Internal state (NOT published — no onChange races)
 
-    /// Remote sessions grouped by machine display name — source of truth.
-    /// Preserves sessions from not-yet-responded machines during incremental refresh.
-    private var remoteSessionsByMachine: [String: [RemoteSessionInfo]] = [:]
-    /// Maps remote session ID → machine display name.
-    private var sessionMachineNames: [String: String] = [:]
-    /// Flattened view of `remoteSessionsByMachine`, minus archived IDs.
+    /// Remote sessions grouped by machineId — source of truth.
+    /// Preserves sessions from not-yet-responded machines during incremental
+    /// refresh. Keyed by the stable machineId, NEVER display name: names
+    /// collide by default ("Mac", "My Machine") and are mutable, so name keys
+    /// let two machines overwrite each other's buckets — which read as chats
+    /// "moving" between machines. Display names are derived at rebuild time.
+    private var remoteSessionsByMachineId: [String: [RemoteSessionInfo]] = [:]
+    /// Flattened view of `remoteSessionsByMachineId`, minus archived IDs.
     private var remoteSessions: [RemoteSessionInfo] = []
     private var hasLoadedRemoteSessions = false
     /// Bulk map of sessionId → tags, fetched once per session load and injected
@@ -70,6 +79,21 @@ public final class RipulSessionListModel: ObservableObject {
     /// hidden from the unified list until the web app removes the tab, so a
     /// flaky archive-all can't resurrect rows as orphan locals.
     private var recentlyClosedLocalIds: Set<String> = []
+
+    /// How many rebuilds ran during the current `loadRemoteSessions` pass, and
+    /// how long they held the main actor. Reset per pass, reported on
+    /// `ios.sessions_load_end` — the before/after signal for rebuild coalescing.
+    private var rebuildCount = 0
+    private var rebuildElapsed: TimeInterval = 0
+
+    /// Debug switch restoring the pre-coalescing behaviour: one full rebuild per
+    /// answering machine. Exists so the two can be compared on-device without a
+    /// rebuild of the app, against identical machine and session counts.
+    public static let perMachineRebuildKey = "sessionListPerMachineRebuild"
+
+    /// Facts signature last folded into `unifiedSessions`. Empty on launch, so
+    /// the first sink carrying any published facts forces one rebuild.
+    private var lastAppliedFactsSignature: String = ""
     private var lastLoadCompleted: Date?
     private var initialLoadTask: Task<Void, Never>?
     private var hasRefreshedAfterAuth = false
@@ -90,6 +114,13 @@ public final class RipulSessionListModel: ObservableObject {
     /// restarts (unlike chatId which requires ripulSession to resolve).
     private static let lastActiveBySessionIdCacheKey = "ripulLastActiveBySessionId"
     @Published public private(set) var lastActiveBySessionId: [String: Date] = [:]
+    /// Last remote scan result per machine. Persisted so a launch starts from
+    /// the last known inputs rather than from nothing — see
+    /// `restoreRemoteSessionsFromCache`. v2: keyed by machineId; the old
+    /// name-keyed cache (and its companion `ripulSessionMachineNames` map,
+    /// which was last-writer-wins and never pruned) is abandoned, not
+    /// migrated — display names can't be re-keyed to ids safely.
+    private static let remoteSessionsCacheKey = "ripulRemoteSessionsByMachineIdV2"
 
     // MARK: - Init
 
@@ -108,6 +139,12 @@ public final class RipulSessionListModel: ObservableObject {
         let openCount = cached.filter(\.cachedIsOpen).count
         self.unifiedSessions = cached
         log("debug_timeline \(elapsed()) init: \(cached.count) cached sessions (\(openCount) cachedIsOpen), bridge.sessions=\(bridge.sessions.count)")
+
+        // Restore the last remote scan per machine. The unified list is derived
+        // from these inputs, so without them the first rebuild of the launch
+        // rebuilds from an EMPTY remote set and every row that isn't an open
+        // local tab disappears until its machine answers.
+        restoreRemoteSessionsFromCache()
 
         // Restore persisted last-active timestamps so sort order is
         // correct immediately on launch, before any live events arrive.
@@ -141,7 +178,18 @@ public final class RipulSessionListModel: ObservableObject {
                 // list, do a full rebuild so a just-created chat appears without
                 // a pull-to-refresh; otherwise keep the cheap rematch to avoid
                 // re-sorting the whole list on every live activity tick.
-                if hasUnrepresentedLocalSession() {
+                //
+                // Facts (project / branch / model, published over SessionChannel)
+                // need the same escape hatch for a different reason: they land
+                // AFTER the row exists — a guest joins, the row is built, and the
+                // DO delivers them a moment later — and they change neither the
+                // id nor the title, which is all `rematchLocalSessions` watches.
+                // `withRipulSession` also carries the row's own gitBranch across
+                // verbatim, so even a triggered rematch keeps the nil. Without
+                // this the row stayed blank until a relaunch rebuilt it.
+                let factsSignature = currentFactsSignature()
+                if hasUnrepresentedLocalSession() || factsSignature != lastAppliedFactsSignature {
+                    lastAppliedFactsSignature = factsSignature
                     rebuildUnifiedSessions()
                 } else {
                     rematchLocalSessions()
@@ -324,10 +372,26 @@ public final class RipulSessionListModel: ObservableObject {
         }
         isLoadingRemoteSessions = true
         bridge.logSessionStartMarker("ios.sessions_load_start")
+        // Rebuild accounting for THIS pass. `rebuildMs` is what the main actor —
+        // and therefore touch delivery — actually lost to rebuilding, and
+        // `changed` is how many machines came back with new data: the number the
+        // per-machine path runs one rebuild for. Coalesced, `rebuilds` should
+        // read 1 against a `changed` of however many machines answered.
+        rebuildCount = 0
+        rebuildElapsed = 0
+        var changedMachines = 0
+        let passStarted = Date()
         defer {
             isLoadingRemoteSessions = false
             lastLoadCompleted = Date()
-            bridge.logSessionStartMarker("ios.sessions_load_end")
+            bridge.logSessionStartMarker(
+                "ios.sessions_load_end",
+                extra: "rebuilds=\(rebuildCount)"
+                    + " changed=\(changedMachines)"
+                    + " rebuildMs=\(Int(rebuildElapsed * 1000))"
+                    + " passMs=\(Int(Date().timeIntervalSince(passStarted) * 1000))"
+                    + " rows=\(unifiedSessions.count)"
+            )
         }
 
         // Refresh the tag map up front so the per-machine rebuilds below already
@@ -350,43 +414,94 @@ public final class RipulSessionListModel: ObservableObject {
             }
         }
 
+        // Rebuild once per PASS, not once per machine — unless there is nothing
+        // on screen yet.
+        //
+        // The per-machine rebuild exists so a slow machine can't leave the list
+        // looking empty while it is still being waited on. That only buys
+        // anything when the list has no rows to show; once rows are up (every
+        // foreground refresh, and any launch seeded from cache) each answering
+        // machine re-ran the whole rebuild — derivedMachineNames, then
+        // UnifiedSession.build over EVERY session of EVERY machine, a merge map
+        // over every existing row, and two whole-collection JSON encodes — all
+        // on the main actor, M times for M machines.
+        //
+        // Foreground is where that bites hardest: every machine's timestamps
+        // have moved while the app was away, so none of them take the no-change
+        // bail and the amplification is at full strength exactly when the user
+        // is tapping. UIKit delivers touches on the main thread, so the cost is
+        // not merely a slow list — it is an app that ignores input until the
+        // last machine's rebuild has drained.
+        //
+        // The debug key forces the old per-machine behaviour back on, so the
+        // two can be A/B'd on-device against the SAME machine count and session
+        // count — the only way the before/after is a measurement rather than an
+        // extrapolation. Same pattern as `suppressSessionListUpdates`.
+        let forcePerMachine = cache.bool(forKey: Self.perMachineRebuildKey)
+        let progressive = unifiedSessions.isEmpty || forcePerMachine
+        var pendingRebuild = false
+
         // Fetch all machines in parallel. Update per-machine so sessions from
         // not-yet-responded machines are preserved (no visual disappearance).
         await withTaskGroup(of: (String, [RemoteSessionInfo]).self) { group in
             for machine in onlineMachines {
                 group.addTask {
                     let sessions = await self.bridge.listRemoteSessions(machineId: machine.machineId)
-                    return (machine.displayName, sessions)
+                    return (machine.machineId, sessions)
                 }
             }
-            for await (name, sessions) in group {
-                let old = remoteSessionsByMachine[name] ?? []
-                // Update per-machine store
-                remoteSessionsByMachine[name] = sessions
-                for s in sessions { sessionMachineNames[s.id] = name }
+            for await (machineId, sessions) in group {
+                let old = remoteSessionsByMachineId[machineId] ?? []
+                // Update per-machine store — only a machine's own answer may
+                // replace its bucket.
+                remoteSessionsByMachineId[machineId] = sessions
 
-                // Only rebuild if this machine's data actually changed
-                guard sessions != old else { continue }
-
-                // Flatten all machines into the working array
-                var flat = remoteSessionsByMachine.values.flatMap { $0 }
-                if !recentlyArchivedIds.isEmpty {
-                    flat.removeAll { recentlyArchivedIds.contains($0.id) }
-                }
-                remoteSessions = flat
+                // A machine answered — that's what this flag means, and it has
+                // to be set before the no-change bail below. Since the launch
+                // now starts from the CACHED scan results, the first response
+                // often matches what we already had; leaving the flag false in
+                // that case stopped the row cache from ever being rewritten.
                 if !hasLoadedRemoteSessions {
                     hasLoadedRemoteSessions = true
                 }
-                rebuildUnifiedSessions()
+
+                // Only rebuild if this machine's data actually changed
+                guard sessions != old else { continue }
+                changedMachines += 1
+
+                if progressive {
+                    reflowRemoteSessions()
+                    rebuildUnifiedSessions()
+                } else {
+                    pendingRebuild = true
+                }
             }
         }
 
+        if pendingRebuild {
+            reflowRemoteSessions()
+            rebuildUnifiedSessions()
+        }
+
         // Final check: if all machines returned empty and we had sessions before,
-        // rebuild once so the list reflects the empty state.
-        if remoteSessionsByMachine.values.allSatisfy({ $0.isEmpty }) && !remoteSessions.isEmpty {
+        // rebuild once so the list reflects the empty state. (The coalesced
+        // rebuild above already reflowed to empty in that case, so this only
+        // fires on the progressive path or when nothing was marked dirty.)
+        if remoteSessionsByMachineId.values.allSatisfy({ $0.isEmpty }) && !remoteSessions.isEmpty {
             remoteSessions = []
             rebuildUnifiedSessions()
         }
+    }
+
+    /// Flatten every machine's bucket into the working array, minus anything
+    /// archived out from under us. O(all sessions) — which is why the pass above
+    /// runs it once rather than per answering machine.
+    private func reflowRemoteSessions() {
+        var flat = remoteSessionsByMachineId.values.flatMap { $0 }
+        if !recentlyArchivedIds.isEmpty {
+            flat.removeAll { recentlyArchivedIds.contains($0.id) }
+        }
+        remoteSessions = flat
     }
 
     // MARK: - Machines
@@ -399,7 +514,14 @@ public final class RipulSessionListModel: ObservableObject {
         guard let fetched = await MachineDirectory.fetch(token: token) else {
             // Fetch FAILED (network / non-200) — keep cache and do NOT mark
             // resolved: "unreachable" must never look like "new account".
-            log("loadMachinesFromAPI: fetch failed — keeping existing \(machines.count) machines")
+            //
+            // Report how OLD the kept cache is, not just how big. A record past
+            // the 5-minute liveness TTL reads as offline, which takes every
+            // machine out of the session scan — "keeping 1 machines" looks
+            // healthy while describing data that is days stale and inert.
+            let oldest = machines.map(\.lastSeenAt).min() ?? "n/a"
+            log("loadMachinesFromAPI: fetch failed — keeping existing \(machines.count) machines "
+                + "(oldest lastSeenAt=\(oldest), online=\(machines.filter(\.isOnline).count))")
             return
         }
         if !hasSuccessfulMachinesResponse {
@@ -504,9 +626,11 @@ public final class RipulSessionListModel: ObservableObject {
 
         // Remote-open path: open (or re-seed) via relay. For remote sessions
         // this is now ALSO the re-entry path — see the fast-path gating above.
-        guard let machine = machines.first(where: { $0.displayName == session.machineName })
-                          ?? machines.first(where: { $0.isOnline }) else {
-            // No machine connectable (list still loading, or host offline).
+        // Owner only — opening on a substitute host CREATES the chat there for
+        // real (its scanner then lists it as local), which is how sessions
+        // migrated off a sleeping machine.
+        guard let ownerMachineId = resolvedMachineId(for: session) else {
+            // Owner offline or unknown (list still loading, or host offline).
             // If the web view has a live tab for this session, degrade to the
             // legacy tab-select so navigation still works — history may be
             // cold until it's re-tapped with the host reachable.
@@ -518,14 +642,15 @@ public final class RipulSessionListModel: ObservableObject {
                 }
                 return
             }
-            openSessionError = "No connected machine available."
+            openSessionError = session.machineName.map { "\"\($0)\" isn't connected — this chat lives there." }
+                ?? "This chat's machine isn't connected."
             openingUnifiedSessionId = nil
             return
         }
 
         Task {
             let (tabId, provider, providerLabel, error) =
-                await bridge.openRemoteSession(machineId: machine.machineId, sessionId: session.id, displayName: session.title)
+                await bridge.openRemoteSession(machineId: ownerMachineId, sessionId: session.id, displayName: session.title)
             openingUnifiedSessionId = nil
 
             if let tabId {
@@ -553,7 +678,29 @@ public final class RipulSessionListModel: ObservableObject {
                 }
                 await loadRemoteSessions()
             } else {
-                openSessionError = error ?? "Failed to open session."
+                // The host PROVED this session is gone (deleted or archived
+                // there) — the web layer has already closed the local tab and
+                // dropped the pairing. Remove the row so it stops listing as a
+                // zombie, and surface what actually happened; the raw
+                // js-exception this used to show read as "machine unavailable"
+                // even though the machine was perfectly online.
+                if let error, error.hasPrefix(Self.sessionNotFoundPrefix) {
+                    if let tabId = session.ripulSession?.id {
+                        recentlyClosedLocalIds.insert(tabId)
+                    }
+                    recentlyArchivedIds.insert(session.id)
+                    for key in session.matchKeys { recentlyArchivedIds.insert(key) }
+                    removeFromRemoteBuckets(sessionId: session.id)
+                    remoteSessions.removeAll { $0.id == session.id }
+                    rebuildUnifiedSessions()
+                    let message = String(error.dropFirst(Self.sessionNotFoundPrefix.count))
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    openSessionError = message.isEmpty
+                        ? "This session was deleted on its host machine. The entry has been removed."
+                        : message
+                } else {
+                    openSessionError = error ?? "Failed to open session."
+                }
             }
         }
     }
@@ -571,12 +718,14 @@ public final class RipulSessionListModel: ObservableObject {
             }
 
             if session.isCliSession {
-                guard let machine = machines.first(where: { $0.displayName == session.machineName })
-                                  ?? machines.first(where: { $0.isOnline }) else {
-                    openSessionError = "No connected machine to archive on."
+                // Owner only — archiving via "any online machine" hit the
+                // wrong disk whenever the owner was the machine that was off.
+                guard let ownerMachineId = resolvedMachineId(for: session) else {
+                    openSessionError = session.machineName.map { "\"\($0)\" isn't connected — archive this chat when it's back." }
+                        ?? "This chat's machine isn't connected."
                     return
                 }
-                let (success, error) = await bridge.archiveRemoteSession(machineId: machine.machineId, sessionId: session.id)
+                let (success, error) = await bridge.archiveRemoteSession(machineId: ownerMachineId, sessionId: session.id)
                 if !success {
                     openSessionError = error ?? "Archive failed."
                     return
@@ -584,9 +733,7 @@ public final class RipulSessionListModel: ObservableObject {
             }
 
             recentlyArchivedIds.insert(session.id)
-            if let mn = sessionMachineNames[session.id] {
-                remoteSessionsByMachine[mn]?.removeAll { $0.id == session.id }
-            }
+            removeFromRemoteBuckets(sessionId: session.id)
             remoteSessions.removeAll { $0.id == session.id }
             rebuildUnifiedSessions()
             await loadRemoteSessions()
@@ -629,11 +776,10 @@ public final class RipulSessionListModel: ObservableObject {
     func deleteSession(_ session: UnifiedSession, keepRemote: Bool = false) {
         deletingUnifiedSessionId = session.id
 
-        // Find the machine for any session with a remote presence
-        let machineId: String? = session.machineName.flatMap { name in
-            machines.first(where: { $0.displayName == name })?.machineId
-                ?? machines.first(where: { $0.isOnline })?.machineId
-        }
+        // Find the OWNING machine for any session with a remote presence.
+        // nil (owner offline/unknown) degrades to a local-only delete rather
+        // than archiving on whichever other machine happened to be online.
+        let machineId: String? = resolvedMachineId(for: session)
         deletingFromHost = !keepRemote && machineId != nil
 
         Task {
@@ -654,9 +800,7 @@ public final class RipulSessionListModel: ObservableObject {
             recentlyArchivedIds.insert(session.id)
             // Also filter by all match keys so the session can't reappear under a different ID
             for key in session.matchKeys { recentlyArchivedIds.insert(key) }
-            if let mn = sessionMachineNames[session.id] {
-                remoteSessionsByMachine[mn]?.removeAll { $0.id == session.id }
-            }
+            removeFromRemoteBuckets(sessionId: session.id)
             remoteSessions.removeAll { $0.id == session.id }
             rebuildUnifiedSessions()
 
@@ -676,14 +820,20 @@ public final class RipulSessionListModel: ObservableObject {
 
     // MARK: - Archive (shared core)
 
-    /// Resolve which machine owns this session for routing. Prefers the stable
-    /// machineId stamped at fetch time; only falls back to "the online machine"
-    /// when exactly one host is online (no ambiguity). Never routes by display
-    /// name — that's how rows landed on the wrong host before.
+    /// Resolve which machine OWNS this session for routing. The stable
+    /// machineId stamped at fetch time is the address; display name resolves
+    /// only legacy rows that predate the stamp. NEVER guesses beyond that:
+    /// the old "exactly one machine online" fallback fired precisely when one
+    /// of two machines went offline and routed the op to the survivor — and
+    /// the "any online machine" guards that used to sit at the open/archive/
+    /// delete call sites did the same. Unresolvable owner = nil; callers
+    /// degrade honestly (error, or local-only) instead of guessing.
     private func resolvedMachineId(for session: UnifiedSession) -> String? {
         if let id = session.machineId { return id }
-        let online = machines.filter { $0.isOnline }
-        return online.count == 1 ? online.first?.machineId : nil
+        if let name = session.machineName {
+            return machines.first(where: { $0.displayName == name })?.machineId
+        }
+        return nil
     }
 
     /// Archive one session: close the local tab (tracked so it can't resurrect
@@ -711,12 +861,20 @@ public final class RipulSessionListModel: ObservableObject {
         }
 
         recentlyArchivedIds.insert(session.id)
-        if let mn = sessionMachineNames[session.id] {
-            remoteSessionsByMachine[mn]?.removeAll { $0.id == session.id }
-        }
+        removeFromRemoteBuckets(sessionId: session.id)
         remoteSessions.removeAll { $0.id == session.id }
 
         return errorMessage
+    }
+
+    /// Remove a session row from EVERY machine bucket by id. Attribution-proof
+    /// on purpose: the old form looked the bucket up through the (global,
+    /// last-writer-wins) id→name map, so a mis-attributed row was removed from
+    /// the wrong bucket and resurrected from the right one on the next rebuild.
+    private func removeFromRemoteBuckets(sessionId: String) {
+        for key in remoteSessionsByMachineId.keys {
+            remoteSessionsByMachineId[key]?.removeAll { $0.id == sessionId }
+        }
     }
 
     // MARK: - Batch archive sessions (selection path)
@@ -800,9 +958,7 @@ public final class RipulSessionListModel: ObservableObject {
 
                 recentlyArchivedIds.insert(session.id)
                 for key in session.matchKeys { recentlyArchivedIds.insert(key) }
-                if let mn = sessionMachineNames[session.id] {
-                    remoteSessionsByMachine[mn]?.removeAll { $0.id == session.id }
-                }
+                removeFromRemoteBuckets(sessionId: session.id)
                 remoteSessions.removeAll { $0.id == session.id }
             }
 
@@ -935,8 +1091,12 @@ public final class RipulSessionListModel: ObservableObject {
 
     /// Connect to a machine in CLI provider mode.
     /// providerKey is e.g. "claude-cli", "codex-cli", "antigravity-cli".
+    /// - Parameter modelId: Catalog model to pin the new session to. Passed by
+    ///   the model-aligned quick-start strip; nil from harness-shaped entry
+    ///   points, which take the provider default.
     func connectWithProvider(
         _ providerKey: String,
+        modelId: String? = nil,
         to machine: RemoteMachine,
         onSelect: @escaping (ChatSession) -> Void,
         onDismiss: @escaping () -> Void
@@ -946,7 +1106,7 @@ public final class RipulSessionListModel: ObservableObject {
             return
         }
         connectingMachineId = machine.machineId
-        let (tabId, error) = await bridge.connectToMachineWithProvider(machineId: machine.machineId, providerKey: providerKey)
+        let (tabId, error) = await bridge.connectToMachineWithProvider(machineId: machine.machineId, providerKey: providerKey, modelId: modelId)
         connectingMachineId = nil
 
         if let tabId {
@@ -1016,11 +1176,74 @@ public final class RipulSessionListModel: ObservableObject {
             : "Host never went offline — the restart likely didn't execute (host guardian may be stale). Try again after relaunching the host app."
     }
 
+    // MARK: - Remote input cache
+
+    /// Persist the per-machine scan results the unified list is derived from.
+    /// Called from the same place as the unified-row cache, so archive, delete
+    /// and move all flow through it.
+    private func saveRemoteSessionsToCache() {
+        if let data = try? JSONEncoder().encode(remoteSessionsByMachineId) {
+            cache.set(data, forKey: Self.remoteSessionsCacheKey)
+        }
+    }
+
+    /// Seed `remoteSessionsByMachineId` from the previous launch so rows
+    /// survive until their owning machine actually answers. Only that machine
+    /// may retract its own sessions.
+    ///
+    /// Machines that have left the account, or that the user disabled, are
+    /// dropped — both are evidence of absence and must not outlive a relaunch.
+    /// `hasLoadedRemoteSessions` deliberately stays false: this data renders,
+    /// but it isn't confirmed, so it doesn't get written back to the cache
+    /// until a live scan replaces it.
+    private func restoreRemoteSessionsFromCache() {
+        guard let data = cache.data(forKey: Self.remoteSessionsCacheKey),
+              var byMachine = try? JSONDecoder().decode([String: [RemoteSessionInfo]].self, from: data)
+        else { return }
+
+        if !machines.isEmpty {
+            let visible = Set(machines.filter { !$0.isDisabled(cache: cache) }.map(\.machineId))
+            byMachine = byMachine.filter { visible.contains($0.key) }
+        }
+        remoteSessionsByMachineId = byMachine
+        remoteSessions = byMachine.values.flatMap { $0 }
+        log("debug_timeline \(elapsed()) restored \(remoteSessions.count) remote sessions across \(byMachine.count) machines")
+    }
+
+    /// Display names derived FRESH from the buckets on every rebuild — never a
+    /// long-lived map. The old `sessionMachineNames` was global, last-writer-
+    /// wins across machines, never pruned, and persisted across launches, so a
+    /// single duplicate echo re-attributed a session's machine label forever.
+    /// A machine absent from the registry contributes no name; coalescing then
+    /// keeps the row's previously-known label.
+    private func derivedMachineNames() -> [String: String] {
+        var names: [String: String] = [:]
+        for (machineId, list) in remoteSessionsByMachineId {
+            guard let display = machines.first(where: { $0.machineId == machineId })?.displayName else { continue }
+            for s in list {
+                names[s.id] = display
+            }
+        }
+        return names
+    }
+
     // MARK: - Rebuild (imperative — no .onChange)
 
     /// Rebuild unified sessions from current remote + local data.
     /// Called directly after every mutation — never from `.onChange`.
+    ///
+    /// Timing wrapper. The rebuild is the main actor's largest single cost on a
+    /// foreground refresh, and it is invoked from a dozen call sites — so what
+    /// matters is not one rebuild's duration but how many run per load pass and
+    /// what they add up to. Both are reported on `ios.sessions_load_end`.
     private func rebuildUnifiedSessions() {
+        let started = Date()
+        performRebuildUnifiedSessions()
+        rebuildCount += 1
+        rebuildElapsed += Date().timeIntervalSince(started)
+    }
+
+    private func performRebuildUnifiedSessions() {
         // Guard: don't overwrite cache with local-only data before remote loads
         if remoteSessions.isEmpty && !hasLoadedRemoteSessions && !unifiedSessions.isEmpty {
             rematchLocalSessions()
@@ -1033,13 +1256,40 @@ public final class RipulSessionListModel: ObservableObject {
         let liveLocalIds = Set(bridge.sessions.map(\.id))
         recentlyClosedLocalIds = recentlyClosedLocalIds.intersection(liveLocalIds)
 
-        let updated = UnifiedSession.build(
+        let built = UnifiedSession.build(
             from: remoteSessions,
             localSessions: bridge.sessions,
-            machineNames: sessionMachineNames,
+            machineNames: derivedMachineNames(),
             recentlyClosedLocalIds: recentlyClosedLocalIds,
             tagsByKey: sessionTagsByKey
         )
+
+        // Merge each freshly-built row over the row it replaces, so a source
+        // that doesn't carry a field can't blank it. `build` is a total
+        // function of whatever inputs have arrived, and at launch they arrive
+        // one at a time — without this, every partial input publishes a
+        // complete-looking row whose unknown fields read as "gone".
+        //
+        // Row *existence* is untouched: a row build didn't emit is still
+        // dropped, so archive / delete / host-side removal land immediately.
+        var previousByKey: [String: UnifiedSession] = [:]
+        for row in unifiedSessions {
+            for key in row.mergeKeys where previousByKey[key] == nil {
+                previousByKey[key] = row
+            }
+        }
+        // Read once, not once per row: resolving a pick used to re-read (and
+        // re-bridge from the plist) the whole picker dictionary for every row.
+        let pickedModels = SessionModelSelectionCache.loadMap(cache: cache)
+        let updated = built.map { row -> UnifiedSession in
+            let previous = row.mergeKeys.lazy.compactMap { previousByKey[$0] }.first
+            let merged = row.coalescing(
+                over: previous,
+                keepTagsWhenEmpty: sessionTagsByKey.isEmpty,
+                keepOpenFlagWhenUnmatched: !bridge.isSessionsReady
+            )
+            return applyPickedModel(merged, pickedModels: pickedModels)
+        }
 
         // Skip publish + cache if nothing changed — keeps the list visually stable
         guard updated != unifiedSessions else { return }
@@ -1050,7 +1300,34 @@ public final class RipulSessionListModel: ObservableObject {
         // all remote sessions have been deleted (empty is a valid state).
         if hasLoadedRemoteSessions {
             UnifiedSession.saveToCache(updated, cache: cache)
+            saveRemoteSessionsToCache()
         }
+    }
+
+    /// Overlay the user's explicit model pick onto a row.
+    ///
+    /// The host scanner reports the model of the LAST ASSISTANT MESSAGE, so a
+    /// fresh pick doesn't show up until the session has answered once more.
+    /// The picker cache is the authoritative record of what it will answer
+    /// with next, and is what the open path re-applies on resume. Applied only
+    /// when the picked id resolves to a known family, so an unrecognised
+    /// catalog id can't replace a good scanned value with a raw string.
+    private func applyPickedModel(
+        _ row: UnifiedSession,
+        pickedModels: [String: String]
+    ) -> UnifiedSession {
+        guard let picked = SessionModelSelectionCache.modelId(
+                map: pickedModels, session: row, liveTabId: row.ripulSession?.id),
+              picked != row.model,
+              ModelIdentity.resolve(modelId: picked) != nil
+        else { return row }
+        return row.withModel(picked)
+    }
+
+    /// Re-run the rebuild so a just-made model pick shows on the rows without
+    /// waiting for the next scan. Cheap: the rebuild bails when nothing moved.
+    public func refreshPickedModelSelections() {
+        rebuildUnifiedSessions()
     }
 
     /// Re-match ripulSession on cached items without full rebuild.
@@ -1083,17 +1360,27 @@ public final class RipulSessionListModel: ObservableObject {
             }
             if match == nil { match = localByKey[updated[i].id] }
             let matchChanged = match?.id != updated[i].ripulSession?.id
-            let nameChanged = match != nil && match?.displayName != updated[i].title
+            // A local name may only overwrite a scan-derived title when it is a
+            // REAL title — source "cli" (JSONL custom-title) or "user" (a Ripul
+            // rename awaiting round-trip). Source "auto" is a descriptor name or
+            // a date fallback: no better than the scan's answer, and letting it
+            // win is what made rows alternate between the two, since this path
+            // and `build` fire on different triggers and kept overwriting each
+            // other. A row with no scan row behind it (an orphan local) has no
+            // competing source, so it always accepts its tab's name.
+            let localTitleIsReal = match?.displayNameSource.map { $0 == "cli" || $0 == "user" } ?? true
+            let mayRetitle = localTitleIsReal || !updated[i].titleFromScan
+            let nameChanged = match != nil && mayRetitle && match?.displayName != updated[i].title
             if matchChanged || nameChanged {
-                updated[i] = UnifiedSession(
-                    id: updated[i].id, title: match?.displayName ?? updated[i].title,
-                    lastUsed: updated[i].lastUsed, gitBranch: updated[i].gitBranch,
-                    messageCount: updated[i].messageCount, projectName: updated[i].projectName,
-                    provider: updated[i].provider, providerLabel: updated[i].providerLabel,
-                    machineName: updated[i].machineName, machineId: updated[i].machineId,
-                    matchKeys: updated[i].matchKeys,
-                    ripulSession: match
-                )
+                // Carry every other field across verbatim. This path knows
+                // about tabs and nothing else — re-deriving the row from its
+                // parts here is how `model` (and project path, tags and
+                // metadataKey) used to get blanked on the way through.
+                // `title: nil` keeps the existing one. Required, not cosmetic:
+                // this branch also runs when only the MATCH changed, and passing
+                // the local name unconditionally would apply it right past the
+                // gate above.
+                updated[i] = updated[i].withRipulSession(match, title: mayRetitle ? match?.displayName : nil)
                 changed = true
             }
         }
@@ -1105,6 +1392,20 @@ public final class RipulSessionListModel: ObservableObject {
     }
 
     // MARK: - Helpers
+
+    /// Fingerprint of every published fact currently on `bridge.sessions`.
+    ///
+    /// Rebuilding is driven by a CHANGE in this, deliberately, rather than by
+    /// "a row still has no branch". The latter never settles: a remote row whose
+    /// scan legitimately found no branch would rebuild on every sink tick,
+    /// forever. A signature converges — once the facts stop moving, so do we.
+    private func currentFactsSignature() -> String {
+        bridge.sessions
+            .filter { $0.projectName != nil || $0.gitBranch != nil || $0.model != nil }
+            .map { "\($0.id)|\($0.projectName ?? "")|\($0.gitBranch ?? "")|\($0.model ?? "")" }
+            .sorted()
+            .joined(separator: ";")
+    }
 
     /// True when `bridge.sessions` holds a local session that has no row in the
     /// current unified list — e.g. a chat just created in the web app. Such a

@@ -57,15 +57,67 @@ public enum RipulSolutionContextsError: LocalizedError {
     case notSignedIn
     case malformedResponse
     case transport(Error)
-    case server(status: Int, message: String)
+    /// `message` is always human-legible; `detail` carries the raw response
+    /// body when the message had to summarise it (a proxy's HTML error page,
+    /// long text) — UIs surface it behind an "Advanced" reveal with copy.
+    case server(status: Int, message: String, detail: String?)
 
     public var errorDescription: String? {
         switch self {
         case .notSignedIn: return "Sign in to manage solution contexts."
         case .malformedResponse: return "Unexpected response from the server."
         case .transport(let error): return error.localizedDescription
-        case .server(let status, let message): return "Server error \(status): \(message)"
+        case .server(let status, let message, _): return "Server error \(status): \(message)"
         }
+    }
+
+    /// The raw response body behind a summarised `.server` message, when the
+    /// two differ. `nil` means the message already IS the whole story.
+    public var serverDetail: String? {
+        if case .server(_, _, let detail) = self { return detail }
+        return nil
+    }
+
+    /// Builds `.server` from a non-2xx body. The API returns
+    /// `{ "error": { "message": ... } }` (older paths `{ "error": "..." }`) —
+    /// those messages pass through verbatim. Anything else — a proxy's HTML
+    /// 502 page, plain text — is summarised (the page's `<title>`, or a
+    /// truncated first chunk) with the raw body preserved as `detail`.
+    static func serverError(status: Int, body: Data) -> RipulSolutionContextsError {
+        let raw = String(data: body, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        // Pasteboard-sane cap; a Cloudflare error page is ~10-20 KB.
+        let detail = raw.count > 16_000 ? String(raw.prefix(16_000)) + "\n… (truncated)" : raw
+        if let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any] {
+            if let nested = json["error"] as? [String: Any], let message = nested["message"] as? String {
+                return .server(status: status, message: message, detail: raw == message ? nil : detail)
+            }
+            if let flat = json["error"] as? String {
+                return .server(status: status, message: flat, detail: raw == flat ? nil : detail)
+            }
+        }
+        if raw.isEmpty {
+            return .server(status: status, message: "The server returned an empty response.", detail: nil)
+        }
+        if raw.hasPrefix("<") {
+            let message = htmlTitle(in: raw).map { "The server returned an error page (\($0))." }
+                ?? "The server returned an error page instead of an API response."
+            return .server(status: status, message: message, detail: detail)
+        }
+        if raw.count > 200 {
+            return .server(status: status, message: String(raw.prefix(200)) + "\u{2026}", detail: detail)
+        }
+        return .server(status: status, message: raw, detail: nil)
+    }
+
+    private static func htmlTitle(in html: String) -> String? {
+        guard let open = html.range(of: "<title>", options: .caseInsensitive),
+              let close = html.range(of: "</title>", options: .caseInsensitive, range: open.upperBound..<html.endIndex)
+        else { return nil }
+        let title = html[open.upperBound..<close.lowerBound]
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return title.isEmpty ? nil : title
     }
 }
 
@@ -160,19 +212,6 @@ public final class RipulSolutionContextsClient {
         )
     }
 
-    /// The API returns `{ "error": { "type": ..., "message": ... } }`; older
-    /// paths return `{ "error": "..." }`. Accept both, then fall back to the
-    /// raw body so a proxy/HTML error page stays legible rather than blank.
-    static func errorMessage(from data: Data) -> String {
-        if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-            if let nested = json["error"] as? [String: Any], let message = nested["message"] as? String {
-                return message
-            }
-            if let flat = json["error"] as? String { return flat }
-        }
-        return String(data: data, encoding: .utf8) ?? ""
-    }
-
     private func encode(_ id: String) -> String {
         id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
     }
@@ -205,8 +244,7 @@ public final class RipulSolutionContextsClient {
             throw RipulSolutionContextsError.malformedResponse
         }
         guard (200..<300).contains(http.statusCode) else {
-            let message = Self.errorMessage(from: data)
-            throw RipulSolutionContextsError.server(status: http.statusCode, message: message)
+            throw RipulSolutionContextsError.serverError(status: http.statusCode, body: data)
         }
         return data
     }

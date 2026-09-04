@@ -63,6 +63,13 @@ public struct AgentView<TopBar: View>: View {
     public weak var linkOpenDelegate: LinkOpenDelegate?
     public var onMinimize: (() -> Void)?
     private let topBar: ((AgentBridge) -> TopBar)?
+    /// Auth token source for speech providers that call the worker API
+    /// (ElevenLabs dictation). Nil falls back to the machine token.
+    private var tokenProvider: (() -> String?)?
+    /// Hands-free voice conversation loop (entered by long-pressing the
+    /// composer mic — typed text in the composer goes in as the first
+    /// utterance). Availability-free class; speech is gated internally.
+    @StateObject private var voiceMode = VoiceModeController()
     /// When false, the web view respects safe areas so it stays confined to its
     /// container (e.g. a NavigationSplitView detail column) instead of full-bleeding
     /// to the window. Defaults true to preserve the full-screen iPhone behaviour.
@@ -81,6 +88,36 @@ public struct AgentView<TopBar: View>: View {
     @State private var showingQuickCommands = false
     @State private var showingDebugCommands = false
     @State private var showingConsoleLogs = false
+    @State private var showingPlanReview = false
+
+    /// Extracted from the body chain deliberately: AgentView's modifier chain
+    /// is at the Swift type-checker's limit, and inlining this sheet tips it
+    /// into "unable to type-check this expression in reasonable time".
+    @ViewBuilder
+    private var planReviewSheet: some View {
+        // The list view does not own a NavigationStack (it is also pushed as a
+        // link destination), so presenting it as a sheet supplies one.
+        NavigationStack {
+            Group {
+                // Plans resolve against the active chat's machine and working
+                // directory, so with no chat there is nothing to look in.
+                if let chatId = bridge.currentSourceChatId {
+                    PlanReviewScreen(bridge: bridge.planReviewBridge(), chatId: chatId)
+                } else {
+                    ContentUnavailableView(
+                        "No active chat",
+                        systemImage: "bubble.left.and.exclamationmark.bubble.right",
+                        description: Text("Plans are read from the working directory of the chat you're in. Open a session first.")
+                    )
+                }
+            }
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { showingPlanReview = false }
+                }
+            }
+        }
+    }
     @AppStorage("showNativeViewInspector") private var showingViewInspector = false
     @State private var chatInputMeasuredHeight: CGFloat = 0
 
@@ -117,6 +154,7 @@ public struct AgentView<TopBar: View>: View {
         bridge: AgentBridge,
         onMinimize: (() -> Void)? = nil,
         fillsSafeArea: Bool = true,
+        tokenProvider: (() -> String?)? = nil,
         @ViewBuilder topBar: @escaping (AgentBridge) -> TopBar
     ) {
         self.configuration = configuration
@@ -127,6 +165,52 @@ public struct AgentView<TopBar: View>: View {
         self._bridge = StateObject(wrappedValue: bridge)
         self.skipBridgeSetup = true
         self.fillsSafeArea = fillsSafeArea
+        self.tokenProvider = tokenProvider
+    }
+
+    /// Enters hands-free mode on behalf of Siri's "Talk to Ripul" intent —
+    /// the same thing the mic long-press does, minus the finger.
+    ///
+    /// Deliberately does NOT clear the latch when it declines for readiness.
+    /// A Siri cold launch arrives here well before the web view has booted,
+    /// and starting the loop with nothing to send to would look like the
+    /// feature failing. The request survives until it can actually be honoured;
+    /// the observer re-runs this when the bridge connects.
+    private func honorVoiceModeRequest() {
+        guard RipulVoiceModeRequest.pending else { return }
+
+        // Reasons to give up rather than wait: the site key's voice profile
+        // switched hands-free off, or a session is already running (a second
+        // request is a no-op, exactly like a second long-press).
+        guard SpeechPreferences.voiceModeEnabled else {
+            RipulVoiceModeRequest.pending = false
+            bridge.handleConsoleLog("LOG: [VOICE] siri request declined - voice mode disabled for this site key")
+            return
+        }
+        guard !voiceMode.isActive else {
+            RipulVoiceModeRequest.pending = false
+            return
+        }
+
+        // Reasons to keep waiting.
+        guard bridge.isConnected, readyConfig != nil else { return }
+
+        RipulVoiceModeRequest.pending = false
+        bridge.handleConsoleLog("LOG: [VOICE] siri request honored - entering hands-free mode")
+
+        Task { @MainActor in
+            // Siri still holds the audio session at the moment the intent
+            // returns; claiming the mic immediately loses the race and the
+            // recogniser comes up deaf. This hands the session back first.
+            // Tuned by ear — raise it if the first utterance gets clipped.
+            try? await Task.sleep(nanoseconds: 700_000_000)
+            guard RipulVoiceModeRequest.pending == false, !voiceMode.isActive else { return }
+            // Compact explicitly, not via the preference: asking out loud to
+            // talk is a request to converse ALONGSIDE the chat, and the
+            // preference resolves through three layers (device override,
+            // web-pushed profile, SDK fallback) that this path cannot see.
+            voiceMode.start(bridge: bridge, tokenProvider: tokenProvider, presentation: .compact)
+        }
     }
 
     public var body: some View {
@@ -171,7 +255,10 @@ public struct AgentView<TopBar: View>: View {
             if let topBar {
                 topBar(bridge)
             }
+
         }
+        .animation(.easeInOut(duration: 0.25), value: voiceMode.isActive)
+        .onRipulVoiceModeRequest(isConnected: bridge.isConnected) { honorVoiceModeRequest() }
         .onChange(of: bridge.nativeChatScrollerEnabled) { on in
             bridge.evaluateJavaScript("window.__ripulSetNativeChatForwarding?.(\(on))")
             // Suspend/restore the web chat render tree so MessagePipeline + React
@@ -193,6 +280,20 @@ public struct AgentView<TopBar: View>: View {
                 // WKWebView, the top bar, and reads many bridge.* properties).
                 ChatComposer(
                     bridge: bridge,
+                    tokenProvider: tokenProvider,
+                    onEnterVoiceMode: { [weak bridge] utterance in
+                        guard let bridge else { return false }
+                        // A site key's voice profile can switch hands-free mode
+                        // off; a second long-press while a session is live is
+                        // ignored. Either way the composer keeps its text.
+                        guard SpeechPreferences.voiceModeEnabled, !voiceMode.isActive else { return false }
+                        voiceMode.start(
+                            bridge: bridge,
+                            tokenProvider: tokenProvider,
+                            initialUtterance: utterance.isEmpty ? nil : utterance
+                        )
+                        return true
+                    },
                     messageHistory: messageHistory,
                     bottomInset: composerBottomInset,
                     onQuickCommands: { showingQuickCommands = true },
@@ -210,6 +311,29 @@ public struct AgentView<TopBar: View>: View {
                         updateWebBottomPadding()
                     }
                 )
+            }
+        }
+        // Hands-free voice mode — attached AFTER the composer overlay so it
+        // stacks above it (modifier overlays ignore in-ZStack zIndex; the
+        // full-screen X was previously buried under the chat box).
+        // Presentation per user preference: immersive orb, or a docked pill
+        // that keeps the chat + composer visible.
+        .overlay {
+            if voiceMode.isActive {
+                // Controller state, not the preference — the preference only
+                // chooses how a session opens, and the overlay's minimise /
+                // expand controls move it afterwards.
+                if voiceMode.presentation == .compact {
+                    VStack {
+                        Spacer()
+                        VoiceModeCompactPanel(controller: voiceMode)
+                            .padding(.bottom, 92)
+                    }
+                    .transition(.opacity)
+                } else {
+                    VoiceModeOverlay(controller: voiceMode, bridge: bridge)
+                        .transition(.opacity)
+                }
             }
         }
         #if os(iOS)
@@ -261,9 +385,16 @@ public struct AgentView<TopBar: View>: View {
                 bridge.wantsShowViewInspector = false
             }
         }
+        .onChange(of: bridge.wantsShowPlanReview) { wants in
+            if wants {
+                showingPlanReview = true
+                bridge.wantsShowPlanReview = false
+            }
+        }
         .sheet(isPresented: $showingQuickCommands) {
             QuickCommandsSheet(bridge: bridge)
         }
+        .sheet(isPresented: $showingPlanReview) { planReviewSheet }
         .sheet(isPresented: $showingDebugCommands) {
             QuickCommandsSheet(bridge: bridge, debugMode: true)
         }
@@ -436,6 +567,11 @@ public extension AgentView where TopBar == EmptyView {
 @available(iOS 16.0, macOS 14.0, *)
 private struct ChatComposer: View {
     @ObservedObject var bridge: AgentBridge
+    var tokenProvider: (() -> String?)?
+    /// Mic long-press. Receives the composer's current text (empty when the
+    /// box is blank); returns true when voice mode actually started, so the
+    /// composer can consume the text (history + clear) only on a real start.
+    var onEnterVoiceMode: ((String) -> Bool)?
     @ObservedObject var messageHistory: MessageHistory
     /// Resting/keyboard bottom inset. A plain value (not the KeyboardObserver)
     /// so keyboard changes re-render only via the parent passing a new value —
@@ -451,6 +587,11 @@ private struct ChatComposer: View {
     @State private var imageAttachments: [NativeImageAttachment] = []
     @State private var planMode = false
     @State private var addressedParticipants: [String] = []
+    /// Stable provider instance for the composer mic (ElevenLabs holds a live
+    /// WebSocket/engine, so identity must survive re-renders). Recreated on
+    /// appear so a changed dictation-provider preference takes effect when
+    /// the user returns to the chat.
+    @State private var speechProvider: Any? = nil
 
     var body: some View {
         VStack(spacing: 0) {
@@ -577,17 +718,46 @@ private struct ChatComposer: View {
                     return ParticipantSuggestion(id: id, name: name, group: group)
                 }
             },
+            onQueryBranches: { query in
+                let dicts = await bridge.queryAutocomplete(category: "branches", query: query)
+                return dicts.compactMap { dict in
+                    guard let name = dict["name"] as? String,
+                          let token = dict["token"] as? String else { return nil }
+                    return BranchSuggestion(
+                        id: token,
+                        name: name,
+                        description: dict["description"] as? String,
+                        remote: dict["remote"] as? Bool ?? false,
+                        token: token
+                    )
+                }
+            },
             addressedParticipants: $addressedParticipants,
             onFocusChanged: { focused in
                 bridge.nativeChatInputFocused = focused
             },
             onPlusLongPress: { onShowConsoleLogs() },
             onQuerySlashCommands: bridge.chatInputShowQuickCommands ? { await bridge.getSlashCommands() } : nil,
-            onSubmitSlashCommand: bridge.chatInputShowQuickCommands ? { message in handleSlashSubmit(message) } : nil
+            onSubmitSlashCommand: bridge.chatInputShowQuickCommands ? { message in handleSlashSubmit(message) } : nil,
+            speechProvider: speechProvider,
+            onEnterVoiceMode: onEnterVoiceMode == nil ? nil : handleEnterVoiceMode
         )
         .onChange(of: planMode) { newValue in
             Task { await bridge.setCliPlanMode(newValue) }
         }
+        .onAppear { speechProvider = makeSpeechProvider() }
+        // The composer is the bottom counterpart to the title bar: pull DOWN
+        // from the top or UP from the bottom, both toward the middle, where the
+        // grid appears. Same gesture, mirrored — see ScreenSwitcherPullModifier.
+        .screenSwitcherPull(
+            .up,
+            // Not while typing. An upward drag inside a focused text field is
+            // text selection, and the keyboard is covering the grid anyway.
+            enabled: !bridge.nativeChatInputFocused,
+            // Horizontal stays with the field, which owns it for cursor
+            // placement and selection.
+            allowsHorizontal: false
+        )
     }
     #elseif os(macOS)
     private var chatInput: some View {
@@ -633,13 +803,68 @@ private struct ChatComposer: View {
                     return ParticipantSuggestion(id: id, name: name, group: group)
                 }
             },
-            addressedParticipants: $addressedParticipants
+            onQueryBranches: { query in
+                let dicts = await bridge.queryAutocomplete(category: "branches", query: query)
+                return dicts.compactMap { dict in
+                    guard let name = dict["name"] as? String,
+                          let token = dict["token"] as? String else { return nil }
+                    return BranchSuggestion(
+                        id: token,
+                        name: name,
+                        description: dict["description"] as? String,
+                        remote: dict["remote"] as? Bool ?? false,
+                        token: token
+                    )
+                }
+            },
+            addressedParticipants: $addressedParticipants,
+            speechProvider: speechProvider,
+            onEnterVoiceMode: onEnterVoiceMode == nil ? nil : handleEnterVoiceMode
         )
         .onChange(of: planMode) { newValue in
             Task { await bridge.setCliPlanMode(newValue) }
         }
+        .onAppear { speechProvider = makeSpeechProvider() }
     }
     #endif
+
+    /// Mic tap (seedFromComposer false) enters voice mode with a live mic;
+    /// long-press (true) hands the composer's text to voice mode as the first
+    /// utterance. The text is consumed (history + clear) only when voice mode
+    /// actually started — a refused start (voice profile off, session already
+    /// live) leaves the composer untouched and returns false so the mic can
+    /// fall back to dictation.
+    private func handleEnterVoiceMode(seedFromComposer: Bool) -> Bool {
+        guard let onEnterVoiceMode else { return false }
+        let utterance = seedFromComposer
+            ? chatMessage.trimmingCharacters(in: .whitespacesAndNewlines)
+            : ""
+        guard onEnterVoiceMode(utterance) else { return false }
+        if !utterance.isEmpty {
+            recordHistory(utterance)
+            chatMessage = ""
+        }
+        return true
+    }
+
+    /// Dictation provider for the composer mic, resolved from
+    /// SpeechPreferences ("apple" default, "elevenlabs" via worker routes).
+    /// Returned as Any? because the speech layer is @available(26+) while
+    /// the SDK floor is lower; the composer unwraps it behind #available.
+    private func makeSpeechProvider() -> Any? {
+        if #available(iOS 26.0, macOS 26.0, *) {
+            switch SpeechPreferences.dictationProviderId {
+            case "elevenlabs":
+                let tokenProvider = self.tokenProvider
+                return ElevenLabsNativeSpeechProvider(tokenProvider: {
+                    tokenProvider?() ?? MachineTokenStore.token
+                })
+            default:
+                return AppleSpeechProvider()
+            }
+        }
+        return nil
+    }
 
     // MARK: Submit handlers
 

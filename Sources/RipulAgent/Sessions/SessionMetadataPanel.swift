@@ -29,12 +29,6 @@ public struct SessionMetadataPanel: View {
     @State private var cliToolsExpanded = false
     @State private var debugExpanded = false
 
-    // CLI Tools
-    @State private var cliTools: [AgentBridge.CliToolEntry]? = nil
-    @State private var cliToolsLoading = false
-    @State private var cliToolsError: String? = nil
-    @State private var cliToolsSearch = ""
-
     // Description editing
     @State private var editingDescription = false
     @State private var descriptionDraft = ""
@@ -509,17 +503,13 @@ public struct SessionMetadataPanel: View {
 
     // MARK: - CLI Tools
 
-    private var filteredCliTools: [AgentBridge.CliToolEntry] {
-        guard let tools = cliTools else { return [] }
-        let q = cliToolsSearch.trimmingCharacters(in: .whitespaces).lowercased()
-        guard !q.isEmpty else { return tools }
-        return tools.filter { $0.name.lowercased().contains(q) || $0.description.lowercased().contains(q) }
-    }
-
+    /// The chat's tool browser — categories with per-chat switches, the member
+    /// tools underneath, and a drill-in per tool. `RipulToolBrowser` owns
+    /// loading and the switch write-back; this section is only the collapsible
+    /// frame around it, so the browser can move elsewhere without touching it.
     @ViewBuilder
     private var cliToolsSection: some View {
         VStack(spacing: 0) {
-            // Header
             HStack(spacing: 6) {
                 Image(systemName: "wrench.and.screwdriver")
                     .font(.caption)
@@ -528,44 +518,7 @@ public struct SessionMetadataPanel: View {
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.secondary)
                     .textCase(.uppercase)
-
-                if cliToolsExpanded && cliTools != nil {
-                    // inline search
-                    TextField("Search…", text: $cliToolsSearch)
-                        .font(.caption)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(maxWidth: 120)
-                }
-
                 Spacer()
-
-                // count badge
-                if let tools = cliTools {
-                    let filtered = filteredCliTools
-                    let label = cliToolsSearch.trimmingCharacters(in: .whitespaces).isEmpty
-                        ? "\(tools.count)"
-                        : "\(filtered.count)/\(tools.count)"
-                    Text(label)
-                        .font(.caption2.monospacedDigit())
-                        .foregroundStyle(.tertiary)
-                }
-
-                // refresh button
-                Button {
-                    Task { await loadCliTools() }
-                } label: {
-                    if cliToolsLoading {
-                        ProgressView().scaleEffect(0.6)
-                    } else {
-                        Image(systemName: "arrow.clockwise")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                .buttonStyle(.plain)
-                .disabled(cliToolsLoading)
-                .uiKitIdentifier("SessionMetadataPanel.cliTools.refresh")
-
                 Image(systemName: cliToolsExpanded ? "chevron.up" : "chevron.down")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
@@ -575,83 +528,23 @@ public struct SessionMetadataPanel: View {
             .contentShape(Rectangle())
             .onTapGesture {
                 withAnimation(.easeInOut(duration: 0.2)) { cliToolsExpanded.toggle() }
-                if cliToolsExpanded && cliTools == nil && !cliToolsLoading {
-                    Task { await loadCliTools() }
-                }
             }
 
             if cliToolsExpanded {
-                if let error = cliToolsError {
-                    Text(error)
-                        .font(.caption)
-                        .foregroundStyle(.red)
-                        .padding(.horizontal, 16)
-                        .padding(.bottom, 10)
-                } else if cliTools == nil && !cliToolsLoading {
-                    Text("Tap ↺ to probe the CLI tool list.")
+                if let chatId = session?.sourceChatId {
+                    RipulToolBrowser(bridge: bridge, chatId: chatId)
+                        .padding(.bottom, 8)
+                } else {
+                    Text("No session selected.")
                         .font(.caption)
                         .foregroundStyle(.tertiary)
                         .padding(.horizontal, 16)
                         .padding(.bottom, 10)
-                } else {
-                    let tools = filteredCliTools
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 0) {
-                            ForEach(tools, id: \.name) { tool in
-                                HStack(spacing: 8) {
-                                    Text(tool.name)
-                                        .font(.caption.monospaced())
-                                        .foregroundStyle(.primary)
-                                        .lineLimit(1)
-                                    Spacer()
-                                    Text(toolGroupLabel(tool.name))
-                                        .font(.caption2)
-                                        .foregroundStyle(.tertiary)
-                                        .padding(.horizontal, 5)
-                                        .padding(.vertical, 1)
-                                        .background(.quaternary, in: RoundedRectangle(cornerRadius: 5))
-                                }
-                                .padding(.horizontal, 16)
-                                .padding(.vertical, 5)
-                                if tool.name != tools.last?.name {
-                                    Divider().padding(.leading, 16)
-                                }
-                            }
-                            if tools.isEmpty {
-                                Text("No tools match.")
-                                    .font(.caption)
-                                    .foregroundStyle(.tertiary)
-                                    .padding(.horizontal, 16)
-                                    .padding(.vertical, 8)
-                            }
-                        }
-                    }
-                    .frame(maxHeight: 220)
-                    .padding(.bottom, 8)
                 }
             }
         }
         .modifier(GlassPanelBackground())
         .uiKitIdentifier("SessionMetadataPanel.cliTools")
-    }
-
-    private func loadCliTools() async {
-        guard let sessionId = session?.sourceChatId else { return }
-        cliToolsLoading = true
-        cliToolsError = nil
-        let result = await bridge.getResolvedCliTools(sessionId: sessionId)
-        if let result {
-            cliTools = result.sorted { $0.name < $1.name }
-        } else {
-            cliToolsError = "Failed to load — page may not be ready."
-        }
-        cliToolsLoading = false
-    }
-
-    private func toolGroupLabel(_ name: String) -> String {
-        if name.hasPrefix("host_") { return "macOS" }
-        if name.hasPrefix("device_") { return "iPhone" }
-        return "web"
     }
 
     // MARK: - Debug

@@ -21,14 +21,20 @@ public struct SessionTagsEditor: View {
     /// Cap the picker so it never floods the sheet.
     private let maxSuggestions = 12
 
+    /// Machine-written plan link tags: never shown as chips, never deletable
+    /// here, and re-attached FIRST on save so the tag cap drops a user label
+    /// rather than silently unlinking the session's plan.
+    private let hiddenTags: [String]
+
     public init(session: UnifiedSession, suggestions: [String] = [], onSave: @escaping ([String]) -> Void) {
         self.session = session
         self.suggestions = suggestions
         self.onSave = onSave
-        _tags = State(initialValue: session.tags)
+        self.hiddenTags = session.tags.filter { PlanTagConvention.isPlanTag($0) }
+        _tags = State(initialValue: PlanTagConvention.userTags(session.tags))
     }
 
-    private var atLimit: Bool { tags.count >= maxTags }
+    private var atLimit: Bool { tags.count + hiddenTags.count >= maxTags }
 
     private var canAdd: Bool {
         !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !atLimit
@@ -149,7 +155,7 @@ public struct SessionTagsEditor: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") {
                         commitDraft()
-                        onSave(tags)
+                        onSave(hiddenTags + tags)
                     }
                     .uiKitIdentifier("SessionTagsEditor.save")
                 }

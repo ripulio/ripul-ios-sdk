@@ -28,7 +28,7 @@ public struct RipulSessionsView: View {
     private let onSelectSession: (ChatSession) -> Void
     private let onDismiss: () -> Void
     private let allowRipulAgents: Bool
-    private let invitesSection: (() -> AnyView)?
+    private let invitesSection: ((InvitesSectionActions) -> AnyView)?
     private let foldersSection: (() -> AnyView)?
     private let solutionManagement: RipulSolutionManagement?
     private let emptyStateOverride: (() -> AnyView)?
@@ -36,6 +36,17 @@ public struct RipulSessionsView: View {
     private let showsTitleLozenge: Bool
     private let showingSidebar: Binding<Bool>?
     private let quickActionsEnabled: Bool
+    /// Embedded mode reserves 52pt at the top for the host screen's floating
+    /// unified bar. Pass `false` where no floating bar covers the list — at
+    /// regular width `RipulAgentScreen` pins it as a `NavigationSplitView`
+    /// sidebar column (which brings its own navigation-bar strip) and overlays
+    /// the bar on the chat detail only, so the reservation is dead space.
+    private let reservesTopBarSpace: Bool
+    /// Pick mode: when set, tapping a session hands back its IDENTITY without
+    /// opening it — no tab creation, no remote history import, no focus
+    /// change. This is the sessions list as a picker (the link-to-plan sheet).
+    /// `ripul://choose` keeps the open path: it needs an openable tab back.
+    private let onPickUnifiedSession: ((UnifiedSession) -> Void)?
 
     @State private var searchText = ""
     @State private var renamingSession: ChatSession?
@@ -52,7 +63,7 @@ public struct RipulSessionsView: View {
         onSelectSession: @escaping (ChatSession) -> Void,
         onDismiss: @escaping () -> Void = {},
         allowRipulAgents: Bool = false,
-        invitesSection: (() -> AnyView)? = nil,
+        invitesSection: ((InvitesSectionActions) -> AnyView)? = nil,
         foldersSection: (() -> AnyView)? = nil,
         solutionManagement: RipulSolutionManagement? = nil,
         emptyStateOverride: (() -> AnyView)? = nil,
@@ -60,7 +71,9 @@ public struct RipulSessionsView: View {
         chooseMode: RipulChooseMode? = nil,
         showsTitleLozenge: Bool = true,
         showingSidebar: Binding<Bool>? = nil,
-        quickActionsEnabled: Bool = false
+        quickActionsEnabled: Bool = false,
+        reservesTopBarSpace: Bool = true,
+        onPickUnifiedSession: ((UnifiedSession) -> Void)? = nil
     ) {
         self.bridge = bridge
         self.cache = cache
@@ -75,6 +88,8 @@ public struct RipulSessionsView: View {
         self.showsTitleLozenge = showsTitleLozenge
         self.showingSidebar = showingSidebar
         self.quickActionsEnabled = quickActionsEnabled
+        self.reservesTopBarSpace = reservesTopBarSpace
+        self.onPickUnifiedSession = onPickUnifiedSession
         _model = StateObject(wrappedValue: model ?? RipulSessionListModel(
             bridge: bridge,
             tokenProvider: tokenProvider,
@@ -88,8 +103,18 @@ public struct RipulSessionsView: View {
             onConnect: { machine in
                 Task { await model.connect(to: machine, onSelect: onSelectSession, onDismiss: onDismiss) }
             },
-            onNewCliSession: { machine, providerKey in
-                Task { await model.connectWithProvider(providerKey, to: machine, onSelect: onSelectSession, onDismiss: onDismiss) }
+            onNewCliSession: { machine, providerKey, modelId in
+                Task { await model.connectWithProvider(providerKey, modelId: modelId, to: machine, onSelect: onSelectSession, onDismiss: onDismiss) }
+            },
+            onNewApiSession: { modelId in
+                Task {
+                    bridge.logSessionStartMarker("ios.tap", extra: "source=GlassSessionsList.quickApi")
+                    if let chatId = await bridge.createNewChat(modelOverride: modelId) {
+                        await bridge.focusSession(id: chatId)
+                        bridge.scrollToBottom()
+                    }
+                    onDismiss()
+                }
             },
             onRestart: { machine in
                 Task { await model.restartMachine(machine) }
@@ -98,6 +123,26 @@ public struct RipulSessionsView: View {
                 model.toggleMachineDisabled(machine)
             }
         )
+    }
+
+    /// Opens the session Siri named, via the same call a tapped row makes.
+    ///
+    /// The latch is only cleared once a matching session is actually found. A
+    /// Siri cold launch arrives here before `unifiedSessions` has loaded, and
+    /// clearing on a miss would drop the request silently — which is precisely
+    /// the failure this replaced. In pick mode the request is dropped
+    /// deliberately: the list is on screen to return a choice to someone else,
+    /// and opening a chat underneath them would be wrong.
+    private func honorOpenSessionRequest() {
+        guard let wanted = RipulOpenSessionRequest.pendingSessionId else { return }
+        guard onPickUnifiedSession == nil else {
+            RipulOpenSessionRequest.pendingSessionId = nil
+            return
+        }
+        guard let session = model.unifiedSessions.first(where: { $0.id == wanted }) else { return }
+        RipulOpenSessionRequest.pendingSessionId = nil
+        bridge.handleConsoleLog("LOG: [SIRI] opening session \(session.title)")
+        model.openSession(session, onSelect: onSelectSession, onDismiss: onDismiss)
     }
 
     public var body: some View {
@@ -118,7 +163,11 @@ public struct RipulSessionsView: View {
             deletingFromHost: model.deletingFromHost,
             lastActiveBySessionId: model.lastActiveBySessionId,
             onOpenUnifiedSession: { session in
-                model.openSession(session, onSelect: onSelectSession, onDismiss: onDismiss)
+                if let onPickUnifiedSession {
+                    onPickUnifiedSession(session)
+                } else {
+                    model.openSession(session, onSelect: onSelectSession, onDismiss: onDismiss)
+                }
             },
             onArchiveUnifiedSession: { session in model.archiveSession(session) },
             onDeleteUnifiedSession: { session in model.deleteSession(session) },
@@ -156,11 +205,18 @@ public struct RipulSessionsView: View {
             renameText: $renameText
         )
         .task {
-            model.initialLoad()
+            // Pick mode borrows the HOST's live model — kicking initialLoad
+            // there fires a publish burst on presentation that re-renders the
+            // presenting subtree and knocks the just-presented sheet down
+            // (tap Link -> sheet appears -> immediately falls back).
+            if onPickUnifiedSession == nil {
+                model.initialLoad()
+            }
             if quickActionsEnabled, remoteActionsByMachine.isEmpty {
                 remoteActionsByMachine = RemoteActionDescriptor.loadAllCached(cache: cache)
             }
         }
+        .onRipulOpenSessionRequest(sessionCount: model.unifiedSessions.count) { honorOpenSessionRequest() }
         .onAppear { machineIcons = RemoteMachine.iconsByDisplayName(machines: model.machines, cache: cache) }
         .onChange(of: model.machines) { _, machines in
             machineIcons = RemoteMachine.iconsByDisplayName(machines: machines, cache: cache)
@@ -191,9 +247,13 @@ public struct RipulSessionsView: View {
             } else {
                 // Embedded mode — mirrors the native app's SessionListScreen: a
                 // transparent 52pt spacer for the screen's floating unified top
-                // bar, with the choose-mode banner below it when active.
+                // bar, with the choose-mode banner below it when active. The
+                // spacer is dropped where no floating bar covers the list (see
+                // reservesTopBarSpace) — otherwise it reads as a stranded gap.
                 VStack(spacing: 0) {
-                    Color.clear.frame(height: 52)
+                    if reservesTopBarSpace {
+                        Color.clear.frame(height: 52)
+                    }
                     if let chooseMode {
                         ChooseModeBannerHost(chooseMode: chooseMode)
                     }

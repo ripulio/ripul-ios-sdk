@@ -24,6 +24,61 @@ public struct RemoteMachine: Identifiable, Codable, Equatable {
         return Date().timeIntervalSince(date) < 300 // 5 minute TTL
     }
 
+    // MARK: - Host kind
+
+    /// True when this machine is a plain browser hosting through the Ripul
+    /// extension (Chrome tabs, no window mirror), false for the native app.
+    /// Prefers the registered `hostKind` meta; falls back to user-agent
+    /// sniffing for machines registered by builds that predate it.
+    public var isBrowserHost: Bool {
+        if let kind = meta?["hostKind"] { return kind == "browser" }
+        guard let ua = meta?["userAgent"], !ua.isEmpty else { return false }
+        return !ua.contains("RipulNative")
+    }
+
+    /// Human label for a browser host ("Chrome"), nil for native hosts.
+    public var browserLabel: String? {
+        guard isBrowserHost else { return nil }
+        switch meta?["browser"] {
+        case "chrome": return "Chrome"
+        case "edge": return "Edge"
+        case "opera": return "Opera"
+        default: return "Browser"
+        }
+    }
+
+    /// Default SF Symbol when the user hasn't assigned an icon.
+    public var defaultIconName: String {
+        isBrowserHost ? "globe" : "desktopcomputer"
+    }
+
+    /// Declared capabilities from registry meta (`caps`, comma-separated).
+    /// Surfaces filter machines by the capability they consume: the machines
+    /// panel wants `cli` (chat hosting), Remote Tabs wants `tabs`, the Dock
+    /// wants `windows`, Processes wants `processes`. Machines registered by
+    /// builds that predate `caps` infer from host kind: native hosts get the
+    /// full set, browser hosts get tabs only.
+    public var capabilities: Set<String> {
+        if let raw = meta?["caps"], !raw.isEmpty {
+            return Set(raw.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) })
+        }
+        return isBrowserHost
+            ? ["tabs"]
+            : ["cli", "files", "tabs", "windows", "processes"]
+    }
+
+    /// Does this machine serve the given capability?
+    public func can(_ capability: String) -> Bool {
+        capabilities.contains(capability)
+    }
+
+    /// The physical machine a browser host runs on (loopback-probed at
+    /// registration). Nil for native hosts and for browsers with no local
+    /// Ripul app to ask — those surface as top-level machines.
+    public var hostMachineId: String? {
+        meta?["hostMachineId"]
+    }
+
     // MARK: - Cache
 
     private static let cacheKey = "ripulCachedMachines"

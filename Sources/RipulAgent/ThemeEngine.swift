@@ -195,6 +195,11 @@ public struct RipulStyleKnob: Identifiable {
         /// TOKEN is the better home (it keeps the tier system); this is for the cases where
         /// a scope genuinely pins its own colour — a per-screen gradient, say.
         case color(fallback: String)
+        /// A free-text knob, stored as a plain string. For COPY a scope owns — a tip's
+        /// title and body, an empty-state line — where no closed option set exists.
+        /// `multiline` picks the editor control (a field vs a small text view); it does
+        /// not change the stored shape, which is always a single string.
+        case text(fallback: String, multiline: Bool = false)
     }
     public let key: String
     public let label: String

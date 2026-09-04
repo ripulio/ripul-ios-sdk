@@ -50,6 +50,10 @@ public struct ChatSession: Identifiable, Equatable, Codable {
     public var provider: String?
     /// Human-readable provider label (e.g. "Claude Code", "Codex"), or nil.
     public var providerLabel: String?
+    /// Catalog model id pinned to this session (e.g. "backend-claude-fable-5"),
+    /// or nil when the session runs the global default. Feeds ModelIdentity so
+    /// non-CLI API chats get a model-aligned row icon.
+    public var model: String?
     /// The canonical host-side chat ID (e.g. "cli_<UUID>") when this tab is paired to a
     /// remote machine. Used to dedup against JSONL-scanned sessions in the unified list.
     public var hostChatId: String?
@@ -72,6 +76,14 @@ public struct ChatSession: Identifiable, Equatable, Codable {
     /// observed here must never be re-stamped as a fresh rename. nil =
     /// unversioned; unversioned writebacks can't overwrite a versioned title.
     public var displayNameRenamedAt: Double?
+    /// Repo / project folder the session is working in, published over
+    /// SessionChannel (`session.facts`). Only carries a value on a tab that
+    /// can't discover it locally — a share-link guest, whose synthetic pairing
+    /// is never scanned. On a machine that can scan for itself, the remote row
+    /// supplies this and the field stays nil.
+    public var projectName: String?
+    /// Git branch, from the same publish. No absolute path travels with it.
+    public var gitBranch: String?
 
     public init(
         id: String,
@@ -81,10 +93,13 @@ public struct ChatSession: Identifiable, Equatable, Codable {
         remoteMachineName: String? = nil,
         provider: String? = nil,
         providerLabel: String? = nil,
+        model: String? = nil,
         hostChatId: String? = nil,
         sizeBytes: Int? = nil,
         displayNameSource: String? = nil,
-        displayNameRenamedAt: Double? = nil
+        displayNameRenamedAt: Double? = nil,
+        projectName: String? = nil,
+        gitBranch: String? = nil
     ) {
         self.id = id
         self.sourceChatId = sourceChatId
@@ -93,10 +108,13 @@ public struct ChatSession: Identifiable, Equatable, Codable {
         self.remoteMachineName = remoteMachineName
         self.provider = provider
         self.providerLabel = providerLabel
+        self.model = model
         self.hostChatId = hostChatId
         self.sizeBytes = sizeBytes
         self.displayNameSource = displayNameSource
         self.displayNameRenamedAt = displayNameRenamedAt
+        self.projectName = projectName
+        self.gitBranch = gitBranch
     }
 
     // MARK: - Cache
@@ -154,8 +172,19 @@ public struct ModelInfo: Identifiable, Equatable {
     public let cliEffort: String?   // low | medium | high | xhigh | max
     public let cliMode: String?     // session | stateless
 
+    // ── Billing metadata (populated from the D1 catalog; nil on older webs) ──
+    public let perMInput: Double?   // $ per million input tokens (0 for CLI rows)
+    public let perMOutput: Double?  // $ per million output tokens
+    public let tier: String?        // standard | premium
+
     /// True when this is a CLI model (Claude Code / Codex / Antigravity).
     public var isCli: Bool { (type ?? "").hasSuffix("-cli") }
+
+    /// True when this is an axis-2 "your subscription" Anthropic model — billed
+    /// to the host's own Claude plan via the host's local subscription proxy.
+    /// Like CLI, it REQUIRES a host (the credential + proxy live there), so the
+    /// picker gates it on a machine rather than offering it machine-free.
+    public var isSubscription: Bool { type == "anthropic-subscription" }
 
     public init(
         id: String,
@@ -172,7 +201,10 @@ public struct ModelInfo: Identifiable, Equatable {
         cliModelId: String? = nil,
         cliRawMode: Bool = false,
         cliEffort: String? = nil,
-        cliMode: String? = nil
+        cliMode: String? = nil,
+        perMInput: Double? = nil,
+        perMOutput: Double? = nil,
+        tier: String? = nil
     ) {
         self.id = id
         self.name = name
@@ -189,11 +221,18 @@ public struct ModelInfo: Identifiable, Equatable {
         self.cliRawMode = cliRawMode
         self.cliEffort = cliEffort
         self.cliMode = cliMode
+        self.perMInput = perMInput
+        self.perMOutput = perMOutput
+        self.tier = tier
     }
 }
 
 /// A session descriptor from a remote machine, returned by the remote discovery protocol.
-public struct RemoteSessionInfo: Identifiable, Equatable {
+///
+/// Codable because the session list persists the per-machine scan results, not
+/// just the rows it derived from them — a machine that hasn't answered yet on
+/// this launch keeps its last-known sessions instead of having them vanish.
+public struct RemoteSessionInfo: Identifiable, Equatable, Codable {
     public let id: String
     public let sourceChatId: String
     public let displayName: String
@@ -378,6 +417,86 @@ public struct CliAccountInfo: Identifiable {
             rateLimits: rateLimitsDict.map { CliRateLimits.from(dict: $0) } ?? .empty
         )
     }
+}
+
+/// Auth state of a host machine's `claude` CLI, plus any in-flight
+/// phone-driven sign-in. Mirrors `AgentHostAuthStatusResponse` (relayProtocol).
+public struct HostAuthStatusInfo {
+    public let loggedIn: Bool
+    public let authMethod: String?
+    public let apiProvider: String?
+    public let email: String?
+    public let orgName: String?
+    /// e.g. "max" / "pro" — which plan backs CLI sessions on this host.
+    public let subscriptionType: String?
+    /// Present while a sign-in started by `beginHostAuth` is awaiting a code.
+    public let pendingSessionId: String?
+    public let error: String?
+
+    static func from(dict: [String: Any]) -> HostAuthStatusInfo {
+        HostAuthStatusInfo(
+            loggedIn: dict["loggedIn"] as? Bool ?? false,
+            authMethod: dict["authMethod"] as? String,
+            apiProvider: dict["apiProvider"] as? String,
+            email: dict["email"] as? String,
+            orgName: dict["orgName"] as? String,
+            subscriptionType: dict["subscriptionType"] as? String,
+            pendingSessionId: dict["pendingSessionId"] as? String,
+            error: dict["error"] as? String
+        )
+    }
+}
+
+/// Result of starting a sign-in on a host: the authorize URL to open on THIS
+/// device, and the host-side session the pasted code must be returned to.
+/// No credential ever crosses the relay — the code is PKCE-bound to the
+/// host process and the token lands in the host's Keychain.
+public struct HostAuthBeginInfo {
+    public let sessionId: String?
+    public let authUrl: String?
+    public let error: String?
+}
+
+/// One switchable Claude account profile on a host machine. Mirrors
+/// `ClaudeAccountProfileInfo` (relayProtocol) — see ClaudeAccountStore on the
+/// host for what a profile physically is (a CLAUDE_CONFIG_DIR with its own
+/// namespaced Keychain credential and a symlink into the shared session store).
+public struct ClaudeAccountProfile: Identifiable, Equatable {
+    public let slug: String
+    public let name: String
+    public let email: String?
+    public let loggedIn: Bool
+    public let isDefault: Bool
+
+    public var id: String { slug }
+
+    static func from(dict: [String: Any]) -> ClaudeAccountProfile {
+        ClaudeAccountProfile(
+            slug: dict["slug"] as? String ?? "",
+            name: dict["name"] as? String ?? "",
+            email: dict["email"] as? String,
+            loggedIn: dict["loggedIn"] as? Bool ?? false,
+            isDefault: dict["isDefault"] as? Bool ?? false
+        )
+    }
+}
+
+/// Result of listing a host's account profiles.
+public struct ClaudeAccountsListInfo {
+    public let accounts: [ClaudeAccountProfile]
+    /// Slug of the machine-global active profile.
+    public let active: String
+    public let error: String?
+}
+
+/// Result of a hot swap: which sessions recycled immediately and which switch
+/// after their in-flight turn completes.
+public struct ClaudeAccountSwitchInfo {
+    public let ok: Bool
+    public let active: String?
+    public let recycledSessions: [String]
+    public let deferredBusySessions: [String]
+    public let error: String?
 }
 
 public struct ConsoleLogEntry: Identifiable, Codable {
@@ -707,6 +826,25 @@ public struct PageContext: Equatable {
     public let showSessionControls: Bool
     /// Safe area mode: "full" = glass header + status bar; "minimal" = status bar only.
     public let safeAreaMode: String
+    /// Current URL of the mirrored tab (page "tabMirror" only) — feeds the
+    /// native remote-browser address bar; updated on every navigation.
+    public let mirrorUrl: String?
+
+    public init(
+        page: String,
+        showNativeHeader: Bool,
+        showNativeChatInput: Bool,
+        showSessionControls: Bool,
+        safeAreaMode: String,
+        mirrorUrl: String? = nil
+    ) {
+        self.page = page
+        self.showNativeHeader = showNativeHeader
+        self.showNativeChatInput = showNativeChatInput
+        self.showSessionControls = showSessionControls
+        self.safeAreaMode = safeAreaMode
+        self.mirrorUrl = mirrorUrl
+    }
 
     /// Default context before the web app sends its first page:context message.
     /// Defaults to chat mode (full chrome) since that's the most common state.
@@ -813,6 +951,9 @@ public final class AgentBridge: NSObject, ObservableObject {
     /// Set to true to request the View Inspector overlay. AgentView observes
     /// this and presents the overlay, then resets the flag.
     @Published public var wantsShowViewInspector = false
+    /// Set to true to request the Plan Review screen. AgentView observes this
+    /// and presents the sheet, then resets the flag.
+    @Published public var wantsShowPlanReview = false
     @Published public var sessions: [ChatSession] = ChatSession.loadCached()
     /// Tab IDs of ephemeral commit-viewer sessions that should be excluded
     /// from the sessions list. Managed by CommitsScreen (insert on open)
@@ -868,6 +1009,11 @@ public final class AgentBridge: NSObject, ObservableObject {
     @Published public var activeSessionId: String? {
         didSet {
             guard activeSessionId != oldValue else { return }
+            // Entering a session by ANY route is reading it — the sessions
+            // list, a deep link, a notification tap, Siri, the switcher. This
+                // used to hang off focusSession alone, which is only one of
+            // them, so sessions opened another way stayed unread by eye.
+            if let id = activeSessionId { markSessionRead(id) }
             markActiveSessionTodoViewedInList()
             // The pause/play buttons are a projection of the ACTIVE chat's
             // phase — any change of active session must re-derive them.
@@ -912,6 +1058,572 @@ public final class AgentBridge: NSObject, ObservableObject {
     @Published public var selectedEffort: String?   // CLI reasoning effort override (nil = default)
     @Published public var modelSelectionEnabled: Bool = true
     @Published public var lastModelsError: String?
+
+    // MARK: Waiting sessions (spoken by Siri's "what's waiting" intent)
+
+    /// A session whose turn has ended and which is now waiting on the user.
+    public struct WaitingSession: Codable, Identifiable {
+        public let chatId: String
+        public let title: String
+        public let at: Date
+        /// What the agent last said in this chat, as the web previewed it.
+        /// Optional because a turn can end without one — a failure, or a chat
+        /// whose last event arrived before the app was listening.
+        public let preview: String?
+        public var id: String { chatId }
+
+        public init(chatId: String, title: String, at: Date, preview: String? = nil) {
+            self.chatId = chatId
+            self.title = title
+            self.at = at
+            self.preview = preview
+        }
+    }
+
+    /// Newest response preview per chat, harvested from `agent:activity`.
+    /// In-memory: it only has to survive until the turn ends and the waiting
+    /// entry is written, which is moments later.
+    private var lastResponsePreviewByChatId: [String: String] = [:]
+
+    private static let waitingKey = "ripulWaitingSessions"
+
+    /// The waiting set, readable with nothing else running.
+    ///
+    /// Persisted rather than derived because the thing that reads it — the
+    /// "what's waiting" App Intent — deliberately does NOT open the app, so it
+    /// has no bridge, no web view and no live `sessionPhases` map to consult.
+    /// This is that map's durable shadow.
+    public static func waitingSessions(cache: RipulSessionCache?) -> [WaitingSession] {
+        guard let data = cache?.data(forKey: waitingKey),
+              let decoded = try? JSONDecoder().decode([WaitingSession].self, from: data)
+        else { return [] }
+        return decoded.sorted { $0.at > $1.at }
+    }
+
+    /// Drops a session from the unread set — opening it is reading it.
+    ///
+    /// Matches every CLI alias of the id. The stored entry may be keyed by the
+    /// bare uuid while the caller holds `cli_<uuid>` (or vice versa), and an
+    /// exact-match clear would silently leave the session unread for ever —
+    /// which reads as Siri nagging about something you have already dealt with.
+    public static func clearWaiting(chatId: String, cache: RipulSessionCache?) {
+        guard let cache else { return }
+        let aliases: Set<String> = chatId.hasPrefix("cli_")
+            ? [chatId, String(chatId.dropFirst(4))]
+            : [chatId, "cli_\(chatId)"]
+        let all = waitingSessions(cache: cache)
+        let remaining = all.filter { !aliases.contains($0.chatId) }
+        guard remaining.count != all.count else { return }
+        guard let data = try? JSONEncoder().encode(remaining) else { return }
+        cache.set(data, forKey: waitingKey)
+    }
+
+    /// Fills in replies for waiting entries that have none.
+    ///
+    /// Runs once per launch, from `fetchSessions`, which is the first moment
+    /// the web is reliably answering. Bounded to the entries Siri would
+    /// actually read — filling the tail nobody hears would be work for nothing.
+    @MainActor
+    private func backfillMissingReplies() async {
+        guard !hasSweptWaitingReplies, sessionCache != nil else { return }
+        let missing = Self.waitingSessions(cache: sessionCache)
+            .filter { ($0.preview ?? "").isEmpty }
+            .prefix(3)
+        guard !missing.isEmpty else { return }
+        hasSweptWaitingReplies = true
+        handleConsoleLog("LOG: [WAITING] sweeping \(missing.count) entr\(missing.count == 1 ? "y" : "ies") with no reply")
+        for entry in missing {
+            await fetchAndStoreReply(chatId: entry.chatId)
+        }
+    }
+
+    private var hasSweptWaitingReplies = false
+
+    /// Pulls the turn's final assistant text from the web and stores it against
+    /// the waiting entry, so Siri can read it back later with nothing running.
+    ///
+    /// A pull, not a push, because the completion signal for the sessions that
+    /// matter — CLI turns finishing on a remote machine — arrives as a bare
+    /// status phase with no text attached. The web can still resolve it: the
+    /// chat's actions are loadable from KV even when nobody is viewing them.
+    @MainActor
+    private func fetchAndStoreReply(chatId: String) async {
+        guard webView != nil else { return }
+        do {
+            let result = try await callAsyncJavaScript(
+                "if (!window.__ripulGetLastAssistantText) return null; return await window.__ripulGetLastAssistantText(\(Self.jsString(chatId)));"
+            )
+            guard let dict = result as? [String: Any] else {
+                handleConsoleLog("LOG: [WAITING] reply fetch chat=…\(chatId.suffix(8)) result=unavailable")
+                return
+            }
+            guard let text = dict["text"] as? String, !text.isEmpty else {
+                handleConsoleLog("LOG: [WAITING] reply fetch chat=…\(chatId.suffix(8)) result=empty")
+                return
+            }
+            backfillWaitingPreview(chatId: chatId, preview: text)
+        } catch {
+            handleConsoleLog("LOG: [WAITING] reply fetch chat=…\(chatId.suffix(8)) error=\(error.localizedDescription)")
+        }
+    }
+
+    /// JSON-encodes a string for safe inlining into a JS expression.
+    private static func jsString(_ value: String) -> String {
+        guard let data = try? JSONEncoder().encode(value),
+              let literal = String(data: data, encoding: .utf8) else { return "''" }
+        return literal
+    }
+
+    /// Fills in the reply on a waiting entry that was written before the reply
+    /// arrived. No-op when the chat isn't waiting, or already has one.
+    private func backfillWaitingPreview(chatId: String, preview: String) {
+        guard let cache = sessionCache else { return }
+        var entries = Self.waitingSessions(cache: cache)
+        guard let index = entries.firstIndex(where: { $0.chatId == chatId }) else { return }
+        let existing = entries[index]
+        guard existing.preview?.isEmpty != false else { return }
+        entries[index] = WaitingSession(
+            chatId: existing.chatId,
+            title: existing.title,
+            at: existing.at,
+            preview: Self.spokenPreview(preview)
+        )
+        guard let data = try? JSONEncoder().encode(entries) else { return }
+        cache.set(data, forKey: Self.waitingKey)
+        handleConsoleLog("LOG: [WAITING] backfilled reply for chat …\(chatId.suffix(8))")
+    }
+
+    /// Trims a response preview to something bearable read aloud.
+    ///
+    /// Spoken text has no skim. A screen-length reply that is fine to glance at
+    /// is a minute of talking, so this takes whole sentences up to a budget and
+    /// stops — cutting mid-sentence sounds like a fault rather than a summary.
+    static func spokenPreview(_ raw: String?) -> String? {
+        guard let raw else { return nil }
+        // Markdown and code fences read as noise, so drop the obvious markers.
+        let flat = raw
+            .replacingOccurrences(of: "```", with: " ")
+            .replacingOccurrences(of: "#", with: "")
+            .replacingOccurrences(of: "*", with: "")
+            .replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: "  ", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !flat.isEmpty else { return nil }
+        guard flat.count > 220 else { return flat }
+
+        var out = ""
+        for sentence in flat.split(separator: ".", omittingEmptySubsequences: true) {
+            let candidate = out.isEmpty ? String(sentence) : out + "." + sentence
+            if candidate.count > 220 { break }
+            out = candidate
+        }
+        if out.isEmpty { out = String(flat.prefix(220)) }
+        return out.trimmingCharacters(in: .whitespaces) + "."
+    }
+
+    /// Adds or removes one session, mirroring the live phase.
+    ///
+    /// `completed` and `failed` mean the agent stopped and it is your move;
+    /// `awaitingInput` is a mid-turn prompt, which is also your move. `running`
+    /// and `idle` are not.
+    private func persistWaitingState(chatId: String, phase: AgentTurnPhase, eventDate: Date?) {
+        guard let cache = sessionCache else { return }
+
+        // Only a TRANSITION counts. The same phase is re-asserted constantly —
+        // status pushes, session refreshes, snapshot replays — and the device
+        // log shows one chat writing `completed` three times inside a second.
+        // Reads `chatTurnPhases` because at this point in the caller it still
+        // holds the PREVIOUS value; `sessionList.sessionPhases` has already
+        // been overwritten with the new one and cannot answer this.
+        guard chatTurnPhases[chatId] != phase else { return }
+
+        // A turn STARTING is not you reading the last one. This used to fall
+        // through to the write below with the entry filtered out, so an agent
+        // beginning new work silently cleared an unread reply nobody had seen.
+        // Only opening the session clears it.
+        switch phase {
+        case .running, .idle: return
+        case .completed, .failed, .awaitingInput: break
+        }
+
+        let date = eventDate ?? Date()
+
+        // THE WATERMARK. On a cold start `chatTurnPhases` is empty, so every
+        // session's first status push reads as a nil -> completed transition
+        // and re-marked the whole list unread — read state did not survive a
+        // relaunch. Edge detection alone cannot fix that, because on a fresh
+        // process there is no previous edge to compare against.
+        //
+        // So compare the turn's own timestamp against when the session was
+        // last read. A replay of yesterday's completion is older than the
+        // read stamp and stays read; a turn that genuinely just ended is
+        // newer and marks unread. A missing timestamp is treated as
+        // rehydration rather than news — the alternative re-marks everything
+        // on launch, which is the bug being fixed.
+        let canonical = Self.canonicalChatKey(chatId)
+        if let readAt = Self.readStamps(cache: cache)[canonical] {
+            guard let eventDate else {
+                handleConsoleLog("LOG: [WAITING] \(phase.rawValue) chat=…\(chatId.suffix(8)) no-timestamp, already read — leaving read")
+                return
+            }
+            guard eventDate > readAt else {
+                handleConsoleLog("LOG: [WAITING] \(phase.rawValue) chat=…\(chatId.suffix(8)) older than read stamp — leaving read")
+                return
+            }
+        }
+
+        var entries = Self.waitingSessions(cache: cache).filter { $0.chatId != chatId }
+        switch phase {
+        case .completed, .failed, .awaitingInput:
+            // Watching it IS reading it. Falls through with the entry already
+            // filtered out, so the session ends up read rather than unread.
+            if isViewingChat(chatId) {
+                handleConsoleLog("LOG: [WAITING] \(phase.rawValue) chat=…\(chatId.suffix(8)) on-screen — read, not marking")
+                break
+            }
+            let title = sessions.first(where: { $0.id == chatId || $0.sourceChatId == chatId })?
+                .displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+            entries.append(WaitingSession(
+                chatId: chatId,
+                title: (title?.isEmpty == false) ? title! : "Untitled session",
+                at: date,
+                // Carried at write time, not read time: by the time Siri asks,
+                // the app may not be running to have a live map at all.
+                preview: Self.spokenPreview(lastResponsePreviewByChatId[chatId])
+            ))
+            handleConsoleLog(
+                "LOG: [WAITING] \(phase.rawValue) chat=…\(chatId.suffix(8)) reply=\(lastResponsePreviewByChatId[chatId] == nil ? "none-yet" : "captured")"
+            )
+            // Activity previews only fire for chats the web view is actively
+            // streaming, so for a CLI session finishing on a remote machine
+            // there is never one — proven on device: every write logged
+            // reply=none-yet and nothing ever backfilled. Ask the web directly
+            // instead; it can load the chat's actions even when unviewed.
+            if lastResponsePreviewByChatId[chatId] == nil {
+                Task { @MainActor in await fetchAndStoreReply(chatId: chatId) }
+            }
+        case .running, .idle:
+            break
+        }
+        guard let data = try? JSONEncoder().encode(Array(entries.sorted { $0.at > $1.at }.prefix(50))) else { return }
+        cache.set(data, forKey: Self.waitingKey)
+        publishUnreadIds()
+    }
+
+    /// Marks a session read — you have looked at it.
+    ///
+    /// Read means SEEN BY EYE, not "announced by Siri". Siri reading a summary
+    /// aloud deliberately does not clear anything: hearing that a session
+    /// finished is not the same as having read what it said, and clearing on
+    /// the announcement would make the list forget the moment you asked.
+    @MainActor
+    func markSessionRead(_ chatId: String) {
+        Self.clearWaiting(chatId: chatId, cache: sessionCache)
+        Self.stampRead(chatId: chatId, cache: sessionCache)
+        if let source = sessions.first(where: { $0.id == chatId })?.sourceChatId {
+            Self.clearWaiting(chatId: source, cache: sessionCache)
+            Self.stampRead(chatId: source, cache: sessionCache)
+        }
+        publishUnreadIds()
+    }
+
+    private static let readStampsKey = "ripulSessionReadAt"
+
+    /// One canonical name per session. CLI sessions appear as `cli_<uuid>`
+    /// live and as the bare uuid from the scanner; keying the stamps by either
+    /// would let the same session hold two contradictory read states.
+    static func canonicalChatKey(_ chatId: String) -> String {
+        chatId.hasPrefix("cli_") ? String(chatId.dropFirst(4)) : chatId
+    }
+
+    /// When each session was last read, by canonical id.
+    static func readStamps(cache: RipulSessionCache?) -> [String: Date] {
+        guard let data = cache?.data(forKey: readStampsKey),
+              let decoded = try? JSONDecoder().decode([String: Date].self, from: data)
+        else { return [:] }
+        return decoded
+    }
+
+    /// Records "seen at now", which is what later completions are measured
+    /// against. Survives relaunch, which the in-memory phase map does not.
+    static func stampRead(chatId: String, cache: RipulSessionCache?) {
+        guard let cache else { return }
+        var stamps = readStamps(cache: cache)
+        stamps[canonicalChatKey(chatId)] = Date()
+        // Bounded: this grows one entry per session ever opened and nothing
+        // else prunes it. Keeps the most recent, which is all a watermark
+        // comparison can ever consult.
+        if stamps.count > 300 {
+            stamps = Dictionary(uniqueKeysWithValues:
+                stamps.sorted { $0.value > $1.value }.prefix(200).map { ($0.key, $0.value) })
+        }
+        guard let data = try? JSONEncoder().encode(stamps) else { return }
+        cache.set(data, forKey: readStampsKey)
+    }
+
+    /// True when this chat is the one on screen, in an app that is frontmost.
+    ///
+    /// A turn finishing while you WATCH it is already read, so marking it
+    /// unread would put a dot on the very row you are looking at and have Siri
+    /// offer to read you back something you just watched arrive.
+    private func isViewingChat(_ chatId: String) -> Bool {
+        guard appIsForeground else { return false }
+        let activeAliases = [activeSessionId, activeSession?.sourceChatId]
+        for case let candidate? in activeAliases {
+            if candidate == chatId { return true }
+            if candidate.hasPrefix("cli_"), String(candidate.dropFirst(4)) == chatId { return true }
+            if "cli_\(candidate)" == chatId { return true }
+        }
+        return false
+    }
+
+    /// Whether the app is frontmost, as reported by the host's scene phase.
+    ///
+    /// A plain flag rather than reading `UIApplication.shared.applicationState`
+    /// — that needs main-thread isolation and this is consulted from the phase
+    /// writer, which is not guaranteed to be there. The host already knows the
+    /// answer and tells us either way.
+    public private(set) var appIsForeground = true
+
+    /// Called by the host when the app leaves the foreground. The matching
+    /// "became active" edge is `notifyWebViewBecameVisible()`.
+    public func notifyAppBackgrounded() {
+        appIsForeground = false
+    }
+
+    /// Mirrors the persisted unread set onto the store the session rows watch.
+    ///
+    /// Two representations because they answer different questions: the file
+    /// survives the app not running, which is what Siri needs; the published
+    /// set drives SwiftUI, which the file cannot.
+    @MainActor
+    func publishUnreadIds() {
+        sessionList.unreadChatIds = Set(Self.waitingSessions(cache: sessionCache).map(\.chatId))
+    }
+
+    // MARK: Sticky model
+
+    /// Set by the host app so the bridge can persist session-list metadata for
+    /// sessions IT creates. The sticky CLI path starts a session without
+    /// `RipulSessionListModel` in the loop, so the raw-mode flag and provider
+    /// label have to be written from here. Optional because an embedding host
+    /// (WAC's dev console) may not run the session list at all.
+    public var sessionCache: RipulSessionCache?
+
+    private static let stickyChoiceKey = "ripulStickyModelChoice"
+
+    /// What a session started WITHOUT an explicit model should continue in —
+    /// Siri's intent, the "+" button, `ripul://new-session`. Without it every
+    /// such session snapped back to the web app's default rather than the
+    /// thing the user was just working in.
+    ///
+    /// Two arms, because starting a session is two different acts. A plain API
+    /// model is one fact: the catalog id. A CLI session is three — WHICH
+    /// harness, WHICH model, and on WHICH machine — because the harness runs
+    /// on the host, not here. Remembering only the model id would be enough to
+    /// name a CLI session and not enough to start one.
+    ///
+    /// `lastKind` records which of the two the user actually reached for last,
+    /// so the arms don't fight: picking an API model after a CLI session means
+    /// the next plain session is that API model, and vice versa.
+    public struct StickyModelChoice: Codable, Equatable {
+        public enum Kind: String, Codable { case api, cli }
+
+        public struct Cli: Codable, Equatable {
+            /// nil = the machine's OWN default harness, i.e. what a plain "tap
+            /// the machine" connect gives you. That path
+            /// (`__ripulConnectToMachine`) lets the web choose the harness and
+            /// never tells us which it picked, so the only faithful way to
+            /// reproduce it is to run the same call again rather than guess a
+            /// providerKey and pin the next session to the wrong harness.
+            public var providerKey: String?
+            /// nil = the provider's own default model.
+            public var modelId: String?
+            public var machineId: String
+        }
+
+        public var apiModelId: String?
+        public var cli: Cli?
+        public var lastKind: Kind
+    }
+
+    /// The persisted sticky choice, or nil if the user has not chosen anything
+    /// yet.
+    public var stickyChoice: StickyModelChoice? {
+        get {
+            guard let data = UserDefaults.standard.data(forKey: Self.stickyChoiceKey) else { return nil }
+            return try? JSONDecoder().decode(StickyModelChoice.self, from: data)
+        }
+        set {
+            guard let newValue, let data = try? JSONEncoder().encode(newValue) else {
+                UserDefaults.standard.removeObject(forKey: Self.stickyChoiceKey)
+                return
+            }
+            UserDefaults.standard.set(data, forKey: Self.stickyChoiceKey)
+        }
+    }
+
+    /// Records a CLI session the user started, so the next plain new session
+    /// starts another one just like it. Called from
+    /// `connectToMachineWithProvider`, the single choke point for CLI session
+    /// creation — which is also the only place all three facts are known.
+    private func rememberCliSession(providerKey: String?, modelId: String?, machineId: String) {
+        var choice = stickyChoice ?? StickyModelChoice(apiModelId: nil, cli: nil, lastKind: .cli)
+        choice.cli = .init(providerKey: providerKey, modelId: modelId, machineId: machineId)
+        choice.lastKind = .cli
+        stickyChoice = choice
+        handleConsoleLog("LOG: [MODELSW] native.sticky REMEMBER cli provider=\(providerKey ?? "machine-default") model=\(modelId ?? "default") machine=\(machineId)")
+    }
+
+    /// Records a model pick from a picker or from creating a session with an
+    /// explicit model.
+    ///
+    /// A CLI id gets special handling: the picker that produced it had no
+    /// machine attached, so on its own it cannot start a session. If we already
+    /// remember a CLI session on the SAME harness, this is the user re-aiming
+    /// that harness (Claude Code on Sonnet → Claude Code on Fable) and the
+    /// remembered machine still applies. If we don't, there is no machine to
+    /// bind to and the pick is skipped rather than stored half-formed.
+    ///
+    /// `nil` means "revert to the web default", which is itself a choice, so it
+    /// clears the memory outright.
+    private func rememberModelPick(_ id: String?) {
+        guard let id else {
+            stickyChoice = nil
+            handleConsoleLog("LOG: [MODELSW] native.sticky CLEARED")
+            return
+        }
+        guard let model = availableModels.first(where: { $0.id == id }) else {
+            // Catalog not loaded, or an id we can't see. Storing it unvalidated
+            // would make it un-droppable later.
+            handleConsoleLog("LOG: [MODELSW] native.sticky SKIP unresolved id=\(id)")
+            return
+        }
+
+        var choice = stickyChoice ?? StickyModelChoice(apiModelId: nil, cli: nil, lastKind: .api)
+
+        if model.isCli {
+            guard let existing = choice.cli else {
+                handleConsoleLog("LOG: [MODELSW] native.sticky SKIP no-machine-for id=\(id)")
+                return
+            }
+            // The pick names the harness and the model; only the machine has to
+            // come from what we already remember.
+            let providerKey = ProviderConstants.byModelId(id)?.providerKey ?? existing.providerKey
+            choice.cli = .init(providerKey: providerKey, modelId: id, machineId: existing.machineId)
+            choice.lastKind = .cli
+            stickyChoice = choice
+            handleConsoleLog("LOG: [MODELSW] native.sticky REMEMBER cli-model id=\(id) provider=\(providerKey ?? "machine-default") machine=\(existing.machineId)")
+            return
+        }
+
+        choice.apiModelId = id
+        choice.lastKind = .api
+        stickyChoice = choice
+        handleConsoleLog("LOG: [MODELSW] native.sticky REMEMBER api id=\(id)")
+    }
+
+    /// The API model a session started with no explicit choice should use, or
+    /// nil to let the web app pick. Re-validated against the live catalog on
+    /// every call — a remembered model that has since been disabled or dropped
+    /// must fall back rather than pin the session to something unusable.
+    private func stickyApiModelForNewChat() -> String? {
+        guard let id = stickyChoice?.apiModelId else { return nil }
+        guard let model = availableModels.first(where: { $0.id == id }) else {
+            handleConsoleLog("LOG: [MODELSW] native.sticky UNRESOLVED at create id=\(id)")
+            return nil
+        }
+        // Subscription models are NOT excluded: they are created through this
+        // same `createNewChat` path (the web routes them to the host's own
+        // proxy), unlike CLI models which need a real connect call.
+        guard model.enabled, !model.isCli else {
+            handleConsoleLog("LOG: [MODELSW] native.sticky UNUSABLE at create id=\(id) enabled=\(model.enabled)")
+            return nil
+        }
+        return id
+    }
+
+    /// Marks a freshly-created CLI session as raw-mode and labels it with its
+    /// provider, the two facts the session list and agent screen read to render
+    /// it as a CLI session rather than a plain chat.
+    ///
+    /// `RipulSessionListModel.connectWithProvider` already does this for
+    /// sessions IT starts, but the sticky path starts one with the list model
+    /// nowhere in the loop. Both writes are idempotent (a set insert and a
+    /// dictionary assignment), so the overlap is harmless and the alternative —
+    /// a CLI session that renders as an API chat — is not.
+    private func persistCliSessionMetadata(tabId: String, providerKey: String) {
+        guard let cache = sessionCache else {
+            handleConsoleLog("LOG: [MODELSW] native.sticky CLI no sessionCache - skipping raw-mode label")
+            return
+        }
+        var rawSessions = Set(cache.stringArray(forKey: "ripulRawModeSessions") ?? [])
+        rawSessions.insert(tabId)
+        cache.set(Array(rawSessions), forKey: "ripulRawModeSessions")
+
+        var providers = cache.dictionary(forKey: "ripulSessionProviders") as? [String: String] ?? [:]
+        providers[tabId] = ProviderConstants.byProviderKey(providerKey)?.displayLabel ?? providerKey
+        cache.set(providers, forKey: "ripulSessionProviders")
+    }
+
+    /// Starts another CLI session like the last one the user started, on the
+    /// same machine. Returns the new session's tab id, or nil to let the caller
+    /// fall back to a plain API chat.
+    ///
+    /// Falling back rather than failing is the point: a CLI harness runs ON the
+    /// host, so if that machine is asleep, gone from the registry, or refuses
+    /// the connect, there is nothing to resume and the user still asked for a
+    /// session. They get one — just not this one.
+    private func resumeStickyCliSession() async -> String? {
+        guard let choice = stickyChoice, choice.lastKind == .cli, let cli = choice.cli else { return nil }
+
+        // An EMPTY list is "the web app hasn't published the registry yet", not
+        // "you have no machines" — and on a Siri cold launch that is the normal
+        // state for the first second or two. Treating it as "machine gone"
+        // would silently downgrade every voice-started session to an API chat.
+        // A list that IS populated and lacks our machine is genuine.
+        var machines = await listMachines()
+        for _ in 0..<6 where machines.isEmpty {
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            machines = await listMachines()
+        }
+
+        guard let machine = machines.first(where: { $0.machineId == cli.machineId }) else {
+            handleConsoleLog("LOG: [MODELSW] native.sticky CLI SKIP machine-unknown id=\(cli.machineId) known=\(machines.count)")
+            return nil
+        }
+        guard machine.isOnline else {
+            handleConsoleLog("LOG: [MODELSW] native.sticky CLI SKIP machine-offline \(machine.displayName)")
+            return nil
+        }
+
+        // Reproduce the ACT, not an approximation of it: a harness the user
+        // named explicitly goes back through the provider call; a plain machine
+        // tap goes back through the plain connect and lets the web pick the
+        // same default it picked last time.
+        let (tabId, error): (String?, String?)
+        if let providerKey = cli.providerKey {
+            (tabId, error) = await connectToMachineWithProvider(
+                machineId: cli.machineId,
+                providerKey: providerKey,
+                modelId: cli.modelId
+            )
+        } else {
+            (tabId, error) = await connectToMachine(machineId: cli.machineId)
+        }
+        guard let tabId else {
+            handleConsoleLog("LOG: [MODELSW] native.sticky CLI SKIP connect-failed: \(error ?? "unknown")")
+            return nil
+        }
+
+        // Same new-chat handoff createNewChat does: a brand-new session has no
+        // agent turn, so point the button projection at it before the sessions
+        // push that makes it resolvable lands.
+        pendingActiveSourceChatId = tabId
+        refreshActiveAgentFlags()
+        handleConsoleLog("LOG: [MODELSW] native.sticky CLI RESUMED provider=\(cli.providerKey ?? "machine-default") model=\(cli.modelId ?? "default") machine=\(machine.displayName)")
+        return tabId
+    }
     /// The most recent structured agent activity event from the web app.
     /// Not @Published — fires at very high frequency during agent runs and is only
     /// consumed via Combine (LiveActivityManager). Avoiding objectWillChange prevents
@@ -1071,6 +1783,14 @@ public final class AgentBridge: NSObject, ObservableObject {
         return sessions.first(where: { $0.id == activeSessionId })?.sourceChatId
     }
 
+    /// The active chat's id, for features that need to ask the web layer about
+    /// "this chat" — plan review resolves its machine and working directory
+    /// from it, the same way the repo tools do.
+    ///
+    /// Read-only on purpose: the active chat is set by session navigation, and
+    /// a feature that could reassign it would desynchronise the pause buttons.
+    public var currentSourceChatId: String? { activeSourceChatId }
+
     /// Update the per-session phase map for a single chat. Drops out-of-order
     /// events via per-chat sequence tracking.
     ///
@@ -1095,6 +1815,13 @@ public final class AgentBridge: NSObject, ObservableObject {
         if let sequence {
             sessionLifecycleSequences[chatId] = sequence
         }
+        // Confession line for wrong flips: the chat box's pause state dies
+        // exactly when a live phase is downgraded here.
+        if let previous = chatTurnPhases[chatId],
+           previous == .running || previous == .awaitingInput,
+           phase == .completed || phase == .failed || phase == .idle {
+            Self.debugLog("[TURNSTATE] downgrade chat=…\(chatId.suffix(8)) \(previous.rawValue) -> \(phase.rawValue) seq=\(sequence.map(String.init) ?? "nil")")
+        }
         let phaseDate = Self.parseEpochMs(timestamp) ?? Date()
         switch phase {
         case .running, .awaitingInput, .completed, .failed:
@@ -1106,6 +1833,17 @@ public final class AgentBridge: NSObject, ObservableObject {
             sessionList.sessionPhases.removeValue(forKey: chatId)
             sessionList.phaseTimestampByChatId.removeValue(forKey: chatId)
         }
+        // Mirror the waiting set to disk from the SAME assignment that drives
+        // the row indicator, so "what Siri says is waiting" and "what the list
+        // shows as waiting" cannot disagree. They did: the first version fed
+        // off completion PUSHES, which only land while the app is foregrounded,
+        // so the spoken answer was almost always "nothing waiting" while a row
+        // sat there plainly waiting.
+        // The PARSED date, not the fallback: a replay carries the original
+        // action's timestamp, and distinguishing "this turn just ended" from
+        // "the app is being told about a turn that ended yesterday" is the
+        // whole basis of the read watermark below.
+        persistWaitingState(chatId: chatId, phase: phase, eventDate: Self.parseEpochMs(timestamp))
         // The raw phase map keeps completed/failed distinct — the chat box must
         // NOT show the paused/play state for a finished turn.
         if phase == .idle {
@@ -1235,6 +1973,8 @@ public final class AgentBridge: NSObject, ObservableObject {
 
     /// Masthead configuration from the web app (text, image, colors for native glass lozenge).
     @Published public var mastheadConfig: MastheadConfig?
+    /// Active voice profile from the site key, for settings UI that shows it.
+    @Published public var voiceProfile: VoiceProfileConfig?
     /// Glass style for the native chat input: "regular", "clear", or "identity".
     @Published public var chatInputGlassStyle: String?
     /// Layout mode for the native chat input: nil/"single" (default) or "twoRow" (buttons below text area).
@@ -1268,6 +2008,20 @@ public final class AgentBridge: NSObject, ObservableObject {
     @Published public var currentPageContext: PageContext = .default
 
     private weak var webView: WKWebView?
+
+    /// Run an async JS callable in the page world and hand back its raw result.
+    ///
+    /// `webView` is private to this file, so features living in their own files
+    /// (PlanReview, …) reach the page through here rather than widening the
+    /// property's access. Returns nil when the web view is not attached yet —
+    /// callers surface that as "still starting up" rather than treating it as
+    /// a failure of whatever they were asking for.
+    @available(iOS 15.0, macOS 13.0, *)
+    func callPageFunction(_ script: String, arguments: [String: Any]) async throws -> Any? {
+        guard let webView else { return nil }
+        return try await webView.callAsyncJavaScript(
+            script, arguments: arguments, contentWorld: .page)
+    }
     /// Channel-bound tools (a console's `console_logs`, `inspect_screen`, …):
     /// they capture this bridge at init, so they live on the channel, never in
     /// the shared registry. Everything else lives in `registry`.
@@ -1357,6 +2111,16 @@ public final class AgentBridge: NSObject, ObservableObject {
     /// is pure cost in production. Flip it on only when debugging with Xcode; the
     /// in-app `consoleLogs` buffer (read by device_console_logs) is unaffected.
     public static var verboseBridgeLog = false
+
+    /// `[SESSION-START]` latency instrumentation. OFF by default. These markers
+    /// were added to measure the tap → input-ready window and are forced to WARN
+    /// so they survive console-level gating — which also means they are loud.
+    /// Unlike the web side they do not dedupe, and `loadRemoteSessions` alone
+    /// emits up to four per call on a path that runs on every foreground,
+    /// refresh and session action. Flip on only while chasing startup latency;
+    /// `setSessionStartInstrumentation` pushes the same gate to the web view so
+    /// one toggle covers web, iOS and macOS.
+    public static var sessionStartInstrumentation = false
 
     /// Render the WKWebView opaque instead of transparent (thermal A/B test). A
     /// transparent web view must blend every repaint against the layers behind it;
@@ -1535,6 +2299,14 @@ public final class AgentBridge: NSObject, ObservableObject {
         evaluateJavaScript("window.__ripulNativeLog = \(on)")
     }
 
+    /// Master switch for the `[SESSION-START]` latency markers. Off (the default)
+    /// silences the native emitters and the web-side `sessionStartTimer` helpers
+    /// alike. Pushed live so a toggle change takes effect without a reload.
+    public func setSessionStartInstrumentation(_ on: Bool) {
+        AgentBridge.sessionStartInstrumentation = on
+        evaluateJavaScript("window.__ripulSessionStartTimer = \(on)")
+    }
+
     /// Called by the web view coordinator when the page finishes loading.
     /// Starts a timeout — if the bridge doesn't connect within 10 seconds,
     /// clears the cache and reloads once to evict stale web app bundles.
@@ -1547,6 +2319,9 @@ public final class AgentBridge: NSObject, ObservableObject {
         // does not cross the bridge (quiet/cool). Re-pushed on every load so a
         // self-heal reload keeps the setting.
         evaluateJavaScript("window.__ripulNativeLog = \(AgentBridge.verboseBridgeLog)")
+        // Same for the [SESSION-START] latency gate — default false => the web
+        // sessionStartTimer helpers no-op, matching the native emitters.
+        evaluateJavaScript("window.__ripulSessionStartTimer = \(AgentBridge.sessionStartInstrumentation)")
         // Refresh the host-prefs mirror with CURRENT UserDefaults values — the
         // documentStart script is baked at webview creation, so this is what
         // keeps reloads of the same webview accurate after host-prefs:set writes.
@@ -1721,6 +2496,7 @@ public final class AgentBridge: NSObject, ObservableObject {
     ///      for the iPhone "locked into a dead comms channel until app restart"
     ///      failure mode.
     public func notifyWebViewBecameVisible() {
+        appIsForeground = true
         // ROOT-CAUSE FIX for the network-switch / background wedge:
         //
         // While the app is backgrounded, iOS can suspend or jettison the
@@ -1803,6 +2579,12 @@ public final class AgentBridge: NSObject, ObservableObject {
     private func startProcessLifecycleMonitoring() {
         #if os(iOS)
         let nc = NotificationCenter.default
+        // Main-thread stall detection. Called straight through rather than from
+        // a `Task { @MainActor }`: this class is already @MainActor, so the hop
+        // bought nothing and added a way for the start to silently not happen —
+        // which is one of the two reasons this monitor shipped twice without
+        // emitting a single line. It logs via the NSLog tee itself.
+        MainThreadStallMonitor.shared.start()
         nc.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in self?.handleConsoleLog("LOG: [LIFECYCLE] app → background") }
         }
@@ -1985,7 +2767,7 @@ public final class AgentBridge: NSObject, ObservableObject {
 
     /// Human description of a WKWebView eval error incl. domain + code + name.
     /// The code is the single most diagnostic datum for the JS-context wedge.
-    static func describeEvalError(_ error: Error) -> String {
+    public static func describeEvalError(_ error: Error) -> String {
         let ns = error as NSError
         let name: String
         switch (ns.domain, ns.code) {
@@ -2290,27 +3072,54 @@ public final class AgentBridge: NSObject, ObservableObject {
     private func scheduleHealVerification(reason: String) {
         healVerifyTask?.cancel()
         healVerifyTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 15_000_000_000) // 15s — fair chance to reload on cellular
-            guard let self, !Task.isCancelled else { return }
-            let health = await self.probeWebContextHealth()
-            switch health {
-            case .healthy:
-                self.handleConsoleLog("LOG: [WEBVIEW_HEAL] post-heal probe healthy — recovered after \(self.healAttempts) attempt(s)")
-                self.healAttempts = 0
-                self.deferredHealTask?.cancel()
-                self.deferredHealTask = nil
-            case .contextDead, .webCrashed, .callablesAbsent:
-                // callablesAbsent post-heal means the RELOAD came back without a
-                // native bridge too — escalating to the purge rung is the point.
-                self.handleConsoleLog("WARN: [WEBVIEW_HEAL] post-heal probe \(health.rawValue) — escalating")
-                await self.healWebContext(reason: "post-heal still \(health.rawValue)")
-            case .callablesMissing, .noWebView:
-                // Still booting or no view — don't escalate to a purge on a slow
-                // load; the eval-failure counter remains armed as a backstop.
-                self.handleConsoleLog("LOG: [WEBVIEW_HEAL] post-heal probe \(health.rawValue) — leaving to finish booting")
+            for round in 1...Self.healVerifyMaxRounds {
+                try? await Task.sleep(nanoseconds: 15_000_000_000) // 15s — fair chance to reload on cellular
+                guard let self, !Task.isCancelled else { return }
+                let health = await self.probeWebContextHealth()
+                switch health {
+                case .healthy:
+                    // The canary only proves `registerNativeCallables()` ran — and
+                    // that happens PRE-React, so a page whose React tree died still
+                    // probes `.healthy`. Demand a functional answer too:
+                    // `__ripulDiagnostics` is served by the app layer, so a shell
+                    // returns nil here. Observed 2026-08-10 12:42:35 — the heal
+                    // fired, the bridge re-handshaked, verification passed, and the
+                    // host stayed dead for another 8 minutes.
+                    if await self.fetchWebDiagnostics() == nil {
+                        self.handleConsoleLog("WARN: [WEBVIEW_HEAL] post-heal canary healthy but diagnostics unreachable — shell context; escalating")
+                        await self.healWebContext(reason: "post-heal shell (canary healthy, no diagnostics)")
+                        return
+                    }
+                    self.handleConsoleLog("LOG: [WEBVIEW_HEAL] post-heal probe healthy — recovered after \(self.healAttempts) attempt(s)")
+                    self.healAttempts = 0
+                    self.deferredHealTask?.cancel()
+                    self.deferredHealTask = nil
+                    return
+                case .contextDead, .webCrashed, .callablesAbsent:
+                    // callablesAbsent post-heal means the RELOAD came back without a
+                    // native bridge too — escalating to the purge rung is the point.
+                    self.handleConsoleLog("WARN: [WEBVIEW_HEAL] post-heal probe \(health.rawValue) — escalating")
+                    await self.healWebContext(reason: "post-heal still \(health.rawValue)")
+                    return
+                case .callablesMissing, .noWebView:
+                    // Still booting or no view — don't escalate to a purge on a slow
+                    // load. But "still booting" forever IS the wedge, and a single
+                    // look then walking away left it unhealed; keep re-checking on a
+                    // bounded schedule and escalate once the rounds are spent.
+                    if round == Self.healVerifyMaxRounds {
+                        self.handleConsoleLog("WARN: [WEBVIEW_HEAL] post-heal probe \(health.rawValue) after \(round) rounds — never finished booting; escalating")
+                        await self.healWebContext(reason: "post-heal stuck \(health.rawValue)")
+                        return
+                    }
+                    self.handleConsoleLog("LOG: [WEBVIEW_HEAL] post-heal probe \(health.rawValue) — still booting, re-checking (round \(round + 1)/\(Self.healVerifyMaxRounds))")
+                }
             }
         }
     }
+
+    /// Post-heal verification rounds (15s apart) before a context that never
+    /// finishes booting is treated as wedged rather than merely slow.
+    private static let healVerifyMaxRounds = 4
 
     // MARK: Host-bridge unavailability backstop
     //
@@ -2719,6 +3528,15 @@ public final class AgentBridge: NSObject, ObservableObject {
         case "sessions:ready":
             NSLog("[AgentBridge] Sessions ready received")
             isSessionsReady = true
+        case "workScope:changed":
+            // The shared work scope moved — from this app, the web Plans
+            // screen, or the web sessions list. Every native surface showing
+            // it re-reads; nobody caches a second copy.
+            NotificationCenter.default.post(
+                name: .ripulWorkScopeChanged,
+                object: nil,
+                userInfo: ["path": dict["path"] as? String as Any]
+            )
         case "search:click":
             handleSearchClick(dict)
         case "widget:minimize":
@@ -2731,6 +3549,8 @@ public final class AgentBridge: NSObject, ObservableObject {
             handleScrollState(dict)
         case "masthead:config":
             handleMastheadConfig(dict)
+        case "voice:config":
+            handleVoiceConfig(dict)
         case "chatInput:config":
             chatInputGlassStyle = dict["glassStyle"] as? String
             chatInputLayout = dict["layout"] as? String
@@ -2788,8 +3608,14 @@ public final class AgentBridge: NSObject, ObservableObject {
             } else if running || paused {
                 applySessionPhase(paused ? .awaitingInput : .running, chatId: chatId, sequence: nil, timestamp: dict["timestamp"])
             } else if chatTurnPhases[chatId] == .running || chatTurnPhases[chatId] == .awaitingInput {
-                // Status-only chat whose last status said running — clear it.
-                applySessionPhase(.completed, chatId: chatId, sequence: nil, timestamp: dict["timestamp"])
+                // Status-only chat whose last status said running. A not-running
+                // push here used to hard-clear to .completed, but pushes can be
+                // transiently wrong mid-turn (e.g. the web's question-prompt
+                // valve pushes isRunning:false while a tool waits on the user).
+                // Defend the running state: arbitrate with a chat-scoped pull of
+                // the web lifecycle snapshot, same as the history branch above.
+                Self.debugLog("[TURNSTATE] status push not-running for status-only chat …\(chatId.suffix(8)) while native=\(chatTurnPhases[chatId]?.rawValue ?? "?") — pull-arbitrating instead of hard clear")
+                Task { await syncAgentStatus(chatId: chatId) }
             }
         case "agent:activity":
             if let eventDict = dict["event"] as? [String: Any],
@@ -2801,6 +3627,24 @@ public final class AgentBridge: NSObject, ObservableObject {
                 if let toolName = eventDict["toolName"] as? String, toolName == "Edit",
                    let filePath = eventDict["toolFilePath"] as? String, !filePath.isEmpty {
                     sessionList.recordRecentlyEditedFile(filePath)
+                }
+                // The agent's own words already cross the bridge as a response
+                // preview, so remembering the newest one per chat costs one
+                // dictionary write and saves inventing a second channel for
+                // exactly the same text. This is what Siri reads back.
+                if case .response(let preview) = event,
+                   let chatId = dict["chatId"] as? String, !chatId.isEmpty {
+                    let cleaned = preview.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !cleaned.isEmpty {
+                        lastResponsePreviewByChatId[chatId] = cleaned
+                        // Also patch an entry already on disk. The turn's phase
+                        // can flip to completed BEFORE the final preview lands,
+                        // in which case the entry was written with nothing and
+                        // would never be revisited — which is exactly what
+                        // shipped: a summary with no reply in it. Handling both
+                        // orders is cheaper than reasoning about which wins.
+                        backfillWaitingPreview(chatId: chatId, preview: cleaned)
+                    }
                 }
                 if let chatId = dict["chatId"] as? String, !chatId.isEmpty {
                     // Stamp last-active time for sort order, but only if the
@@ -2911,7 +3755,8 @@ public final class AgentBridge: NSObject, ObservableObject {
                 showNativeHeader: showHeader,
                 showNativeChatInput: showInput,
                 showSessionControls: showControls,
-                safeAreaMode: safeArea
+                safeAreaMode: safeArea,
+                mirrorUrl: dict["mirrorUrl"] as? String
             )
         case "userInteraction:multiChoice":
             handleUserInteractionMultiChoice(dict)
@@ -3250,6 +4095,7 @@ public final class AgentBridge: NSObject, ObservableObject {
     /// the web-side stages. Used to instrument the native side of the
     /// tap → input-ready window when investigating new-chat latency.
     public func logSessionStartMarker(_ stage: String, chatId: String? = nil, extra: String = "") {
+        guard AgentBridge.sessionStartInstrumentation else { return }
         let ts = Int(Date().timeIntervalSince1970 * 1000)
         let chatStr = chatId.map { " chatId=\($0)" } ?? ""
         let extraStr = extra.isEmpty ? "" : " \(extra)"
@@ -3313,26 +4159,30 @@ public final class AgentBridge: NSObject, ObservableObject {
     public func submitMessage(
         _ text: String,
         imageAttachments: [[String: String]]? = nil,
-        addressedTo: [String]? = nil
+        addressedTo: [String]? = nil,
+        modality: String? = nil
     ) async -> Bool {
         guard let webView else { return false }
         do {
             var args: [String: Any] = ["text": text]
+            // Modality (e.g. "voice") rides as the 4th positional argument;
+            // undefined placeholders keep earlier positions stable.
+            args["modality"] = modality.map { $0 as Any } ?? NSNull()
             let hasImages = (imageAttachments?.isEmpty == false)
             let hasAddressedTo = (addressedTo?.isEmpty == false)
             let script: String
             if hasImages && hasAddressedTo {
                 args["images"] = imageAttachments!
                 args["addressedTo"] = addressedTo!
-                script = "return await window.__ripulSubmitMessage?.(text, images, addressedTo) ?? { success: false }"
+                script = "return await window.__ripulSubmitMessage?.(text, images, addressedTo, modality ?? undefined) ?? { success: false }"
             } else if hasImages {
                 args["images"] = imageAttachments!
-                script = "return await window.__ripulSubmitMessage?.(text, images) ?? { success: false }"
+                script = "return await window.__ripulSubmitMessage?.(text, images, undefined, modality ?? undefined) ?? { success: false }"
             } else if hasAddressedTo {
                 args["addressedTo"] = addressedTo!
-                script = "return await window.__ripulSubmitMessage?.(text, undefined, addressedTo) ?? { success: false }"
+                script = "return await window.__ripulSubmitMessage?.(text, undefined, addressedTo, modality ?? undefined) ?? { success: false }"
             } else {
-                script = "return await window.__ripulSubmitMessage?.(text) ?? { success: false }"
+                script = "return await window.__ripulSubmitMessage?.(text, undefined, undefined, modality ?? undefined) ?? { success: false }"
             }
             let result = try await webView.callAsyncJavaScript(
                 script,
@@ -3598,6 +4448,20 @@ public final class AgentBridge: NSObject, ObservableObject {
     @available(iOS 15.0, macOS 13.0, *)
     private var fetchSessionsCallCount = 0
     public func fetchSessions() async {
+        // Entries written before the reply-fetch existed — or while the web
+        // was unreachable — have no text and would otherwise stay mute for
+        // ever, since a reply is only pulled when a turn ENDS. Sweeping here
+        // means they fill themselves the next time the app runs, rather than
+        // needing the session to complete another turn first.
+        defer {
+            Task { @MainActor in
+                // Hydrate the rows from disk too — the published set starts
+                // empty on launch, so without this nothing is marked unread
+                // until the next turn ends.
+                publishUnreadIds()
+                await backfillMissingReplies()
+            }
+        }
         fetchSessionsCallCount += 1
         let fetchStart = CFAbsoluteTimeGetCurrent()
         guard let webView else {
@@ -3607,8 +4471,9 @@ public final class AgentBridge: NSObject, ObservableObject {
             lastSessionsError = "webView is nil"
             return
         }
-        // Log every 10th call to confirm polling is active, plus first 3
-        if fetchSessionsCallCount <= 3 || fetchSessionsCallCount % 10 == 0 {
+        // Liveness heartbeat only — every 100th call (~20min) is plenty to
+        // confirm polling is alive. Every 10th was ~1.5k lines a day.
+        if fetchSessionsCallCount <= 3 || fetchSessionsCallCount % 100 == 0 {
             Self.debugLog("[AgentBridge] fetchSessions #\(fetchSessionsCallCount), sessions=\(sessions.count), cliSessions=\(sessions.filter { $0.provider == "claude-cli" || $0.provider == "codex-cli" }.count)")
         }
 
@@ -3645,18 +4510,24 @@ public final class AgentBridge: NSObject, ObservableObject {
                 let remoteMachineName = item["remoteMachineName"] as? String
                 let provider = item["provider"] as? String
                 let providerLabel = item["providerLabel"] as? String
+                let model = item["modelId"] as? String
                 let hostChatId = item["hostChatId"] as? String
                 let sizeBytes = (item["sizeBytes"] as? NSNumber)?.intValue
                 let displayNameSource = item["displayNameSource"] as? String
                 let displayNameRenamedAt = (item["displayNameRenamedAt"] as? NSNumber)?.doubleValue
+                let projectName = item["projectName"] as? String
+                let gitBranch = item["gitBranch"] as? String
                 return ChatSession(id: id, sourceChatId: sourceChatId,
                                    displayName: displayName, createdAt: createdAt,
                                    remoteMachineName: remoteMachineName,
                                    provider: provider, providerLabel: providerLabel,
+                                   model: model,
                                    hostChatId: hostChatId,
                                    sizeBytes: sizeBytes,
                                    displayNameSource: displayNameSource,
-                                   displayNameRenamedAt: displayNameRenamedAt)
+                                   displayNameRenamedAt: displayNameRenamedAt,
+                                   projectName: projectName,
+                                   gitBranch: gitBranch)
             }
 
             // Filter out ephemeral commit-viewer sessions (tracked explicitly
@@ -3674,7 +4545,13 @@ public final class AgentBridge: NSObject, ObservableObject {
                     // `custom-title`, locking out Claude's own ai-title.
                     let oldByID = Dictionary(self.sessions.map { ($0.id, $0) }, uniquingKeysWith: { _, new in new })
                     let isInitialLoad = oldByID.isEmpty
-                    var renameLog = "[AgentBridge] sessions changed (\(self.sessions.count)→\(filtered.count)):"
+                    // Only real renames earn a line. This previously appended
+                    // every CLI session with old→new on every refresh, even when
+                    // nothing changed: ~10KB per line, ~3MB/day, and it pushed
+                    // the signals that matter clean out of the window.
+                    var renameNotes: [String] = []
+                    var skipAuto = 0
+                    var initialSync = 0
                     for session in filtered {
                         // claude-cli only: onCliSessionRenamed is wired to
                         // ClaudeCliServer, the sole server with a title-write
@@ -3684,21 +4561,27 @@ public final class AgentBridge: NSObject, ObservableObject {
                             let oldName = oldByID[session.id]?.displayName ?? "(new)"
                             // Older hosts don't send displayNameSource — treat as "user" for back-compat.
                             let source = session.displayNameSource ?? "user"
-                            renameLog += " [\(session.sourceChatId): '\(oldName)'→'\(session.displayName)' src=\(source)]"
                             let isAuthoritative = source == "cli" || source == "user"
                             if !isAuthoritative {
-                                renameLog += " SKIP_AUTO"
+                                skipAuto += 1
                             } else if isInitialLoad {
                                 // Sync all CLI session names on first load so reconnects pick up renames
-                                renameLog += " INITIAL_SYNC"
+                                initialSync += 1
                                 self.onCliSessionRenamed?(session.sourceChatId, session.displayName, session.displayNameRenamedAt)
                             } else if let old = oldByID[session.id], old.displayName != session.displayName {
-                                renameLog += " RENAME_DETECTED"
+                                renameNotes.append("[\(session.sourceChatId): '\(oldName)'→'\(session.displayName)' src=\(source) RENAME_DETECTED]")
                                 self.onCliSessionRenamed?(session.sourceChatId, session.displayName, session.displayNameRenamedAt)
                             }
                         }
                     }
-                    Self.debugLog(renameLog)
+                    if self.sessions.count != filtered.count || !renameNotes.isEmpty || initialSync > 0 {
+                        var renameLog = "[AgentBridge] sessions changed (\(self.sessions.count)→\(filtered.count))"
+                        if initialSync > 0 || skipAuto > 0 {
+                            renameLog += " initialSync=\(initialSync) skipAuto=\(skipAuto)"
+                        }
+                        if !renameNotes.isEmpty { renameLog += " " + renameNotes.joined(separator: " ") }
+                        Self.debugLog(renameLog)
+                    }
                     self.sessions = filtered
                     ChatSession.saveToCache(filtered)
                 }
@@ -3774,6 +4657,9 @@ public final class AgentBridge: NSObject, ObservableObject {
         // with no phase entry shows none.
         pendingActiveSourceChatId = nil
         activeSessionId = id
+        // Opening a session is reading it — drop it from the waiting set so
+        // Siri stops offering something you are now looking at.
+        markSessionRead(id)
         do {
             _ = try await webView.callAsyncJavaScript(
                 "if (window.__ripulFocusSession) await window.__ripulFocusSession(sessionId);",
@@ -3924,7 +4810,10 @@ public final class AgentBridge: NSObject, ObservableObject {
                     cliModelId: item["cliModelId"] as? String,
                     cliRawMode: (item["cliRawMode"] as? Bool) ?? false,
                     cliEffort: item["cliEffort"] as? String,
-                    cliMode: item["cliMode"] as? String
+                    cliMode: item["cliMode"] as? String,
+                    perMInput: (item["perMInput"] as? NSNumber)?.doubleValue,
+                    perMOutput: (item["perMOutput"] as? NSNumber)?.doubleValue,
+                    tier: item["tier"] as? String
                 )
             }
 
@@ -3963,6 +4852,9 @@ public final class AgentBridge: NSObject, ObservableObject {
             if let dict = result as? [String: Any],
                let success = dict["success"] as? Bool, success {
                 self.selectedModelId = modelId
+                // Picking from the global model menu IS the user expressing a
+                // preference — the primary way the sticky default is set.
+                rememberModelPick(modelId)
                 handleConsoleLog("LOG: [MODELSW] native.setModel OK modelId=\(modelId ?? "default") readBack=\(dict["readBack"] as? String ?? "none")")
                 return true
             }
@@ -4394,6 +5286,283 @@ public final class AgentBridge: NSObject, ObservableObject {
         }
     }
 
+    /// Run a shell command on a host machine through the web app's typed
+    /// `agent:execCommand` relay command. Every exec is a fresh `zsh -lc` on
+    /// the host — no session state survives; callers track cwd themselves and
+    /// pass it per call. With `background: true` the host launches the command
+    /// as a managed job and returns immediately with `jobId` (plus `pid`),
+    /// which is then tailed/stopped via `controlRemoteJob`.
+    ///
+    /// Returns the host's result dict: `exitCode/stdout/stderr/timedOut/
+    /// truncated/durationMs/cwd` for foreground, `background/jobId/pid` when
+    /// backgrounded, or `error`.
+    @available(iOS 15.0, macOS 13.0, *)
+    public func execRemoteCommand(machineId: String, command: String, cwd: String? = nil, timeoutMs: Int? = nil, background: Bool = false) async -> [String: Any] {
+        guard let webView else { return ["error": "webView is nil"] }
+        do {
+            // Every key referenced in the body MUST be present: callAsyncJavaScript
+            // turns the dictionary into the wrapper function's named parameters, so
+            // an omitted key is an undeclared identifier — a ReferenceError, not
+            // `undefined`. Nil optionals therefore go as NSNull() (→ JS `null`),
+            // never as an absent key and never as a boxed `nil as Any`.
+            let arguments: [String: Any] = [
+                "machineId": machineId,
+                "command": command,
+                "background": background,
+                "cwd": cwd.map { $0 as Any } ?? NSNull(),
+                "timeoutMs": timeoutMs.map { $0 as Any } ?? NSNull(),
+            ]
+            let result = try await webView.callAsyncJavaScript(
+                """
+                // The phone restores its web view across app relaunches to keep
+                // chat state, so the running bundle can predate the console
+                // callables even though the server serves the current build.
+                // GetMachines registers in the same pass as the console
+                // callables — if IT exists and they don't, this build is stale:
+                // reload to the current bundle so the retry lands.
+                if (typeof window.__ripulGetMachines === 'function' && typeof window.__ripulConsoleExec !== 'function') {
+                    try { location.reload(); } catch (e) {}
+                    return {error:'console-reloading'};
+                }
+                if (typeof window.__ripulConsoleExec !== 'function') return {error:'not ready'};
+                // `?? undefined` so a nil Swift optional reaches the callable as an
+                // absent argument, exactly as before — the web side forwards these
+                // straight onto the relay payload, where null !== omitted.
+                return await window.__ripulConsoleExec(machineId, command, cwd ?? undefined, timeoutMs ?? undefined, background);
+                """,
+                arguments: arguments,
+                contentWorld: .page
+            )
+            return result as? [String: Any] ?? ["error": "Unexpected result type"]
+        } catch {
+            handleConsoleLog("[AgentBridge] execRemoteCommand error: \(error.localizedDescription)")
+            return ["error": error.localizedDescription]
+        }
+    }
+
+    /// List, tail, or stop a background command job started by
+    /// `execRemoteCommand(..., background: true)` on a host machine.
+    /// `output` returns the bytes written since `offset` plus `nextOffset`,
+    /// so callers tail incrementally instead of re-reading the whole log.
+    @available(iOS 15.0, macOS 13.0, *)
+    public func controlRemoteJob(machineId: String, action: String, jobId: String? = nil, offset: Int? = nil) async -> [String: Any] {
+        guard let webView else { return ["error": "webView is nil"] }
+        do {
+            // Keys are always present — see the note in execRemoteCommand.
+            let arguments: [String: Any] = [
+                "machineId": machineId,
+                "action": action,
+                "jobId": jobId.map { $0 as Any } ?? NSNull(),
+                "offset": offset.map { $0 as Any } ?? NSNull(),
+            ]
+            let result = try await webView.callAsyncJavaScript(
+                """
+                if (typeof window.__ripulGetMachines === 'function' && typeof window.__ripulConsoleJobControl !== 'function') {
+                    try { location.reload(); } catch (e) {}
+                    return {error:'console-reloading'};
+                }
+                if (typeof window.__ripulConsoleJobControl !== 'function') return {error:'not ready'};
+                return await window.__ripulConsoleJobControl(machineId, action, jobId ?? undefined, offset ?? undefined);
+                """,
+                arguments: arguments,
+                contentWorld: .page
+            )
+            return result as? [String: Any] ?? ["error": "Unexpected result type"]
+        } catch {
+            handleConsoleLog("[AgentBridge] controlRemoteJob error: \(error.localizedDescription)")
+            return ["error": error.localizedDescription]
+        }
+    }
+
+    /// List the open browser tabs on a host machine (tab mirror).
+    /// Returns `{success, tabs?: [{id, url, title, active, favIconUrl?, contextName?}], error?}`.
+    public func mirrorListTabs(machineId: String) async -> [String: Any] {
+        guard let webView else { return ["success": false, "error": "webView is nil"] }
+        do {
+            let result = try await webView.callAsyncJavaScript(
+                "return await window.__ripulMirrorListTabs?.(machineId) ?? {success:false, error:'not ready'};",
+                arguments: ["machineId": machineId],
+                contentWorld: .page
+            )
+            return result as? [String: Any] ?? ["success": false, "error": "Unexpected result type"]
+        } catch {
+            handleConsoleLog("[AgentBridge] mirrorListTabs error: \(error.localizedDescription)")
+            return ["success": false, "error": error.localizedDescription]
+        }
+    }
+
+    /// List the Mac app windows on a host machine (window pixel mirror).
+    /// Returns `{success, windows?: [{id, title, app, onScreen, frontmost, isSelf, width, height}], error?}`.
+    /// One level of a mirrored app's menu bar, read through Accessibility on
+    /// the Mac. An empty path is the menu bar itself.
+    ///
+    /// Reading needs no activation, so browsing a background app's menus costs
+    /// the user nothing. Pressing is what needs the app forward, and the Mac
+    /// side does that itself.
+    /// Any allow-listed capability call on the mirrored machine.
+    ///
+    /// The generic door. Every mirror feature before this one needed its own
+    /// method here, its own callable, its own relay command and its own entry
+    /// in five more lists; behind this, a new capability is a line in the Mac's
+    /// allowlist and nothing else. The Mac holds that allowlist, because a gate
+    /// the caller could edit would not be a gate.
+    public func mirrorInvoke(
+        machineId: String, capability: String, method: String, args: [Any]
+    ) async -> [String: Any] {
+        guard let webView else { return ["success": false, "error": "webView is nil"] }
+        do {
+            let result = try await webView.callAsyncJavaScript(
+                "return await window.__ripulMirrorInvoke?.(machineId, capability, method, args) ?? {success:false, error:'not ready'};",
+                arguments: ["machineId": machineId, "capability": capability, "method": method, "args": args],
+                contentWorld: .page
+            )
+            return result as? [String: Any] ?? ["success": false, "error": "Unexpected result type"]
+        } catch {
+            handleConsoleLog("[AgentBridge] mirrorInvoke error: \(error.localizedDescription)")
+            return ["success": false, "error": error.localizedDescription]
+        }
+    }
+
+    /// A mirrored app's whole menu tree, children nested under their parent.
+    ///
+    /// One call rather than one per level, because a real menu needs its
+    /// children the moment it opens.
+    public func mirrorMenuTree(
+        machineId: String, pid: Int, maxDepth: Int = 3, budget: Int = 1200
+    ) async -> [String: Any] {
+        guard let webView else { return ["success": false, "error": "webView is nil"] }
+        do {
+            let result = try await webView.callAsyncJavaScript(
+                "return await window.__ripulMirrorMenuTree?.(machineId, pid, maxDepth, budget) ?? {success:false, error:'not ready'};",
+                arguments: ["machineId": machineId, "pid": pid, "maxDepth": maxDepth, "budget": budget],
+                contentWorld: .page
+            )
+            return result as? [String: Any] ?? ["success": false, "error": "Unexpected result type"]
+        } catch {
+            handleConsoleLog("[AgentBridge] mirrorMenuTree error: \(error.localizedDescription)")
+            return ["success": false, "error": error.localizedDescription]
+        }
+    }
+
+    /// Invoke a menu item on a mirrored app.
+    public func mirrorMenuPress(machineId: String, pid: Int, path: [Int]) async -> [String: Any] {
+        guard let webView else { return ["success": false, "error": "webView is nil"] }
+        do {
+            let result = try await webView.callAsyncJavaScript(
+                "return await window.__ripulMirrorMenuPress?.(machineId, pid, path) ?? {success:false, error:'not ready'};",
+                arguments: ["machineId": machineId, "pid": pid, "path": path],
+                contentWorld: .page
+            )
+            return result as? [String: Any] ?? ["success": false, "error": "Unexpected result type"]
+        } catch {
+            handleConsoleLog("[AgentBridge] mirrorMenuPress error: \(error.localizedDescription)")
+            return ["success": false, "error": error.localizedDescription]
+        }
+    }
+
+    public func mirrorListWindows(machineId: String) async -> [String: Any] {
+        guard let webView else { return ["success": false, "error": "webView is nil"] }
+        do {
+            let result = try await webView.callAsyncJavaScript(
+                "return await window.__ripulMirrorListWindows?.(machineId) ?? {success:false, error:'not ready'};",
+                arguments: ["machineId": machineId],
+                contentWorld: .page
+            )
+            return result as? [String: Any] ?? ["success": false, "error": "Unexpected result type"]
+        } catch {
+            handleConsoleLog("[AgentBridge] mirrorListWindows error: \(error.localizedDescription)")
+            return ["success": false, "error": error.localizedDescription]
+        }
+    }
+
+    /// Collect switcher thumbnails for Mac app windows (window pixel mirror).
+    /// Returns `{success, thumbs: {"<windowId>": {w, h, jpegB64}}, error?}` —
+    /// the web side gathers them off the ephemeral stream channel, so this
+    /// can take a few seconds for a long window list.
+    public func mirrorWindowThumbs(machineId: String, windowIds: [Int]) async -> [String: Any] {
+        guard let webView else { return ["success": false, "error": "webView is nil"] }
+        do {
+            let result = try await webView.callAsyncJavaScript(
+                "return await window.__ripulMirrorWindowThumbs?.(machineId, windowIds) ?? {success:false, error:'not ready'};",
+                arguments: ["machineId": machineId, "windowIds": windowIds],
+                contentWorld: .page
+            )
+            return result as? [String: Any] ?? ["success": false, "error": "Unexpected result type"]
+        } catch {
+            handleConsoleLog("[AgentBridge] mirrorWindowThumbs error: \(error.localizedDescription)")
+            return ["success": false, "error": error.localizedDescription]
+        }
+    }
+
+    /// Open a new browser tab on a host machine (tab mirror). Bare hosts are
+    /// upgraded to https:// web-side. Returns `{success, tab?, error?}` where
+    /// tab carries {id, url, title, ...} for jumping straight into a mirror.
+    public func mirrorOpenTab(machineId: String, url: String) async -> [String: Any] {
+        guard let webView else { return ["success": false, "error": "webView is nil"] }
+        do {
+            let result = try await webView.callAsyncJavaScript(
+                "return await window.__ripulMirrorOpenTab?.(machineId, url) ?? {success:false, error:'not ready'};",
+                arguments: ["machineId": machineId, "url": url],
+                contentWorld: .page
+            )
+            return result as? [String: Any] ?? ["success": false, "error": "Unexpected result type"]
+        } catch {
+            handleConsoleLog("[AgentBridge] mirrorOpenTab error: \(error.localizedDescription)")
+            return ["success": false, "error": error.localizedDescription]
+        }
+    }
+
+    /// Open the full-screen live tab-mirror overlay in the web layer. The
+    /// caller must first put the UI in a state where the webview is visible
+    /// (agent tab, chat state) — the overlay paints inside the webview and
+    /// hides the native chat chrome itself via page:context.
+    public func openTabMirror(machineId: String, tabId: Int, title: String) async {
+        guard let webView else { return }
+        _ = try? await webView.callAsyncJavaScript(
+            "return window.__ripulOpenTabMirror?.(machineId, tabId, title) ?? {success:false};",
+            arguments: ["machineId": machineId, "tabId": tabId, "title": title],
+            contentWorld: .page
+        )
+    }
+
+    /// Drive browser navigation on a host tab (remote browser chrome).
+    /// action: "back" | "forward" | "reload" | "navigate" | "close";
+    /// url is required for "navigate". Returns `{success, tab?, error?}`.
+    public func mirrorTabControl(machineId: String, tabId: Int, action: String, url: String? = nil, width: Int? = nil, height: Int? = nil) async -> [String: Any] {
+        guard let webView else { return ["success": false, "error": "webView is nil"] }
+        do {
+            let result = try await webView.callAsyncJavaScript(
+                "return await window.__ripulMirrorTabControl?.(machineId, tabId, action, url, width, height) ?? {success:false, error:'not ready'};",
+                arguments: ["machineId": machineId, "tabId": tabId, "action": action, "url": url ?? "", "width": width ?? 0, "height": height ?? 0],
+                contentWorld: .page
+            )
+            return result as? [String: Any] ?? ["success": false, "error": "Unexpected result type"]
+        } catch {
+            handleConsoleLog("[AgentBridge] mirrorTabControl error: \(error.localizedDescription)")
+            return ["success": false, "error": error.localizedDescription]
+        }
+    }
+
+    /// Set the mirror's reticule pointer mode: "off" | "pointer" | "inspect".
+    public func setMirrorPointerMode(_ mode: String) async {
+        guard let webView else { return }
+        _ = try? await webView.callAsyncJavaScript(
+            "return window.__ripulSetMirrorPointerMode?.(mode) ?? {success:false};",
+            arguments: ["mode": mode],
+            contentWorld: .page
+        )
+    }
+
+    /// Close the tab-mirror overlay if open (safe no-op otherwise).
+    public func closeTabMirror() async {
+        guard let webView else { return }
+        _ = try? await webView.callAsyncJavaScript(
+            "return window.__ripulCloseTabMirror?.() ?? {success:false};",
+            arguments: [:],
+            contentWorld: .page
+        )
+    }
+
     /// Query the remote host for file suggestions matching a partial path/name.
     /// Used by the native @files autocomplete in NativeChatInput.
     /// Returns an array of dictionaries with `path` (String) and `isDirectory` (Bool).
@@ -4567,6 +5736,53 @@ public final class AgentBridge: NSObject, ObservableObject {
         }
     }
 
+    /// Outcome of accepting a share invite.
+    public struct ShareLinkJoinResult {
+        /// Local chat tab id the shared session landed in. Match against
+        /// `ChatSession.id` / `.sourceChatId` to open it.
+        public let tabId: String?
+        public let label: String?
+        public let error: String?
+        public var ok: Bool { tabId != nil }
+    }
+
+    /// Accept a share invite: join the room, create the local tab + pairing,
+    /// and subscribe for history. Returns the tab it landed in so the caller
+    /// can open it — a fire-and-forget hash change looked identical whether
+    /// the join worked or not.
+    @available(iOS 15.0, macOS 13.0, *)
+    public func joinShareLink(token: String) async -> ShareLinkJoinResult {
+        guard let webView else {
+            return ShareLinkJoinResult(tabId: nil, label: nil, error: "webView is nil")
+        }
+        do {
+            let result = try await webView.callAsyncJavaScript(
+                """
+                if (!window.__ripulJoinShareLink) return { ok: false, error: 'App is still starting up' };
+                return await window.__ripulJoinShareLink(token);
+                """,
+                arguments: ["token": token],
+                contentWorld: .page
+            )
+            guard let dict = result as? [String: Any] else {
+                return ShareLinkJoinResult(tabId: nil, label: nil, error: "No response from the web app")
+            }
+            if dict["ok"] as? Bool == true, let tabId = dict["tabId"] as? String {
+                // Pull the new tab into `sessions` now rather than waiting out
+                // the 3s poll — the caller is about to look for it.
+                await fetchSessions()
+                return ShareLinkJoinResult(tabId: tabId, label: dict["label"] as? String, error: nil)
+            }
+            return ShareLinkJoinResult(
+                tabId: nil, label: nil,
+                error: dict["error"] as? String ?? "Failed to join session"
+            )
+        } catch {
+            NSLog("[AgentBridge] joinShareLink error: %@", error.localizedDescription)
+            return ShareLinkJoinResult(tabId: nil, label: nil, error: error.localizedDescription)
+        }
+    }
+
     /// Truncate a chat session, keeping only the most recent `keepCount` actions.
     /// Returns the number of actions removed, or -1 on failure.
     @available(iOS 15.0, macOS 13.0, *)
@@ -4670,6 +5886,12 @@ public final class AgentBridge: NSObject, ObservableObject {
                 let tabId = dict["tabId"] as? String
                 let machineName = dict["machineName"] as? String ?? machineId
                 NSLog("[AgentBridge] connectToMachine: paired to %@, tab %@", machineName, tabId ?? "?")
+                // Tapping a machine to start a session on it is a CLI choice
+                // just as much as picking a harness explicitly — it is in fact
+                // the most common way to make one. nil providerKey records
+                // "whatever this machine defaults to", which is exactly what
+                // the user asked for and exactly what resuming will re-run.
+                rememberCliSession(providerKey: nil, modelId: nil, machineId: machineId)
                 // Refresh sessions so the new tab appears
                 await fetchSessions()
                 return (tabId, nil)
@@ -4696,8 +5918,12 @@ public final class AgentBridge: NSObject, ObservableObject {
     /// Connect to a remote machine in CLI provider mode: creates a session,
     /// sets the model to the provider's default, and enables raw mode.
     /// providerKey is e.g. "claude-cli", "codex-cli", "antigravity-cli".
-    public func connectToMachineWithProvider(machineId: String, providerKey: String) async -> (tabId: String?, error: String?) {
-        logSessionStartMarker("ios.connect_with_provider_enter", extra: "machineId=\(machineId) provider=\(providerKey)")
+    /// - Parameter modelId: Catalog model to pin the new chat to (e.g.
+    ///   "claude-cli-raw-opus"). This is what makes a quick-start shortcut mean
+    ///   a MODEL rather than a harness. Pass nil for "a session on this
+    ///   harness" and the provider's declared default is used.
+    public func connectToMachineWithProvider(machineId: String, providerKey: String, modelId: String? = nil) async -> (tabId: String?, error: String?) {
+        logSessionStartMarker("ios.connect_with_provider_enter", extra: "machineId=\(machineId) provider=\(providerKey) model=\(modelId ?? "default")")
         guard let webView else {
             return (nil, "webView is nil")
         }
@@ -4707,10 +5933,12 @@ public final class AgentBridge: NSObject, ObservableObject {
                 try await webView.callAsyncJavaScript(
                     """
                     if (!window.__ripulConnectToMachineWithProvider) return {success:false, error:'not ready'};
-                    var r = await window.__ripulConnectToMachineWithProvider(machineId, providerKey);
+                    var r = await window.__ripulConnectToMachineWithProvider(machineId, providerKey, modelId || undefined);
                     return JSON.parse(JSON.stringify(r));
                     """,
-                    arguments: ["machineId": machineId, "providerKey": providerKey],
+                    // A nil argument bridges as NSNull, not `undefined` — hence
+                    // the `|| undefined` above.
+                    arguments: ["machineId": machineId, "providerKey": providerKey, "modelId": modelId.map { $0 as Any } ?? NSNull()],
                     contentWorld: .page
                 )
             }
@@ -4722,7 +5950,19 @@ public final class AgentBridge: NSObject, ObservableObject {
             if let success = dict["success"] as? Bool, success {
                 let tabId = dict["tabId"] as? String
                 NSLog("[AgentBridge] connectToMachineWithProvider(%@): tab %@", providerKey, tabId ?? "?")
-                self.selectedModelId = "\(providerKey)-raw-default"
+                // Mirror what the web actually stamped. This used to hardcode
+                // "\(providerKey)-raw-default", which for claude-cli is not the
+                // real default (claude-cli-raw-sonnet) — so the native model
+                // label disagreed with the chat's own override.
+                self.selectedModelId = modelId ?? ProviderConstants.defaultModelId(for: providerKey)
+                // Starting a CLI session IS the user expressing a preference —
+                // and this is the only place all three facts it takes to start
+                // another one (harness, model, machine) are known together.
+                rememberCliSession(providerKey: providerKey, modelId: modelId, machineId: machineId)
+                // Only the explicit-harness path marks raw-mode — the plain
+                // machine connect never did, and matching it exactly is the
+                // point of reproducing the act rather than normalising it.
+                if let tabId { persistCliSessionMetadata(tabId: tabId, providerKey: providerKey) }
                 logSessionStartMarker("ios.fetch_sessions_start", chatId: tabId)
                 await fetchSessions()
                 logSessionStartMarker("ios.fetch_sessions_end", chatId: tabId, extra: "sessionCount=\(sessions.count)")
@@ -4800,6 +6040,62 @@ public final class AgentBridge: NSObject, ObservableObject {
 
     /// List sessions available on a remote machine via the relay discovery protocol.
     @available(iOS 15.0, macOS 13.0, *)
+    /// The machine registry as the web app currently knows it.
+    ///
+    /// Preferred over the native REST fetch: the web app polls the registry with
+    /// a live token, whereas the native copy silently retains its last cache
+    /// whenever its own fetch cannot run. A retained cache ages past
+    /// `RemoteMachine.isOnline`'s 5-minute TTL, at which point every machine
+    /// reads offline and `RemoteSessionScan` returns nothing at all — the
+    /// session list then shows only orphan local tabs, dated by when each tab
+    /// was opened rather than by conversation activity.
+    public func listMachines() async -> [RemoteMachine] {
+        guard let webView else {
+            NSLog("[AgentBridge] listMachines: webView is nil")
+            return []
+        }
+        do {
+            let result = try await webView.callAsyncJavaScript(
+                """
+                if (!window.__ripulGetMachines) return {machines: [], error: 'not ready'};
+                return await window.__ripulGetMachines();
+                """,
+                arguments: [:],
+                contentWorld: .page
+            )
+            guard let dict = result as? [String: Any],
+                  let raw = dict["machines"] as? [[String: Any]] else {
+                NSLog("[AgentBridge] listMachines: unexpected result type: %@", String(describing: result))
+                return []
+            }
+            if let error = dict["error"] as? String, !error.isEmpty {
+                NSLog("[AgentBridge] listMachines: JS error: %@", error)
+            }
+            let parsed = raw.compactMap { item -> RemoteMachine? in
+                guard let machineId = item["machineId"] as? String,
+                      let displayName = item["displayName"] as? String,
+                      let roomId = item["roomId"] as? String,
+                      let lastSeenAt = item["lastSeenAt"] as? String else {
+                    return nil
+                }
+                return RemoteMachine(
+                    machineId: machineId,
+                    displayName: displayName,
+                    userId: item["userId"] as? String ?? "",
+                    roomId: roomId,
+                    registeredAt: item["registeredAt"] as? String ?? lastSeenAt,
+                    lastSeenAt: lastSeenAt,
+                    meta: item["meta"] as? [String: String]
+                )
+            }
+            NSLog("[AgentBridge] listMachines: %d machines from web registry", parsed.count)
+            return parsed
+        } catch {
+            NSLog("[AgentBridge] listMachines error: %@", error.localizedDescription)
+            return []
+        }
+    }
+
     public func listRemoteSessions(machineId: String) async -> [RemoteSessionInfo] {
         guard let webView else {
             NSLog("[AgentBridge] listRemoteSessions: webView is nil")
@@ -4892,6 +6188,237 @@ public final class AgentBridge: NSObject, ObservableObject {
         } catch {
             NSLog("[AgentBridge] fetchCliAccount error: %@", error.localizedDescription)
             return nil
+        }
+    }
+
+    // MARK: - Host Claude sign-in (phone-driven)
+
+    /// Auth state of a machine's `claude` CLI: who is signed in, on what plan,
+    /// and whether a phone-driven sign-in is already in flight. `profile`
+    /// probes one account profile; nil = the host's ACTIVE profile.
+    @available(iOS 15.0, macOS 13.0, *)
+    public func fetchHostAuthStatus(machineId: String, profile: String? = nil) async -> HostAuthStatusInfo {
+        guard let webView else {
+            return HostAuthStatusInfo.from(dict: ["error": "webView is nil"])
+        }
+        do {
+            let result = try await webView.callAsyncJavaScript(
+                """
+                if (!window.__ripulRemoteHostAuthStatus) return { loggedIn: false, error: 'not ready' };
+                return await window.__ripulRemoteHostAuthStatus(machineId, profile);
+                """,
+                arguments: ["machineId": machineId, "profile": profile ?? NSNull()],
+                contentWorld: .page
+            )
+            guard let dict = result as? [String: Any] else {
+                return HostAuthStatusInfo.from(dict: ["error": "Unexpected result"])
+            }
+            return HostAuthStatusInfo.from(dict: dict)
+        } catch {
+            handleConsoleLog("LOG: [AgentBridge] fetchHostAuthStatus(\(machineId)) error: \(error.localizedDescription)")
+            return HostAuthStatusInfo.from(dict: ["error": error.localizedDescription])
+        }
+    }
+
+    /// Begin a Claude sign-in on a host machine. The returned authorize URL is
+    /// opened on THIS device; the code it yields goes back via
+    /// `submitHostAuthCode`. Safe to render as a link — it carries no secret.
+    /// `profile` scopes the sign-in to one account profile; nil = active.
+    @available(iOS 15.0, macOS 13.0, *)
+    public func beginHostAuth(machineId: String, profile: String? = nil) async -> HostAuthBeginInfo {
+        guard let webView else {
+            return HostAuthBeginInfo(sessionId: nil, authUrl: nil, error: "webView is nil")
+        }
+        do {
+            let result = try await webView.callAsyncJavaScript(
+                """
+                if (!window.__ripulRemoteHostAuthBegin) return { error: 'not ready' };
+                return await window.__ripulRemoteHostAuthBegin(machineId, profile);
+                """,
+                arguments: ["machineId": machineId, "profile": profile ?? NSNull()],
+                contentWorld: .page
+            )
+            guard let dict = result as? [String: Any] else {
+                return HostAuthBeginInfo(sessionId: nil, authUrl: nil, error: "Unexpected result")
+            }
+            return HostAuthBeginInfo(
+                sessionId: dict["sessionId"] as? String,
+                authUrl: dict["authUrl"] as? String,
+                error: dict["error"] as? String
+            )
+        } catch {
+            handleConsoleLog("LOG: [AgentBridge] beginHostAuth(\(machineId)) error: \(error.localizedDescription)")
+            return HostAuthBeginInfo(sessionId: nil, authUrl: nil, error: error.localizedDescription)
+        }
+    }
+
+    /// Submit the code from the callback page to the host — VERBATIM. The page
+    /// renders `<code>#<state>` and the CLI rejects a code split on '#'; the
+    /// host strips whitespace itself. The code is single-use, so this is never
+    /// retried at any layer (relay registers it single-attempt).
+    /// `profile` must match the one passed to `beginHostAuth`.
+    @available(iOS 15.0, macOS 13.0, *)
+    public func submitHostAuthCode(machineId: String, sessionId: String, code: String, profile: String? = nil) async -> (ok: Bool, error: String?) {
+        guard let webView else {
+            return (false, "webView is nil")
+        }
+        do {
+            let result = try await webView.callAsyncJavaScript(
+                """
+                if (!window.__ripulRemoteHostAuthSubmitCode) return { ok: false, error: 'not ready' };
+                return await window.__ripulRemoteHostAuthSubmitCode(machineId, sessionId, code, profile);
+                """,
+                arguments: ["machineId": machineId, "sessionId": sessionId, "code": code, "profile": profile ?? NSNull()],
+                contentWorld: .page
+            )
+            guard let dict = result as? [String: Any] else {
+                return (false, "Unexpected result")
+            }
+            return (dict["ok"] as? Bool ?? false, dict["error"] as? String)
+        } catch {
+            handleConsoleLog("LOG: [AgentBridge] submitHostAuthCode(\(machineId)) error: \(error.localizedDescription)")
+            return (false, error.localizedDescription)
+        }
+    }
+
+    /// Cancel an in-flight sign-in on a host machine.
+    @available(iOS 15.0, macOS 13.0, *)
+    public func cancelHostAuth(machineId: String) async -> (ok: Bool, error: String?) {
+        guard let webView else {
+            return (false, "webView is nil")
+        }
+        do {
+            let result = try await webView.callAsyncJavaScript(
+                """
+                if (!window.__ripulRemoteHostAuthCancel) return { ok: false, error: 'not ready' };
+                return await window.__ripulRemoteHostAuthCancel(machineId);
+                """,
+                arguments: ["machineId": machineId],
+                contentWorld: .page
+            )
+            guard let dict = result as? [String: Any] else {
+                return (false, "Unexpected result")
+            }
+            return (dict["ok"] as? Bool ?? false, dict["error"] as? String)
+        } catch {
+            handleConsoleLog("LOG: [AgentBridge] cancelHostAuth(\(machineId)) error: \(error.localizedDescription)")
+            return (false, error.localizedDescription)
+        }
+    }
+
+    // MARK: - Claude account switcher (machine-global profiles)
+
+    /// List a host machine's Claude account profiles and which is active.
+    @available(iOS 15.0, macOS 13.0, *)
+    public func fetchClaudeAccounts(machineId: String) async -> ClaudeAccountsListInfo {
+        guard let webView else {
+            return ClaudeAccountsListInfo(accounts: [], active: "default", error: "webView is nil")
+        }
+        do {
+            let result = try await webView.callAsyncJavaScript(
+                """
+                if (!window.__ripulRemoteClaudeAccountsList) return { accounts: [], active: 'default', error: 'not ready' };
+                return await window.__ripulRemoteClaudeAccountsList(machineId);
+                """,
+                arguments: ["machineId": machineId],
+                contentWorld: .page
+            )
+            guard let dict = result as? [String: Any] else {
+                return ClaudeAccountsListInfo(accounts: [], active: "default", error: "Unexpected result")
+            }
+            let accounts = (dict["accounts"] as? [[String: Any]] ?? []).map { ClaudeAccountProfile.from(dict: $0) }
+            return ClaudeAccountsListInfo(
+                accounts: accounts,
+                active: dict["active"] as? String ?? "default",
+                error: dict["error"] as? String
+            )
+        } catch {
+            handleConsoleLog("LOG: [AgentBridge] fetchClaudeAccounts(\(machineId)) error: \(error.localizedDescription)")
+            return ClaudeAccountsListInfo(accounts: [], active: "default", error: error.localizedDescription)
+        }
+    }
+
+    /// Create a new (not yet signed-in) account profile on the host. Follow
+    /// with beginHostAuth(machineId:profile:) to sign it in.
+    @available(iOS 15.0, macOS 13.0, *)
+    public func createClaudeAccount(machineId: String, name: String) async -> (ok: Bool, slug: String?, name: String?, error: String?) {
+        guard let webView else {
+            return (false, nil, nil, "webView is nil")
+        }
+        do {
+            let result = try await webView.callAsyncJavaScript(
+                """
+                if (!window.__ripulRemoteClaudeAccountCreate) return { ok: false, error: 'not ready' };
+                return await window.__ripulRemoteClaudeAccountCreate(machineId, name);
+                """,
+                arguments: ["machineId": machineId, "name": name],
+                contentWorld: .page
+            )
+            guard let dict = result as? [String: Any] else {
+                return (false, nil, nil, "Unexpected result")
+            }
+            return (dict["ok"] as? Bool ?? false, dict["slug"] as? String, dict["name"] as? String, dict["error"] as? String)
+        } catch {
+            handleConsoleLog("LOG: [AgentBridge] createClaudeAccount(\(machineId)) error: \(error.localizedDescription)")
+            return (false, nil, nil, error.localizedDescription)
+        }
+    }
+
+    /// Hot-swap the host's machine-global active account. Idle persistent CLI sessions recycle onto it immediately (--resume keeps the conversation);
+    /// busy ones switch after their current turn.
+    @available(iOS 15.0, macOS 13.0, *)
+    public func switchClaudeAccount(machineId: String, slug: String) async -> ClaudeAccountSwitchInfo {
+        guard let webView else {
+            return ClaudeAccountSwitchInfo(ok: false, active: nil, recycledSessions: [], deferredBusySessions: [], error: "webView is nil")
+        }
+        do {
+            let result = try await webView.callAsyncJavaScript(
+                """
+                if (!window.__ripulRemoteClaudeAccountSwitch) return { ok: false, error: 'not ready' };
+                return await window.__ripulRemoteClaudeAccountSwitch(machineId, slug);
+                """,
+                arguments: ["machineId": machineId, "slug": slug],
+                contentWorld: .page
+            )
+            guard let dict = result as? [String: Any] else {
+                return ClaudeAccountSwitchInfo(ok: false, active: nil, recycledSessions: [], deferredBusySessions: [], error: "Unexpected result")
+            }
+            return ClaudeAccountSwitchInfo(
+                ok: dict["ok"] as? Bool ?? false,
+                active: dict["active"] as? String,
+                recycledSessions: dict["recycledSessions"] as? [String] ?? [],
+                deferredBusySessions: dict["deferredBusySessions"] as? [String] ?? [],
+                error: dict["error"] as? String
+            )
+        } catch {
+            handleConsoleLog("LOG: [AgentBridge] switchClaudeAccount(\(machineId)) error: \(error.localizedDescription)")
+            return ClaudeAccountSwitchInfo(ok: false, active: nil, recycledSessions: [], deferredBusySessions: [], error: error.localizedDescription)
+        }
+    }
+
+    /// Remove an account profile from the host (dir + manifest + best-effort Keychain entry). Deleting the ACTIVE profile switches the machine back to default first.
+    /// The default profile itself can't be deleted — the host refuses that.
+    @available(iOS 15.0, macOS 13.0, *)
+    public func deleteClaudeAccount(machineId: String, slug: String) async -> (ok: Bool, active: String?, error: String?) {
+        guard let webView else {
+            return (false, nil, "webView is nil")
+        }
+        do {
+            let result = try await webView.callAsyncJavaScript(
+                """
+                if (!window.__ripulRemoteClaudeAccountDelete) return { ok: false, error: 'not ready' };
+                return await window.__ripulRemoteClaudeAccountDelete(machineId, slug);
+                """,
+                arguments: ["machineId": machineId, "slug": slug],
+                contentWorld: .page
+            )
+            guard let dict = result as? [String: Any] else {
+                return (false, nil, "Unexpected result")
+            }
+            return (dict["ok"] as? Bool ?? false, dict["active"] as? String, dict["error"] as? String)
+        } catch {
+            handleConsoleLog("LOG: [AgentBridge] deleteClaudeAccount(\(machineId)) error: \(error.localizedDescription)")
+            return (false, nil, error.localizedDescription)
         }
     }
 
@@ -5368,6 +6895,106 @@ public final class AgentBridge: NSObject, ObservableObject {
         }
     }
 
+    // MARK: - Per-chat tool categories
+
+    /// A progressive-discovery tool category (a `tool_collections` row) with the
+    /// chat's on/off state. Off = the category's tools AND its collapsed stub are
+    /// hidden from that chat's tool list (web: `ChatTabDescriptor.disabledToolCategories`).
+    public struct ChatToolCategory: Identifiable, Equatable {
+        public var id: String { name }
+        public let name: String
+        public let label: String
+        public let description: String
+        /// Tools the category currently gathers from what this webview would offer
+        /// the chat — on the phone an approximation of the Mac host's view.
+        public let toolCount: Int
+        public var enabled: Bool
+    }
+
+    /// List the tool categories the chat's tools/list is built from, with their
+    /// per-chat switch state. Calls `window.__ripulGetChatToolCategories`.
+    @available(iOS 15.0, macOS 13.0, *)
+    public func getChatToolCategories(chatId: String) async -> [ChatToolCategory]? {
+        guard let webView else { return nil }
+        do {
+            let result = try await webView.callAsyncJavaScript(
+                """
+                if (!window.__ripulGetChatToolCategories) return { error: 'not ready' };
+                return await window.__ripulGetChatToolCategories(chatId);
+                """,
+                arguments: ["chatId": chatId],
+                contentWorld: .page
+            )
+            guard let dict = result as? [String: Any],
+                  let raw = dict["categories"] as? [[String: Any]] else { return nil }
+            return raw.compactMap { c in
+                guard let name = c["name"] as? String else { return nil }
+                return ChatToolCategory(
+                    name: name,
+                    label: (c["label"] as? String) ?? name,
+                    description: (c["description"] as? String) ?? "",
+                    toolCount: (c["toolCount"] as? Int) ?? 0,
+                    enabled: (c["enabled"] as? Bool) ?? true
+                )
+            }
+        } catch {
+            NSLog("[AgentBridge] getChatToolCategories error: %@", error.localizedDescription)
+            return nil
+        }
+    }
+
+    /// Persist the categories hidden from a chat. Whole-list write: pass every
+    /// disabled name; an empty list turns everything back on. The CLI bridge
+    /// re-lists tools each turn, so the change lands without a restart.
+    @available(iOS 15.0, macOS 13.0, *)
+    @discardableResult
+    public func setChatToolCategories(chatId: String, disabled: [String]) async -> Bool {
+        guard let webView else { return false }
+        do {
+            let result = try await webView.callAsyncJavaScript(
+                """
+                if (!window.__ripulSetChatToolCategories) return { success: false, error: 'not ready' };
+                return await window.__ripulSetChatToolCategories(chatId, { disabled: disabled });
+                """,
+                arguments: ["chatId": chatId, "disabled": disabled],
+                contentWorld: .page
+            )
+            let ok = ((result as? [String: Any])?["success"] as? Bool) ?? false
+            handleConsoleLog("LOG: [ToolCategories] native.setChatToolCategories chatId=\(chatId.suffix(12)) disabled=\(disabled) ok=\(ok)")
+            return ok
+        } catch {
+            NSLog("[AgentBridge] setChatToolCategories error: %@", error.localizedDescription)
+            return false
+        }
+    }
+
+    /// The chat's full tool inventory for the tool browser — see
+    /// `RipulToolInventory`. Calls `window.__ripulGetChatToolInventory`, which
+    /// runs one tools/list resolution, so treat it like a probe, not a poll.
+    @available(iOS 15.0, macOS 13.0, *)
+    public func getChatToolInventory(chatId: String) async -> RipulToolInventory? {
+        guard let webView else { return nil }
+        do {
+            let result = try await webView.callAsyncJavaScript(
+                """
+                if (!window.__ripulGetChatToolInventory) return { error: 'not ready' };
+                return await window.__ripulGetChatToolInventory(chatId);
+                """,
+                arguments: ["chatId": chatId],
+                contentWorld: .page
+            )
+            guard let dict = result as? [String: Any] else { return nil }
+            if let err = dict["error"] as? String, dict["categories"] == nil {
+                NSLog("[AgentBridge] getChatToolInventory: %@", err)
+                return nil
+            }
+            return RipulToolInventory.parse(dict)
+        } catch {
+            NSLog("[AgentBridge] getChatToolInventory error: %@", error.localizedDescription)
+            return nil
+        }
+    }
+
     /// Patch session metadata (description, notes, etc.) via the API.
     @available(iOS 15.0, macOS 13.0, *)
     public func patchSessionMetadata(sessionId: String, patch: [String: Any]) async -> SessionMetadata? {
@@ -5638,8 +7265,12 @@ public final class AgentBridge: NSObject, ObservableObject {
     }
 
     /// Create a new chat tab via direct JS call.
+    /// Create a new chat. `modelOverride` pins the new chat to a catalog model
+    /// at birth — a non-CLI id (e.g. "backend-claude-fable-5") creates a
+    /// regular web chat that runs through the LLM proxy instead of a CLI
+    /// session.
     @available(iOS 15.0, macOS 13.0, *)
-    public func createNewChat() async -> String? {
+    public func createNewChat(modelOverride: String? = nil) async -> String? {
         logSessionStartMarker("ios.bridge_createNewChat_enter", extra: "isConnected=\(isConnected)")
         guard let webView else {
             NSLog("[AgentBridge] createNewChat: webView is nil")
@@ -5647,15 +7278,29 @@ public final class AgentBridge: NSObject, ObservableObject {
             return nil
         }
 
+        // No explicit choice (Siri, the "+" button, ripul://new-session) →
+        // continue whatever the user was last working in. If that was a CLI
+        // session, this returns a real CLI session rather than an API chat;
+        // if the machine is unreachable it returns nil and we fall through to
+        // the API path below, which is what "no model specified" meant before.
+        if modelOverride == nil, let cliTabId = await resumeStickyCliSession() {
+            return cliTabId
+        }
+        let effectiveModel = modelOverride ?? stickyApiModelForNewChat()
+        if modelOverride == nil, let effectiveModel {
+            handleConsoleLog("LOG: [MODELSW] native.createNewChat sticky-default id=\(effectiveModel)")
+        }
+
         do {
             logSessionStartMarker("ios.bridge_js_call_start")
             let wdArgument: Any = pendingNewChatWorkingDirectory ?? NSNull()
+            let modelArgument: Any = effectiveModel ?? NSNull()
             let result = try await webView.callAsyncJavaScript(
                 """
                 if (!window.__ripulCreateChat) return {success:false, error:'not ready'};
-                return await window.__ripulCreateChat(workingDirectory);
+                return await window.__ripulCreateChat(workingDirectory, modelOverride ? { modelOverride } : null);
                 """,
-                arguments: ["workingDirectory": wdArgument],
+                arguments: ["workingDirectory": wdArgument, "modelOverride": modelArgument],
                 contentWorld: .page
             )
 
@@ -5668,6 +7313,10 @@ public final class AgentBridge: NSObject, ObservableObject {
                 return nil
             }
             NSLog("[AgentBridge] createNewChat: created %@", chatId)
+            // Creating a session FROM a picker is a deliberate choice too, so
+            // the next plain new session continues in it. Only on success —
+            // a model that failed to start is not a preference.
+            if let modelOverride { rememberModelPick(modelOverride) }
             // A brand-new chat has no agent turn — point the button projection
             // at it immediately (the sessions push that makes it resolvable in
             // `sessions` lags this call by hundreds of ms).
@@ -6404,6 +8053,37 @@ public final class AgentBridge: NSObject, ObservableObject {
         updateNativeHeaderHeight()
     }
 
+    /// Adopt the resolved voice settings from the web app's site key profile.
+    /// The SDK runs its own TTS/STT, so without this the web read-aloud would
+    /// honour the site key and native voice mode would ignore it.
+    private func handleVoiceConfig(_ message: [String: Any]) {
+        let profile = VoiceProfileConfig(
+            profileId: message["profileId"] as? String,
+            profileName: message["profileName"] as? String,
+            ttsProviderId: message["ttsProviderId"] as? String,
+            voiceId: message["voiceId"] as? String,
+            pace: (message["pace"] as? NSNumber)?.doubleValue,
+            expressiveness: (message["expressiveness"] as? NSNumber)?.doubleValue,
+            sttProviderId: message["sttProviderId"] as? String,
+            language: message["language"] as? String,
+            keyterms: message["keyterms"] as? [String] ?? [],
+            voiceEnabled: message["voiceEnabled"] as? Bool ?? true,
+            readAloudEnabled: message["readAloudEnabled"] as? Bool ?? true,
+            voiceModeEnabled: message["voiceModeEnabled"] as? Bool ?? true,
+            voiceModeStyle: message["voiceModeStyle"] as? String,
+            autoSpeakReplies: message["autoSpeakReplies"] as? Bool ?? false,
+            allowUserOverride: message["allowUserOverride"] as? Bool ?? true
+        )
+        guard profile != SpeechPreferences.activeProfile else { return }
+        SpeechPreferences.activeProfile = profile
+        voiceProfile = profile
+        handleConsoleLog(
+            "LOG: [Voice] profile=\(profile.profileName ?? profile.profileId ?? "(none)") "
+            + "locked=\(!profile.allowUserOverride) voice=\(profile.voiceId ?? "auto") "
+            + "lang=\(profile.language ?? "-")"
+        )
+    }
+
     /// Re-inject `--native-header-height` CSS variable to account for the masthead.
     private func updateNativeHeaderHeight() {
         guard let webView else { return }
@@ -6806,13 +8486,17 @@ public final class AgentBridge: NSObject, ObservableObject {
             let sizeBytes = (dict["sizeBytes"] as? NSNumber)?.intValue
             let displayNameSource = dict["displayNameSource"] as? String
             let displayNameRenamedAt = (dict["displayNameRenamedAt"] as? NSNumber)?.doubleValue
+            let projectName = dict["projectName"] as? String
+            let gitBranch = dict["gitBranch"] as? String
             return ChatSession(id: id, sourceChatId: sourceChatId, displayName: displayName, createdAt: createdAt,
                                remoteMachineName: remoteMachineName,
                                provider: provider, providerLabel: providerLabel,
                                hostChatId: hostChatId,
                                sizeBytes: sizeBytes,
                                displayNameSource: displayNameSource,
-                               displayNameRenamedAt: displayNameRenamedAt)
+                               displayNameRenamedAt: displayNameRenamedAt,
+                               projectName: projectName,
+                               gitBranch: gitBranch)
         }
 
         // Filter out ephemeral commit-viewer sessions (tracked explicitly
@@ -6829,6 +8513,12 @@ public final class AgentBridge: NSObject, ObservableObject {
             if self.sessions != filtered {
                 let oldByID = Dictionary(self.sessions.map { ($0.id, $0) }, uniquingKeysWith: { _, new in new })
                 let isInitialLoad = oldByID.isEmpty
+                // SKIP_AUTO and INITIAL_SYNC are the steady state for ~95 CLI
+                // sessions on every refresh — narrating each one produced 6.8k
+                // lines / 1.1MB a day and buried the signals that matter. Count
+                // them; only an actual rename earns its own line.
+                var skipAuto = 0
+                var initialSync = 0
                 for session in filtered {
                     // claude-cli only — see the matching gate in the
                     // sessions-changed path above.
@@ -6836,15 +8526,18 @@ public final class AgentBridge: NSObject, ObservableObject {
                         let source = session.displayNameSource ?? "user"
                         let isAuthoritative = source == "cli" || source == "user"
                         if !isAuthoritative {
-                            Self.debugLog("[AgentBridge] handleSessionsListResponse: SKIP_AUTO '\(session.displayName)' (sourceChatId=\(session.sourceChatId))")
+                            skipAuto += 1
                         } else if isInitialLoad {
-                            Self.debugLog("[AgentBridge] handleSessionsListResponse: INITIAL_SYNC '\(session.displayName)' src=\(source) (sourceChatId=\(session.sourceChatId))")
+                            initialSync += 1
                             self.onCliSessionRenamed?(session.sourceChatId, session.displayName, session.displayNameRenamedAt)
                         } else if let old = oldByID[session.id], old.displayName != session.displayName {
                             Self.debugLog("[AgentBridge] handleSessionsListResponse: CLI rename detected '\(old.displayName)' → '\(session.displayName)' src=\(source) (sourceChatId=\(session.sourceChatId))")
                             self.onCliSessionRenamed?(session.sourceChatId, session.displayName, session.displayNameRenamedAt)
                         }
                     }
+                }
+                if initialSync > 0 {
+                    Self.debugLog("[AgentBridge] handleSessionsListResponse: initialSync=\(initialSync) skipAuto=\(skipAuto)")
                 }
             }
             self.sessions = filtered

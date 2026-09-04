@@ -31,8 +31,65 @@ public final class SessionListStore: ObservableObject {
     /// sole `objectWillChange`.)
     public let objectWillChange = ObservableObjectPublisher()
 
-    @inline(__always) private func notify() {
-        if !updatesSuppressed { objectWillChange.send() }
+    /// Coalesced SwiftUI invalidation. During a run, activity events land many
+    /// times per second (the web's thinking forward is throttled to ~4 Hz, but
+    /// tool start/end and relayed events are not, and one event often writes
+    /// two maps here), and every `objectWillChange` re-runs the body of EVERY
+    /// screen observing this store — sessions list, Files recents, todo
+    /// lozenge, plans. Visible symptom: a presented context menu flickering
+    /// for the whole length of a turn; invisible one: sustained re-render heat
+    /// on screens full of glass materials. Nothing in these maps changes
+    /// meaning faster than a human reads a subtitle, so one send per window is
+    /// enough. The first write of a burst sends immediately (subtitle still
+    /// appears promptly); writes inside the window ride a single trailing
+    /// flush, so the final state always renders.
+    private static let notifyCoalesceInterval: TimeInterval = 0.25
+    private var lastNotifySentAt: Date = .distantPast
+    private var notifyFlushScheduled = false
+
+    private func notify() {
+        guard !updatesSuppressed else { return }
+        let now = Date()
+        let elapsed = now.timeIntervalSince(lastNotifySentAt)
+        if elapsed >= Self.notifyCoalesceInterval {
+            lastNotifySentAt = now
+            objectWillChange.send()
+            return
+        }
+        guard !notifyFlushScheduled else { return }
+        notifyFlushScheduled = true
+        let delay = Self.notifyCoalesceInterval - elapsed
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(max(0, delay) * 1_000_000_000))
+            guard let self else { return }
+            self.notifyFlushScheduled = false
+            guard !self.updatesSuppressed else { return }
+            self.lastNotifySentAt = Date()
+            self.objectWillChange.send()
+        }
+    }
+
+    /// Chats whose last agent turn has not been looked at.
+    ///
+    /// Distinct from the turn phase, which the row's "hand" reads. A session
+    /// can be awaiting input AND already read — you opened it, saw the reply,
+    /// and left without answering. Phase says what the agent is doing; this
+    /// says whether YOU have seen it. Conflating them is what made the row's
+    /// only unread-ish signal a lie.
+    ///
+    /// Ids arrive in both CLI forms (`cli_<uuid>` and the bare uuid), so
+    /// membership is tested through `isUnread(anyOf:)` rather than directly.
+    public var unreadChatIds: Set<String> = [] { willSet { notify() } }
+
+    /// True when any of the supplied aliases for one session is unread.
+    public func isUnread(anyOf keys: [String?]) -> Bool {
+        guard !unreadChatIds.isEmpty else { return false }
+        for case let key? in keys where !key.isEmpty {
+            if unreadChatIds.contains(key) { return true }
+            if key.hasPrefix("cli_"), unreadChatIds.contains(String(key.dropFirst(4))) { return true }
+            if unreadChatIds.contains("cli_\(key)") { return true }
+        }
+        return false
     }
 
     /// Per-chat latest activity event (session-list subtitle while running).

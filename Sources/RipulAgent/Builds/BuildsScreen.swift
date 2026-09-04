@@ -70,7 +70,7 @@ public struct RipulBuildsScreen: View {
                 pendingInstall = nil
             }
         } message: {
-            Text(installWarning(for: pendingInstall))
+            Text(pendingInstall.map { store.installWarning(for: $0) } ?? "")
         }
     }
 
@@ -111,6 +111,16 @@ public struct RipulBuildsScreen: View {
             LabeledContent("Status") {
                 Label("Build \(build.build) available", systemImage: "arrow.down.circle.fill")
                     .foregroundStyle(.orange)
+            }
+            // The whole point of the status check is acting on it — make the
+            // newest build installable from here, not just from its row in the
+            // channel list below. Same confirmation alert as the row button.
+            if RipulBuildInstaller.canInstall {
+                Button {
+                    pendingInstall = build
+                } label: {
+                    Label("Install build \(build.build)", systemImage: "arrow.down.circle")
+                }
             }
         }
     }
@@ -189,21 +199,6 @@ public struct RipulBuildsScreen: View {
             && build.build == RipulBuildFeedStore.runningBuild
     }
 
-    private func installWarning(for build: RipulBuild?) -> String {
-        guard let build else { return "" }
-        let channel = store.feed?.channels.first { $0.builds.contains(build) }
-        let replaces = channel.map { store.installReplacesRunningApp($0) } ?? false
-        var lines: [String] = []
-        if replaces {
-            lines.append("This replaces the app you're using now, and iOS will close it to do so.")
-        } else if let channel {
-            lines.append("This installs as a separate app (\(channel.bundleId)) alongside this one.")
-        }
-        // The constraint Ripul hosting does not remove: the build is
-        // development-signed, so Apple still gates which devices may run it.
-        lines.append("Development-signed: your device must be registered on the developer account, and you may need to trust the developer in Settings afterwards.")
-        return lines.joined(separator: "\n\n")
-    }
 }
 
 /// Liquid Glass on iOS 26+, bordered elsewhere.

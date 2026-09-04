@@ -1,5 +1,8 @@
 import Foundation
 import Combine
+#if os(iOS)
+import UIKit
+#endif
 
 // ---------------------------------------------------------------------------
 // RipulBuildFeedStore — load state + "am I on the latest build?"
@@ -39,6 +42,9 @@ public final class RipulBuildFeedStore: ObservableObject {
     private let source: RipulBuildFeedSource
     private let baseURL: URL
     private let tokenProvider: () -> String?
+    private var refreshTimer: Timer?
+    private var lifecycleObservers: [NSObjectProtocol] = []
+    private var autoRefreshStarted = false
 
     /// - Parameter tokenProvider: called per fetch, so a token refreshed after
     ///   init is picked up without rebuilding the store.
@@ -48,14 +54,92 @@ public final class RipulBuildFeedStore: ObservableObject {
     ///   only ever a relay *controller* has none. Hosts that sign in with Clerk
     ///   should pass that token instead (falling back to the machine token),
     ///   or every feed read 401s.
+    ///
+    /// - Parameter autoRefresh: poll the feed on a timer and on foreground
+    ///   instead of waiting for a view to drive it. A screen you navigate to can
+    ///   fetch in `.task`; a banner that renders NOTHING until an update exists
+    ///   cannot — SwiftUI runs no lifecycle for a view that resolves to
+    ///   `EmptyView`, so the check that decides whether to show it has to be
+    ///   owned here.
     public init(
         source: RipulBuildFeedSource,
         baseURL: URL = AgentConfiguration.defaultBaseURL,
-        tokenProvider: @escaping () -> String? = { MachineTokenStore.token }
+        tokenProvider: @escaping () -> String? = { MachineTokenStore.token },
+        autoRefresh: Bool = false
     ) {
         self.source = source
         self.baseURL = baseURL
         self.tokenProvider = tokenProvider
+        if autoRefresh { startAutoRefresh() }
+    }
+
+    deinit {
+        refreshTimer?.invalidate()
+        lifecycleObservers.forEach(NotificationCenter.default.removeObserver)
+    }
+
+    // MARK: - Auto refresh
+
+    /// Refresh now, then every `interval`, and again whenever the app returns to
+    /// the foreground.
+    ///
+    /// The timer is torn down on background: a build check is a UI-freshness aid
+    /// and has no business keeping the radio warm behind a locked screen. The
+    /// foreground observer is what makes "publish from the Mac, pick the phone
+    /// up" work without a relaunch.
+    public func startAutoRefresh(interval: TimeInterval = 300) {
+        // Guarded on its own flag, not on `refreshTimer`: the timer is nil for
+        // the whole time the app is backgrounded, so using it as the "already
+        // started" test would stack a second set of observers on the next call.
+        guard !autoRefreshStarted else { return }
+        autoRefreshStarted = true
+        Task { await loadFirstFeed() }
+        startTimer(interval: interval)
+        #if os(iOS)
+        lifecycleObservers.append(NotificationCenter.default.addObserver(
+            forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.stopTimer() }
+        })
+        lifecycleObservers.append(NotificationCenter.default.addObserver(
+            forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                await self.refresh()
+                self.startTimer(interval: interval)
+            }
+        })
+        #endif
+    }
+
+    /// Retry the FIRST load quickly, then leave it to the timer.
+    ///
+    /// A single shot at startup loses a race it will usually lose: the token
+    /// provider reads a Clerk session that may not have landed yet, and a
+    /// credential-less fetch is refused outright. Backing off to the 5-minute
+    /// timer after that means a device that had an update waiting says nothing
+    /// for five minutes — indistinguishable from being up to date.
+    private func loadFirstFeed(attempts: Int = 6, spacing: TimeInterval = 10) async {
+        for attempt in 1...attempts {
+            await refresh()
+            if feed != nil { return }
+            guard attempt < attempts else { break }
+            try? await Task.sleep(nanoseconds: UInt64(spacing * 1_000_000_000))
+        }
+        RipulLog.log("[Builds] first feed load gave up after \(attempts) attempts — the timer takes over")
+    }
+
+    private func startTimer(interval: TimeInterval) {
+        refreshTimer?.invalidate()
+        refreshTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in await self?.refresh() }
+        }
+    }
+
+    private func stopTimer() {
+        refreshTimer?.invalidate()
+        refreshTimer = nil
     }
 
     // MARK: - Running build identity
@@ -143,6 +227,28 @@ public final class RipulBuildFeedStore: ObservableObject {
             return .unknown
         }
         return latest > running ? .updateAvailable(newest) : .upToDate
+    }
+
+    // MARK: - Install confirmation
+
+    /// What the user needs to know before tapping Install.
+    ///
+    /// Lives on the store rather than in a screen because more than one surface
+    /// offers the install — the Builds list and the update banner — and a
+    /// warning that differs between two buttons doing the same thing is worse
+    /// than no warning.
+    public func installWarning(for build: RipulBuild) -> String {
+        let channel = feed?.channels.first { $0.builds.contains(build) }
+        var lines: [String] = []
+        if let channel, installReplacesRunningApp(channel) {
+            lines.append("This replaces the app you're using now, and iOS will close it to do so.")
+        } else if let channel {
+            lines.append("This installs as a separate app (\(channel.bundleId)) alongside this one.")
+        }
+        // The constraint Ripul hosting does not remove: the build is
+        // development-signed, so Apple still gates which devices may run it.
+        lines.append("Development-signed: your device must be registered on the developer account, and you may need to trust the developer in Settings afterwards.")
+        return lines.joined(separator: "\n\n")
     }
 
     private func logStatus() {

@@ -77,12 +77,29 @@ public enum SessionModelSelectionCache {
     /// The cache key both platforms' pickers write.
     public static let key = "ripulSessionModelIds"
 
+    /// The whole picker map, read once.
+    ///
+    /// For callers that resolve a pick for MANY sessions in a row. The
+    /// convenience overload below re-reads the key on every call, and
+    /// `UserDefaults.dictionary(forKey:)` is not a pointer hand-off — it bridges
+    /// the plist into a fresh Swift dictionary each time. A session-list rebuild
+    /// resolves a pick for every row, so that was one full read per row, per
+    /// rebuild, on the main actor. Read the map once and use `modelId(map:)`.
+    public static func loadMap(cache: RipulSessionCache) -> [String: String] {
+        (cache.dictionary(forKey: key) as? [String: String]) ?? [:]
+    }
+
     /// The cached catalog model id for a session being (re)opened, trying every
     /// known alias: the live tab id, the row id, and all matchKeys — each with
     /// and without the `cli_` prefix (ChatSession ids carry it, bare CLI uuids
     /// don't).
     public static func modelId(cache: RipulSessionCache, session: UnifiedSession, liveTabId: String?) -> String? {
-        guard let map = cache.dictionary(forKey: key) as? [String: String], !map.isEmpty else { return nil }
+        modelId(map: loadMap(cache: cache), session: session, liveTabId: liveTabId)
+    }
+
+    /// As above, against a map the caller already holds.
+    public static func modelId(map: [String: String], session: UnifiedSession, liveTabId: String?) -> String? {
+        guard !map.isEmpty else { return nil }
         var keys: [String] = []
         if let liveTabId { keys.append(liveTabId) }
         keys.append(session.id)

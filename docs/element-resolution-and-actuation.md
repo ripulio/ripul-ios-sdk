@@ -375,10 +375,10 @@ run until they match what was just installed.
 
 ## 5. Where we are, and the path to 100%
 
-Current (0.7.70): **12/15** — eleven archetypes plus the four anchor rows,
-every pass confirmed by the app's own handler firing. The count went UP by a
-failing row on purpose: the plain-`.accessibilityIdentifier` Button added in
-0.7.70 turned an assumption into a visible red row (see (a-bis)).
+Current (0.7.72): **13/15** — eleven archetypes plus the four anchor rows,
+every pass confirmed by the app's own handler firing. The plain-
+`.accessibilityIdentifier` Button added in 0.7.70 as a deliberate red row is
+now green, and (a-bis) below is closed.
 
 | Archetype | Status |
 |---|---|
@@ -391,7 +391,7 @@ failing row on purpose: the plain-`.accessibilityIdentifier` Button added in
 | Nested-island button | pass — readout pessimistic (a11y candidates are try-and-see) |
 | All four anchor rows | pass — locality, exception gating, replay-after-move, stale-point proof |
 | SwiftUI `Button` | **fail — honestly now**: the pick lands on the 17pt stamp, whose island publishes one element belonging to a *different* island 166pt away, so nothing is level with the point — see (a) |
-| SwiftUI `Button` (plain `.accessibilityIdentifier`) | **fail — not even findable by id**, though findable by text. See (a-bis): this one is a *lookup* gap, not an actuation one |
+| SwiftUI `Button` (plain `.accessibilityIdentifier`) | **pass** — `accessibilityElement(point)`, handler fired. Fixed by the containment rung, (a-bis) |
 | SwiftUI `onTapGesture` | **platform limit** — now declines instead of falsely succeeding |
 
 ### The three open problems
@@ -437,8 +437,33 @@ This is worse than (a) in blast radius, because it is a **lookup** gap, not a
 point-resolution one: `tap_element id=…`, `wait_for_element id=…` and macro
 replay by id all fail for any control identified the plain SwiftUI way — which
 is what a client app that never imported our stamp modifier will naturally
-write. The fix is to match a view's published accessibility elements'
-identifiers as a rung of `find(id:)`, resolving back to the host view.
+write.
+
+**FIXED in 0.7.72.** `find(id:)` gained a containment rung: does this island
+*publish* an element carrying the id? The row now passes via
+`accessibilityElement(point)` with the app's own handler firing. `Match` carries
+the element's frame (`effectiveFrame`) so spatial consumers aim at the control
+rather than at its island — reporting a 440×894 rectangle for a 44pt control
+would have re-created the 0.7.67 misfire inside the fix for a different bug.
+
+**The shape of the rung matters more than the rung.** Shipped inline alongside
+the view rungs (0.7.71) it regressed the sweep 12/15 → 8/15: published elements
+carried blanket top specificity so they outranked the correct, tighter *view*
+match, and ascending-area ranking sorted ZERO-area elements first. Three UIKit
+rows that had passed reported `not-on-screen`, and the split control
+re-resolved to the whole screen `(0,0 440×956)`.
+
+That last one is the instructive part: `Anchor: stale screen point would miss`
+failed by reporting *both* points inside the target, which reads exactly like
+the anchor logic breaking. It hadn't — a whole-screen frame makes every point
+"inside", so a **lookup** bug wore an **anchor** bug's clothing. Corroboration
+of §3's rule that a number moving the wrong way does not tell you which thing
+moved.
+
+0.7.72 makes it a strict fallback — consulted only when the view planes found
+nothing, and refusing a degenerate frame. **A rung that adds reach must never
+be able to outrank a correct answer**: the same lesson as path 2d's locality
+requirement, in a different plane.
 
 **(b) `onTapGesture` is a genuine platform limit.** SwiftUI registers no
 accessibility action for a bare `onTapGesture` and attaches the recognizer to a

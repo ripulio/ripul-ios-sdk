@@ -13,12 +13,14 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/gonzalezreal/swift-markdown-ui.git", from: "2.4.1"),
+        .package(url: "https://github.com/ripulio/thinking-orbs-swift.git", from: "0.1.0"),
     ],
     targets: [
         .target(
             name: "RipulAgent",
             dependencies: [
                 .product(name: "MarkdownUI", package: "swift-markdown-ui"),
+                .product(name: "ThinkingOrbs", package: "thinking-orbs-swift"),
             ],
             resources: [
                 .process("Resources/providers.json"),

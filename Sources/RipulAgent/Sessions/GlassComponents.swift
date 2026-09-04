@@ -13,12 +13,17 @@ import SwiftUI
 /// On iOS 26+ renders with `.glassEffect`; on older versions uses
 /// `.ultraThinMaterial` with a rounded rect. Works on all iOS versions
 /// so call sites don't need `if #available` branching.
-public struct GlassSectionPanel<Content: View, Trailing: View, Center: View>: View {
+public struct GlassSectionPanel<Content: View, Trailing: View, Center: View, CollapsedAccessory: View>: View {
     let title: String
     var subtitle: String? = nil
     @Binding var isExpanded: Bool
     let center: Center
     let trailing: Trailing
+    /// Rendered on its own row beneath the header while COLLAPSED. Use this for
+    /// controls that are too wide or too numerous to sit in `trailing` without
+    /// squeezing the title — it sits outside the header's tap target, so
+    /// tapping it doesn't toggle the panel.
+    let collapsedAccessory: CollapsedAccessory
     let content: Content
 
     public init(
@@ -27,6 +32,7 @@ public struct GlassSectionPanel<Content: View, Trailing: View, Center: View>: Vi
         isExpanded: Binding<Bool>,
         @ViewBuilder center: () -> Center = { EmptyView() },
         @ViewBuilder trailing: () -> Trailing = { EmptyView() },
+        @ViewBuilder collapsedAccessory: () -> CollapsedAccessory = { EmptyView() },
         @ViewBuilder content: () -> Content
     ) {
         self.title = title
@@ -34,6 +40,7 @@ public struct GlassSectionPanel<Content: View, Trailing: View, Center: View>: Vi
         self._isExpanded = isExpanded
         self.center = center()
         self.trailing = trailing()
+        self.collapsedAccessory = collapsedAccessory()
         self.content = content()
     }
 
@@ -69,6 +76,10 @@ public struct GlassSectionPanel<Content: View, Trailing: View, Center: View>: Vi
                 UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
                 #endif
                 withAnimation(.easeInOut(duration: 0.2)) { isExpanded.toggle() }
+            }
+
+            if !isExpanded {
+                collapsedAccessory
             }
 
             if isExpanded {
@@ -217,6 +228,14 @@ public struct GlassListSection<Data: RandomAccessCollection, ID: Hashable, RowCo
     var scrollable: Bool = false
     var maxVisibleItems: Int? = nil
     var onRefresh: (() async -> Void)? = nil
+    /// Supplying this turns on drag-to-reorder. Offsets are into `data` as
+    /// given, so a caller that filters or searches its collection must either
+    /// pass `nil` while a query is active or map the offsets back itself.
+    var onMove: ((IndexSet, Int) -> Void)? = nil
+    /// Per-row veto for reordering — rows answering `true` won't lift. Lets a
+    /// partly-reorderable list (a pinned prefix followed by a read-only tail)
+    /// refuse the drag up front rather than animating it and snapping back.
+    var moveDisabled: ((Data.Element) -> Bool)? = nil
     let trailing: Trailing
     let rowContent: (Data.Element) -> RowContent
 
@@ -234,6 +253,8 @@ public struct GlassListSection<Data: RandomAccessCollection, ID: Hashable, RowCo
         scrollable: Bool = false,
         maxVisibleItems: Int? = nil,
         onRefresh: (() async -> Void)? = nil,
+        onMove: ((IndexSet, Int) -> Void)? = nil,
+        moveDisabled: ((Data.Element) -> Bool)? = nil,
         @ViewBuilder trailing: () -> Trailing = { EmptyView() },
         @ViewBuilder row: @escaping (Data.Element) -> RowContent
     ) {
@@ -247,6 +268,8 @@ public struct GlassListSection<Data: RandomAccessCollection, ID: Hashable, RowCo
         self.scrollable = scrollable
         self.maxVisibleItems = maxVisibleItems
         self.onRefresh = onRefresh
+        self.onMove = onMove
+        self.moveDisabled = moveDisabled
         self.trailing = trailing()
         self.rowContent = row
     }
@@ -267,6 +290,10 @@ public struct GlassListSection<Data: RandomAccessCollection, ID: Hashable, RowCo
 
             let items = Array(data)
             let list = List {
+                // `onMove` is attached unconditionally so the ForEach keeps one
+                // concrete type (wrapping it in _ConditionalContent stops List
+                // recognising it as reorderable). Sections that didn't ask for
+                // reordering disable every row instead, which is inert.
                 ForEach(items, id: id) { item in
                     rowContent(item)
                         .padding(.horizontal, 16)
@@ -275,7 +302,9 @@ public struct GlassListSection<Data: RandomAccessCollection, ID: Hashable, RowCo
                         .listRowSeparator(.visible)
                         .alignmentGuide(.listRowSeparatorLeading) { _ in 44 }
                         .listRowBackground(Color.clear)
+                        .moveDisabled(onMove == nil || moveDisabled?(item) == true)
                 }
+                .onMove { offsets, destination in onMove?(offsets, destination) }
             }
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
@@ -321,10 +350,12 @@ public extension GlassListSection where ID == Data.Element.ID, Data.Element: Ide
         scrollable: Bool = false,
         maxVisibleItems: Int? = nil,
         onRefresh: (() async -> Void)? = nil,
+        onMove: ((IndexSet, Int) -> Void)? = nil,
+        moveDisabled: ((Data.Element) -> Bool)? = nil,
         @ViewBuilder trailing: () -> Trailing = { EmptyView() },
         @ViewBuilder row: @escaping (Data.Element) -> RowContent
     ) {
-        self.init(title: title, subtitle: subtitle, isExpanded: isExpanded, data: data, id: \.id, searchPlaceholder: searchPlaceholder, searchText: searchText, scrollable: scrollable, maxVisibleItems: maxVisibleItems, onRefresh: onRefresh, trailing: trailing, row: row)
+        self.init(title: title, subtitle: subtitle, isExpanded: isExpanded, data: data, id: \.id, searchPlaceholder: searchPlaceholder, searchText: searchText, scrollable: scrollable, maxVisibleItems: maxVisibleItems, onRefresh: onRefresh, onMove: onMove, moveDisabled: moveDisabled, trailing: trailing, row: row)
     }
 }
 

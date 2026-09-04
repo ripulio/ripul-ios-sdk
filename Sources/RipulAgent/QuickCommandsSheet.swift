@@ -21,6 +21,22 @@ public struct QuickCommandsSheet: View {
         self.debugMode = debugMode
     }
 
+    /// Plans resolve against the active chat's machine and working directory,
+    /// so without a chat there is nothing to look in.
+    @available(iOS 17.0, macOS 14.0, *)
+    @ViewBuilder
+    private var planReviewDestination: some View {
+        if let chatId = bridge.currentSourceChatId {
+            PlanReviewScreen(bridge: bridge.planReviewBridge(), chatId: chatId)
+        } else {
+            ContentUnavailableView(
+                "No active chat",
+                systemImage: "bubble.left.and.exclamationmark.bubble.right",
+                description: Text("Plans are read from the working directory of the chat you're in. Open a session first.")
+            )
+        }
+    }
+
     private var filteredCommands: [SlashCommandInfo] {
         if searchText.isEmpty { return commands }
         let query = searchText.lowercased()
@@ -36,25 +52,40 @@ public struct QuickCommandsSheet: View {
                 if isLoading {
                     ProgressView()
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if commands.isEmpty && !debugMode {
-                    if #available(iOS 17.0, macOS 14.0, *) {
-                        ContentUnavailableView {
-                            Label("No Commands", systemImage: "bolt.slash")
-                        } description: {
-                            Text("No slash commands available.")
-                        }
-                    } else {
-                        VStack(spacing: 8) {
-                            Image(systemName: "bolt.slash")
-                                .font(.largeTitle)
-                                .foregroundStyle(.secondary)
-                            Text("No slash commands available.")
-                                .foregroundStyle(.secondary)
-                        }
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    }
                 } else {
                     List {
+                        if #available(iOS 17.0, macOS 14.0, *) {
+                            Section("Plans") {
+                                NavigationLink {
+                                    planReviewDestination
+                                } label: {
+                                    HStack(spacing: 12) {
+                                        Image(systemName: "checklist")
+                                            .font(.system(size: 16))
+                                            .foregroundStyle(.tint)
+                                            .frame(width: 28)
+                                        VStack(alignment: .leading, spacing: 3) {
+                                            Text("Plan review")
+                                                .font(.body)
+                                                .fontWeight(.medium)
+                                            Text("Comments, tasks and lock state for this repo's plans")
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                        }
+                                    }
+                                    .padding(.vertical, 4)
+                                }
+                                .uiKitIdentifier("QuickCommandsSheet.planReviewLink")
+                            }
+                        }
+
+                        if commands.isEmpty && !debugMode {
+                            Section("Commands") {
+                                Label("No slash commands available.", systemImage: "bolt.slash")
+                                    .foregroundStyle(.secondary)
+                                    .font(.callout)
+                            }
+                        }
                         // Native debug tools (only in /rr. menu)
                         if debugMode {
                             Section("Native") {

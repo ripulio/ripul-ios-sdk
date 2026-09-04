@@ -15,6 +15,13 @@ import SwiftUI
 /// scratchpad is design-time only, so it never shows. Deep-link (?view=)
 /// handling is a web-routing concern and doesn't apply; instead the user's
 /// last-picked view persists per block instance.
+///
+/// The web block's styling props (size, alignment, radius, item gap, label
+/// typography, per-state colours) are deliberately NOT ported: they describe
+/// how to draw chips and tabs, and reproducing them here would be re-skinning
+/// the web look over a system control. `activeColor` is the exception — it
+/// carries the author's brand accent, and SwiftUI takes it first-class as a
+/// tint without changing what the control is.
 struct CmsGridViewSwitcherBlockView: View {
     let block: CmsBlock
     @EnvironmentObject var runtime: CmsRuntime
@@ -25,6 +32,11 @@ struct CmsGridViewSwitcherBlockView: View {
     /// When on, a view may re-bind the target grid's READ query to its own
     /// `querySlug` (web parity: the toggle gates the per-view query re-bind).
     private var switchesQuery: Bool { block.props.bool("switchesQuery") ?? false }
+    /// The author's selected colour, tinting the segmented control's selection.
+    /// Blank falls through to the app tint rather than forcing a theme colour.
+    private var accentTint: Color? {
+        runtime.color(block.props.string("activeColor"))
+    }
 
     private struct GridView: Identifiable {
         var id: String
@@ -66,6 +78,7 @@ struct CmsGridViewSwitcherBlockView: View {
                     .pickerStyle(.segmented)
                     .fixedSize()
                     .padding(.vertical, 2)
+                    .tint(accentTint)
                     .cmsInspectorID("Cms.gridViewSwitcher.picker")
                 }
             }

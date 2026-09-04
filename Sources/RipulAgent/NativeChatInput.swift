@@ -94,6 +94,115 @@ public struct ParticipantSuggestion: Identifiable {
     }
 }
 
+/// A branch suggestion for the @ picker — a git branch of the chat's repo.
+/// `token` is the serialised `[context: …]` chip text; the composer displays it
+/// as a readable alias (see `ContextMentionAliasing`) and swaps the token back
+/// in at submit, where the web path resolves it to live branch facts (sha,
+/// upstream, ahead/behind, checked-out state).
+public struct BranchSuggestion: Identifiable {
+    public let id: String
+    public let name: String
+    public let description: String?
+    public let remote: Bool
+    public let token: String
+
+    public init(id: String, name: String, description: String? = nil, remote: Bool = false, token: String) {
+        self.id = id
+        self.name = name
+        self.description = description
+        self.remote = remote
+        self.token = token
+    }
+}
+
+/// Context mentions serialise to `[context: provider.id/<ref> | Label]`, where
+/// the ref is a base64url payload that routinely runs past 150 characters. The
+/// web composer never shows it — Tiptap renders the mention as a chip node and
+/// only serialises the token on the way out. A UITextView/TextField has no chip,
+/// so the native composer keeps the readable half (`@origin/main`) in the field
+/// and swaps the token back in at submit. The string that reaches the web send
+/// path is identical either way.
+enum ContextMentionAliasing {
+    /// Mirrors CONTEXT_TOKEN_RE in
+    /// chrome-extension/src/context-providers/resolveContextRefs.ts.
+    private static let tokenPattern = try? NSRegularExpression(
+        pattern: #"\[context:\s*([A-Za-z0-9_.]+)/([A-Za-z0-9_-]+)(?:\s*\|\s*([^\]]*?))?\s*\]"#
+    )
+
+    /// Cheap pre-check so the common keystroke path never touches the regex.
+    private static let marker = "[context:"
+
+    /// The composer-visible form of a mention.
+    static func alias(for label: String) -> String { "@" + label }
+
+    /// Replace every labelled token in `text` with its alias, recording the
+    /// mapping so `expand` can reverse it. Covers tokens that arrive already
+    /// serialised — history recall, a restored draft, a paste — not just picks.
+    /// Unlabelled tokens are left alone: there is nothing readable to show.
+    static func collapse(_ text: String, into aliases: inout [String: String]) -> String {
+        guard let tokenPattern, text.contains(marker) else { return text }
+        let ns = text as NSString
+        let matches = tokenPattern.matches(in: text, range: NSRange(location: 0, length: ns.length))
+        guard !matches.isEmpty else { return text }
+        let out = NSMutableString(string: text)
+        // Back to front, so an earlier match's range stays valid as we splice.
+        for match in matches.reversed() {
+            let labelRange = match.range(at: 3)
+            guard labelRange.location != NSNotFound else { continue }
+            let label = ns.substring(with: labelRange).trimmingCharacters(in: .whitespaces)
+            guard !label.isEmpty else { continue }
+            let aliasText = alias(for: label)
+            aliases[aliasText] = ns.substring(with: match.range)
+            out.replaceCharacters(in: match.range, with: aliasText)
+        }
+        return out as String
+    }
+
+    /// Swap each recorded alias back to its token. An alias the user has edited
+    /// away simply doesn't match and the mention drops — the same outcome as
+    /// deleting the chip on web.
+    static func expand(_ text: String, using aliases: [String: String]) -> String {
+        guard !aliases.isEmpty else { return text }
+        var out = text
+        // Longest first, so a label that prefixes another can't claim its text.
+        for aliasText in aliases.keys.sorted(by: { $0.count > $1.count }) {
+            guard let token = aliases[aliasText] else { continue }
+            out = out.replacingOccurrences(of: aliasText, with: token)
+        }
+        return out
+    }
+}
+
+/// A toggleable class of @ suggestions. Keys match the web composer's
+/// atMenuClassToggles so a user's preference has the same shape on both
+/// surfaces (values do not sync across devices; absent = on, as on web).
+private struct AtClassToggleSpec: Identifiable {
+    let key: String
+    let label: String
+    let icon: String
+    var id: String { key }
+
+    static let all: [AtClassToggleSpec] = [
+        AtClassToggleSpec(key: "people", label: "People", icon: "person.fill"),
+        AtClassToggleSpec(key: "repo", label: "Branches", icon: "arrow.triangle.branch"),
+        AtClassToggleSpec(key: "files", label: "Files", icon: "doc.text.fill"),
+    ]
+}
+
+private enum AtClassToggles {
+    static let defaultsKey = "atMenuClassToggles"
+
+    static func isHidden(_ key: String) -> Bool {
+        UserDefaults.standard.dictionary(forKey: defaultsKey)?[key] as? Bool == false
+    }
+
+    static func setHidden(_ key: String, _ hidden: Bool) {
+        var dict = UserDefaults.standard.dictionary(forKey: defaultsKey) ?? [:]
+        dict[key] = !hidden
+        UserDefaults.standard.set(dict, forKey: defaultsKey)
+    }
+}
+
 // MARK: - Cross-platform Chat Input
 
 /// A floating chat input that uses Liquid Glass on iOS 26+ and ultraThinMaterial elsewhere.
@@ -134,6 +243,10 @@ public struct NativeChatInput: View {
     /// Optional callback to fetch chat participant suggestions (agents + humans).
     /// When provided, the `@` category overlay shows a "People" row that lists them.
     var onQueryParticipants: (() async -> [ParticipantSuggestion])?
+    /// Optional callback to fetch repo branch suggestions (the chat's repo).
+    /// When provided, the `@` overlay shows a "Branches" section; picking one
+    /// inserts its `[context: …]` token, resolved to live branch facts at send.
+    var onQueryBranches: ((String) async -> [BranchSuggestion])?
     /// Structured participant IDs picked since the last send. Cleared on submit
     /// by the parent so a new turn starts empty. Drives `addressedTo` routing.
     @Binding var addressedParticipants: [String]
@@ -147,6 +260,20 @@ public struct NativeChatInput: View {
     /// Submits a slash command message ("/cmd" or "/cmd option") picked from
     /// the slash menu. The menu clears the input text before calling.
     var onSubmitSlashCommand: ((String) -> Void)?
+    /// Speech provider for mic dictation. Typed `Any?` because the speech
+    /// layer is @available(iOS 26+) while the SDK floor is 17 — stored
+    /// properties can't carry availability, so it's unlocked via #available
+    /// casts. Pass `(any NativeSpeechProviding)?`; nil hides the mic button.
+    var speechProvider: Any?
+    /// Mic tap enters hands-free voice mode; double-tap toggles
+    /// dictation-into-composer; long-press seeds voice mode with the
+    /// composer text as the first spoken utterance (testing voice mode
+    /// without speaking). The Bool is that seed flag; the return says
+    /// whether voice mode actually started — on refusal (voice profile off)
+    /// the mic falls back to dictation. Nil = dictation only.
+    var onEnterVoiceMode: ((Bool) -> Bool)?
+    @State private var isDictating = false
+    @State private var dictationBase = ""
     @State private var showPhotoPicker = false
     @State private var showCamera = false
     @State private var textHeight: CGFloat = 36
@@ -160,6 +287,10 @@ public struct NativeChatInput: View {
     @State private var elementSuggestions: [ElementSuggestion] = []
     @State private var allParticipantSuggestions: [ParticipantSuggestion] = []
     @State private var participantSuggestions: [ParticipantSuggestion] = []
+    @State private var branchSuggestions: [BranchSuggestion] = []
+    @State private var allBranchSuggestions: [BranchSuggestion] = []
+    /// Classes hidden via the toggle chips (persisted in UserDefaults).
+    @State private var hiddenClasses: Set<String> = Set(AtClassToggleSpec.all.filter { AtClassToggles.isHidden($0.key) }.map(\.key))
     @State private var showHistorySheet = false
     @State private var showTodoPicker = false
     @State private var glowPhase: Bool = false
@@ -168,6 +299,8 @@ public struct NativeChatInput: View {
     @State private var slashCommands: [SlashCommandInfo] = []
     @State private var slashCommandsLoaded = false
     @State private var slashDrillCommand: SlashCommandInfo?
+    /// Composer-visible alias → the `[context: …]` token it stands in for.
+    @State private var contextAliases: [String: String] = [:]
 
     private var isTwoRow: Bool { chatInputLayout == "twoRow" }
     private var resolvedChatInputGlassStyle: String { chatInputGlassStyle ?? "clear" }
@@ -193,11 +326,14 @@ public struct NativeChatInput: View {
         onQueryFiles: ((String) async -> [FileSuggestion])? = nil,
         onQueryElements: (() async -> [ElementSuggestion])? = nil,
         onQueryParticipants: (() async -> [ParticipantSuggestion])? = nil,
+        onQueryBranches: ((String) async -> [BranchSuggestion])? = nil,
         addressedParticipants: Binding<[String]> = .constant([]),
         onFocusChanged: ((Bool) -> Void)? = nil,
         onPlusLongPress: (() -> Void)? = nil,
         onQuerySlashCommands: (() async -> [SlashCommandInfo])? = nil,
-        onSubmitSlashCommand: ((String) -> Void)? = nil
+        onSubmitSlashCommand: ((String) -> Void)? = nil,
+        speechProvider: Any? = nil,
+        onEnterVoiceMode: ((Bool) -> Bool)? = nil
     ) {
         self._text = text
         self._imageAttachments = imageAttachments
@@ -219,15 +355,119 @@ public struct NativeChatInput: View {
         self.onQueryFiles = onQueryFiles
         self.onQueryElements = onQueryElements
         self.onQueryParticipants = onQueryParticipants
+        self.onQueryBranches = onQueryBranches
         self._addressedParticipants = addressedParticipants
         self.onFocusChanged = onFocusChanged
         self.onPlusLongPress = onPlusLongPress
         self.onQuerySlashCommands = onQuerySlashCommands
         self.onSubmitSlashCommand = onSubmitSlashCommand
+        self.speechProvider = speechProvider
+        self.onEnterVoiceMode = onEnterVoiceMode
     }
 
     private func dismissKeyboard() {
+        // Every submit path dismisses the keyboard first, so this doubles as
+        // the dictation stop hook — sending (or dismissing) ends the mic.
+        stopDictation()
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+    }
+
+    // MARK: - Dictation (mic → text binding)
+
+    private var dictationAvailable: Bool {
+        guard #available(iOS 26.0, *) else { return false }
+        // The site key's profile can switch speech off wholesale. Checked here
+        // rather than at the mic's gestures: with voice off the button should
+        // be absent, not present and inert.
+        guard SpeechPreferences.voiceEnabled else { return false }
+        return speechProvider is (any NativeSpeechProviding)
+    }
+
+    /// Streams live transcription into the text binding: the in-flight
+    /// partial rides after the committed base and is rewritten in place;
+    /// committed segments fold into the base. Typed text present at mic
+    /// start is preserved as the initial base.
+    private func toggleDictation() {
+        guard #available(iOS 26.0, *),
+              let provider = speechProvider as? any NativeSpeechProviding else { return }
+        if isDictating {
+            provider.stopTranscription()
+            return
+        }
+        dictationBase = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        Task { @MainActor in
+            do {
+                try await provider.startTranscription { event in
+                    switch event {
+                    case .partial(let partial):
+                        text = dictationBase.isEmpty ? partial : dictationBase + " " + partial
+                    case .committed(let segment):
+                        dictationBase = dictationBase.isEmpty ? segment : dictationBase + " " + segment
+                        text = dictationBase
+                    case .audioLevel:
+                        break
+                    case .error:
+                        break
+                    case .ended:
+                        isDictating = false
+                    }
+                }
+                isDictating = true
+            } catch {
+                isDictating = false
+            }
+        }
+    }
+
+    private func stopDictation() {
+        guard isDictating, #available(iOS 26.0, *),
+              let provider = speechProvider as? any NativeSpeechProviding else { return }
+        provider.stopTranscription()
+    }
+
+    private func micButton(size: CGFloat) -> some View {
+        // Not a Button: tap, double-tap, and long-press each map to a
+        // distinct action, so the gestures compose exclusively — a Button's
+        // touch-up action would fire on the first tap of a double-tap and
+        // again when a long-press is released.
+        let longPress = LongPressGesture(minimumDuration: 0.6).onEnded { _ in
+            if let onEnterVoiceMode {
+                // Long-press = seed voice mode with the typed text as the
+                // first utterance (spoken-reply testing without speaking).
+                // Also stops any in-flight dictation; the dictated text
+                // stays in the composer and goes in as the first utterance.
+                dismissKeyboard()
+                if !onEnterVoiceMode(true) { toggleDictation() }
+            } else {
+                toggleDictation()
+            }
+        }
+        let doubleTap = TapGesture(count: 2).onEnded {
+            // Double-tap = dictation-into-composer (transcribe, don't send).
+            toggleDictation()
+        }
+        let singleTap = TapGesture().onEnded {
+            if isDictating {
+                // The mic is live from a double-tap — any tap ends it.
+                toggleDictation()
+            } else if let onEnterVoiceMode {
+                // Tap = conversation mode with a live mic; the composer text
+                // stays put (long-press is what consumes it). Drop the
+                // keyboard so the overlay isn't fighting it for the screen.
+                dismissKeyboard()
+                if !onEnterVoiceMode(false) { toggleDictation() }
+            } else {
+                toggleDictation()
+            }
+        }
+        return Image(systemName: isDictating ? "mic.fill" : "mic")
+            .font(.system(size: size == 40 ? 18 : 16, weight: .bold))
+            .foregroundStyle(isDictating ? Color.red : Color.accentColor)
+            .frame(width: size, height: size)
+            .contentShape(Circle())
+            .modifier(GlassCircleModifier(glassStyle: "clear"))
+            .gesture(longPress.exclusively(before: doubleTap.exclusively(before: singleTap)))
+            .accessibilityAddTraits(.isButton)
     }
 
     public var body: some View {
@@ -251,6 +491,11 @@ public struct NativeChatInput: View {
         }
         .animation(.easeInOut(duration: 0.15), value: textHeight)
         .animation(.easeInOut(duration: 0.2), value: imageAttachments.count)
+        .onChange(of: text) { newValue in
+            if isDictating && newValue.isEmpty {
+                dictationBase = ""
+            }
+        }
         .animation(.easeInOut(duration: 0.2), value: isTwoRow)
         .animation(.easeInOut(duration: 0.15), value: showAtSuggestions)
         .animation(.easeInOut(duration: 0.15), value: showSlashMenu)
@@ -258,6 +503,7 @@ public struct NativeChatInput: View {
             if newValue.isEmpty {
                 textHeight = 36 // minHeight — snap immediately when text is cleared
             }
+            collapseIncomingContextTokens(newValue)
         }
         .photosPicker(isPresented: $showPhotoPicker, selection: $selectedPhotos, maxSelectionCount: 4, matching: .images)
         .fullScreenCover(isPresented: $showCamera) {
@@ -288,7 +534,7 @@ public struct NativeChatInput: View {
     /// Detect `@` followed by typing and populate a single ranked suggestion list
     /// (participants first, then files, then UI elements).
     private func handleAtDetection(_ value: String) {
-        guard onQueryFiles != nil || onQueryElements != nil || onQueryParticipants != nil else { return }
+        guard onQueryFiles != nil || onQueryElements != nil || onQueryParticipants != nil || onQueryBranches != nil else { return }
 
         guard let atRange = value.range(of: "@", options: .backwards) else {
             dismissAtOverlay()
@@ -325,6 +571,15 @@ public struct NativeChatInput: View {
                     }
                 }
             }
+            if !hiddenClasses.contains("repo"), let queryBranches = onQueryBranches {
+                Task {
+                    let results = await queryBranches(afterAt)
+                    await MainActor.run {
+                        allBranchSuggestions = results
+                        branchSuggestions = filterBranches(by: afterAt, all: results)
+                    }
+                }
+            }
             if let queryElements = onQueryElements {
                 Task {
                     let results = await queryElements()
@@ -337,6 +592,7 @@ public struct NativeChatInput: View {
         } else {
             // Already open — refilter cached lists locally.
             participantSuggestions = filterParticipants(by: afterAt, all: allParticipantSuggestions)
+            branchSuggestions = filterBranches(by: afterAt, all: allBranchSuggestions)
             elementSuggestions = filterElements(by: afterAt, all: allElementSuggestions)
         }
 
@@ -369,6 +625,12 @@ public struct NativeChatInput: View {
         return all.filter { $0.dataUi.lowercased().contains(q) }
     }
 
+    private func filterBranches(by query: String, all: [BranchSuggestion]) -> [BranchSuggestion] {
+        guard !query.isEmpty else { return all }
+        let q = query.lowercased()
+        return all.filter { $0.name.lowercased().contains(q) || ($0.description ?? "").lowercased().contains(q) }
+    }
+
     private func dismissAtOverlay() {
         showAtSuggestions = false
         fileSuggestions = []
@@ -376,6 +638,8 @@ public struct NativeChatInput: View {
         allElementSuggestions = []
         participantSuggestions = []
         allParticipantSuggestions = []
+        branchSuggestions = []
+        allBranchSuggestions = []
         atTriggerIndex = nil
         fileQueryTask?.cancel()
     }
@@ -413,6 +677,108 @@ public struct NativeChatInput: View {
         dismissAtOverlay()
     }
 
+    private func selectBranchSuggestion(_ suggestion: BranchSuggestion) {
+        // The field shows the branch name; submitMessage swaps the token back in.
+        let alias = ContextMentionAliasing.alias(for: suggestion.name)
+        contextAliases[alias] = suggestion.token
+        if let triggerIdx = atTriggerIndex {
+            let before = String(text[text.startIndex..<triggerIdx])
+            text = before + alias + " "
+        } else {
+            text += alias + " "
+        }
+        dismissAtOverlay()
+    }
+
+    /// A raw token can land in the field without going through the picker —
+    /// history recall (which stores the submitted, expanded text), a restored
+    /// draft, a paste. Collapse those to aliases too, so the base64 ref is never
+    /// on screen and the mention still survives a re-send.
+    private func collapseIncomingContextTokens(_ newValue: String) {
+        var aliases = contextAliases
+        let collapsed = ContextMentionAliasing.collapse(newValue, into: &aliases)
+        guard collapsed != newValue else { return }
+        contextAliases = aliases
+        text = collapsed
+    }
+
+    /// Restore the `[context: …]` tokens the composer is displaying as aliases,
+    /// then hand off. `text` is a binding straight into the caller's state, so
+    /// the submit handler reads the expanded string.
+    private func submitMessage() {
+        let expanded = ContextMentionAliasing.expand(text, using: contextAliases)
+        if expanded != text { text = expanded }
+        contextAliases = [:]
+        onSubmit()
+    }
+
+    private func toggleClass(_ key: String) {
+        if hiddenClasses.contains(key) {
+            hiddenClasses.remove(key)
+        } else {
+            hiddenClasses.insert(key)
+        }
+        AtClassToggles.setHidden(key, hiddenClasses.contains(key))
+    }
+
+    /// Fast show/hide chips for whole classes of suggestions, pinned atop the
+    /// overlay. Persistence mirrors the web composer's atMenuClassToggles.
+    private var classToggleRow: some View {
+        HStack(spacing: 6) {
+            ForEach(AtClassToggleSpec.all) { spec in
+                Button {
+                    toggleClass(spec.key)
+                } label: {
+                    Label(spec.label, systemImage: spec.icon)
+                        .font(.system(size: 11, weight: .medium))
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(Capsule().fill(hiddenClasses.contains(spec.key) ? Color.clear : Color.accentColor.opacity(0.18)))
+                        .overlay(Capsule().stroke(hiddenClasses.contains(spec.key) ? Color.secondary.opacity(0.35) : Color.accentColor, lineWidth: 1))
+                        .foregroundStyle(hiddenClasses.contains(spec.key) ? Color.secondary : Color.accentColor)
+                }
+                .buttonStyle(.plain)
+            }
+            Spacer()
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+    }
+
+    private func branchRow(_ suggestion: BranchSuggestion) -> some View {
+        Button {
+            selectBranchSuggestion(suggestion)
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "arrow.triangle.branch")
+                    .foregroundStyle(.secondary)
+                    .frame(width: 20)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(suggestion.name)
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                    if let description = suggestion.description, !description.isEmpty {
+                        Text(description)
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+                Spacer()
+                if suggestion.remote {
+                    Image(systemName: "cloud")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
     private var afterAtText: String {
         guard let triggerIdx = atTriggerIndex,
               triggerIdx < text.endIndex else { return "" }
@@ -423,13 +789,17 @@ public struct NativeChatInput: View {
 
     private var unifiedSuggestionsOverlay: some View {
         VStack(spacing: 0) {
-            let hasResults = !participantSuggestions.isEmpty || !fileSuggestions.isEmpty || !elementSuggestions.isEmpty
+            classToggleRow
+            let peopleShown = !participantSuggestions.isEmpty && !hiddenClasses.contains("people")
+            let branchesShown = !branchSuggestions.isEmpty && !hiddenClasses.contains("repo")
+            let filesShown = !fileSuggestions.isEmpty && !hiddenClasses.contains("files")
+            let hasResults = peopleShown || branchesShown || filesShown || !elementSuggestions.isEmpty
             if !hasResults {
                 HStack(spacing: 8) {
                     Image(systemName: "magnifyingglass")
                         .foregroundStyle(.secondary)
                         .frame(width: 20)
-                    Text(afterAtText.isEmpty ? "Type to search people, files, and UI elements" : "No matches for \u{201C}\(afterAtText)\u{201D}")
+                    Text(hiddenClasses.contains("people") && hiddenClasses.contains("repo") && hiddenClasses.contains("files") && elementSuggestions.isEmpty ? "All classes hidden — use the toggles above" : (afterAtText.isEmpty ? "Type to search people, branches, files, and UI elements" : "No matches for \u{201C}\(afterAtText)\u{201D}"))
                         .font(.system(size: 14))
                         .foregroundStyle(.secondary)
                     Spacer()
@@ -439,7 +809,7 @@ public struct NativeChatInput: View {
             } else {
                 ScrollView {
                     LazyVStack(spacing: 0) {
-                        if !participantSuggestions.isEmpty {
+                        if peopleShown {
                             suggestionSectionHeader("People")
                             ForEach(participantSuggestions) { suggestion in
                                 participantRow(suggestion)
@@ -448,8 +818,20 @@ public struct NativeChatInput: View {
                                 }
                             }
                         }
-                        if !fileSuggestions.isEmpty {
-                            if !participantSuggestions.isEmpty {
+                        if branchesShown {
+                            if peopleShown {
+                                Divider()
+                            }
+                            suggestionSectionHeader("Branches")
+                            ForEach(branchSuggestions) { suggestion in
+                                branchRow(suggestion)
+                                if suggestion.id != branchSuggestions.last?.id {
+                                    Divider().padding(.leading, 40)
+                                }
+                            }
+                        }
+                        if filesShown {
+                            if peopleShown || branchesShown {
                                 Divider()
                             }
                             suggestionSectionHeader("Files")
@@ -461,7 +843,7 @@ public struct NativeChatInput: View {
                             }
                         }
                         if !elementSuggestions.isEmpty {
-                            if !participantSuggestions.isEmpty || !fileSuggestions.isEmpty {
+                            if peopleShown || branchesShown || filesShown {
                                 Divider()
                             }
                             suggestionSectionHeader("UI Elements")
@@ -798,6 +1180,9 @@ public struct NativeChatInput: View {
                             planModeToggle
                         }
                         textInputView
+                        if dictationAvailable {
+                            micButton(size: 36)
+                        }
                         actionButton
                     }
                 }
@@ -840,6 +1225,9 @@ public struct NativeChatInput: View {
                     historyMenuButton
                     if showPlanModeToggle {
                         planModeToggle
+                    }
+                    if dictationAvailable {
+                        micButton(size: 40)
                     }
                     Spacer()
                     twoRowActionButton
@@ -957,18 +1345,26 @@ public struct NativeChatInput: View {
         isAgentRunning && !isAgentPaused
     }
 
+    // Matches ChatTextView's font so the shimmer overlay sits exactly where
+    // the UIKit placeholder label would.
+    private var placeholderFont: Font {
+        .system(size: UIFont.preferredFont(forTextStyle: .body).pointSize + 1, weight: .semibold)
+    }
+
     private var textInputView: some View {
         NoAutofillTextView(
             text: $text,
             height: $textHeight,
-            placeholder: agentWaiting ? "Waiting on agent…" : isAgentPaused ? "Agent is paused, add new instruction…" : "Message...",
+            // While waiting, the UIKit placeholder is blanked and the
+            // shimmering SwiftUI overlay below renders the copy instead.
+            placeholder: agentWaiting ? "" : isAgentPaused ? "Agent is paused, add new instruction…" : "Message...",
             onSubmit: {
                 // On Catalyst (hardware keyboard) keep focus after sending so the
                 // next message can be typed immediately; on iOS dismiss as before.
                 #if !targetEnvironment(macCatalyst)
                 dismissKeyboard()
                 #endif
-                onSubmit()
+                submitMessage()
             },
             onTextChange: { newText in
                 if newText.isEmpty {
@@ -982,6 +1378,16 @@ public struct NativeChatInput: View {
             onFocusChanged: onFocusChanged
         )
         .frame(maxWidth: .infinity, minHeight: textHeight, maxHeight: textHeight, alignment: .leading)
+        .overlay(alignment: .topLeading) {
+            if agentWaiting && text.isEmpty {
+                Text("Waiting on agent…")
+                    .font(placeholderFont)
+                    .ripulShimmer(base: Color(uiColor: .placeholderText))
+                    .padding(.leading, 12)
+                    .padding(.top, 8)
+                    .allowsHitTesting(false)
+            }
+        }
     }
 
     @ViewBuilder
@@ -1015,7 +1421,7 @@ public struct NativeChatInput: View {
                 }
                 Button {
                     dismissKeyboard()
-                    onSubmit()
+                    submitMessage()
                 } label: {
                     Image(systemName: "play.fill")
                         .font(.system(size: 16, weight: .bold))
@@ -1033,7 +1439,7 @@ public struct NativeChatInput: View {
                 }
                 Button {
                     dismissKeyboard()
-                    onSubmit()
+                    submitMessage()
                 } label: {
                     Image(systemName: "arrow.up")
                         .font(.system(size: 16, weight: .bold))
@@ -1068,7 +1474,7 @@ public struct NativeChatInput: View {
     private func sendButton(size: CGFloat, glassStyle: String?) -> some View {
         Button {
             dismissKeyboard()
-            onSubmit()
+            submitMessage()
         } label: {
             Image(systemName: "arrow.up")
                 .font(.system(size: size == 40 ? 18 : 16, weight: .bold))
@@ -1113,7 +1519,7 @@ public struct NativeChatInput: View {
                 }
                 Button {
                     dismissKeyboard()
-                    onSubmit()
+                    submitMessage()
                 } label: {
                     Image(systemName: "play.fill")
                         .font(.system(size: 18, weight: .bold))
@@ -1132,7 +1538,7 @@ public struct NativeChatInput: View {
                 }
                 Button {
                     dismissKeyboard()
-                    onSubmit()
+                    submitMessage()
                 } label: {
                     Image(systemName: "arrow.up")
                         .font(.system(size: 18, weight: .bold))
@@ -1235,10 +1641,25 @@ public struct NativeChatInput: View {
     /// Optional callback to fetch chat participant suggestions (agents + humans).
     /// When provided, the `@` category overlay shows a "People" row that lists them.
     var onQueryParticipants: (() async -> [ParticipantSuggestion])?
+    /// Optional callback to fetch repo branch suggestions (the chat's repo).
+    /// When provided, the `@` overlay shows a "Branches" section; picking one
+    /// inserts its `[context: …]` token, resolved to live branch facts at send.
+    var onQueryBranches: ((String) async -> [BranchSuggestion])?
     /// Structured participant IDs picked since the last send. Cleared on submit
     /// by the parent so a new turn starts empty. Drives `addressedTo` routing.
     @Binding var addressedParticipants: [String]
     var onFocusChanged: ((Bool) -> Void)?
+    /// Speech provider for mic dictation — see the iOS variant's doc comment.
+    var speechProvider: Any?
+    /// Mic tap enters hands-free voice mode; double-tap toggles
+    /// dictation-into-composer; long-press seeds voice mode with the
+    /// composer text as the first spoken utterance (testing voice mode
+    /// without speaking). The Bool is that seed flag; the return says
+    /// whether voice mode actually started — on refusal (voice profile off)
+    /// the mic falls back to dictation. Nil = dictation only.
+    var onEnterVoiceMode: ((Bool) -> Bool)?
+    @State private var isDictating = false
+    @State private var dictationBase = ""
     @State private var showPhotoPicker = false
     @FocusState private var isFocused: Bool
     @State private var fileSuggestions: [FileSuggestion] = []
@@ -1253,6 +1674,12 @@ public struct NativeChatInput: View {
     @State private var elementSuggestions: [ElementSuggestion] = []
     @State private var allParticipantSuggestions: [ParticipantSuggestion] = []
     @State private var participantSuggestions: [ParticipantSuggestion] = []
+    @State private var branchSuggestions: [BranchSuggestion] = []
+    @State private var allBranchSuggestions: [BranchSuggestion] = []
+    /// Classes hidden via the toggle chips (persisted in UserDefaults).
+    @State private var hiddenClasses: Set<String> = Set(AtClassToggleSpec.all.filter { AtClassToggles.isHidden($0.key) }.map(\.key))
+    /// Composer-visible alias → the `[context: …]` token it stands in for.
+    @State private var contextAliases: [String: String] = [:]
 
     private var isTwoRow: Bool { chatInputLayout == "twoRow" }
     private var resolvedChatInputGlassStyle: String { chatInputGlassStyle ?? "clear" }
@@ -1278,8 +1705,11 @@ public struct NativeChatInput: View {
         onQueryFiles: ((String) async -> [FileSuggestion])? = nil,
         onQueryElements: (() async -> [ElementSuggestion])? = nil,
         onQueryParticipants: (() async -> [ParticipantSuggestion])? = nil,
+        onQueryBranches: ((String) async -> [BranchSuggestion])? = nil,
         addressedParticipants: Binding<[String]> = .constant([]),
-        onFocusChanged: ((Bool) -> Void)? = nil
+        onFocusChanged: ((Bool) -> Void)? = nil,
+        speechProvider: Any? = nil,
+        onEnterVoiceMode: ((Bool) -> Bool)? = nil
     ) {
         self._text = text
         self._imageAttachments = imageAttachments
@@ -1301,8 +1731,11 @@ public struct NativeChatInput: View {
         self.onQueryFiles = onQueryFiles
         self.onQueryElements = onQueryElements
         self.onQueryParticipants = onQueryParticipants
+        self.onQueryBranches = onQueryBranches
         self._addressedParticipants = addressedParticipants
         self.onFocusChanged = onFocusChanged
+        self.speechProvider = speechProvider
+        self.onEnterVoiceMode = onEnterVoiceMode
     }
 
     // MARK: - @ Mention Suggestions
@@ -1310,7 +1743,7 @@ public struct NativeChatInput: View {
     /// Detect `@` followed by typing and populate a single ranked suggestion list
     /// (participants first, then files, then UI elements).
     private func handleAtDetection(_ value: String) {
-        guard onQueryFiles != nil || onQueryElements != nil || onQueryParticipants != nil else { return }
+        guard onQueryFiles != nil || onQueryElements != nil || onQueryParticipants != nil || onQueryBranches != nil else { return }
 
         guard let atRange = value.range(of: "@", options: .backwards) else {
             dismissAtOverlay()
@@ -1347,6 +1780,15 @@ public struct NativeChatInput: View {
                     }
                 }
             }
+            if !hiddenClasses.contains("repo"), let queryBranches = onQueryBranches {
+                Task {
+                    let results = await queryBranches(afterAt)
+                    await MainActor.run {
+                        allBranchSuggestions = results
+                        branchSuggestions = filterBranches(by: afterAt, all: results)
+                    }
+                }
+            }
             if let queryElements = onQueryElements {
                 Task {
                     let results = await queryElements()
@@ -1359,6 +1801,7 @@ public struct NativeChatInput: View {
         } else {
             // Already open — refilter cached lists locally.
             participantSuggestions = filterParticipants(by: afterAt, all: allParticipantSuggestions)
+            branchSuggestions = filterBranches(by: afterAt, all: allBranchSuggestions)
             elementSuggestions = filterElements(by: afterAt, all: allElementSuggestions)
         }
 
@@ -1391,6 +1834,12 @@ public struct NativeChatInput: View {
         return all.filter { $0.dataUi.lowercased().contains(q) }
     }
 
+    private func filterBranches(by query: String, all: [BranchSuggestion]) -> [BranchSuggestion] {
+        guard !query.isEmpty else { return all }
+        let q = query.lowercased()
+        return all.filter { $0.name.lowercased().contains(q) || ($0.description ?? "").lowercased().contains(q) }
+    }
+
     private func dismissAtOverlay() {
         showAtSuggestions = false
         fileSuggestions = []
@@ -1398,6 +1847,8 @@ public struct NativeChatInput: View {
         allElementSuggestions = []
         participantSuggestions = []
         allParticipantSuggestions = []
+        branchSuggestions = []
+        allBranchSuggestions = []
         atTriggerIndex = nil
         fileQueryTask?.cancel()
     }
@@ -1435,6 +1886,108 @@ public struct NativeChatInput: View {
         dismissAtOverlay()
     }
 
+    private func selectBranchSuggestion(_ suggestion: BranchSuggestion) {
+        // The field shows the branch name; submitMessage swaps the token back in.
+        let alias = ContextMentionAliasing.alias(for: suggestion.name)
+        contextAliases[alias] = suggestion.token
+        if let triggerIdx = atTriggerIndex {
+            let before = String(text[text.startIndex..<triggerIdx])
+            text = before + alias + " "
+        } else {
+            text += alias + " "
+        }
+        dismissAtOverlay()
+    }
+
+    /// A raw token can land in the field without going through the picker —
+    /// history recall (which stores the submitted, expanded text), a restored
+    /// draft, a paste. Collapse those to aliases too, so the base64 ref is never
+    /// on screen and the mention still survives a re-send.
+    private func collapseIncomingContextTokens(_ newValue: String) {
+        var aliases = contextAliases
+        let collapsed = ContextMentionAliasing.collapse(newValue, into: &aliases)
+        guard collapsed != newValue else { return }
+        contextAliases = aliases
+        text = collapsed
+    }
+
+    /// Restore the `[context: …]` tokens the composer is displaying as aliases,
+    /// then hand off. `text` is a binding straight into the caller's state, so
+    /// the submit handler reads the expanded string.
+    private func submitMessage() {
+        let expanded = ContextMentionAliasing.expand(text, using: contextAliases)
+        if expanded != text { text = expanded }
+        contextAliases = [:]
+        onSubmit()
+    }
+
+    private func toggleClass(_ key: String) {
+        if hiddenClasses.contains(key) {
+            hiddenClasses.remove(key)
+        } else {
+            hiddenClasses.insert(key)
+        }
+        AtClassToggles.setHidden(key, hiddenClasses.contains(key))
+    }
+
+    /// Fast show/hide chips for whole classes of suggestions, pinned atop the
+    /// overlay. Persistence mirrors the web composer's atMenuClassToggles.
+    private var classToggleRow: some View {
+        HStack(spacing: 6) {
+            ForEach(AtClassToggleSpec.all) { spec in
+                Button {
+                    toggleClass(spec.key)
+                } label: {
+                    Label(spec.label, systemImage: spec.icon)
+                        .font(.system(size: 11, weight: .medium))
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(Capsule().fill(hiddenClasses.contains(spec.key) ? Color.clear : Color.accentColor.opacity(0.18)))
+                        .overlay(Capsule().stroke(hiddenClasses.contains(spec.key) ? Color.secondary.opacity(0.35) : Color.accentColor, lineWidth: 1))
+                        .foregroundStyle(hiddenClasses.contains(spec.key) ? Color.secondary : Color.accentColor)
+                }
+                .buttonStyle(.plain)
+            }
+            Spacer()
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+    }
+
+    private func branchRow(_ suggestion: BranchSuggestion) -> some View {
+        Button {
+            selectBranchSuggestion(suggestion)
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "arrow.triangle.branch")
+                    .foregroundStyle(.secondary)
+                    .frame(width: 20)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(suggestion.name)
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                    if let description = suggestion.description, !description.isEmpty {
+                        Text(description)
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+                Spacer()
+                if suggestion.remote {
+                    Image(systemName: "cloud")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
     private var afterAtText: String {
         guard let triggerIdx = atTriggerIndex,
               triggerIdx < text.endIndex else { return "" }
@@ -1445,13 +1998,17 @@ public struct NativeChatInput: View {
 
     private var unifiedSuggestionsOverlay: some View {
         VStack(spacing: 0) {
-            let hasResults = !participantSuggestions.isEmpty || !fileSuggestions.isEmpty || !elementSuggestions.isEmpty
+            classToggleRow
+            let peopleShown = !participantSuggestions.isEmpty && !hiddenClasses.contains("people")
+            let branchesShown = !branchSuggestions.isEmpty && !hiddenClasses.contains("repo")
+            let filesShown = !fileSuggestions.isEmpty && !hiddenClasses.contains("files")
+            let hasResults = peopleShown || branchesShown || filesShown || !elementSuggestions.isEmpty
             if !hasResults {
                 HStack(spacing: 8) {
                     Image(systemName: "magnifyingglass")
                         .foregroundStyle(.secondary)
                         .frame(width: 20)
-                    Text(afterAtText.isEmpty ? "Type to search people, files, and UI elements" : "No matches for \u{201C}\(afterAtText)\u{201D}")
+                    Text(hiddenClasses.contains("people") && hiddenClasses.contains("repo") && hiddenClasses.contains("files") && elementSuggestions.isEmpty ? "All classes hidden — use the toggles above" : (afterAtText.isEmpty ? "Type to search people, branches, files, and UI elements" : "No matches for \u{201C}\(afterAtText)\u{201D}"))
                         .font(.system(size: 14))
                         .foregroundStyle(.secondary)
                     Spacer()
@@ -1461,7 +2018,7 @@ public struct NativeChatInput: View {
             } else {
                 ScrollView {
                     LazyVStack(spacing: 0) {
-                        if !participantSuggestions.isEmpty {
+                        if peopleShown {
                             suggestionSectionHeader("People")
                             ForEach(participantSuggestions) { suggestion in
                                 participantRow(suggestion)
@@ -1470,8 +2027,20 @@ public struct NativeChatInput: View {
                                 }
                             }
                         }
-                        if !fileSuggestions.isEmpty {
-                            if !participantSuggestions.isEmpty {
+                        if branchesShown {
+                            if peopleShown {
+                                Divider()
+                            }
+                            suggestionSectionHeader("Branches")
+                            ForEach(branchSuggestions) { suggestion in
+                                branchRow(suggestion)
+                                if suggestion.id != branchSuggestions.last?.id {
+                                    Divider().padding(.leading, 40)
+                                }
+                            }
+                        }
+                        if filesShown {
+                            if peopleShown || branchesShown {
                                 Divider()
                             }
                             suggestionSectionHeader("Files")
@@ -1483,7 +2052,7 @@ public struct NativeChatInput: View {
                             }
                         }
                         if !elementSuggestions.isEmpty {
-                            if !participantSuggestions.isEmpty || !fileSuggestions.isEmpty {
+                            if peopleShown || branchesShown || filesShown {
                                 Divider()
                             }
                             suggestionSectionHeader("UI Elements")
@@ -1622,6 +2191,12 @@ public struct NativeChatInput: View {
         .animation(.easeInOut(duration: 0.2), value: imageAttachments.count)
         .animation(.easeInOut(duration: 0.2), value: isAgentRunning)
         .animation(.easeInOut(duration: 0.2), value: isTwoRow)
+        .onChange(of: text) { newValue in
+            if isDictating && newValue.isEmpty {
+                dictationBase = ""
+            }
+            collapseIncomingContextTokens(newValue)
+        }
         .animation(.easeInOut(duration: 0.2), value: showAtSuggestions)
         .photosPicker(isPresented: $showPhotoPicker, selection: $selectedPhotos, maxSelectionCount: 4, matching: .images)
         .sheet(isPresented: $showTodoPicker) {
@@ -1667,6 +2242,97 @@ public struct NativeChatInput: View {
 
     // MARK: - Single Row Layout (default)
 
+    // MARK: - Dictation (mic → text binding)
+
+    private var dictationAvailable: Bool {
+        guard #available(macOS 26.0, *) else { return false }
+        // See the iOS variant: voice off removes the button rather than
+        // leaving it there to do nothing.
+        guard SpeechPreferences.voiceEnabled else { return false }
+        return speechProvider is (any NativeSpeechProviding)
+    }
+
+    private func toggleDictation() {
+        guard #available(macOS 26.0, *),
+              let provider = speechProvider as? any NativeSpeechProviding else { return }
+        if isDictating {
+            provider.stopTranscription()
+            return
+        }
+        dictationBase = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        Task { @MainActor in
+            do {
+                try await provider.startTranscription { event in
+                    switch event {
+                    case .partial(let partial):
+                        text = dictationBase.isEmpty ? partial : dictationBase + " " + partial
+                    case .committed(let segment):
+                        dictationBase = dictationBase.isEmpty ? segment : dictationBase + " " + segment
+                        text = dictationBase
+                    case .audioLevel:
+                        break
+                    case .error:
+                        break
+                    case .ended:
+                        isDictating = false
+                    }
+                }
+                isDictating = true
+            } catch {
+                isDictating = false
+            }
+        }
+    }
+
+    private func stopDictation() {
+        guard isDictating, #available(macOS 26.0, *),
+              let provider = speechProvider as? any NativeSpeechProviding else { return }
+        provider.stopTranscription()
+    }
+
+    private func micButton(size: CGFloat) -> some View {
+        // Not a Button: tap, double-tap, and long-press each map to a
+        // distinct action, so the gestures compose exclusively — a Button's
+        // click action would fire on the first click of a double-click and
+        // again when a long-press is released.
+        let longPress = LongPressGesture(minimumDuration: 0.6).onEnded { _ in
+            if let onEnterVoiceMode {
+                // Long-press = seed voice mode with the typed text as the
+                // first utterance (spoken-reply testing without speaking).
+                // Stop any in-flight dictation first; the dictated text
+                // stays in the composer and goes in as the first utterance.
+                stopDictation()
+                if !onEnterVoiceMode(true) { toggleDictation() }
+            } else {
+                toggleDictation()
+            }
+        }
+        let doubleTap = TapGesture(count: 2).onEnded {
+            // Double-tap = dictation-into-composer (transcribe, don't send).
+            toggleDictation()
+        }
+        let singleTap = TapGesture().onEnded {
+            if isDictating {
+                // The mic is live from a double-tap — any tap ends it.
+                toggleDictation()
+            } else if let onEnterVoiceMode {
+                // Tap = conversation mode with a live mic; the composer text
+                // stays put (long-press is what consumes it).
+                if !onEnterVoiceMode(false) { toggleDictation() }
+            } else {
+                toggleDictation()
+            }
+        }
+        return Image(systemName: isDictating ? "mic.fill" : "mic")
+            .font(.system(size: size == 40 ? 18 : 16, weight: .bold))
+            .foregroundStyle(isDictating ? Color.red : Color.accentColor)
+            .frame(width: size, height: size)
+            .contentShape(Circle())
+            .modifier(GlassCircleModifier(glassStyle: "clear"))
+            .gesture(longPress.exclusively(before: doubleTap.exclusively(before: singleTap)))
+            .accessibilityAddTraits(.isButton)
+    }
+
     private var singleRowBody: some View {
         ChatInputGlassGroup {
             HStack(alignment: .bottom, spacing: 8) {
@@ -1681,6 +2347,9 @@ public struct NativeChatInput: View {
                             planModeToggle
                         }
                         textInputView
+                        if dictationAvailable {
+                            micButton(size: 36)
+                        }
                         actionButton
                     }
                 }
@@ -1724,6 +2393,9 @@ public struct NativeChatInput: View {
                     historyMenuButton
                     if showPlanModeToggle {
                         planModeToggle
+                    }
+                    if dictationAvailable {
+                        micButton(size: 40)
                     }
                     Spacer()
                     twoRowActionButton
@@ -1831,14 +2503,24 @@ public struct NativeChatInput: View {
     }
 
     private var textInputView: some View {
-        TextField(agentWaiting ? "Waiting on agent…" : isAgentPaused ? "Agent is paused, add new instruction…" : "Message...", text: $text, axis: .vertical)
+        // While waiting, the TextField placeholder is blanked and the
+        // shimmering overlay below renders the copy instead.
+        TextField(agentWaiting ? "" : isAgentPaused ? "Agent is paused, add new instruction…" : "Message...", text: $text, axis: .vertical)
             .textFieldStyle(.plain)
             .lineLimit(1...5)
             .focused($isFocused)
             .padding(.leading, 12)
             .padding(.vertical, 8)
+            .overlay(alignment: .leading) {
+                if agentWaiting && text.isEmpty {
+                    Text("Waiting on agent…")
+                        .ripulShimmer(base: Color(nsColor: .placeholderTextColor))
+                        .padding(.leading, 12)
+                        .allowsHitTesting(false)
+                }
+            }
             .onSubmit {
-                onSubmit()
+                submitMessage()
             }
             .onChange(of: text) { newValue in
                 handleAtDetection(newValue)
@@ -1869,7 +2551,7 @@ public struct NativeChatInput: View {
                 }
                 if hasContent {
                     Button {
-                        onSubmit()
+                        submitMessage()
                     } label: {
                         Image(systemName: "arrow.up")
                             .font(.system(size: 14, weight: .bold))
@@ -1898,7 +2580,7 @@ public struct NativeChatInput: View {
                     macNoteButton(onTap: onSubmitNote)
                 }
                 Button {
-                    onSubmit()
+                    submitMessage()
                 } label: {
                     Image(systemName: "play.fill")
                         .font(.system(size: 14, weight: .bold))
@@ -1916,7 +2598,7 @@ public struct NativeChatInput: View {
                     macNoteButton(onTap: onSubmitNote)
                 }
                 Button {
-                    onSubmit()
+                    submitMessage()
                 } label: {
                     Image(systemName: "arrow.up")
                         .font(.system(size: 14, weight: .bold))
@@ -1949,7 +2631,7 @@ public struct NativeChatInput: View {
                     .transition(.scale.combined(with: .opacity))
                 }
                 if hasContent {
-                    Button { onSubmit() } label: {
+                    Button { submitMessage() } label: {
                         Image(systemName: "arrow.up")
                             .font(.system(size: 18, weight: .bold))
                             .foregroundStyle(Color.accentColor)
@@ -1988,7 +2670,7 @@ public struct NativeChatInput: View {
                     .transition(.scale.combined(with: .opacity))
                 }
                 Button {
-                    onSubmit()
+                    submitMessage()
                 } label: {
                     Image(systemName: "play.fill")
                         .font(.system(size: 18, weight: .bold))
@@ -2015,7 +2697,7 @@ public struct NativeChatInput: View {
                     .transition(.scale.combined(with: .opacity))
                 }
                 Button {
-                    onSubmit()
+                    submitMessage()
                 } label: {
                     Image(systemName: "arrow.up")
                         .font(.system(size: 18, weight: .bold))
@@ -2400,6 +3082,21 @@ class ChatTextView: UITextView {
         return super.canPerformAction(action, withSender: sender)
     }
 
+    /// Fires when layout gives the view a new width, so the composer height can
+    /// be remeasured against the width the text actually wraps at (first layout
+    /// after a remake, rotation). Width-only: height writes back into the
+    /// SwiftUI frame, so keying on height would recurse.
+    var onLayoutWidthChange: (() -> Void)?
+    private var lastLayoutWidth: CGFloat = 0
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        if bounds.width != lastLayoutWidth {
+            lastLayoutWidth = bounds.width
+            onLayoutWidthChange?()
+        }
+    }
+
     #if targetEnvironment(macCatalyst)
     /// Hardware-keyboard Return (no Shift) sends the message; Shift+Return inserts a
     /// newline. Wired by NoAutofillTextView to the submit action. iPhone (non-Catalyst)
@@ -2472,10 +3169,19 @@ struct NoAutofillTextView: UIViewRepresentable {
         ])
         context.coordinator.placeholderLabel = label
 
+        // A remade view can start with multi-line text already in it (draft
+        // restored, session switch) — the first real layout is when the wrap
+        // width becomes known, so measure there rather than at width 0.
+        textView.onLayoutWidthChange = { [weak textView, weak coordinator = context.coordinator] in
+            guard let textView, let coordinator else { return }
+            coordinator.recalcHeight(textView)
+        }
+
         return textView
     }
 
     func updateUIView(_ textView: ChatTextView, context: Context) {
+        context.coordinator.parent = self
         #if targetEnvironment(macCatalyst)
         textView.onReturnKey = onSubmit
         #endif
@@ -2505,10 +3211,20 @@ struct NoAutofillTextView: UIViewRepresentable {
         }
 
         func recalcHeight(_ textView: UITextView) {
-            // When empty, contentSize can lag behind — snap to minimum
+            let width = textView.bounds.width
+            // Before the first layout the wrap width is unknown — any measure
+            // would be garbage (one giant line). Skip; the width-change hook
+            // remeasures once layout runs.
+            guard textView.text.isEmpty || width > 0 else { return }
+            // sizeThatFits forces layout of the FULL text. contentSize can
+            // under-report it when the view isn't first responder (TextKit only
+            // guarantees layout of the visible viewport), which is what shrank
+            // a multi-line composer on blur.
             let target = textView.text.isEmpty
                 ? parent.minHeight
-                : min(max(textView.contentSize.height, parent.minHeight), parent.maxHeight)
+                : min(max(textView.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude)).height,
+                          parent.minHeight),
+                      parent.maxHeight)
             if target != parent.height {
                 DispatchQueue.main.async {
                     self.parent.height = target
@@ -2524,6 +3240,9 @@ struct NoAutofillTextView: UIViewRepresentable {
         }
 
         func textViewDidBeginEditing(_ textView: UITextView) {
+            // Tapping into a collapsed multi-line box must re-expand it the
+            // same way typing does — remeasure now, not on the next keystroke.
+            recalcHeight(textView)
             parent.onFocusChanged?(true)
         }
 

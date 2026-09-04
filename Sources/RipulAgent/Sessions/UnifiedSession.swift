@@ -10,6 +10,16 @@ public struct UnifiedSession: Identifiable, Codable {
     public let title: String
     /// Last time any message was written in any app — the canonical sort key.
     public let lastUsed: Date
+    /// Whether `lastUsed` came from a source that actually knows when the
+    /// conversation last moved (the host's JSONL scan), as opposed to a
+    /// stand-in like a local tab's creation time.
+    ///
+    /// Without this the merge had no way to tell a real activity timestamp from
+    /// "when you opened the tab", so it kept whichever was NEWER — and a chat
+    /// opened minutes ago always beat its own true last-activity of weeks back.
+    /// Excluded-by-default on decode: rows cached before this existed carry an
+    /// unknown provenance, so the first authoritative scan replaces them.
+    public let hasKnownActivity: Bool
     public let gitBranch: String?
     public let messageCount: Int?
     public let projectName: String?
@@ -20,8 +30,8 @@ public struct UnifiedSession: Identifiable, Codable {
     public let providerLabel: String?
     /// Model of the most recent assistant message in the session JSONL
     /// (e.g. "claude-opus-4-6"), resolved by the host scanner. Session rows
-    /// show this in place of the harness label — the leading icon already
-    /// identifies the harness, so the text slot carries the model in use.
+    /// key both the leading icon (via `ModelIdentity`) and the detail-row
+    /// text off this — the row identifies the model in use, not the harness.
     public let model: String?
     /// The machine this session lives on (for openRemoteSession routing).
     public let machineName: String?
@@ -43,6 +53,16 @@ public struct UnifiedSession: Identifiable, Codable {
     /// Canonical key for reading/writing this session's metadata blob (tags,
     /// notes, …) — the bare sourceChatId. Used when the user edits tags.
     public let metadataKey: String
+    /// True when `title` came from the host's JSONL scan rather than from a
+    /// local tab. Provenance, not decoration: `rematchLocalSessions` consults
+    /// it to decide whether a local name may overwrite this one.
+    ///
+    /// Two writers set `title` — `build` (here) and `rematchLocalSessions` —
+    /// and neither used to know which answer was better, so a row whose two
+    /// sources disagreed flipped between them on every tick. Field case: a
+    /// session showing `Peter_Maude_(iPhone)` from the scan and its own raw
+    /// `cli_<uuid>` from the local tab, alternating.
+    public let titleFromScan: Bool
 
     public var isOpenInRipul: Bool { ripulSession != nil || cachedIsOpen }
 
@@ -95,7 +115,7 @@ public struct UnifiedSession: Identifiable, Codable {
     enum CodingKeys: String, CodingKey {
         case id, title, lastUsed, gitBranch, messageCount, projectName, projectPath
         case provider, providerLabel, model, machineName, machineId, matchKeys, cachedIsOpen
-        case tags, metadataKey
+        case tags, metadataKey, hasKnownActivity, titleFromScan
     }
 
     public init(from decoder: Decoder) throws {
@@ -116,32 +136,198 @@ public struct UnifiedSession: Identifiable, Codable {
         cachedIsOpen = try c.decodeIfPresent(Bool.self, forKey: .cachedIsOpen) ?? false
         tags = try c.decodeIfPresent([String].self, forKey: .tags) ?? []
         metadataKey = try c.decodeIfPresent(String.self, forKey: .metadataKey) ?? id
+        hasKnownActivity = try c.decodeIfPresent(Bool.self, forKey: .hasKnownActivity) ?? false
+        // Same reasoning as hasKnownActivity: a row cached before this existed
+        // has unknown title provenance, so assume the weaker one and let the
+        // first real scan claim it.
+        titleFromScan = try c.decodeIfPresent(Bool.self, forKey: .titleFromScan) ?? false
         ripulSession = nil
     }
 
+    /// - Parameter cachedIsOpen: Overrides the open flag, which otherwise
+    ///   follows `ripulSession`. Only the merge path passes this — it carries a
+    ///   cached "was open" across a rebuild that ran before the local tab list
+    ///   was available, so the green dot doesn't blink off at launch.
     public init(
-        id: String, title: String, lastUsed: Date, gitBranch: String?,
+        id: String, title: String, lastUsed: Date, hasKnownActivity: Bool = true,
+        gitBranch: String?,
         messageCount: Int?, projectName: String?, projectPath: String? = nil,
         provider: String?,
         providerLabel: String?, model: String? = nil, machineName: String?, machineId: String? = nil,
         matchKeys: [String] = [], tags: [String] = [], metadataKey: String? = nil,
+        cachedIsOpen: Bool? = nil,
+        titleFromScan: Bool = false,
         ripulSession: ChatSession?
     ) {
+        self.titleFromScan = titleFromScan
         self.id = id; self.title = title; self.lastUsed = lastUsed
+        self.hasKnownActivity = hasKnownActivity
         self.gitBranch = gitBranch; self.messageCount = messageCount
         self.projectName = projectName; self.projectPath = projectPath
         self.provider = provider
         self.providerLabel = providerLabel; self.model = model; self.machineName = machineName
         self.machineId = machineId
         self.matchKeys = matchKeys; self.ripulSession = ripulSession
-        self.cachedIsOpen = ripulSession != nil
+        self.cachedIsOpen = cachedIsOpen ?? (ripulSession != nil)
         self.tags = tags
         self.metadataKey = metadataKey ?? id
     }
 
+    // MARK: - Merge
+
+    /// Every key this row can be recognised by when merging it against the
+    /// previously-displayed list: its own id, its match keys, and the canonical
+    /// CLI uuid each of those resolves to. The uuid forms matter because the
+    /// SAME conversation is emitted under different ids depending on which
+    /// source won the rebuild (`chat_<ts>` as an orphan local, the host's id
+    /// once a remote row covers it) — string keys alone can't equate those.
+    public var mergeKeys: [String] {
+        let base = [id] + matchKeys
+        return base + base.map { UnifiedSession.cliUuid(for: $0) }
+    }
+
+    /// Copy of this row with a different (or no) matched Ripul tab, and
+    /// optionally a refreshed title.
+    ///
+    /// Exists so the rematch path cannot silently drop fields: it used to
+    /// re-run the memberwise init and omit `model`, `projectPath`, `tags` and
+    /// `metadataKey`, all of which default to nil/empty — which is what made
+    /// the row's leading icon fall back to the harness glyph mid-launch.
+    public func withRipulSession(_ match: ChatSession?, title newTitle: String? = nil) -> UnifiedSession {
+        UnifiedSession(
+            id: id, title: newTitle ?? title, lastUsed: lastUsed,
+            hasKnownActivity: hasKnownActivity, gitBranch: gitBranch,
+            messageCount: messageCount, projectName: projectName, projectPath: projectPath,
+            provider: provider, providerLabel: providerLabel, model: model,
+            machineName: machineName, machineId: machineId,
+            matchKeys: matchKeys, tags: tags, metadataKey: metadataKey,
+            // A title supplied here came from the local tab, so the row is no
+            // longer scan-titled; without a new title the provenance stands.
+            titleFromScan: newTitle == nil ? titleFromScan : false,
+            ripulSession: match
+        )
+    }
+
+    /// True when this row represents the given local tab — the same identity
+    /// test `build` uses, so a caller holding only a `ChatSession` (the chat
+    /// screen holds the active tab, not a row) can find its row.
+    public func represents(_ chat: ChatSession) -> Bool {
+        if ripulSession?.id == chat.id { return true }
+        var keys: Set<String> = [chat.id, chat.sourceChatId]
+        if chat.sourceChatId.hasPrefix("cli_") {
+            keys.insert(String(chat.sourceChatId.dropFirst(4)))
+        }
+        if let host = chat.hostChatId {
+            keys.insert(host)
+            if host.hasPrefix("cli_") { keys.insert(String(host.dropFirst(4))) }
+        }
+        keys.insert(UnifiedSession.cliUuid(for: chat.hostChatId ?? chat.sourceChatId))
+        return !Set(mergeKeys).isDisjoint(with: keys)
+    }
+
+    /// Copy of this row reporting a different model.
+    public func withModel(_ newModel: String?) -> UnifiedSession {
+        UnifiedSession(
+            id: id, title: title, lastUsed: lastUsed,
+            hasKnownActivity: hasKnownActivity, gitBranch: gitBranch,
+            messageCount: messageCount, projectName: projectName, projectPath: projectPath,
+            provider: provider, providerLabel: providerLabel, model: newModel,
+            machineName: machineName, machineId: machineId,
+            matchKeys: matchKeys, tags: tags, metadataKey: metadataKey,
+            cachedIsOpen: cachedIsOpen,
+            titleFromScan: titleFromScan,
+            ripulSession: ripulSession
+        )
+    }
+
+    /// Copy of this row with the project name and path filled in from a source
+    /// the builder didn't have (the host's own working directory).
+    public func withProject(name: String?, path: String?) -> UnifiedSession {
+        UnifiedSession(
+            id: id, title: title, lastUsed: lastUsed,
+            hasKnownActivity: hasKnownActivity, gitBranch: gitBranch,
+            messageCount: messageCount, projectName: name ?? projectName,
+            projectPath: path ?? projectPath,
+            provider: provider, providerLabel: providerLabel, model: model,
+            machineName: machineName, machineId: machineId,
+            matchKeys: matchKeys, tags: tags, metadataKey: metadataKey,
+            cachedIsOpen: cachedIsOpen,
+            titleFromScan: titleFromScan,
+            ripulSession: ripulSession
+        )
+    }
+
+    /// Fill in the fields this row has no opinion about from the row that was
+    /// on screen before it.
+    ///
+    /// Absence of evidence is not evidence of absence: a source that doesn't
+    /// know a session's model (a local tab, a scan that hasn't landed) reports
+    /// nil, and publishing that nil is what makes descriptive fields flicker
+    /// between renders. Nil means "no opinion" and loses to any previously
+    /// known value; a non-nil value always wins, so real changes still land.
+    ///
+    /// `lastUsed` follows provenance, not recency. It used to take the max, to
+    /// stop a noisy file mtime from re-sorting the list under the user's
+    /// finger. But max() cannot distinguish noise from a correction: once any
+    /// wrong-but-recent value landed on a row — a bumped mtime, or a local
+    /// tab's creation time standing in for activity — no accurate older value
+    /// could ever replace it, and the ratchet was persisted to the cache, so
+    /// the row stayed wrong across relaunches. A three-week-old conversation
+    /// read as "50 minutes ago" indefinitely.
+    ///
+    /// So: a source that KNOWS the activity wins outright, even moving the row
+    /// backwards. A source that is only guessing loses to a previously-known
+    /// value, and two guesses fall back to the old max() behaviour.
+    ///
+    /// - Parameters:
+    ///   - keepTagsWhenEmpty: Pass true when the tag map itself failed to load
+    ///     (no data for ANY session), so empty tags read as "not fetched"
+    ///     rather than "user removed them".
+    ///   - keepOpenFlagWhenUnmatched: Pass true while the local tab list is
+    ///     still loading — until then an unmatched row means "don't know yet",
+    ///     not "closed".
+    public func coalescing(
+        over previous: UnifiedSession?,
+        keepTagsWhenEmpty: Bool = false,
+        keepOpenFlagWhenUnmatched: Bool = false
+    ) -> UnifiedSession {
+        guard let previous else { return self }
+        let keepOpen = keepOpenFlagWhenUnmatched && ripulSession == nil && previous.isOpenInRipul
+        let mergedLastUsed: Date = {
+            if hasKnownActivity { return lastUsed }
+            if previous.hasKnownActivity { return previous.lastUsed }
+            return max(lastUsed, previous.lastUsed)
+        }()
+        return UnifiedSession(
+            id: id,
+            title: title,
+            lastUsed: mergedLastUsed,
+            hasKnownActivity: hasKnownActivity || previous.hasKnownActivity,
+            gitBranch: gitBranch ?? previous.gitBranch,
+            messageCount: messageCount ?? previous.messageCount,
+            projectName: projectName ?? previous.projectName,
+            projectPath: projectPath ?? previous.projectPath,
+            provider: provider ?? previous.provider,
+            providerLabel: providerLabel ?? previous.providerLabel,
+            model: model ?? previous.model,
+            machineName: machineName ?? previous.machineName,
+            machineId: machineId ?? previous.machineId,
+            matchKeys: matchKeys.isEmpty ? previous.matchKeys : matchKeys,
+            tags: (tags.isEmpty && keepTagsWhenEmpty) ? previous.tags : tags,
+            metadataKey: metadataKey,
+            cachedIsOpen: keepOpen ? true : cachedIsOpen,
+            ripulSession: ripulSession
+        )
+    }
+
     // MARK: - Cache
 
-    private static let cacheKey = "ripulUnifiedSessionsCache"
+    /// v2: entries written before `hasKnownActivity` existed can hold a
+    /// lastUsed the old max() ratchet locked in — a bumped file mtime or a tab's
+    /// creation time that no correct value could displace. Reading them back
+    /// would reseed exactly the wrong dates this key was bumped to clear, so
+    /// the old cache is abandoned rather than migrated.
+    private static let cacheKey = "ripulUnifiedSessionsCacheV2"
 
     public static func loadCached(cache: RipulSessionCache) -> [UnifiedSession] {
         guard let data = cache.data(forKey: cacheKey) else { return [] }
@@ -284,7 +470,10 @@ public struct UnifiedSession: Identifiable, Codable {
             result.append(UnifiedSession(
                 id: r.id,
                 title: r.displayName,
+                // lastModified is the scanner's real last-message time; createdAt
+                // is only a stand-in, so a row falling back to it is guessing.
                 lastUsed: r.lastModified ?? r.createdAt,
+                hasKnownActivity: r.lastModified != nil,
                 gitBranch: r.gitBranch,
                 messageCount: r.messageCount,
                 projectName: r.projectName,
@@ -297,6 +486,7 @@ public struct UnifiedSession: Identifiable, Codable {
                 matchKeys: rowKeys,
                 tags: resolveTags(rowKeys),
                 metadataKey: canonicalKey(r.sourceChatId),
+                titleFromScan: true,
                 ripulSession: ripulMatch
             ))
         }
@@ -332,17 +522,33 @@ public struct UnifiedSession: Identifiable, Codable {
             result.append(UnifiedSession(
                 id: s.id,
                 title: s.displayName,
+                // A local tab knows when IT was opened, not when the conversation
+                // last moved. Flagged as a guess so a real scan overrides it.
                 lastUsed: s.createdAt,
-                gitBranch: nil,
+                hasKnownActivity: false,
+                // Facts published over SessionChannel, when the session sent
+                // any. A local tab normally has none — the remote scan above
+                // is where repo/branch come from — but a share-link guest is
+                // never scanned (its pairing is a synthetic shared-<roomId>
+                // machine holding no files), so this is the only route by
+                // which its row learns what work the session is doing.
+                gitBranch: s.gitBranch,
                 messageCount: nil,
-                projectName: nil,
+                projectName: s.projectName,
+                // No absolute path travels with the facts, deliberately: the
+                // row shows a project name, and a guest invited to a
+                // conversation shouldn't receive the owner's directory layout.
                 projectPath: nil,
                 provider: s.provider,
                 providerLabel: s.providerLabel,
+                model: s.model,
                 machineName: s.remoteMachineName,
                 machineId: nil,
                 tags: resolveTags([s.id, s.sourceChatId]),
                 metadataKey: canonicalKey(s.sourceChatId),
+                // Orphan: no scan row covered this conversation, so the local
+                // tab is the ONLY title source and must stay free to update it.
+                titleFromScan: false,
                 ripulSession: s
             ))
         }
@@ -360,7 +566,12 @@ extension UnifiedSession: Equatable {
         lhs.id == rhs.id &&
         lhs.title == rhs.title &&
         lhs.lastUsed == rhs.lastUsed &&
+        lhs.hasKnownActivity == rhs.hasKnownActivity &&
         lhs.machineName == rhs.machineName &&
+        // machineId is the routing ADDRESS for open/archive/delete. Omitting
+        // it let a rebuild that only corrected the owner be dropped by the
+        // "nothing changed" gate, freezing a wrong attribution on screen.
+        lhs.machineId == rhs.machineId &&
         lhs.provider == rhs.provider &&
         lhs.providerLabel == rhs.providerLabel &&
         lhs.model == rhs.model &&
@@ -368,6 +579,12 @@ extension UnifiedSession: Equatable {
         lhs.projectName == rhs.projectName &&
         lhs.gitBranch == rhs.gitBranch &&
         lhs.tags == rhs.tags &&
+        // Both drive what the row shows: projectPath re-roots the folder tree,
+        // cachedIsOpen is half of `isOpenInRipul` (the green dot). Omitting
+        // them let a rebuild that ONLY corrects one of them be dropped by the
+        // "nothing changed" gate, so the stale value stayed on screen.
+        lhs.projectPath == rhs.projectPath &&
+        lhs.cachedIsOpen == rhs.cachedIsOpen &&
         lhs.ripulSession?.id == rhs.ripulSession?.id
     }
 }
@@ -401,11 +618,30 @@ public enum RemoteSessionScan {
             for await pair in group { collected.append(pair) }
         }
 
+        // Collapse cross-machine duplicates of one session id instead of
+        // last-writer-wins (task-group completion order is nondeterministic,
+        // so the winning machine flipped between refreshes). Prefer the row
+        // backed by a real CLI scan (provider/lastModified present) over a
+        // tab-fallback echo from a machine that merely has the chat open.
         var sessions: [RemoteSessionInfo] = []
         var names: [String: String] = [:]
+        var indexById: [String: Int] = [:]
+        func scanScore(_ s: RemoteSessionInfo) -> Int {
+            (s.provider != nil ? 2 : 0) + (s.lastModified != nil ? 1 : 0)
+        }
         for (name, list) in collected {
-            sessions.append(contentsOf: list)
-            for s in list { names[s.id] = name }
+            for s in list {
+                if let i = indexById[s.id] {
+                    if scanScore(s) > scanScore(sessions[i]) {
+                        sessions[i] = s
+                        names[s.id] = name
+                    }
+                } else {
+                    indexById[s.id] = sessions.count
+                    sessions.append(s)
+                    names[s.id] = name
+                }
+            }
         }
         return (sessions, names)
     }

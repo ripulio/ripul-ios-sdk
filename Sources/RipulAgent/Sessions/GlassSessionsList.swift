@@ -4,25 +4,43 @@ import Foundation
 import UIKit
 #endif
 
+// MARK: - Panel Stack Measurement
+
+/// Height available to the panel stack, used to decide when the machines panel
+/// must scroll its own contents instead of overflowing its band.
+private struct SessionsPanelStackHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
 // MARK: - Shared Callbacks
 
 public struct SessionsListCallbacks {
     var onFocusSession: (ChatSession) -> Void = { _ in }
     var onConnect: (RemoteMachine) -> Void = { _ in }
-    var onNewCliSession: ((RemoteMachine, String) -> Void)?
+    /// Start a CLI session: (machine, providerKey, modelId). `modelId` is the
+    /// catalog model to pin the chat to — nil means "this harness's default".
+    var onNewCliSession: ((RemoteMachine, String, String?) -> Void)?
+    /// Start a non-CLI API chat pinned to the given catalog model id
+    /// (e.g. "backend-claude-fable-5"). No machine required.
+    var onNewApiSession: ((String) -> Void)?
     var onRestart: ((RemoteMachine) -> Void)?
     var onToggleMachineDisabled: ((RemoteMachine) -> Void)?
 
     public init(
         onFocusSession: @escaping (ChatSession) -> Void = { _ in },
         onConnect: @escaping (RemoteMachine) -> Void = { _ in },
-        onNewCliSession: ((RemoteMachine, String) -> Void)? = nil,
+        onNewCliSession: ((RemoteMachine, String, String?) -> Void)? = nil,
+        onNewApiSession: ((String) -> Void)? = nil,
         onRestart: ((RemoteMachine) -> Void)? = nil,
         onToggleMachineDisabled: ((RemoteMachine) -> Void)? = nil
     ) {
         self.onFocusSession = onFocusSession
         self.onConnect = onConnect
         self.onNewCliSession = onNewCliSession
+        self.onNewApiSession = onNewApiSession
         self.onRestart = onRestart
         self.onToggleMachineDisabled = onToggleMachineDisabled
     }
@@ -89,7 +107,9 @@ public struct GlassSessionsList: View {
     var remoteActionsByMachine: [String: [RemoteActionDescriptor]] = [:]
     var onExecuteAction: ((RemoteMachine, RemoteActionDescriptor, [String: Any]) async -> [String: Any])? = nil
     /// Optional invites panel section, rendered where the app's InviteManager UI was.
-    var invitesSection: (() -> AnyView)? = nil
+    /// Handed this list's own open/dismiss actions so accepting an invite can
+    /// land the user in the joined chat.
+    var invitesSection: ((InvitesSectionActions) -> AnyView)? = nil
     /// Optional folders (file browser) section, rendered where FolderTreeSection was.
     var foldersSection: (() -> AnyView)? = nil
     /// Developer's solution-shaping controls (collections, contexts, testing
@@ -110,19 +130,25 @@ public struct GlassSessionsList: View {
     @AppStorage("ripul.embeddedOnboardingDismissed") private var embeddedOnboardingDismissed = false
     @State private var machinesExpanded = true
     @State private var expandedMachineId: String? = nil
+    /// Height of the panel stack, measured from its own frame. Feeds the
+    /// machine panel's expansion ceiling — see `machinePanelCap`.
+    @State private var panelStackHeight: CGFloat = 0
     @State private var sessionsExpanded = true
     @State private var isSelecting = false
     @State private var selectedSessionIds: Set<String> = []
-    /// Optimistic active-row override: set immediately on tap so the selection
-    /// highlight snaps to user intent instead of waiting for the async
-    /// bridge.activeSessionId (selectedSessionId) round-trip. Cleared whenever
-    /// selectedSessionId changes (bridge confirmed, or a remote focus moved it).
-    @State private var optimisticActiveId: String?
+    // NOTE: the optimistic active-row override now lives inside GlassRichList,
+    // which owns the tap that sets it and the `activeToken` change that clears
+    // it. Keeping a copy here would have meant two sources for one highlight.
     @State private var selectedProjectFilter: String? = nil
     @State private var selectedTagFilter: String? = nil
+    /// The shared work scope, re-read rather than cached — see `refreshWorkScope`.
+    @State private var workScope: WorkScopeState? = nil
     @State private var showBatchArchiveConfirm = false
     @State private var showBatchDeleteConfirm = false
     @State private var quickLaunchLoading: String?
+    /// Bumped on QuickLaunchPreferences.didChangeNotification to force the
+    /// shortcut strip to re-read the cache after a Settings edit.
+    @State private var quickLaunchRevision = 0
     @State private var presentedPlan: (content: String, fileName: String)? = nil
     /// Session whose tags are being edited (drives the tags editor sheet).
     @State private var taggingSession: UnifiedSession? = nil
@@ -163,7 +189,7 @@ public struct GlassSessionsList: View {
         onDiscoverActions: ((RemoteMachine) -> Void)? = nil,
         remoteActionsByMachine: [String: [RemoteActionDescriptor]] = [:],
         onExecuteAction: ((RemoteMachine, RemoteActionDescriptor, [String: Any]) async -> [String: Any])? = nil,
-        invitesSection: (() -> AnyView)? = nil,
+        invitesSection: ((InvitesSectionActions) -> AnyView)? = nil,
         foldersSection: (() -> AnyView)? = nil,
         solutionManagement: RipulSolutionManagement? = nil,
         emptyStateOverride: (() -> AnyView)? = nil,
@@ -226,63 +252,146 @@ public struct GlassSessionsList: View {
         )
     }
 
+    /// Machines this panel should show: chat hosts. A browser host (Chrome +
+    /// extension) is a legitimate machine in the registry, but it only serves
+    /// tab mirrors — it can't run CLI sessions, so a row here would promise
+    /// pairing and host actions it can't deliver. It appears where its
+    /// capability lives instead (the Remote Tabs machine picker and the
+    /// sidebar's per-machine sections).
+    ///
+    /// Display order is default-starred first, then alphabetical: the server
+    /// sends most-recently-active, which reshuffled the list under the user's
+    /// finger every time a machine checked in. `defaultMachineId` is an
+    /// @AppStorage, so setting/clearing the star re-sorts reactively.
+    private var chatHostMachines: [RemoteMachine] {
+        machines
+            .filter { $0.can("cli") }
+            .sorted { a, b in
+                let aDefault = a.machineId == defaultMachineId
+                let bDefault = b.machineId == defaultMachineId
+                if aDefault != bDefault { return aDefault }
+                return a.displayName.localizedCaseInsensitiveCompare(b.displayName) == .orderedAscending
+            }
+    }
+
     private var machineNamesSummary: String {
-        machines.map(\.displayName).joined(separator: ", ")
+        chatHostMachines.map(\.displayName).joined(separator: ", ")
     }
 
     /// The machine used for quick-launch buttons on the collapsed panel header.
     private var quickLaunchMachine: RemoteMachine? {
-        machines.first { $0.machineId == defaultMachineId && $0.isOnline && !$0.isDisabled(cache: cache) }
-            ?? machines.first { $0.isOnline && !$0.isDisabled(cache: cache) }
+        chatHostMachines.first { $0.machineId == defaultMachineId && $0.isOnline && !$0.isDisabled(cache: cache) }
+            ?? chatHostMachines.first { $0.isOnline && !$0.isDisabled(cache: cache) }
+    }
+
+    /// How tall an expanded machine body may grow before it has to scroll
+    /// itself, when the machine row IS the panel.
+    ///
+    /// The panel stack in `body` has no scroll container of its own: Sessions
+    /// gets away with a greedy `List` and Folders caps its own scroller, but an
+    /// expanded machine body is ~600-700pt of inflexible tiles. When the stack
+    /// can't fit it, the VStack draws it at full height CENTERED on its
+    /// allotted band — which is how the panel ends up bleeding upward under the
+    /// top safe area. Handing the row a ceiling makes it scroll instead.
+    ///
+    /// Expressed as a share of the stack rather than "everything minus a
+    /// reserve": the body grows on its own after it opens (remote actions and
+    /// the host's Claude-account row both arrive async), so an arithmetic
+    /// reserve is a guess that goes stale. Half the stack leaves room for the
+    /// row's own header plus the Sessions / Folders / Solution headers on any
+    /// screen size. Nil until measured, which means "no ceiling" — the row
+    /// still bounds itself by its own natural height.
+    private var machinePanelCap: CGFloat? {
+        guard panelStackHeight > 0 else { return nil }
+        return max(260, panelStackHeight * 0.5)
+    }
+
+    /// The same ceiling for a row inside the multi-machine panel, which also
+    /// has to leave room for the panel's own header and the other machines'
+    /// collapsed rows.
+    private var machineRowCap: CGFloat? {
+        guard let cap = machinePanelCap else { return nil }
+        return max(220, cap - 44 - CGFloat(max(0, chatHostMachines.count - 1)) * 64)
     }
 
     @ViewBuilder
     private var machinesPanelSection: some View {
-        GlassSectionPanel(
-            title: "Remote Machines",
-            subtitle: machineNamesSummary,
-            isExpanded: $machinesExpanded,
-            trailing: { machinesPanelTrailing }
-        ) {
-            ForEach(machines) { machine in
-                if machine.id != machines.first?.id {
-                    Divider().padding(.horizontal, 16)
-                }
-                MachineRowExpandable(
-                    machine: machine,
-                    activeSessions: bridge.sessions.filter { $0.remoteMachineName == machine.displayName },
-                    isConnecting: connectingMachineId == machine.machineId,
-                    isExpanded: machineExpandedBinding(for: machine),
-                    onConnect: { callbacks.onConnect(machine) },
-                    onFocusSession: { session in callbacks.onFocusSession(session) },
-                    onNewCliSession: callbacks.onNewCliSession,
-                    onRestart: callbacks.onRestart,
-                    onToggleDisabled: callbacks.onToggleMachineDisabled,
-                    isRestarting: restartingMachineId == machine.machineId,
-                    isRestartSucceeded: restartSucceededId == machine.machineId,
-                    allowRipulAgents: allowRipulAgents,
-                    machineIcon: machine.icon(cache: cache),
-                    isMachineDisabled: machine.isDisabled(cache: cache),
-                    defaultMachineId: defaultMachineId,
-                    onSetDefault: { self.defaultMachineId = $0 },
-                    onSetIcon: { RemoteMachine.setIcon($0, for: machine.machineId, cache: cache) },
-                    onDiscoverActions: onDiscoverActions,
-                    remoteActions: remoteActionsByMachine[machine.machineId] ?? [],
-                    onExecuteAction: onExecuteAction.map { exec in
-                        { action, params in await exec(machine, action, params) }
-                    }
-                )
+        // One machine needs no list around it. The "Machines" wrapper would be
+        // a disclosure whose subtitle is that machine's name, containing a
+        // second disclosure for the same machine — two chevrons and the name
+        // twice to reach one row. Promote the row to be the panel instead; the
+        // header disappears, and the machine's own disclosure still reaches
+        // restart / set-default / set-icon.
+        if chatHostMachines.count == 1, let machine = chatHostMachines.first {
+            machineRow(for: machine, alwaysShowQuickLaunch: true, maxExpandedHeight: machinePanelCap)
                 .padding(.horizontal, 16)
-                .padding(.vertical, 4)
+                .padding(.vertical, 10)
+                .modifier(GlassPanelBackground())
+                .uiKitIdentifier("GlassSessionsList.machines.soloPanel")
+        } else {
+            GlassSectionPanel(
+                title: "Machines",
+                subtitle: machineNamesSummary,
+                isExpanded: $machinesExpanded,
+                collapsedAccessory: { machinesPanelTrailing }
+            ) {
+                ForEach(chatHostMachines) { machine in
+                    if machine.id != chatHostMachines.first?.id {
+                        Divider().padding(.horizontal, 16)
+                    }
+                    machineRow(for: machine, maxExpandedHeight: machineRowCap)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 4)
+                }
+            }
+            .uiKitIdentifier("GlassSessionsList.machines.panel")
+            .contentShape(Rectangle())
+            .onTapGesture {
+                #if os(iOS)
+                UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                #endif
             }
         }
-        .uiKitIdentifier("GlassSessionsList.machines.panel")
-        .contentShape(Rectangle())
-        .onTapGesture {
-            #if os(iOS)
-            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
-            #endif
-        }
+    }
+
+    @ViewBuilder
+    private func machineRow(
+        for machine: RemoteMachine,
+        alwaysShowQuickLaunch: Bool = false,
+        maxExpandedHeight: CGFloat? = nil
+    ) -> some View {
+        MachineRowExpandable(
+            machine: machine,
+            activeSessions: bridge.sessions.filter { $0.remoteMachineName == machine.displayName },
+            isConnecting: connectingMachineId == machine.machineId,
+            isExpanded: machineExpandedBinding(for: machine),
+            onConnect: { callbacks.onConnect(machine) },
+            onFocusSession: { session in callbacks.onFocusSession(session) },
+            onNewCliSession: callbacks.onNewCliSession,
+            onNewApiSession: callbacks.onNewApiSession,
+            quickLaunchTargets: quickLaunchTargets,
+            quickLaunchAllTargets: offerableQuickLaunchTargets,
+            quickLaunchCache: cache,
+            quickLaunchShowCircles: quickLaunchShowCircles,
+            alwaysShowQuickLaunch: alwaysShowQuickLaunch,
+            onRestart: callbacks.onRestart,
+            onToggleDisabled: callbacks.onToggleMachineDisabled,
+            isRestarting: restartingMachineId == machine.machineId,
+            isRestartSucceeded: restartSucceededId == machine.machineId,
+            maxExpandedHeight: maxExpandedHeight,
+            allowRipulAgents: allowRipulAgents,
+            machineIcon: machine.icon(cache: cache),
+            isMachineDisabled: machine.isDisabled(cache: cache),
+            defaultMachineId: defaultMachineId,
+            onSetDefault: { self.defaultMachineId = $0 },
+            onSetIcon: { RemoteMachine.setIcon($0, for: machine.machineId, cache: cache) },
+            onDiscoverActions: onDiscoverActions,
+            remoteActions: remoteActionsByMachine[machine.machineId] ?? [],
+            onExecuteAction: onExecuteAction.map { exec in
+                { action, params in await exec(machine, action, params) }
+            },
+            hostAuthBridge: bridge
+        )
     }
 
     @ViewBuilder
@@ -319,218 +428,213 @@ public struct GlassSessionsList: View {
                         .uiKitIdentifier("GlassSessionsList.sessions.searchField")
                         .padding(.horizontal, 16)
                         .padding(.top, 4)
-                } else if !searchText.isEmpty {
-                    Color.clear.frame(height: 0).onAppear { searchText = "" }
                 }
 
-                if isLoadingRemoteSessions && unifiedSessions.isEmpty {
-                    HStack {
-                        Spacer()
-                        ProgressView().controlSize(.small)
-                            .uiKitIdentifier("GlassSessionsList.sessions.loadingSpinner")
-                        Text("Loading sessions...")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .uiKitIdentifier("GlassSessionsList.sessions.loadingText")
-                        Spacer()
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 8)
-                } else if unifiedSessions.isEmpty {
-                    Text("No sessions found.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 8)
-                        .uiKitIdentifier("GlassSessionsList.sessions.emptyText")
-                } else if sessions.isEmpty {
-                    Text("No matches for \"\(searchText)\".")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 8)
-                        .uiKitIdentifier("GlassSessionsList.sessions.noMatchesText")
-                } else {
-                    List {
-                        ForEach(sessions) { session in
-                            // Optimistic override beats the async selectedSessionId so the
-                            // active highlight snaps on tap; nil falls back to the confirmed value.
-                            let activeId = optimisticActiveId ?? selectedSessionId
-                            let isActiveRow = activeId != nil
-                                && (session.ripulSession?.id == activeId || session.id == activeId)
-                            UnifiedSessionRow(
-                                sessionStore: sessionStore,
-                                session: session,
-                                cachedLastActive: lastActiveBySessionId[session.id],
-                                // Spinner runs while navigating — keyed on navigatingToSessionId
-                                // (cleared after slide animation) rather than openingUnifiedSessionId
-                                // (cleared before onSelect fires, too early for the sweep + animation).
-                                // Guard the navigating clauses on a non-nil navigatingToSessionId:
-                                // session.ripulSession?.id is nil for un-imported rows, and a bare
-                                // `nil == nil` would pin the spinner ON for every such row at rest.
-                                isOpening: openingUnifiedSessionId == session.id
-                                    || (navigationStore.navigatingToSessionId != nil
-                                        && (navigationStore.navigatingToSessionId == session.ripulSession?.id
-                                            || navigationStore.navigatingToSessionId == session.id)),
-                                isArchiving: archivingUnifiedSessionId == session.id,
-                                isDeleting: deletingUnifiedSessionId == session.id,
-                                isDeletingFromHost: deletingUnifiedSessionId == session.id && deletingFromHost,
-                                machineIcon: session.machineName.flatMap { machineIcons[$0] },
-                                hideProjectName: activeProjectFilter != nil,
-                                isSelectMode: isSelecting,
-                                isSelected: selectedSessionIds.contains(session.id),
-                                onSessionAction: { action in
-                                    handleSessionAction(action, session: session)
-                                }
-                            )
-                            .contentShape(Rectangle())
-                            .onTapGesture {
-                                if isSelecting {
-                                    if selectedSessionIds.contains(session.id) {
-                                        selectedSessionIds.remove(session.id)
-                                    } else {
-                                        selectedSessionIds.insert(session.id)
-                                    }
-                                } else {
-                                    optimisticActiveId = session.id   // snap highlight to intent
-                                    onOpenUnifiedSession(session)
-                                }
-                            }
-                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                                if !isSelecting {
-                                    Button {
-                                        onArchiveUnifiedSession(session)
-                                    } label: {
-                                        Label("Archive", systemImage: "archivebox.fill")
-                                    }
-                                    .uiKitIdentifier("GlassSessionsList.sessions.swipeArchiveButton")
-                                    .tint(.orange)
-                                }
-                            }
-                            .contextMenu {
-                                if !isSelecting {
-                                    Button {
-                                        onArchiveUnifiedSession(session)
-                                    } label: {
-                                        Label("Archive", systemImage: "archivebox")
-                                    }
-                                    .uiKitIdentifier("GlassSessionsList.contextMenu.archiveButton")
-                                    if let ripulTab = session.ripulSession {
-                                        Button {
-                                            renameText = ""
-                                            renamingSession = ripulTab
-                                        } label: {
-                                            Label("Rename", systemImage: "pencil")
-                                        }
-                                        .uiKitIdentifier("GlassSessionsList.contextMenu.renameButton")
-                                    }
-                                    Button {
-                                        taggingSession = session
-                                    } label: {
-                                        Label("Tags…", systemImage: "tag")
-                                    }
-                                    .uiKitIdentifier("GlassSessionsList.contextMenu.tagsButton")
-                                    let moveTargets = machines.filter { m in
-                                        m.isOnline && m.displayName != session.machineName
-                                    }
-                                    if !moveTargets.isEmpty {
-                                        Menu {
-                                            ForEach(moveTargets) { target in
-                                                Button {
-                                                    onMoveUnifiedSession(session, target)
-                                                } label: {
-                                                    Label(target.displayName, systemImage: "desktopcomputer")
-                                                }
-                                                .uiKitIdentifier("GlassSessionsList.contextMenu.moveTarget")
-                                            }
-                                        } label: {
-                                            Label("Move to Machine…", systemImage: "arrow.right.circle")
-                                        }
-                                        .uiKitIdentifier("GlassSessionsList.contextMenu.moveMenu")
-                                    }
-                                    Divider()
-                                    Picker(selection: Binding(
-                                        get: { navigationStore.showThinkingMode },
-                                        set: { mode in Task { await bridge.setShowThinking(mode) } }
-                                    ), label: Label("Thinking", systemImage: "brain.head.profile")) {
-                                        Text("None").tag("none")
-                                        Text("Folded").tag("folded")
-                                        Text("Open").tag("open")
-                                    }
-                                    .pickerStyle(.palette)
-                                    .uiKitIdentifier("GlassSessionsList.contextMenu.thinkingPicker")
-                                    Divider()
-                                    Button {
-                                        onRemoveFromRipulUnifiedSession(session)
-                                    } label: {
-                                        Label("Remove from Ripul", systemImage: "minus.circle")
-                                    }
-                                    .uiKitIdentifier("GlassSessionsList.contextMenu.removeFromRipulButton")
-                                }
-                            }
-                            .listRowBackground(
-                                isSelecting && selectedSessionIds.contains(session.id)
-                                    ? Color.accentColor.opacity(0.08)
-                                    : isActiveRow
-                                        ? Color.accentColor.opacity(0.18)   // active — snaps on tap (optimistic), then confirmed
-                                        : openingUnifiedSessionId == session.id
-                                            ? Color.accentColor.opacity(0.12)
-                                            : archivingUnifiedSessionId == session.id
-                                                ? Color.orange.opacity(0.12)
-                                                : deletingUnifiedSessionId == session.id
-                                                    ? Color.red.opacity(0.12)
-                                                    : Color.clear
-                            )
-                            .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+                GlassRichList(
+                    items: sessions,
+                    emptyState: emptyState(visible: sessions.count),
+                    identifierPrefix: "GlassSessionsList.sessions",
+                    activity: activity(for:),
+                    isSelecting: isSelecting,
+                    selectedIds: selectedSessionIds,
+                    // Two identities per row: the unified row's own id and its
+                    // live web tab's. Collapsing them to one would stop
+                    // highlighting every row that opened via a tab.
+                    isActive: { session in
+                        guard let activeId = selectedSessionId else { return false }
+                        return session.ripulSession?.id == activeId || session.id == activeId
+                    },
+                    activeToken: selectedSessionId,
+                    onTap: { onOpenUnifiedSession($0) },
+                    onToggleSelect: { session in
+                        if selectedSessionIds.contains(session.id) {
+                            selectedSessionIds.remove(session.id)
+                        } else {
+                            selectedSessionIds.insert(session.id)
                         }
+                    },
+                    onRefresh: onRefresh,
+                    row: { session in
+                        UnifiedSessionRow(
+                            sessionStore: sessionStore,
+                            session: session,
+                            cachedLastActive: lastActiveBySessionId[session.id],
+                            // Spinner runs while navigating — keyed on navigatingToSessionId
+                            // (cleared after slide animation) rather than openingUnifiedSessionId
+                            // (cleared before onSelect fires, too early for the sweep + animation).
+                            // Guard the navigating clauses on a non-nil navigatingToSessionId:
+                            // session.ripulSession?.id is nil for un-imported rows, and a bare
+                            // `nil == nil` would pin the spinner ON for every such row at rest.
+                            isOpening: openingUnifiedSessionId == session.id
+                                || (navigationStore.navigatingToSessionId != nil
+                                    && (navigationStore.navigatingToSessionId == session.ripulSession?.id
+                                        || navigationStore.navigatingToSessionId == session.id)),
+                            isArchiving: archivingUnifiedSessionId == session.id,
+                            isDeleting: deletingUnifiedSessionId == session.id,
+                            isDeletingFromHost: deletingUnifiedSessionId == session.id && deletingFromHost,
+                            machineIcon: session.machineName.flatMap { machineIcons[$0] },
+                            hideProjectName: activeProjectFilter != nil,
+                            isSelectMode: isSelecting,
+                            isSelected: selectedSessionIds.contains(session.id),
+                            onSessionAction: { action in
+                                handleSessionAction(action, session: session)
+                            }
+                        )
+                    },
+                    swipe: { session in
+                        Button {
+                            onArchiveUnifiedSession(session)
+                        } label: {
+                            Label("Archive", systemImage: "archivebox.fill")
+                        }
+                        .uiKitIdentifier("GlassSessionsList.sessions.swipeArchiveButton")
+                        .tint(.orange)
+                    },
+                    rowMenu: { session in
+                        sessionContextMenu(session)
                     }
-                    .listStyle(.plain)
-                    .scrollContentBackground(.hidden)
-                    .onChange(of: selectedSessionId) { _, _ in
-                        // Bridge confirmed (or a remote focus moved) the active session;
-                        // drop the optimistic override so the highlight follows the bridge.
-                        optimisticActiveId = nil
-                    }
-                    #if os(iOS)
-                    .scrollDismissesKeyboard(.interactively)
-                    #endif
-                    .animation(.easeInOut(duration: 0.3), value: sessions.map(\.id))
-                    .refreshable {
-                        if let onRefresh { await onRefresh() }
-                    }
-                }
+                )
             }
         }
     }
 
+    /// Which resting state the list is in, or nil when it has rows to draw.
+    ///
+    /// "No machine has answered yet" is Sessions' own version of `unresolved`
+    /// and has no Plans equivalent — Plans resolves against exactly one
+    /// machine+folder, so its unresolved case is "no folder". Same slot,
+    /// different sentence, which is why the component takes the string.
+    private func emptyState(visible: Int) -> GlassListEmptyState? {
+        if isLoadingRemoteSessions && unifiedSessions.isEmpty { return .loading }
+        if unifiedSessions.isEmpty { return .empty("No sessions found.") }
+        if visible == 0 { return .noMatches("No matches for \"\(searchText)\".") }
+        return nil
+    }
+
+    /// The five in-flight inputs, reduced to the one thing the list needs.
+    /// Rest is `.idle`; the row draws its own spinner from the same inputs.
+    private func activity(for session: UnifiedSession) -> GlassRowActivity {
+        if deletingUnifiedSessionId == session.id { return .deleting }
+        if archivingUnifiedSessionId == session.id { return .archiving }
+        if openingUnifiedSessionId == session.id { return .opening }
+        return .idle
+    }
+
+    /// Session-vocabulary row actions. Stays here rather than in the shared
+    /// component: thinking mode, move-to-machine and remove-from-Ripul mean
+    /// nothing to a plan.
+    @ViewBuilder
+    private func sessionContextMenu(_ session: UnifiedSession) -> some View {
+        Button {
+            onArchiveUnifiedSession(session)
+        } label: {
+            Label("Archive", systemImage: "archivebox")
+        }
+        .uiKitIdentifier("GlassSessionsList.contextMenu.archiveButton")
+        if let ripulTab = session.ripulSession {
+            Button {
+                renameText = ""
+                renamingSession = ripulTab
+            } label: {
+                Label("Rename", systemImage: "pencil")
+            }
+            .uiKitIdentifier("GlassSessionsList.contextMenu.renameButton")
+        }
+        Button {
+            taggingSession = session
+        } label: {
+            Label("Tags…", systemImage: "tag")
+        }
+        .uiKitIdentifier("GlassSessionsList.contextMenu.tagsButton")
+        let moveTargets = machines.filter { m in
+            m.isOnline && m.displayName != session.machineName
+        }
+        if !moveTargets.isEmpty {
+            Menu {
+                ForEach(moveTargets) { target in
+                    Button {
+                        onMoveUnifiedSession(session, target)
+                    } label: {
+                        Label(target.displayName, systemImage: "desktopcomputer")
+                    }
+                    .uiKitIdentifier("GlassSessionsList.contextMenu.moveTarget")
+                }
+            } label: {
+                Label("Move to Machine…", systemImage: "arrow.right.circle")
+            }
+            .uiKitIdentifier("GlassSessionsList.contextMenu.moveMenu")
+        }
+        Divider()
+        Picker(selection: Binding(
+            get: { navigationStore.showThinkingMode },
+            set: { mode in Task { await bridge.setShowThinking(mode) } }
+        ), label: Label("Thinking", systemImage: "brain.head.profile")) {
+            Text("None").tag("none")
+            Text("Folded").tag("folded")
+            Text("Open").tag("open")
+        }
+        .pickerStyle(.palette)
+        .uiKitIdentifier("GlassSessionsList.contextMenu.thinkingPicker")
+        Divider()
+        Button {
+            onRemoveFromRipulUnifiedSession(session)
+        } label: {
+            Label("Remove from Ripul", systemImage: "minus.circle")
+        }
+        .uiKitIdentifier("GlassSessionsList.contextMenu.removeFromRipulButton")
+    }
+
+    /// The user's configured quick-start shortcuts, resolved against the live
+    /// catalog. Empty when the strip is switched off in Settings. Reading
+    /// `quickLaunchRevision` ties this to the preferences notification —
+    /// UserDefaults writes don't invalidate a SwiftUI view on their own, so
+    /// without it a Settings edit wouldn't reach an already-rendered list.
+    private var quickLaunchTargets: [QuickLaunchTarget] {
+        _ = quickLaunchRevision
+        return QuickLaunchPreferences.targets(models: bridge.availableModels, cache: cache)
+    }
+
+    /// Everything the picker may offer — the full CLI catalog plus the API
+    /// group, regardless of what the user has pinned. Unlike `quickLaunchTargets`
+    /// this ignores the enabled flag and the stored selection: the picker's job
+    /// is to show what exists so the user can pin it.
+    private var offerableQuickLaunchTargets: [QuickLaunchTarget] {
+        _ = quickLaunchRevision
+        return QuickLaunchPreferences.offerableTargets(models: bridge.availableModels)
+    }
+
+    /// Whether the strips draw per-model circles or the lone "New Session"
+    /// button. Same revision dependency as the targets — a Settings toggle
+    /// reaches an already-rendered list only through the notification.
+    private var quickLaunchShowCircles: Bool {
+        _ = quickLaunchRevision
+        return QuickLaunchPreferences.showCircles(cache: cache)
+    }
+
+    /// Quick-start shortcuts for the panel's default machine, on their own row
+    /// beneath the header while the panel is collapsed. It used to be the
+    /// header's trailing accessory, which squeezed the title and the machine-name
+    /// subtitle once the set became user-sized — and matches how each machine
+    /// row now carries its own strip.
+    ///
+    /// The panel renders this only when collapsed, so no `machinesExpanded`
+    /// check is needed here.
     @ViewBuilder
     private var machinesPanelTrailing: some View {
-        if !machinesExpanded, let machine = quickLaunchMachine {
-            HStack(spacing: 6) {
-                if let newCliAction = callbacks.onNewCliSession {
-                    ForEach(ProviderConstants.cliProviders, id: \.id) { provider in
-                        Button {
-                            quickLaunchLoading = provider.id
-                            newCliAction(machine, provider.providerKey!)
-                        } label: {
-                            Group {
-                                if quickLaunchLoading == provider.id {
-                                    ProgressView().controlSize(.small)
-                                } else {
-                                    Image(systemName: provider.sfSymbol)
-                                        .font(.system(size: 14, weight: .semibold))
-                                        .foregroundStyle(Color(hex: provider.color))
-                                }
-                            }
-                            .frame(width: 32, height: 32)
-                        }
-                        .modifier(GlassCircleModifier(glassStyle: "regular"))
-                        .buttonStyle(.plain)
-                        .uiKitIdentifier("GlassSessionsList.machines.quick\(provider.id)")
-                    }
-                }
-            }
-        }
+        QuickLaunchStrip(
+            targets: quickLaunchTargets,
+            machine: quickLaunchMachine,
+            loadingId: $quickLaunchLoading,
+            identifierPrefix: "GlassSessionsList.machines",
+            onNewCliSession: callbacks.onNewCliSession,
+            onNewApiSession: callbacks.onNewApiSession,
+            allTargets: offerableQuickLaunchTargets,
+            cache: cache,
+            showCircles: quickLaunchShowCircles
+        )
+        .padding(.horizontal, 16)
+        .padding(.bottom, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     /// Distinct project names across all sessions, sorted case-insensitively.
@@ -570,16 +674,89 @@ public struct GlassSessionsList: View {
 
     /// Picker binding that reads through `activeProjectFilter` so an invalid
     /// stale selection presents as "All Projects" without extra bookkeeping.
+    ///
+    /// A pure VIEW FILTER: it narrows the rows and nothing else. It used to also
+    /// set `pendingNewChatWorkingDirectory`, which quietly made "show me this
+    /// project" and "put new work here" the same gesture — so you could not do
+    /// either without the other. That mirror still exists (dropping it would
+    /// regress new-chat placement) but is now fed by the work scope below, which
+    /// is persisted and shared with Plans rather than dying with this view.
     private var projectFilterBinding: Binding<String?> {
         Binding(get: { activeProjectFilter }, set: { newValue in
             selectedProjectFilter = newValue
-            // Mirror the picked project's cwd to the bridge so the NEXT new chat
-            // is created there. Set imperatively in the picker's setter — SwiftUI
-            // does not reliably fire onChange for the computed selectedProjectPath,
-            // which left pendingNewChatWorkingDirectory nil and new sessions in the
-            // default workspace.
-            bridge.pendingNewChatWorkingDirectory = newValue.flatMap { projectPathsByName[$0] }
         })
+    }
+
+    // MARK: - Work scope
+
+    /// The scope picker's options and provenance, re-read on every change.
+    /// Nil until the first fetch answers, which simply means no scope section.
+    private var scopeSubtitle: String? {
+        guard let scope = workScope, let effective = scope.effective else { return nil }
+        return (effective as NSString).lastPathComponent
+    }
+
+    /// Re-read the shared scope and mirror it to the bridge.
+    ///
+    /// The mirror is the surviving half of the old conflation: new chats must
+    /// still land somewhere deliberate, and now that somewhere is the scope
+    /// rather than whatever the project filter happened to be showing.
+    private func refreshWorkScope() async {
+        // No chatId — this surface has none. listMachineDirectories falls
+        // through to the stored default machine, the same chain web Plans has
+        // always used from the sidebar.
+        let scope = await bridge.workScope(chatId: "")
+        workScope = scope
+        bridge.pendingNewChatWorkingDirectory = scope?.effective
+    }
+
+    /// Folders this list can see that the machine's favourites do not include.
+    ///
+    /// Restricted to sessions on the scope's own machine: scope overrides the
+    /// directory and leaves the machine implicit, so offering a path from
+    /// another machine would resolve against the wrong disk — failing, or worse,
+    /// silently reading a different repo that happens to share the path.
+    ///
+    /// Known gap: a host-local bridge reports its machine as "this host", which
+    /// no session's `machineName` matches, so on the Mac nothing is contributed
+    /// and the picker degrades to the machine's favourites. That is the safe
+    /// direction to fail in.
+    private var scopeOptions: [String] {
+        guard let scope = workScope else { return [] }
+        guard let machine = scope.machineName else { return scope.options }
+        let discovered = unifiedSessions
+            .filter { $0.machineName == machine }
+            .compactMap(\.projectPath)
+        return scope.mergedOptions(discovered: discovered)
+    }
+
+    @ViewBuilder
+    private var workScopeMenuSection: some View {
+        if let scope = workScope {
+            Divider()
+            Section(WorkScopeState.title) {
+                Button {
+                    Task { _ = await bridge.setWorkScope(path: nil) }
+                } label: {
+                    if scope.source != "chosen" {
+                        Label("Automatic", systemImage: "checkmark")
+                    } else {
+                        Text("Automatic")
+                    }
+                }
+                ForEach(scopeOptions, id: \.self) { dir in
+                    Button {
+                        Task { _ = await bridge.setWorkScope(path: dir) }
+                    } label: {
+                        if scope.source == "chosen" && scope.effective == dir {
+                            Label(dir, systemImage: "checkmark")
+                        } else {
+                            Text(dir)
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /// Distinct tags across all sessions, ordered most-recent first (shared with
@@ -636,6 +813,11 @@ public struct GlassSessionsList: View {
                 .pickerStyle(.inline)
                 .uiKitIdentifier("GlassSessionsList.sessions.tagFilterPicker")
             }
+            // A third section in the SAME menu, not a second control — one
+            // entry point, and no extra chrome on the most-used navigation
+            // affordance. The sections above narrow what you see; this one
+            // moves where new work goes.
+            workScopeMenuSection
         } label: {
             HStack(spacing: 5) {
                 Image(systemName: "line.3.horizontal.decrease")
@@ -849,11 +1031,20 @@ public struct GlassSessionsList: View {
                 .uiKitIdentifier("GlassSessionsList.connecting")
             } else {
                 VStack(spacing: 16) {
-                    if !machines.isEmpty {
+                    if !chatHostMachines.isEmpty {
                         machinesPanelSection
+                            // Served before the greedy Sessions panel below.
+                            // Without this the expanded body — now flexible, so
+                            // that it can be compressed rather than overflow —
+                            // is starved by the List's infinite appetite and
+                            // opens as a sliver.
+                            .layoutPriority(1)
                     }
                     if let invitesSection {
-                        invitesSection()
+                        invitesSection(InvitesSectionActions(
+                            openChat: { callbacks.onFocusSession($0) },
+                            dismissList: { onDismissSheet?() }
+                        ))
                     }
                     sessionsPanelSection
                         // Only greedy-fill while expanded (so a long session list
@@ -884,6 +1075,28 @@ public struct GlassSessionsList: View {
                 // the top. Expanded Sessions still greedy-fills exactly as
                 // before (its own conditional frame above).
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                // Measure the space the stack actually has, so the machines
+                // panel knows when it has to scroll rather than overflow (see
+                // machinePanelCap). Read off the .infinity frame, not the
+                // VStack: the frame's height is the container's regardless of
+                // what the children do, so there is no feedback loop between
+                // the ceiling and the height it is derived from. The top bar is
+                // a safeAreaInset, so this is already net of it.
+                .background(
+                    GeometryReader { geo in
+                        Color.clear.preference(
+                            key: SessionsPanelStackHeightKey.self,
+                            value: geo.size.height
+                        )
+                    }
+                )
+                .onPreferenceChange(SessionsPanelStackHeightKey.self) { height in
+                    panelStackHeight = height
+                }
+                .onChange(of: panelStackHeight) { _, height in
+                    RipulLog.log("[SOLOPANEL] panelStack=\(Int(height)) "
+                        + "cap=\(machinePanelCap.map { String(Int($0)) } ?? "nil")")
+                }
             }
 
             floatingActionBars
@@ -894,16 +1107,32 @@ public struct GlassSessionsList: View {
         .animation(.easeInOut(duration: 0.25), value: selectedSessionIds.count)
         .onAppear {
             machinesExpanded = storedMachinesExpanded
-            // Seed the new-chat target folder from the current project filter.
-            bridge.pendingNewChatWorkingDirectory = selectedProjectPath
+        }
+        .task {
+            // Seed the new-chat target folder from the shared work scope (it
+            // used to come from the project filter — see projectFilterBinding).
+            await refreshWorkScope()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .ripulWorkScopeChanged)) { _ in
+            Task { await refreshWorkScope() }
         }
         .onChange(of: machinesExpanded) { _, new in storedMachinesExpanded = new }
-        .onChange(of: bridge.sessions.count) { _, _ in quickLaunchLoading = nil }
-        // Keep the new-chat target folder in sync with the project filter, and
-        // with late-resolving project paths once sessions finish loading.
-        .onChange(of: selectedProjectPath) { _, newPath in
-            bridge.pendingNewChatWorkingDirectory = newPath
+        // Drop a stale query when the list shrinks below the search threshold.
+        // This used to be a `Color.clear.onAppear { searchText = "" }` sitting
+        // in the panel body — a state write during body evaluation, which is
+        // both a SwiftUI hazard and invisible at the call site.
+        .onChange(of: unifiedSessions.count) { _, count in
+            if count <= 12 && !searchText.isEmpty { searchText = "" }
         }
+        .onChange(of: bridge.sessions.count) { _, _ in quickLaunchLoading = nil }
+        .onReceive(NotificationCenter.default.publisher(for: QuickLaunchPreferences.didChangeNotification)) { _ in
+            quickLaunchRevision &+= 1
+        }
+        // NOTE: the new-chat target folder deliberately no longer tracks
+        // `selectedProjectPath`. That is the view filter; new work follows the
+        // work scope (see refreshWorkScope). `selectedProjectPath` survives
+        // because the Folders panel still re-roots to the filtered project,
+        // which is a view concern and correctly stays one.
         .confirmationDialog("Archive \(selectedSessionIds.count) sessions?", isPresented: $showBatchArchiveConfirm, titleVisibility: .visible) {
             Button("Archive \(selectedSessionIds.count) Sessions", role: .destructive) {
                 let sessions = selectedSessions
@@ -946,7 +1175,9 @@ public struct GlassSessionsList: View {
     private var recentTags: [String] {
         var recencyByTag: [String: Date] = [:]
         for s in unifiedSessions {
-            for tag in s.tags {
+            // Machine-written plan link tags are identity, not labels — keep
+            // them out of the filter menu and the editor's picker.
+            for tag in s.tags where !PlanTagConvention.isPlanTag(tag) {
                 if let existing = recencyByTag[tag] {
                     recencyByTag[tag] = max(existing, s.lastUsed)
                 } else {

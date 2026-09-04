@@ -27,6 +27,9 @@ public struct RipulSiteKeySummary: Identifiable, Hashable {
     /// one. Editing such a key here would be a no-op at runtime, so the editor
     /// says so rather than silently writing an ignored triple.
     public let delegateSolutionContextTo: String?
+    /// The CMS portal this key is linked to (internal id or portal slug).
+    /// Row billing binds to CMS queries, so it needs keys that carry one.
+    public let cmsDefinitionId: String?
 
     init?(json: [String: Any]) {
         guard let id = json["id"] as? String,
@@ -39,6 +42,7 @@ public struct RipulSiteKeySummary: Identifiable, Hashable {
         self.defaultSolutionContextId = json["defaultSolutionContextId"] as? String
         self.surfaceContextMap = json["surfaceContextMap"] as? [String: String] ?? [:]
         self.delegateSolutionContextTo = json["delegateSolutionContextTo"] as? String
+        self.cmsDefinitionId = json["cmsDefinitionId"] as? String
     }
 
     /// Whether this key's sessions are bound to contexts at all. An unbound key
@@ -107,19 +111,6 @@ public final class RipulSiteKeysClient {
         return key
     }
 
-    /// The API returns `{ "error": { "type": ..., "message": ... } }`; older
-    /// paths return `{ "error": "..." }`. Accept both, then fall back to the
-    /// raw body so a proxy/HTML error page stays legible rather than blank.
-    static func errorMessage(from data: Data) -> String {
-        if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-            if let nested = json["error"] as? [String: Any], let message = nested["message"] as? String {
-                return message
-            }
-            if let flat = json["error"] as? String { return flat }
-        }
-        return String(data: data, encoding: .utf8) ?? ""
-    }
-
     private func encode(_ id: String) -> String {
         id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
     }
@@ -152,10 +143,10 @@ public final class RipulSiteKeysClient {
             throw RipulSolutionContextsError.malformedResponse
         }
         guard (200..<300).contains(http.statusCode) else {
-            // The triple validator's message names the offending id — pass it
-            // through so the editor can show why the save was refused.
-            let message = Self.errorMessage(from: data)
-            throw RipulSolutionContextsError.server(status: http.statusCode, message: message)
+            // The triple validator's message names the offending id — the
+            // factory passes JSON messages through verbatim so the editor can
+            // show why the save was refused.
+            throw RipulSolutionContextsError.serverError(status: http.statusCode, body: data)
         }
         return data
     }

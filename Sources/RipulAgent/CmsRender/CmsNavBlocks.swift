@@ -231,6 +231,84 @@ struct CmsTopNavBlockView: View {
     private var activeColor: Color {
         runtime.color(block.props.string("activeColor")) ?? runtime.theme.primary
     }
+
+    // ── Selection appearance (navShared.tsx `buildSelectionStyle`) ──────────
+    // `lozenge`/`pill`/`outline`/`solid` draw a chip; the fill defaults to the
+    // accent at low alpha so a nav on a coloured bar reads without the author
+    // choosing one. `text`/`underline` draw no chip.
+
+    private var chipVariant: Bool { ["lozenge", "pill", "outline", "solid"].contains(variant) }
+
+    private var activeFill: Color? {
+        if let explicit = runtime.color(block.props.string("activeBackground")) { return explicit }
+        switch variant {
+        case "lozenge", "pill": return activeColor.opacity(0.18)
+        case "solid": return activeColor
+        default: return nil
+        }
+    }
+
+    private var activeTextColor: Color {
+        variant == "solid" ? CmsCss.contrastText(on: activeFill ?? activeColor) : activeColor
+    }
+
+    private var chipRadius: CGFloat {
+        CmsCss.points(block.props.string("activeRadius")) ?? (variant == "pill" ? 999 : 10)
+    }
+
+    private var chipPadX: CGFloat { CmsCss.points(block.props.string("activePaddingX")) ?? 12 }
+    private var chipPadY: CGFloat { CmsCss.points(block.props.string("activePaddingY")) ?? 6 }
+    private var activeBold: Bool { block.props.bool("activeBold") ?? true }
+
+    // ── Logo ───────────────────────────────────────────────────────────────
+
+    private var logoURL: URL? {
+        guard let src = block.props.string("logo"), !src.isEmpty else { return nil }
+        return URL(string: src)
+    }
+    private var logoAlign: String { block.props.string("logoAlign") ?? "start" }
+    private var logoHeight: CGFloat { CmsCss.points(block.props.string("logoHeight")) ?? 28 }
+    private var logoPadX: CGFloat { CmsCss.points(block.props.string("logoPaddingX")) ?? 8 }
+    private var logoPadY: CGFloat { CmsCss.points(block.props.string("logoPaddingY")) ?? 0 }
+
+    /// The brand mark, sized by height so the width follows the artwork's own
+    /// ratio. Tappable only when the author gave it a destination — the same
+    /// nav machinery every other entry uses.
+    @ViewBuilder
+    private var logoMark: some View {
+        if let url = logoURL {
+            let target = CmsNavItem(
+                label: block.props.string("logoAlt") ?? "",
+                icon: nil,
+                targetPageSlug: block.props.string("logoTargetPageSlug").flatMap { $0.isEmpty ? nil : $0 },
+                targetViewRef: nil,
+                url: block.props.string("logoUrl").flatMap { $0.isEmpty ? nil : $0 },
+                actionType: "link",
+                targetGridId: nil,
+                targetViewId: nil,
+                children: [],
+                align: nil,
+                divider: false
+            )
+            let mark = AsyncImage(url: url) { phase in
+                switch phase {
+                case .success(let image): image.resizable().scaledToFit()
+                default: Color.clear
+                }
+            }
+            .frame(height: logoHeight)
+            .padding(.horizontal, logoPadX)
+            .padding(.vertical, logoPadY)
+            .accessibilityLabel(block.props.string("logoAlt") ?? "")
+
+            if target.isActionable {
+                Button { target.perform(runtime: runtime, openURL: openURL) } label: { mark }
+                    .buttonStyle(.plain)
+            } else {
+                mark
+            }
+        }
+    }
     private var labelFont: Font {
         let typo = block.props.object("labelTypography")
         return .system(size: CmsTypography.size(typo) ?? 14,
@@ -260,6 +338,7 @@ struct CmsTopNavBlockView: View {
                         .foregroundColor(labelColor)
                         .padding(8)
                 }
+                logoMark
                 Spacer(minLength: 0)
             } else {
                 barZones
@@ -292,11 +371,14 @@ struct CmsTopNavBlockView: View {
         let center = items.filter { zone($0) == "center" }
         let end = items.filter { zone($0) == "end" }
         return HStack(spacing: CmsCss.points(block.props.string("itemGap")) ?? 8) {
+            if logoAlign == "start" { logoMark }
             ForEach(start) { barItem($0) }
             Spacer(minLength: 8)
+            if logoAlign == "center" { logoMark }
             ForEach(center) { barItem($0) }
             Spacer(minLength: 8)
             ForEach(end) { barItem($0) }
+            if logoAlign == "end" { logoMark }
         }
     }
 
@@ -329,7 +411,7 @@ struct CmsTopNavBlockView: View {
                 Image(systemName: symbol).font(.system(size: 13))
             }
             Text(item.label)
-                .font(labelFont.weight(active ? .semibold : .regular))
+                .font(labelFont.weight(active && activeBold ? .semibold : .regular))
                 .lineLimit(1)
             if chevron {
                 Image(systemName: "chevron.down").font(.system(size: 9, weight: .semibold))
@@ -337,12 +419,19 @@ struct CmsTopNavBlockView: View {
         }
         .foregroundColor(!item.isActionable && item.children.isEmpty
                          ? .secondary.opacity(0.5)
-                         : active ? activeColor : labelColor)
-        .padding(.horizontal, variant == "pill" ? 12 : 4)
-        .padding(.vertical, 6)
+                         : active ? activeTextColor : labelColor)
+        .padding(.horizontal, chipVariant ? chipPadX : 4)
+        .padding(.vertical, chipVariant ? chipPadY : 6)
         .background {
-            if variant == "pill" && active {
-                Capsule().fill(Color.secondary.opacity(0.14))
+            if chipVariant && active {
+                RoundedRectangle(cornerRadius: chipRadius, style: .continuous)
+                    .fill(activeFill ?? .clear)
+                    .overlay {
+                        if variant == "outline" {
+                            RoundedRectangle(cornerRadius: chipRadius, style: .continuous)
+                                .strokeBorder(activeColor, lineWidth: 1)
+                        }
+                    }
             }
         }
         .overlay(alignment: .bottom) {

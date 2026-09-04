@@ -160,6 +160,53 @@ public struct GlassLozengeModifier: ViewModifier {
     }
 }
 
+/// A glass background for a pill whose content can grow TALL.
+///
+/// `Capsule` derives its corner radius from the height, so a pill that grows
+/// into a card balloons into an oval whose corners eat the content. A fixed
+/// radius keeps the corner geometry constant while the frame animates — and,
+/// because both states are then the same `Shape` type, the glass shape
+/// interpolates instead of snapping between two unrelated geometries.
+///
+/// The style is a parameter because the two endpoints want different ones:
+/// `.circular` at r = height/2 IS a capsule (so a contracted pill is
+/// geometrically unchanged), while an expanded panel wants `.continuous` at
+/// the system panel radius, like every other panel in the app.
+@available(iOS 15.0, macOS 13.0, *)
+public struct GlassGrowablePillModifier: ViewModifier {
+    public let cornerRadius: CGFloat
+    public let style: RoundedCornerStyle
+
+    public init(cornerRadius: CGFloat, style: RoundedCornerStyle = .circular) {
+        self.cornerRadius = cornerRadius
+        self.style = style
+    }
+
+    public func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: style)
+        let shaped = content.contentShape(shape)
+        #if os(iOS)
+        if #available(iOS 26.0, *) {
+            shaped
+                .background(.clear)
+                .glassEffect(.regular, in: shape)
+        } else {
+            shaped
+                .background(.ultraThinMaterial, in: shape)
+        }
+        #elseif os(macOS)
+        if #available(macOS 26.0, *) {
+            shaped
+                .background(.clear)
+                .glassEffect(.regular, in: shape)
+        } else {
+            shaped
+                .background(.ultraThinMaterial, in: shape)
+        }
+        #endif
+    }
+}
+
 /// A capsule-shaped glass background modifier.
 @available(iOS 15.0, macOS 13.0, *)
 public struct GlassPillModifier: ViewModifier {

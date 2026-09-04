@@ -50,6 +50,9 @@ public struct AgentWebView: NSViewRepresentable {
 
     public func makeNSView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
+        // Allow programmatic audio playback (read-aloud TTS) — see the iOS
+        // config below for why; macOS WKWebView applies the same gesture gate.
+        config.mediaTypesRequiringUserActionForPlayback = []
 
         let bridgeScript = WKUserScript(
             source: Self.bridgeJavaScript,
@@ -58,6 +61,7 @@ public struct AgentWebView: NSViewRepresentable {
         )
         config.userContentController.addUserScript(bridgeScript)
         config.userContentController.addUserScript(Self.installationIdentityScript)
+        config.userContentController.addUserScript(Self.nativeBuildScript)
         config.userContentController.addUserScript(Self.hostPreferencesScript())
         config.userContentController.add(context.coordinator, name: "agentBridge")
         config.userContentController.add(context.coordinator, name: "agentLog")
@@ -257,6 +261,27 @@ public struct AgentWebView: NSViewRepresentable {
             }
         }
 
+        // MARK: - Media Capture Permission (WKUIDelegate)
+
+        // Without this delegate method WKWebView silently denies getUserMedia,
+        // so web-side mic capture (speech input) can never work in the shell.
+        // Auto-grant for the app's own origin only; the OS-level microphone
+        // consent (NSMicrophoneUsageDescription) still applies on first use.
+        public func webView(
+            _ webView: WKWebView,
+            requestMediaCapturePermissionFor origin: WKSecurityOrigin,
+            initiatedByFrame frame: WKFrameInfo,
+            type: WKMediaCaptureType,
+            decisionHandler: @escaping (WKPermissionDecision) -> Void
+        ) {
+            let host = origin.host
+            if host == "ripul.io" || host.hasSuffix(".ripul.io") || host == "localhost" {
+                decisionHandler(.grant)
+            } else {
+                decisionHandler(.prompt)
+            }
+        }
+
         // MARK: - JavaScript Dialog Handlers (WKUIDelegate)
 
         public func webView(
@@ -334,14 +359,16 @@ public struct AgentWebView: View {
         self.bridge = bridge
     }
 
-    private var safeAreaTop: CGFloat {
-        UIApplication.shared.connectedScenes
-            .compactMap { $0 as? UIWindowScene }
-            .first?.keyWindow?.safeAreaInsets.top ?? 54
-    }
+    /// Window-level top inset for the masthead, fed by `WindowSafeAreaTopReader`.
+    /// Never read `UIWindow.safeAreaInsets` inside `body` instead: it forces a
+    /// status-bar preference query that re-enters the in-flight body evaluation
+    /// and can overflow the stack in Debug builds (see
+    /// RipulAgentScreen.topBarOverlay for the full mechanism).
+    @State private var safeAreaTop: CGFloat = 54
 
     public var body: some View {
         AgentWebViewRepresentable(configuration: configuration, bridge: bridge)
+            .background(WindowSafeAreaTopReader { safeAreaTop = $0 })
             .overlay(alignment: .top) {
                 if let config = bridge.mastheadConfig {
                     GlassMastheadView(config: config)
@@ -379,6 +406,7 @@ private struct AgentWebViewRepresentable: UIViewRepresentable {
         )
         config.userContentController.addUserScript(bridgeScript)
         config.userContentController.addUserScript(AgentWebView.installationIdentityScript)
+        config.userContentController.addUserScript(AgentWebView.nativeBuildScript)
         config.userContentController.addUserScript(AgentWebView.hostPreferencesScript())
 
         config.userContentController.add(context.coordinator, name: "agentBridge")
@@ -411,6 +439,11 @@ private struct AgentWebViewRepresentable: UIViewRepresentable {
 
         // Allow inline media playback
         config.allowsInlineMediaPlayback = true
+        // Allow programmatic audio playback (read-aloud TTS). The default
+        // blocks audio.play() outside a user-gesture call stack — our playback
+        // starts after async synthesis, so without this the quality provider
+        // fails on iOS and read-aloud silently falls back to on-device TTS.
+        config.mediaTypesRequiringUserActionForPlayback = []
 
         // Build a user agent that matches Mobile Safari closely so OAuth
         // providers (Google, etc.) don't reject sign-in with "disallowed_useragent".
@@ -841,6 +874,27 @@ extension AgentWebView {
             return vc
         }
 
+        // MARK: - Media Capture Permission (WKUIDelegate)
+
+        // Without this delegate method WKWebView silently denies getUserMedia,
+        // so web-side mic capture (speech input) can never work in the shell.
+        // Auto-grant for the app's own origin only; the OS-level microphone
+        // consent (NSMicrophoneUsageDescription) still applies on first use.
+        public func webView(
+            _ webView: WKWebView,
+            requestMediaCapturePermissionFor origin: WKSecurityOrigin,
+            initiatedByFrame frame: WKFrameInfo,
+            type: WKMediaCaptureType,
+            decisionHandler: @escaping (WKPermissionDecision) -> Void
+        ) {
+            let host = origin.host
+            if host == "ripul.io" || host.hasSuffix(".ripul.io") || host == "localhost" {
+                decisionHandler(.grant)
+            } else {
+                decisionHandler(.prompt)
+            }
+        }
+
         // MARK: - JavaScript Dialog Handlers (WKUIDelegate)
 
         // OAuth providers (Google, GitHub) may present JavaScript alerts, confirms, or
@@ -913,6 +967,45 @@ extension AgentWebView {
         injectionTime: .atDocumentStart,
         forMainFrameOnly: true
     )
+
+    /// The native build the shell was compiled from, exposed so it can be read
+    /// rather than guessed at.
+    ///
+    /// The web layer already answers "which bundle am I running" through
+    /// __BUILD_VERSION__ and a LIVE/STALE self-check. The native side had no
+    /// equivalent, so "is this fix on the phone?" was only ever answerable by
+    /// looking for a visual tell — twice in one day that cost a round of
+    /// auditing code that turned out to be correct and simply not installed.
+    ///
+    /// CFBundleVersion plus the compile timestamp: the version says which build
+    /// and the timestamp orders two builds of the same version, which is
+    /// exactly the case an OTA in active development produces.
+    public static let nativeBuildScript: WKUserScript = {
+        let info = Bundle.main.infoDictionary
+        let version = info?["CFBundleShortVersionString"] as? String ?? "?"
+        let build = info?["CFBundleVersion"] as? String ?? "?"
+        let stamp = "\(version)-\(build)-\(Self.compiledAt)"
+        return WKUserScript(
+            source: "window.__ripulNativeBuild = \"\(stamp)\";",
+            injectionTime: .atDocumentStart,
+            forMainFrameOnly: true
+        )
+    }()
+
+    /// When this binary was compiled, to the minute. Baked in at build time by
+    /// the compiler rather than read at runtime, so it identifies the BUILD and
+    /// not the launch.
+    static let compiledAt: String = {
+        // __DATE__ has no Swift equivalent; the bundle's own executable
+        // modification date is the closest honest answer and is fixed for the
+        // life of an installed build.
+        guard let url = Bundle.main.executableURL,
+              let modified = try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
+        else { return "unknown" }
+        let formatter = DateFormatter()
+        formatter.dateFormat = "MMdd-HHmm"
+        return formatter.string(from: modified)
+    }()
 
     /// Exposes the native mirror of host-mode prefs (hostEnabled / machineName)
     /// and the long-lived machine token so the web layer can keep host comms

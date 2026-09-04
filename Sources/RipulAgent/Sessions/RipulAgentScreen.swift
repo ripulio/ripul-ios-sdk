@@ -46,6 +46,13 @@ public struct RipulAgentScreenSlots {
     /// menu (e.g. WAC's minimize-to-bubble). Style it with `GlassButton` /
     /// `GlassCircleModifier` to match the bar's own buttons exactly.
     public var topBarTrailingAccessory: (() -> AnyView)?
+    /// The host renders its own root bar over the session LIST (the
+    /// first-party Agents|Plans shell: stock segmented control + the same
+    /// SessionListMenu). This screen's bar then hides in list mode only —
+    /// chat, metadata, commit and file-viewer states keep the unified bar
+    /// with all of its earned machinery. nil/false = standalone screen,
+    /// bar always on.
+    public var hidesListModeBar: Bool
 
     public init(
         showingSidebar: Binding<Bool>? = nil,
@@ -54,7 +61,8 @@ public struct RipulAgentScreenSlots {
         onInviteByEmail: ((String) -> Void)? = nil,
         screenTip: ((String) -> AnyView)? = nil,
         chooseMode: RipulChooseMode? = nil,
-        topBarTrailingAccessory: (() -> AnyView)? = nil
+        topBarTrailingAccessory: (() -> AnyView)? = nil,
+        hidesListModeBar: Bool = false
     ) {
         self.showingSidebar = showingSidebar
         self.onNavigateToFiles = onNavigateToFiles
@@ -63,6 +71,7 @@ public struct RipulAgentScreenSlots {
         self.screenTip = screenTip
         self.chooseMode = chooseMode
         self.topBarTrailingAccessory = topBarTrailingAccessory
+        self.hidesListModeBar = hidesListModeBar
     }
 }
 
@@ -97,9 +106,47 @@ public struct RipulAgentScreen: View {
     }
     @State private var renamingSession: ChatSession?
     @State private var renameText = ""
+    /// Non-nil while the shared model picker is up, naming what it will change.
+    @State private var modelPickerTarget: ModelPickerTarget?
+
+    /// What the picker sheet is repointing: the global model override, or one
+    /// CLI session's raw model. The two used to be separate nested `Menu`
+    /// trees; they are now the same picker with a different model list.
+    private enum ModelPickerTarget: Identifiable {
+        case global
+        case raw(sessionId: String)
+        /// Not repointing anything — starting a session with the picked model.
+        case newSession
+
+        var id: String {
+            switch self {
+            case .global: return "global"
+            case .raw(let sessionId): return "raw:\(sessionId)"
+            case .newSession: return "newSession"
+            }
+        }
+    }
     @State private var rawModeSessions: Set<String> = []
     @State private var sessionProviders: [String: String] = [:]
     @State private var sessionModelIds: [String: String] = [:]
+    /// Expanded/contracted state of the chat title lozenge. A single tap
+    /// toggles it and the choice is remembered across chats AND launches,
+    /// because it is a preferred layout, not a one-off reveal.
+    ///
+    /// @State with a manual write-through, NOT @AppStorage: an @AppStorage
+    /// mutation re-enters the view through the UserDefaults publisher OUTSIDE
+    /// the withAnimation transaction, so the lozenge snapped open instead of
+    /// morphing. Same fix, same reason as the sidebar machine disclosures.
+    /// Namespace for the title lozenge's glass morph. Owned HERE, not by the
+    /// bar: the two states are two glass shapes sharing one id, and the id has
+    /// to live with the branches for the container to morph between them.
+    @Namespace private var titleGlassNS
+    @State private var chatTitleLozengeExpanded =
+        UserDefaults.standard.bool(forKey: "ripul.chatTitleLozengeExpanded")
+    /// Machine display name → SF Symbol, for the top-bar row's machine glyph.
+    /// Cached rather than derived per body pass — the bar re-renders on every
+    /// live activity tick and this reads the defaults suite.
+    @State private var machineIcons: [String: String] = [:]
     @State private var codexModelsByMachineId: [String: [ModelInfo]] = [:]
     @State private var codexModelLoadsInFlight = Set<String>()
     @State private var rawModeError: String = ""
@@ -132,7 +179,10 @@ public struct RipulAgentScreen: View {
     }
     @State private var commitViewInfo: CommitViewInfo?
     @State private var parentGlobalY: CGFloat = 0
-    @Namespace private var topBarNS
+    /// Window-level top inset for the floating top bar, fed by
+    /// `WindowSafeAreaTopReader` — see topBarOverlay for why it can be neither
+    /// inherited from the hierarchy nor read from UIApplication during body.
+    @State private var safeAreaTop: CGFloat = 54
 
     private var cache: RipulSessionCache { configuration.cache }
 
@@ -190,7 +240,7 @@ public struct RipulAgentScreen: View {
     private func agentWebView(fillsSafeArea: Bool) -> some View {
         // The native scroller is rendered INSIDE AgentView (over the web view, under
         // the reused ChatComposer) — we just sync the debug flag onto the bridge.
-        AgentView(configuration: agentConfig, bridge: bridge, fillsSafeArea: fillsSafeArea) { _ in EmptyView() }
+        AgentView(configuration: agentConfig, bridge: bridge, fillsSafeArea: fillsSafeArea, tokenProvider: tokenProvider) { _ in EmptyView() }
             .onAppear { bridge.nativeChatScrollerEnabled = showNativeChatScroller }
             .onChange(of: showNativeChatScroller) { bridge.nativeChatScrollerEnabled = $0 }
     }
@@ -260,19 +310,29 @@ public struct RipulAgentScreen: View {
             allowRipulAgents: configuration.allowRipulAgents,
             invitesSection: configuration.invitesSection,
             foldersSection: configuration.foldersSection,
-            solutionManagement: RipulSolutionManagement(
-                registry: configuration.registry,
-                baseURL: configuration.baseURL,
-                tokenProvider: tokenProvider,
-                showsSiteKeyAdmin: configuration.showsSiteKeyAdmin,
-                buildsApp: configuration.buildsApp
-            ),
+            // nil omits the panel entirely — GlassSessionsList renders it only
+            // when present, so the role gate needs no plumbing further down.
+            solutionManagement: configuration.showsSolutionManagement
+                ? RipulSolutionManagement(
+                    registry: configuration.registry,
+                    baseURL: configuration.baseURL,
+                    tokenProvider: tokenProvider,
+                    showsSiteKeyAdmin: configuration.showsSiteKeyAdmin,
+                    buildsApp: configuration.buildsApp
+                )
+                : nil,
             emptyStateOverride: configuration.emptyStateOverride,
             model: model,
             chooseMode: slots.chooseMode,
             showsTitleLozenge: false,
-            showingSidebar: slots.showingSidebar,
-            quickActionsEnabled: configuration.quickActionsEnabled
+            // The host's app-nav sidebar is a pinned rail at regular width, so
+            // there is nothing for a right-drag on the list to slide open.
+            showingSidebar: horizontalSizeClass == .regular ? nil : slots.showingSidebar,
+            quickActionsEnabled: configuration.quickActionsEnabled,
+            // Regular width pins the list as a split-view column with its own
+            // navigation-bar strip, and the floating bar is overlaid on the
+            // chat detail only — reserving 52pt here would be a stranded gap.
+            reservesTopBarSpace: horizontalSizeClass != .regular
         )
     }
 
@@ -306,10 +366,18 @@ public struct RipulAgentScreen: View {
         }
     }
 
+    /// True while the tab-mirror overlay owns the webview. The agent screen's
+    /// edge-swipe affordances must stand down then: their UIKit recognizers
+    /// arbitrate over every horizontal touch (delaying webview delivery — the
+    /// mirror camera's jank), and a right-edge swipe opening the CHAT's
+    /// metadata panel over a mirrored browser is a category error.
+    private var mirrorOwnsWebview: Bool { bridge.currentPageContext.page == "tabMirror" }
+
     private var compactBody: some View {
         AgentChatDragContainer(
             showingSessionList: showingSessionList,
             showingMetadata: showingMetadata,
+            suppressEdgeSwipe: mirrorOwnsWebview,
             bridge: bridge,
             isFileViewerOpen: bridge.fileViewerTitle != nil,
             hasCommitView: commitViewInfo != nil,
@@ -325,7 +393,7 @@ public struct RipulAgentScreen: View {
             chat: {
                 agentWebView(fillsSafeArea: true)
                     .overlay(alignment: .trailing) {
-                        if !showingSessionList.wrappedValue && !showingMetadata {
+                        if !showingSessionList.wrappedValue && !showingMetadata && !mirrorOwnsWebview {
                             RightEdgeSwipeView(
                                 onChanged: { offset in
                                     guard bridge.fileViewerTitle == nil else { return }
@@ -373,6 +441,7 @@ public struct RipulAgentScreen: View {
             }
         }
         .onPreferenceChange(KeyboardStableYKey.self) { parentGlobalY = $0 }
+        .background(WindowSafeAreaTopReader { safeAreaTop = $0 })
         // Metadata panel — compact: slides in from the right edge; regular (iPad /
         // Mac Catalyst): docks as a trailing inspector column.
         .overlay {
@@ -419,7 +488,11 @@ public struct RipulAgentScreen: View {
         // columns.
         .overlay(alignment: .top) {
             if horizontalSizeClass != .regular {
+                // Pin to the physical top; topBarOverlay adds the window inset
+                // back. Previously this branch inherited the inset while the
+                // regular branch zeroed it — see topBarOverlay.
                 topBarOverlay
+                    .ignoresSafeArea(edges: .top)
             }
         }
         // Read-only banner when viewing a committed session
@@ -446,6 +519,9 @@ public struct RipulAgentScreen: View {
         } message: {
             Text(forkError)
         }
+        .sheet(item: $modelPickerTarget) { target in
+            modelPickerSheet(for: target)
+        }
         .onChange(of: showingSessionList.wrappedValue) { showing in
             if showing {
                 Task { await model.loadMachinesFromAPI() }
@@ -453,6 +529,12 @@ public struct RipulAgentScreen: View {
                 rawModeSessions = Set(cache.stringArray(forKey: "ripulRawModeSessions") ?? [])
                 sessionProviders = cache.dictionary(forKey: "ripulSessionProviders") as? [String: String] ?? [:]
                 sessionModelIds = cache.dictionary(forKey: "ripulSessionModelIds") as? [String: String] ?? [:]
+                // Refreshed on the way out of the list rather than via its own
+                // .onChange(of: model.machines): body's modifier chain is
+                // already at the type checker's limit, and one more closure on
+                // it fails the iOS build outright. Machines change rarely and
+                // the list is the only place they can be renamed or re-iconed.
+                machineIcons = RemoteMachine.iconsByDisplayName(machines: model.machines, cache: cache)
             }
         }
         .onChange(of: bridge.fileViewerTitle) { _, title in
@@ -475,6 +557,7 @@ public struct RipulAgentScreen: View {
             rawModeSessions = Set(cache.stringArray(forKey: "ripulRawModeSessions") ?? [])
             sessionProviders = cache.dictionary(forKey: "ripulSessionProviders") as? [String: String] ?? [:]
             sessionModelIds = cache.dictionary(forKey: "ripulSessionModelIds") as? [String: String] ?? [:]
+            machineIcons = RemoteMachine.iconsByDisplayName(machines: model.machines, cache: cache)
             favoriteFiles = cache.stringArray(forKey: "ripulFavoriteFiles") ?? []
             elementDebuggerActive = cache.bool(forKey: "elementDebuggerActive")
             showNativeChatScroller = cache.bool(forKey: "showNativeChatScroller")
@@ -550,13 +633,60 @@ public struct RipulAgentScreen: View {
     // Floating top bar (glass strip + buttons). Full-width on compact; on the
     // regular split it's overlaid on just the chat detail so the glass doesn't
     // run across the sidebar and metadata columns.
+    /// Both mount points pin this with `.ignoresSafeArea(edges: .top)` and
+    /// `safeAreaTop` adds the **window's** inset back, so the bar's position is
+    /// stated, not inherited. Neither obvious source for that inset works:
+    ///
+    /// - **Not the hierarchy** (a `GeometryReader`'s `safeAreaInsets`):
+    ///   ancestors consume or zero the region — that was the original bug.
+    ///   `agentTopBarContent` carries only `.padding(.top, 4)`, so an inherited
+    ///   inset dropped the lozenge to physical-top + 4, under the notch, and
+    ///   `safeAreaGlass` hid the evidence because it bleeds to the physical top
+    ///   either way.
+    /// - **Not `UIApplication`/`UIWindow` read during `body`**:
+    ///   `UIWindow.safeAreaInsets` computes status-bar visibility, which queries
+    ///   a SwiftUI preference, which synchronously re-enters this very body
+    ///   evaluation — one nested pass through these frames overflows the
+    ///   main-thread stack in Debug builds (deterministic launch crash,
+    ///   ___chkstk_darwin SIGSEGV).
+    ///
+    /// So `WindowSafeAreaTopReader` (mounted on `body`'s root) reads the window
+    /// inset from UIKit callbacks outside any SwiftUI update and feeds the
+    /// `safeAreaTop` state. Catalyst has no status bar, so its inset reports 0
+    /// and the bar sits flush as before.
     @ViewBuilder private var topBarOverlay: some View {
         if bridge.currentPageContext.showNativeHeader {
+            // Hidden (not removed) while the host's root bar covers list
+            // mode, so the glass containers stay mounted and the reappear on
+            // chat entry is a fade on the same value the bar's own content
+            // already animates on.
+            // Yields at regular width too. The host's root bar floats over the
+            // whole split there, so keeping this one would stack the screen's
+            // "Agents" lozenge behind the root bar's Agents|Plans picker.
+            let hiddenForHostBar = slots.hidesListModeBar
+                && showingSessionList.wrappedValue
+                && !showingMetadata
+                && bridge.fileViewerTitle == nil
             ZStack(alignment: .top) {
                 safeAreaGlass
                 unifiedTopBar
+                    .padding(.top, safeAreaTop)
+                // The chat title morph, a SIBLING of the bar rather than its
+                // centre slot — see `chatTitleMorphOverlay`. Same placement
+                // maths as the slot it replaces: the bar's 12pt gutter plus
+                // the symmetric centre inset, and the bar's 4pt top padding.
+                chatTitleMorphOverlay
+                    .padding(.horizontal, 12 + centerLozengeInset)
+                    .padding(.top, safeAreaTop + 4)
             }
             .offset(y: parentGlobalY < 0 ? -parentGlobalY : 0)
+            .opacity(hiddenForHostBar ? 0 : 1)
+            .allowsHitTesting(!hiddenForHostBar)
+            // TEMPORARILY no .animation(value: hiddenForHostBar) here: an
+            // ancestor value-animation can strip inherited transactions from
+            // its whole subtree when its own value is unchanged, and this one
+            // sits above the lozenge morph and the diagnostic twin. The
+            // hide/show fade snaps until this is re-plumbed.
         }
     }
 
@@ -569,149 +699,65 @@ public struct RipulAgentScreen: View {
         if let fileTitle = bridge.fileViewerTitle {
             fileViewerTopBar(title: fileTitle)
         } else {
-            if #available(iOS 26.0, *) {
-                GlassEffectContainer {
-                    agentTopBarContent(session: activeSession)
-                }
-            } else {
-                agentTopBarContent(session: activeSession)
-            }
+            // NO glass container at this level. The lozenge morph's container
+            // lives in `titleLozengeContent`, wrapped immediately around the
+            // two branches — a container here would nest around it (nested
+            // containers don't compose), and a container this far from the
+            // branches, across the GlassTopBar component boundary, never
+            // morphed either. The bar's edge buttons draw their glass
+            // standalone, which needs no container.
+            agentTopBarContent(session: activeSession)
         }
     }
 
+    /// Inset so the pill doesn't overlap with buttons on either side.
+    /// Trailing side can have two buttons (scrollUp 44 + spacing 8 + menu 44
+    /// = 96px), so pad symmetrically to the larger side when the scroll button
+    /// is visible. A host accessory button adds another 52px (44 + 8).
+    private var centerLozengeInset: CGFloat {
+        // Chat used to pad to 108 to clear a scroll-up accessory; that button
+        // now exists ONLY inside the expanded lozenge, so both modes use the
+        // single-button 56 — and the expanded form gets the freed width.
+        56 + (slots.topBarTrailingAccessory != nil ? 52 : 0)
+    }
+
+    /// The agent bar IS `GlassTopBar` — this screen supplies slot content only.
+    /// Everything that used to justify a fork (screen-centred lozenge, glass
+    /// morph namespace, contextual menu, host accessory) is a parameter now, and
+    /// the swipe-down screen overview comes along for free.
     @ViewBuilder
     private func agentTopBarContent(session: ChatSession?) -> some View {
-        ZStack {
-            // Center layer: title lozenge — stays screen-centered regardless of button count
-            VStack(spacing: 1) {
-                HStack(spacing: 4) {
-                    Text(unifiedTitle(session: session))
-                        .font(.caption)
-                        .fontWeight(.semibold)
-                        .foregroundColor(.primary)
-                        .lineLimit(1)
-                        .contentTransition(.interpolate)
-                    if showingSessionList.wrappedValue, let screenTip = slots.screenTip {
-                        screenTip("agent")
-                    }
-                }
-                if let sub = unifiedSubtitle(session: session) {
-                    Text(sub)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .contentTransition(.interpolate)
-                }
-            }
-            .padding(.horizontal, 12)
-            .frame(minHeight: 44)
-            .modifier(GlassPillModifier())
-            .modifier(GlassEffectIDModifier(id: "title", namespace: topBarNS))
-            // Inset so the pill doesn't overlap with buttons on either side.
-            // Trailing side can have two buttons (scrollUp 44 + spacing 8 + menu 44 = 96px),
-            // so pad symmetrically to the larger side when the scroll button is visible.
-            // A host accessory button adds another 52px (44 + 8) of clearance.
-            .padding(.horizontal, ((!showingSessionList.wrappedValue && !showingMetadata && bridge.fileViewerTitle == nil) ? 108 : 56) + (slots.topBarTrailingAccessory != nil ? 52 : 0))
-            .simultaneousGesture(
-                LongPressGesture(minimumDuration: 1.0).onEnded { _ in
-                    NotificationCenter.default.post(name: .ripulShowDevTools, object: nil)
-                }
-            )
-            .onTapGesture(count: 2) {
-                bridge.logToWebConsole("[AgentScreen] title lozenge double-tap -> bridge.toggleElementDebugger")
-                bridge.toggleElementDebugger()
-            }
-            .uiKitIdentifier("AgentScreen.topBar.titleLozenge")
-
-            // Edge layer: buttons at leading/trailing
-            HStack(spacing: 8) {
-                // Leading button — morphs between chevron.left and line.3.horizontal.
-                // Hidden on regular width: the session list is a pinned sidebar there,
-                // so navigating "back" to it (the burger) is redundant.
-                // Also hidden in list mode when the host has no sidebar to open.
-                if horizontalSizeClass != .regular && (!showingSessionList.wrappedValue || slots.showingSidebar != nil) {
-                    Button(action: unifiedLeadingAction(session: session)) {
-                        // Cross-fade burger<->chevron with plain opacity. contentTransition
-                        // (.symbolEffect/.interpolate) ran on its own timeline and would not
-                        // lock to the slide; opacity is a plain animatable property, so it is
-                        // governed by the top bar's .animation(value: showingSessionList.wrappedValue) and
-                        // travels on the exact same timeline as the panel.
-                        ZStack {
-                            Image(systemName: "line.3.horizontal")
-                                .opacity(showingSessionList.wrappedValue ? 1 : 0)
-                            Image(systemName: "chevron.left")
-                                .opacity(showingSessionList.wrappedValue ? 0 : 1)
-                        }
-                            .font(.system(size: 18, weight: .semibold))
-                            .foregroundStyle(.primary)
-                            .frame(width: 44, height: 44)
-                            .modifier(GlassCircleModifier(glassStyle: "regular"))
-                            .modifier(GlassEffectIDModifier(id: "leading", namespace: topBarNS))
-                    }
-                    .uiKitIdentifier("AgentScreen.topBar.leadingButton")
-                }
-
-                Spacer()
-
-                // Navigate to previous user message (only in chat view)
-                if !showingSessionList.wrappedValue && !showingMetadata && bridge.fileViewerTitle == nil {
-                    Button {
-                        bridge.scrollToUserMessage(direction: "up")
-                    } label: {
-                        Image(systemName: "chevron.up")
-                            .font(.system(size: 18, weight: .semibold))
-                            .foregroundStyle(.primary)
-                            .frame(width: 44, height: 44)
-                            .modifier(GlassCircleModifier(glassStyle: "regular"))
-                    }
-                    .transition(.scale.combined(with: .opacity))
-                    .uiKitIdentifier("AgentScreen.topBar.scrollUpButton")
-                }
-
-                // Trailing menu — content changes but circle stays
-                Menu {
-                if showingMetadata {
-                    metadataMenuItems
-                } else if showingSessionList.wrappedValue {
-                    sessionListMenuItems
-                } else {
-                    if let info = commitViewInfo, session?.id == info.tabId {
-                        Button {
-                            resumeCommitSession(info)
-                        } label: {
-                            Label("Resume Session", systemImage: "play.fill")
-                        }
-                        .uiKitIdentifier("AgentScreen.contextMenu.resumeButton")
-                    }
-                    agentMenuItems(session: session)
-                }
-            } label: {
-                Image(systemName: "ellipsis")
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(.primary)
-                    .frame(width: 44, height: 44)
-                    .modifier(GlassCircleModifier(glassStyle: "regular"))
-                    .modifier(GlassEffectIDModifier(id: "trailing", namespace: topBarNS))
-            }
+        GlassTopBar(
+            title: "",
+            // No AnyView. Erasing this slot's type stops SwiftUI retaining
+            // the `.animation(_:value:)` inside titleLozengeContent across
+            // updates, so the morph never animated at all.
+            center: { titleLozengeContent(session: session) },
+            // In a chat the centre slot draws its own glass in BOTH states so
+            // the contracted capsule and the expanded panel are one glass id
+            // leaving and re-entering the container — which is the morph.
+            // Elsewhere the lozenge names a screen and the bar's pill is right.
+            centerOwnsGlass: expandedTitleAvailable,
+            leading: agentLeading(session: session),
+            trailingOuter: agentHostAccessory,
             // Kick a favourites refresh as the menu opens. The fetch is async
             // so this presentation may still show the cached list, but Menu
             // content is rebuilt from state between presentations — the next
             // open is fresh even if every earlier trigger raced the relay boot.
-            .simultaneousGesture(TapGesture().onEnded {
-                Task { await refreshFavoriteDirectories() }
-            })
-            .uiKitIdentifier("AgentScreen.topBar.trailingMenu")
-
-                // Host chrome (e.g. WAC's minimize button) — sibling of the bar's
-                // own buttons, inside the same GlassEffectContainer.
-                if let accessory = slots.topBarTrailingAccessory {
-                    accessory()
-                        .modifier(GlassEffectIDModifier(id: "accessory", namespace: topBarNS))
-                        .transition(.scale.combined(with: .opacity))
-                }
-            } // HStack (buttons)
-        } // ZStack
-        .padding(.horizontal, 12)
-        .padding(.top, 4)
+            onMenuOpen: { Task { await refreshFavoriteDirectories() } },
+            centerInset: centerLozengeInset,
+            onDoubleTapTitle: {
+                bridge.logToWebConsole("[AgentScreen] title lozenge double-tap -> bridge.toggleElementDebugger")
+                bridge.toggleElementDebugger()
+            },
+            // No tap here in chat: the morphing pill is `chatTitleMorphOverlay`,
+            // stacked over this slot, and it owns the single/double taps.
+            // Elsewhere the lozenge names a screen and never had a tap.
+            onTapTitle: nil,
+            menuKey: agentMenuKey(session: session)
+        ) {
+            agentMenuContent(session: session)
+        }
         // Sync the title bar to the chat<->list slide so the lozenge, title and
         // buttons travel on the SAME timeline as the panel. Mirror the container's
         // slideAnimation: brake (chatOpenAnimation) when opening into the chat,
@@ -720,6 +766,162 @@ public struct RipulAgentScreen: View {
         // lozenge settled in 0.6s while the panel was still travelling.
         .animation(showingSessionList.wrappedValue ? chatSlideSpring : chatOpenAnimation, value: showingSessionList.wrappedValue)
         .animation(.spring(response: 0.6, dampingFraction: 0.65), value: showingMetadata)
+        // No .animation(value: chatTitleLozengeExpanded) here — the morph's
+        // spring lives on its glass container in `titleLozengeContent`.
+        // A second implicit transaction on the same value would compete with
+        // it and re-introduce the snap.
+    }
+
+    /// Expanded AND in a state where expansion is meaningful. The pill shape,
+    /// the header's line limit and the disclosed block all key off this one
+    /// value so they can never disagree mid-animation.
+    private var titleLozengeExpandedNow: Bool {
+        chatTitleLozengeExpanded && expandedTitleAvailable
+    }
+
+    /// Whether the expanded lozenge (and its tap toggle) applies right now:
+    /// chat only. List/metadata/commit/file-viewer states name a screen or a
+    /// file, not a chat, so the lozenge there keeps its old tap-through
+    /// behaviour and never morphs.
+    private var expandedTitleAvailable: Bool {
+        !showingSessionList.wrappedValue
+            && !showingMetadata
+            && bridge.fileViewerTitle == nil
+            && commitViewInfo == nil
+    }
+
+    private func toggleTitleLozenge() {
+        // withAnimation at the mutation site — the driver WAC's Glass Sandbox
+        // morphs with on this same phone. (The .animation(value:) container
+        // driver, copied from BrowserScreen, snapped in this screen every
+        // time.) Persist + console log stay deferred a tick so no
+        // bridge/WebKit work runs inside the morph's transaction.
+        // Tuned on-device: 0.5/0.58 read as latent. Shorter response = the
+        // growth starts and lands faster; lower damping = a visible bounce.
+        withAnimation(.spring(response: 0.32, dampingFraction: 0.55)) {
+            chatTitleLozengeExpanded.toggle()
+        }
+        let expanded = chatTitleLozengeExpanded
+        Task { @MainActor in
+            UserDefaults.standard.set(expanded, forKey: "ripul.chatTitleLozengeExpanded")
+            bridge.logToWebConsole("[AgentScreen] title lozenge tap -> expanded=\(expanded)")
+        }
+    }
+
+    /// Contents of the lozenge's expanded form. Strings derive from the SAME
+    /// sources as the compact row (`unifiedRow`, `topBarSubtitle`,
+    /// `ModelIdentity`) so the two presentations can never disagree about
+    /// what chat this is.
+    // NOT @ViewBuilder: the metadata builder accumulates `rows` with appends
+    // inside `if`s, which produce `()` and can't be builder branches.
+    private func expandedTitleContent(session: ChatSession?) -> some View {
+        let unified = session.flatMap { unifiedRow(for: $0) }
+        return ExpandedChatTitleContent(
+            metadata: expandedTitleMetadata(session: session, unified: unified),
+            onPreviousUserMessage: { bridge.scrollToUserMessage(direction: "up") },
+            onNextUserMessage: { bridge.scrollToUserMessage(direction: "down") },
+            onScrollToBottom: { bridge.scrollToBottom() }
+        )
+    }
+
+    private func expandedTitleMetadata(session: ChatSession?, unified: UnifiedSession?) -> [ExpandedChatTitleContent.MetadataRow] {
+        let pickedModelId: String? = session.flatMap { sessionModelIds[$0.id] }
+        let modelIdentity = ModelIdentity.resolve(modelId: pickedModelId)
+            ?? unified.flatMap { ModelIdentity.resolve(modelId: $0.model) }
+
+        var rows: [ExpandedChatTitleContent.MetadataRow] = []
+        if let identity = modelIdentity {
+            let providerBit = unified?.providerLabel.flatMap { $0.isEmpty ? nil : $0 }
+            rows.append(.init(
+                icon: "cpu",
+                text: [identity.label, providerBit].compactMap { $0 }.joined(separator: " \u{00B7}")
+            ))
+        } else if let session, let sub = topBarSubtitle(session: session) {
+            rows.append(.init(icon: "cpu", text: sub))
+        }
+        if let machine = unified?.machineName ?? session?.remoteMachineName, !machine.isEmpty {
+            rows.append(.init(icon: "desktopcomputer", text: machine))
+        }
+        let projectPathName = unified?.projectPath.map { URL(fileURLWithPath: $0).lastPathComponent }
+        if let project = unified?.projectName ?? projectPathName, !project.isEmpty {
+            let branch = unified?.gitBranch.flatMap { $0.isEmpty ? nil : $0 }
+            rows.append(.init(
+                icon: "folder",
+                text: [project, branch].compactMap { $0 }.joined(separator: " \u{00B7}")
+            ))
+        }
+        if let unified {
+            var activityBits: [String] = []
+            if let count = unified.messageCount { activityBits.append("\(count) messages") }
+            activityBits.append("active \(RelativeTimeText.string(for: unified.lastUsed, relativeTo: Date()))")
+            rows.append(.init(icon: "clock", text: activityBits.joined(separator: " \u{00B7}")))
+        }
+        if let tags = unified?.tags, !tags.isEmpty {
+            rows.append(.init(icon: "tag", text: tags.joined(separator: " \u{00B7}")))
+        }
+        return rows
+    }
+
+    /// Leading button — morphs between chevron.left and line.3.horizontal.
+    /// Hidden on regular width: the session list is a pinned sidebar there, so
+    /// navigating "back" to it (the burger) is redundant. Also hidden in list
+    /// mode when the host has no sidebar to open.
+    private func agentLeading(session: ChatSession?) -> (() -> AnyView)? {
+        guard horizontalSizeClass != .regular,
+              !showingSessionList.wrappedValue || slots.showingSidebar != nil
+        else { return nil }
+        let inList = showingSessionList.wrappedValue
+        let action = unifiedLeadingAction(session: session)
+        return {
+            AnyView(
+                Button(action: action) {
+                    // Cross-fade burger<->chevron with plain opacity. This is the
+                    // whole reason the leading slot is overridden instead of using
+                    // the bar's default symbol-replace: contentTransition runs on
+                    // its own timeline and would not lock to the slide, whereas
+                    // opacity is a plain animatable property governed by the bar's
+                    // .animation(value: showingSessionList) — so it travels on the
+                    // exact same timeline as the panel.
+                    ZStack {
+                        Image(systemName: "line.3.horizontal").opacity(inList ? 1 : 0)
+                        Image(systemName: "chevron.left").opacity(inList ? 0 : 1)
+                    }
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .frame(width: 44, height: 44)
+                    .modifier(GlassCircleModifier(glassStyle: "regular"))
+                }
+                .uiKitIdentifier("AgentScreen.topBar.leadingButton")
+            )
+        }
+    }
+
+    /// Host chrome (e.g. WAC's minimize button). It sits OUTBOARD of the
+    /// screen's own ellipsis — hence `trailingOuter`, not `trailingAccessory`.
+    private var agentHostAccessory: (() -> AnyView)? {
+        guard let accessory = slots.topBarTrailingAccessory else { return nil }
+        return { AnyView(accessory().transition(.scale.combined(with: .opacity))) }
+    }
+
+    /// Split out of the bar expression: with all three branches inline the type
+    /// checker gives up ("unable to type-check in reasonable time") on iOS.
+    @ViewBuilder
+    private func agentMenuContent(session: ChatSession?) -> some View {
+        if showingMetadata {
+            metadataMenuItems
+        } else if showingSessionList.wrappedValue {
+            sessionListMenuItems
+        } else {
+            if let info = commitViewInfo, session?.id == info.tabId {
+                Button {
+                    resumeCommitSession(info)
+                } label: {
+                    Label("Resume Session", systemImage: "play.fill")
+                }
+                .uiKitIdentifier("AgentScreen.contextMenu.resumeButton")
+            }
+            agentMenuItems(session: session)
+        }
     }
 
     @ViewBuilder
@@ -754,6 +956,154 @@ public struct RipulAgentScreen: View {
                 }
             }
         }
+    }
+
+    /// Contents of the top-bar pill. Kept as its own function rather than
+    /// inlined in `agentTopBarContent`: with both branches inline the type
+    /// checker gives up on the enclosing expression ("unable to type-check in
+    /// reasonable time") when building for iOS. Not `@ViewBuilder` — the body
+    /// binds `expanded` before returning a single container.
+    private func titleLozengeContent(session: ChatSession?) -> some View {
+        Group {
+            if expandedTitleAvailable {
+                // In a chat the morphing pill does NOT live in this slot at
+                // all — it is `chatTitleMorphOverlay`, a sibling of the bar in
+                // `topBarOverlay`. Six attempts at running the Liquid Glass
+                // morph through the bar's slot indirection snapped; the
+                // overlay gives the morph the address pill's flat topology
+                // with no component boundary above it. This placeholder only
+                // reserves the bar's compact height so the edge buttons and
+                // the switcher-pull surface keep their geometry.
+                Color.clear.frame(height: 44)
+            } else {
+                // List / metadata / commit / file viewer: the lozenge names a
+                // screen, there is nothing to expand, and the bar supplies the
+                // pill as it does for every other screen.
+                lozengeHeader(session: session, expanded: false)
+            }
+        }
+    }
+
+    /// The chat title pill and its expanded panel, mounted BESIDE the bar in
+    /// `topBarOverlay` rather than inside the bar's centre slot.
+    ///
+    /// This is a SINGLE-SHAPE morph — Glass Lab experiment #4's technique,
+    /// and the only morphing technique the Lab proved works for this case on
+    /// this device. One persistent view carries the glass; its padding,
+    /// width, corner radius and disclosed content animate INSIDE it under
+    /// `withAnimation`, and the glass re-renders crisply at each frame.
+    ///
+    /// Do NOT rewrite this as two branches handing off a shared
+    /// `glassEffectID` (the BrowserScreen recipe, tried seven times): the Lab
+    /// showed a same-id swap between two views does not morph here in either
+    /// animation driver — it snaps. Experiments #1/#5 (grow-out, merge) work,
+    /// so containers and ids are fine for OTHER shapes of morph; the
+    /// pill-to-panel handoff specifically is not one of them.
+    @ViewBuilder
+    private var chatTitleMorphOverlay: some View {
+        if expandedTitleAvailable {
+            let session = bridge.sessions.first(where: { $0.id == bridge.activeSessionId })
+            let expanded = chatTitleLozengeExpanded
+            VStack(alignment: .leading, spacing: expanded ? 9 : 0) {
+                lozengeHeader(session: session, expanded: expanded)
+                if expanded {
+                    // No .transition: the reveal is the panel's height growth
+                    // alone. A transition would translate/fade the block while
+                    // the frame is also animating and the two fight.
+                    expandedTitleContent(session: session)
+                }
+            }
+            .padding(.horizontal, expanded ? 14 : 12)
+            .padding(.vertical, expanded ? 10 : 0)
+            .frame(minHeight: 44)
+            // Pinned to the full width the bar allows when expanded, so the
+            // panel does not resize itself as its own metadata changes — a
+            // running tool call rewrites that text constantly. Collapsed hugs
+            // its content and the overlay's ZStack centres it, matching the
+            // bar pill it replaces.
+            .frame(maxWidth: expanded ? .infinity : nil, alignment: .leading)
+            // 22 circular at the compact 44pt height IS a capsule, so the
+            // contracted pill is geometrically unchanged; 16 continuous is
+            // the app-wide panel radius. One shape type either way keeps the
+            // radius interpolating instead of cutting.
+            .contentShape(.rect(cornerRadius: expanded ? 16 : 22))
+            .glassEffect(.regular, in: .rect(cornerRadius: expanded ? 16 : 22))
+            // Driven by withAnimation inside toggleTitleLozenge — no
+            // .animation(value:) here.
+            // Single tap ONLY — no double-tap on this view. A double-tap
+            // recognizer makes the single tap wait out the double-tap window
+            // (~300ms) before firing, which read as the morph lagging the
+            // finger. The element debugger the double-tap used to open is
+            // still reachable via long-press -> dev tools. Buttons inside the
+            // expanded panel win over the tap.
+            .onTapGesture(count: 1) { toggleTitleLozenge() }
+            .simultaneousGesture(
+                LongPressGesture(minimumDuration: 1.0).onEnded { _ in
+                    NotificationCenter.default.post(name: .ripulShowDevTools, object: nil)
+                }
+            )
+            .uiKitIdentifier("RipulAgentScreen.chatTitleMorphLozenge")
+        }
+    }
+
+
+    /// The lozenge's identity line, shared by both states so the chat is named
+    /// the same way whether the pill is a capsule or a panel.
+    @ViewBuilder
+    private func lozengeHeader(session: ChatSession?, expanded: Bool) -> some View {
+        if let unified = unifiedRow(for: session) {
+            // Same component as the session list, compact presentation. The
+            // header used to derive its own model from the picker cache, which
+            // falls back to the provider's DEFAULT when the user has never
+            // picked — so it named a model the session wasn't running, and
+            // disagreed with the list row for the same session. One component,
+            // one derivation.
+            let pickedModelId: String? = session.flatMap { sessionModelIds[$0.id] }
+            let icon: String? = unified.machineName.flatMap { machineIcons[$0] }
+            UnifiedSessionRow(
+                sessionStore: bridge.sessionList,
+                session: unified,
+                presentation: .lozenge,
+                modelIdOverride: pickedModelId,
+                machineIcon: icon,
+                titleLineLimit: expanded ? 2 : 1
+            )
+            .frame(maxWidth: expanded ? .infinity : nil, alignment: .leading)
+        } else {
+            VStack(spacing: 1) {
+                HStack(spacing: 4) {
+                    Text(unifiedTitle(session: session))
+                        .font(.caption)
+                        .fontWeight(.semibold)
+                        .foregroundColor(.primary)
+                        .lineLimit(1)
+                        .contentTransition(.interpolate)
+                    if showingSessionList.wrappedValue, let screenTip = slots.screenTip {
+                        screenTip("agent")
+                    }
+                }
+                if let sub = unifiedSubtitle(session: session) {
+                    Text(sub)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .contentTransition(.interpolate)
+                }
+            }
+        }
+    }
+
+    /// The session-list row for the chat currently on screen.
+    ///
+    /// nil in the list / metadata / commit / file-viewer states — the bar names
+    /// the screen there, not a session — and for a brand-new chat that hasn't
+    /// reached the list yet. All of those fall back to the plain title pair.
+    private func unifiedRow(for session: ChatSession?) -> UnifiedSession? {
+        guard !showingSessionList.wrappedValue,
+              !showingMetadata,
+              bridge.fileViewerTitle == nil,
+              let session else { return nil }
+        if let info = commitViewInfo, session.id == info.tabId { return nil }
+        return model.unifiedSessions.first { $0.represents(session) }
     }
 
     private func unifiedTitle(session: ChatSession?) -> String {
@@ -849,53 +1199,64 @@ public struct RipulAgentScreen: View {
 
     // MARK: - Menu Items
 
-    private var defaultMachine: RemoteMachine? {
-        let defaultMachineId = (cache.object(forKey: "ripulDefaultMachineId") as? String) ?? ""
-        return model.machines.first { $0.machineId == defaultMachineId && $0.isOnline && !$0.isDisabled(cache: cache) }
-    }
-
+    /// Extracted to the public SessionListMenu so the first-party shell's
+    /// root bar can offer the same actions — one menu, two chromes.
     @ViewBuilder
     private var sessionListMenuItems: some View {
-        if let machine = defaultMachine {
-            ForEach(ProviderConstants.cliProviders, id: \.id) { provider in
-                Button {
-                    Task {
-                        await model.connectWithProvider(provider.providerKey!, to: machine, onSelect: { session in
-                            withAnimation(.easeInOut(duration: 0.28)) {
-                                showingSessionList.wrappedValue = false
-                            }
-                            Task {
-                                await bridge.focusSession(id: session.id)
-                                bridge.scrollToBottom()
-                            }
-                        }, onDismiss: {
-                            withAnimation(.easeInOut(duration: 0.28)) {
-                                showingSessionList.wrappedValue = false
-                            }
-                        })
-                    }
-                } label: {
-                    Label("New \(provider.label)", systemImage: provider.sfSymbol)
-                }
-                .uiKitIdentifier("AgentScreen.listMenu.new\(provider.id)Button")
-            }
+        SessionListMenu(
+            bridge: bridge,
+            model: model,
+            cache: cache,
+            showingSessionList: showingSessionList,
+            onShowModelPicker: { modelPickerTarget = .newSession }
+        )
+    }
 
-            Divider()
+    /// Every state input the CURRENT mode's menu renders, flattened. This keys
+    /// the menu host's `.equatable()` gate (see GlassTopBar.menuKey): while
+    /// the key is unchanged, screen-body re-runs — which happen on every
+    /// bridge publish during streaming — cannot re-resolve the menu, and an
+    /// OPEN menu therefore stops flashing. The mode prefix guarantees a
+    /// re-resolve when `agentMenuContent` switches branches. MAINTENANCE: a
+    /// new state-dependent menu item must add its inputs here, or it renders
+    /// stale until an existing input changes.
+    private func agentMenuKey(session: ChatSession?) -> String {
+        if showingMetadata { return "meta" }
+        if showingSessionList.wrappedValue {
+            // SessionListMenu renders from the machines roster (default-machine
+            // entries) and deliberately does not observe it — this key is what
+            // refreshes it.
+            let defaultMachineId = (cache.object(forKey: "ripulDefaultMachineId") as? String) ?? ""
+            let machines = model.machines
+                .map { "\($0.machineId):\($0.isOnline ? "1" : "0"):\($0.displayName)" }
+                .joined(separator: ",")
+            return "list|\(defaultMachineId)|\(machines)"
         }
-
-        Button {
-            Task { await model.refresh() }
-        } label: {
-            Label("Refresh", systemImage: "arrow.clockwise")
+        var parts: [String] = [
+            "chat",
+            session?.id ?? "-",
+            session?.provider ?? "-",
+            session?.remoteMachineName == nil ? "local" : "remote",
+            (commitViewInfo != nil && session?.id == commitViewInfo?.tabId) ? "commit" : "-",
+            showNativeChatScroller ? "native" : "web",
+            bridge.navigationStore.showThinkingMode,
+            session.map { rawModeSessions.contains($0.id) ? "raw" : "std" } ?? "-",
+            favoriteDirectories.joined(separator: ","),
+            sessionWorkingDirectory ?? "-",
+            hostWorkingDirectory ?? "-",
+            slots.onInviteByEmail != nil ? "invite" : "-",
+            cache.bool(forKey: "showElementDebuggerMenu") ? (elementDebuggerActive ? "dbg1" : "dbg0") : "-",
+            cache.bool(forKey: "enableNoteInjection") ? "notes" : "-",
+            bridge.selectedEffort ?? "-",
+        ]
+        if let session, rawModeSessions.contains(session.id) || ProviderConstants.isCliProvider(session.provider) {
+            let rawModels = rawModelsForSession(session)
+            let currentModelId = currentRawModelId(for: session)
+            parts.append(rawModels.first(where: { $0.id == currentModelId }).map { shortModelName($0.name) } ?? "Default")
+        } else {
+            parts.append(selectedModelName)
         }
-        .uiKitIdentifier("AgentScreen.listMenu.refreshButton")
-
-        Button {
-            NotificationCenter.default.post(name: .ripulShowDevTools, object: nil)
-        } label: {
-            Label("Console Logs", systemImage: "doc.text.magnifyingglass")
-        }
-        .uiKitIdentifier("AgentScreen.listMenu.consoleLogsButton")
+        return parts.joined(separator: "|")
     }
 
     @ViewBuilder
@@ -909,6 +1270,16 @@ public struct RipulAgentScreen: View {
             Label("New Chat", systemImage: "plus.message")
         }
         .uiKitIdentifier("AgentScreen.contextMenu.newChatButton")
+
+        // Was a nested menu over the hardcoded "Anthropic API" group; now the
+        // shared picker, so every catalog model can start a session and each one
+        // says who pays for it.
+        Button {
+            modelPickerTarget = .newSession
+        } label: {
+            Label("New session from model…", systemImage: "square.stack.3d.up")
+        }
+        .uiKitIdentifier("AgentScreen.contextMenu.newFromModelButton")
 
         Toggle(isOn: Binding(
             get: { showNativeChatScroller },
@@ -1062,61 +1433,24 @@ public struct RipulAgentScreen: View {
 
         Divider()
 
+        // Both branches open the SAME picker — sections, pins, search, billing
+        // subtitles — differing only in which models it lists. They used to be
+        // two nested `Menu` trees, which meant the chat's model change was the
+        // one place in the app you couldn't see what a model would cost or pin
+        // the one you keep coming back to.
         if let session, rawModeSessions.contains(session.id) || ProviderConstants.isCliProvider(session.provider) {
             let rawModels = rawModelsForSession(session)
             let currentModelId = currentRawModelId(for: session)
             let currentModelName = rawModels.first(where: { $0.id == currentModelId }).map { shortModelName($0.name) } ?? "Default"
-            Menu {
-                ForEach(rawModels) { model in
-                    Button {
-                        bridge.handleConsoleLog("LOG: [MODELSW] native.contextMenu.tap surface=AgentScreen.rawModelMenu sessionId=\(session.id.suffix(12)) sourceChatId=\(session.sourceChatId.suffix(12)) from=\(currentModelId) to=\(model.id)")
-                        sessionModelIds[session.id] = model.id
-                        cache.set(sessionModelIds, forKey: "ripulSessionModelIds")
-                        Task { await bridge.setChatModel(chatId: session.sourceChatId, modelId: model.id) }
-                    } label: {
-                        HStack {
-                            Text(shortModelName(model.name))
-                            if model.id == currentModelId {
-                                Image(systemName: "checkmark")
-                            }
-                        }
-                    }
-                }
+            Button {
+                modelPickerTarget = .raw(sessionId: session.id)
             } label: {
                 Label(currentModelName, systemImage: "cpu")
             }
             .uiKitIdentifier("AgentScreen.contextMenu.rawModelMenu")
         } else {
-            Menu {
-                Button {
-                    bridge.handleConsoleLog("LOG: [MODELSW] native.contextMenu.tap surface=AgentScreen.globalModelMenu to=default")
-                    Task { await bridge.setModel(nil) }
-                } label: {
-                    HStack {
-                        Text("Default")
-                        if bridge.selectedModelId == nil {
-                            Image(systemName: "checkmark")
-                        }
-                    }
-                }
-
-                ForEach(groupedModels, id: \.group) { group in
-                    Menu(group.group) {
-                        ForEach(group.models) { model in
-                            Button {
-                                bridge.handleConsoleLog("LOG: [MODELSW] native.contextMenu.tap surface=AgentScreen.globalModelMenu from=\(bridge.selectedModelId ?? "default") to=\(model.id)")
-                                Task { await bridge.setModel(model.id) }
-                            } label: {
-                                HStack {
-                                    Text(model.name)
-                                    if bridge.selectedModelId == model.id {
-                                        Image(systemName: "checkmark")
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
+            Button {
+                modelPickerTarget = .global
             } label: {
                 Label(selectedModelName, systemImage: "cpu")
             }
@@ -1251,7 +1585,10 @@ public struct RipulAgentScreen: View {
                 activityItems: [shareURL],
                 applicationActivities: activities
             )
-            if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+            // compactMap, not `.first as?` — with CarPlay connected a
+            // CPTemplateApplicationScene can be first in connectedScenes.
+            if let windowScene = UIApplication.shared.connectedScenes
+                .compactMap({ $0 as? UIWindowScene }).first,
                let rootVC = windowScene.windows.first?.rootViewController {
                 rootVC.present(activityVC, animated: true)
             }
@@ -1378,6 +1715,83 @@ public struct RipulAgentScreen: View {
         cache.set(favoriteFiles, forKey: "ripulFavoriteFiles")
     }
 
+    // MARK: - Model Picker
+
+    /// The shared picker, pointed at whichever model the menu asked about.
+    ///
+    /// Effort rides along in both cases: it is set globally on the bridge, so it
+    /// is the same control either way, and it belongs next to the model rather
+    /// than three items further down a menu.
+    @ViewBuilder
+    private func modelPickerSheet(for target: ModelPickerTarget) -> some View {
+        let effort = ModelPickerEffort(current: bridge.selectedEffort) { level in
+            Task { await bridge.setEffort(level) }
+        }
+        switch target {
+        case .global:
+            ModelPickerSheetContent(
+                models: bridge.availableModels,
+                cache: cache,
+                selectedId: bridge.selectedModelId,
+                showsDefaultRow: true,
+                effort: effort,
+                identifierPrefix: "AgentScreen.modelPicker",
+                isLoading: bridge.availableModels.isEmpty,
+                loadFailure: bridge.lastModelsError,
+                onRetry: { Task { await bridge.fetchModels() } },
+                onPick: { picked in
+                    bridge.handleConsoleLog("LOG: [MODELSW] native.contextMenu.tap surface=AgentScreen.globalModelMenu from=\(bridge.selectedModelId ?? "default") to=\(picked?.id ?? "default")")
+                    Task { await bridge.setModel(picked?.id) }
+                    modelPickerTarget = nil
+                },
+                onDismiss: { modelPickerTarget = nil }
+            )
+            .task { if bridge.availableModels.isEmpty { await bridge.fetchModels() } }
+
+        case .newSession:
+            NewSessionModelPicker(
+                bridge: bridge,
+                model: model,
+                cache: cache,
+                showingSessionList: showingSessionList,
+                onDismiss: { modelPickerTarget = nil }
+            )
+
+        case .raw(let sessionId):
+            if let session = bridge.sessions.first(where: { $0.id == sessionId }) {
+                ModelPickerSheetContent(
+                    models: rawModelsForSession(session),
+                    // Only this harness's models are listed, but the pin list is
+                    // global — seed it from the whole catalog or pinning here
+                    // would wipe every other harness's shortcut.
+                    pinCatalog: bridge.availableModels,
+                    cache: cache,
+                    selectedId: currentRawModelId(for: session),
+                    effort: effort,
+                    identifierPrefix: "AgentScreen.rawModelPicker",
+                    onPick: { picked in
+                        guard let picked else { return }
+                        pickRawModel(picked, for: session)
+                        modelPickerTarget = nil
+                    },
+                    onDismiss: { modelPickerTarget = nil }
+                )
+            }
+        }
+    }
+
+    private func pickRawModel(_ picked: ModelInfo, for session: ChatSession) {
+        let from = currentRawModelId(for: session)
+        bridge.handleConsoleLog("LOG: [MODELSW] native.contextMenu.tap surface=AgentScreen.rawModelMenu sessionId=\(session.id.suffix(12)) sourceChatId=\(session.sourceChatId.suffix(12)) from=\(from) to=\(picked.id)")
+        sessionModelIds[session.id] = picked.id
+        cache.set(sessionModelIds, forKey: "ripulSessionModelIds")
+        // The top bar picks this up from state immediately; the list rows read
+        // the same pick from the cache on the next rebuild, so nudge one now
+        // rather than leaving them naming the previous model until the next scan.
+        model.refreshPickedModelSelections()
+        Task { await bridge.setChatModel(chatId: session.sourceChatId, modelId: picked.id) }
+    }
+
     // MARK: - Model Helpers
 
     private var selectedModelName: String {
@@ -1386,12 +1800,6 @@ public struct RipulAgentScreen: View {
             return model.name
         }
         return "Default"
-    }
-
-    private var groupedModels: [(group: String, models: [ModelInfo])] {
-        let dict = Dictionary(grouping: bridge.availableModels, by: { $0.group })
-        return dict.sorted { $0.key < $1.key }
-            .map { (group: $0.key, models: $0.value) }
     }
 
     private func rawModelsForSession(_ session: ChatSession) -> [ModelInfo] {
@@ -1487,37 +1895,10 @@ public struct RipulAgentScreen: View {
 
     // MARK: - Safe Area Glass
 
+    /// Extracted to the public TopSafeAreaGlass so the shell's root bar draws
+    /// the same strip.
     private var safeAreaGlass: some View {
-        VStack(spacing: 0) {
-            if #available(iOS 26.0, *) {
-                Rectangle()
-                    .fill(.clear)
-                    .frame(height: 130)
-                    .glassEffect(.clear, in: .rect)
-                    .mask(safeAreaMask)
-            } else {
-                Rectangle()
-                    .fill(.ultraThinMaterial)
-                    .opacity(0.6)
-                    .frame(height: 130)
-                    .mask(safeAreaMask)
-            }
-            Spacer()
-        }
-        .ignoresSafeArea(edges: .top)
-        .allowsHitTesting(false)
-    }
-
-    private var safeAreaMask: some View {
-        VStack(spacing: 0) {
-            Color.black.frame(height: 98)
-            LinearGradient(
-                colors: [.black, .clear],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            .frame(height: 32)
-        }
+        TopSafeAreaGlass()
     }
 }
 
@@ -1529,6 +1910,10 @@ public struct RipulAgentScreen: View {
 private struct AgentChatDragContainer<SessionList: View, Chat: View>: View {
     @Binding var showingSessionList: Bool
     let showingMetadata: Bool
+    /// Mirror active — the left-edge back-swipe stands down (see
+    /// mirrorOwnsWebview). Passed as a plain value because this container
+    /// does not observe the bridge (by design — see the init comment).
+    let suppressEdgeSwipe: Bool
     let bridge: AgentBridge
     let isFileViewerOpen: Bool
     let hasCommitView: Bool
@@ -1570,6 +1955,7 @@ private struct AgentChatDragContainer<SessionList: View, Chat: View>: View {
     init(
         showingSessionList: Binding<Bool>,
         showingMetadata: Bool,
+        suppressEdgeSwipe: Bool = false,
         bridge: AgentBridge,
         isFileViewerOpen: Bool,
         hasCommitView: Bool,
@@ -1580,6 +1966,7 @@ private struct AgentChatDragContainer<SessionList: View, Chat: View>: View {
     ) {
         self._showingSessionList = showingSessionList
         self.showingMetadata = showingMetadata
+        self.suppressEdgeSwipe = suppressEdgeSwipe
         self.bridge = bridge
         self.isFileViewerOpen = isFileViewerOpen
         self.hasCommitView = hasCommitView
@@ -1596,7 +1983,7 @@ private struct AgentChatDragContainer<SessionList: View, Chat: View>: View {
 
             chat
                 .overlay(alignment: .leading) {
-                    if !showingSessionList && !showingMetadata {
+                    if !showingSessionList && !showingMetadata && !suppressEdgeSwipe {
                         InteractiveEdgeSwipeView(
                             onChanged: handleChanged,
                             onEnded: { offset, velocity in
