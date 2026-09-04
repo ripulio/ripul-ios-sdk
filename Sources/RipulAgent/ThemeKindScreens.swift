@@ -220,6 +220,7 @@ public struct RipulStyleKindScreen: View {
                     knobs: styleKind?.knobs ?? [],
                     slots: styleKind?.slots ?? [],
                     working: RipulThemeEngine.current.styleOverrides[kind]?[element.id] ?? [:],
+                    inherited: RipulThemeEngine.resolvedStyle(kind: kind, element: element.id),
                     onChange: { knobs in
                         RipulThemeEngine.setOverrides(kind: kind, element: element.id, knobs: knobs)
                     })
@@ -565,6 +566,7 @@ public struct RipulScopeOverridesScreen: View {
                     knobs: styleKind?.knobs ?? [],
                     slots: styleKind?.slots ?? [],
                     working: RipulThemeEngine.current.styleOverrides[kind]?[element] ?? [:],
+                    inherited: RipulThemeEngine.resolvedStyle(kind: kind, element: element),
                     onChange: { knobs in
                         RipulThemeEngine.setOverrides(kind: kind, element: element, knobs: knobs)
                     })
@@ -613,6 +615,7 @@ struct RipulScopeContent: View {
                 knobs: styleKind?.knobs ?? [],
                 slots: styleKind?.slots ?? [],
                 working: RipulThemeEngine.current.styleOverrides[kind]?[scope.id] ?? [:],
+                inherited: RipulThemeEngine.resolvedStyle(kind: kind, element: scope.id),
                 onChange: { knobs in
                     RipulThemeEngine.setOverrides(kind: kind, element: scope.id, knobs: knobs)
                 })

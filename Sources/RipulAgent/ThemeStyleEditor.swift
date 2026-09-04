@@ -30,15 +30,31 @@ public struct RipulStyleKnobRows: View {
     let knobs: [RipulStyleKnob]
     let slots: [RipulStyleSlot]
     let working: [String: RipulKnob]
+    /// What each knob resolves to for this element RIGHT NOW. Where `working` has no entry,
+    /// this is by definition the INHERITED value — so a row can show what it is inheriting
+    /// instead of the word "Inherit" and nothing else. Pass the engine's resolved style for
+    /// the element; empty falls back to each knob's schema constant, as before.
+    let inherited: [String: RipulKnob]
     let onChange: ([String: RipulKnob]) -> Void
 
     public init(knobs: [RipulStyleKnob], slots: [RipulStyleSlot] = [],
                 working: [String: RipulKnob],
+                inherited: [String: RipulKnob] = [:],
                 onChange: @escaping ([String: RipulKnob]) -> Void) {
         self.knobs = knobs
         self.slots = slots
         self.working = working
+        self.inherited = inherited
         self.onChange = onChange
+    }
+
+    /// The value a row should DISPLAY and seed from when the knob is unset: what the element
+    /// actually inherits, else the knob's schema constant.
+    private func inheritedString(_ knob: RipulStyleKnob, _ fallback: String) -> String {
+        inherited[knob.key]?.string ?? fallback
+    }
+    private func inheritedNumber(_ knob: RipulStyleKnob, _ fallback: Double) -> Double {
+        inherited[knob.key]?.number ?? fallback
     }
 
     public var body: some View {
@@ -99,8 +115,9 @@ public struct RipulStyleKnobRows: View {
     @ViewBuilder private func textRow(_ knob: RipulStyleKnob, fallback: String,
                                       multiline: Bool) -> some View {
         let isSet = working[knob.key] != nil
+        let inheritedText = inheritedString(knob, fallback)
         let binding = Binding(
-            get: { working[knob.key]?.string ?? fallback },
+            get: { working[knob.key]?.string ?? inheritedText },
             set: { set(knob.key, .string($0)) })
         VStack(alignment: .leading, spacing: 4) {
             HStack {
@@ -109,7 +126,7 @@ public struct RipulStyleKnobRows: View {
                 if !isSet { Text("Inherit").font(.caption2).foregroundColor(.secondary) }
                 Toggle("", isOn: Binding(
                     get: { isSet },
-                    set: { on in set(knob.key, on ? .string(fallback) : nil) }))
+                    set: { on in set(knob.key, on ? .string(inheritedText) : nil) }))
                     .labelsHidden()
             }
             if isSet {
@@ -121,10 +138,11 @@ public struct RipulStyleKnobRows: View {
                     TextField(knob.label, text: binding)
                         .textFieldStyle(.roundedBorder)
                 }
-            } else {
-                Text(fallback)
+            } else if !inheritedText.isEmpty {
+                Text(inheritedText)
                     .font(.callout).foregroundColor(.secondary)
                     .lineLimit(multiline ? 4 : 1)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
     }
@@ -133,7 +151,7 @@ public struct RipulStyleKnobRows: View {
     /// pinned `#RRGGBB`. Shows the INHERITED colour while unset, so the swatch always
     /// reflects what the element actually renders.
     private func colorRow(_ knob: RipulStyleKnob, fallback: String) -> some View {
-        let current = working[knob.key]?.string ?? fallback
+        let current = working[knob.key]?.string ?? inheritedString(knob, fallback)
         return HStack {
             ColorPicker(selection: Binding(
                 get: { SwiftUI.Color(UIColor(ripulHexString: current) ?? .magenta) },
@@ -148,7 +166,7 @@ public struct RipulStyleKnobRows: View {
             }
             Toggle("", isOn: Binding(
                 get: { working[knob.key] != nil },
-                set: { on in set(knob.key, on ? .string(fallback) : nil) }))
+                set: { on in set(knob.key, on ? .string(current) : nil) }))
                 .labelsHidden()
         }
     }
@@ -163,11 +181,13 @@ public struct RipulStyleKnobRows: View {
                     Text(String(format: format, value))
                         .foregroundColor(.secondary).monospacedDigit()
                 } else {
-                    Text("Inherit").foregroundColor(.secondary)
+                    // Show what it inherits, not just that it inherits.
+                    Text("Inherit · " + String(format: format, inheritedNumber(knob, fallback)))
+                        .foregroundColor(.secondary).monospacedDigit()
                 }
                 Toggle("", isOn: Binding(
                     get: { working[knob.key] != nil },
-                    set: { on in set(knob.key, on ? .number(fallback) : nil) }))
+                    set: { on in set(knob.key, on ? .number(inheritedNumber(knob, fallback)) : nil) }))
                     .labelsHidden()
             }
             if let value = working[knob.key]?.number {
