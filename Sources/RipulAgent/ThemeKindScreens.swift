@@ -555,12 +555,18 @@ public struct RipulScopeOverridesScreen: View {
         self.kind = kind; self.element = element; self.title = title
     }
 
-    /// Theme changes reach this pushed screen as an environment bump from the kind screen
-    /// above. It MUST be read in `body` — the values below are resolved from the engine at
-    /// body-evaluation time, so without the read a knob set here would not show its own
-    /// change. (This used to work only because the kind screen re-identified itself and
-    /// destroyed the whole stack, which is what popped you back a screen.)
-    @Environment(\.ripulThemeVersion) private var themeVersion
+    /// SELF-SUFFICIENT refresh — this screen owns its subscription rather than reading a
+    /// counter an ancestor injects.
+    ///
+    /// It is pushed STANDALONE at least as often as it is reached through the kind screen:
+    /// a host hub routes straight to it for a single element. Depending on an ancestor meant
+    /// that on those routes the counter never moved, the body never re-ran, and every value
+    /// here stayed at what the engine held when the screen was first built — so a toggle
+    /// showed its old state however many times you tapped it.
+    ///
+    /// MUST be read in `body`: every value below is resolved from the engine at
+    /// body-evaluation time, and SwiftUI only re-invokes bodies for state they actually read.
+    @State private var themeVersion = 0
 
     private var styleKind: RipulStyleKind? {
         RipulThemeEngine.styleKinds.first { $0.name == kind }
@@ -603,6 +609,10 @@ public struct RipulScopeOverridesScreen: View {
                     }
                 }
             }
+        }
+        .environment(\.ripulThemeVersion, themeVersion)
+        .onReceive(NotificationCenter.default.publisher(for: .ripulThemeDidChange)) { _ in
+            themeVersion &+= 1
         }
         .navigationTitle(title ?? (styleKind?.scopes.first { $0.id == element }?.label ?? element))
         .navigationBarTitleDisplayMode(.inline)
