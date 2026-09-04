@@ -1897,4 +1897,51 @@ public struct ScrollElementTool: NativeTool {
         return nil
     }
 }
+
+// MARK: - Locating a named element (for callers that are not actuation)
+
+/// Find a control by the identity stamp it already carries.
+///
+/// WAC stamps every interactive control `<screen>.<element>` — accessibilityIdentifier,
+/// `instrumentComponent` or `uiKitIdentifier` — enforced by CI and audited to zero
+/// anonymous controls in the View Explorer. That makes the stamp a usable ADDRESS for
+/// things other than automation: pointing a first-run tip at a control whose screen never
+/// explicitly published it as an anchor, say.
+///
+/// Deliberately the same resolver `tap_element` uses, so anything the automation tools can
+/// reach is reachable here — including SwiftUI controls whose identifier lands on a
+/// published accessibility element rather than on a view.
+@available(iOS 13.0, *)
+public enum RipulElementLocator {
+
+    public struct Located {
+        /// The view to attach to.
+        public let view: UIView
+        /// The element's rect in `view`'s OWN coordinate space, set only when the match
+        /// came through a published accessibility element whose host is a whole SwiftUI
+        /// island. Anything spatial must prefer it over the view's bounds — aiming at a
+        /// 440x894 island's centre is the exact misfire this field exists to prevent.
+        public let rect: CGRect?
+    }
+
+    /// The best match for `identifier`, or nil when nothing on screen carries it.
+    /// Results are ranked by how strongly a view claims to BE the thing the id names, so
+    /// the first is the answer (same contract the actuation tools rely on).
+    @MainActor
+    public static func first(identifier: String) -> Located? {
+        guard !identifier.isEmpty,
+              let match = ScreenElementFinder.find(id: identifier, text: nil).first else {
+            return nil
+        }
+        // elementFrame is in WINDOW coordinates; `convert(_:from: nil)` brings it into the
+        // view's space, which is what a popover sourceRect wants.
+        return Located(view: match.view,
+                       rect: match.elementFrame.map { match.view.convert($0, from: nil) })
+    }
+
+    /// Whether anything on screen currently carries `identifier`.
+    @MainActor
+    public static func exists(identifier: String) -> Bool { first(identifier: identifier) != nil }
+}
+
 #endif
