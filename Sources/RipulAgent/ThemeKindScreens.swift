@@ -177,10 +177,24 @@ public struct RipulStyleKindScreen: View {
     }
 
     public var body: some View {
-        if let element = singletonElement {
-            singletonBody(element)
-        } else {
-            libraryBody
+        // Read the counter HERE so a theme change re-runs this body — SwiftUI only
+        // re-invokes bodies for state they actually read. Deliberately NOT
+        // `.id(themeVersion)`: that changes the view's IDENTITY, so SwiftUI tears the
+        // subtree down and rebuilds it — including any pushed NavigationLink destination.
+        // Setting a knob therefore popped you back a screen. The environment counter
+        // refreshes descendants without touching identity (same contract as
+        // `refreshesOnThemeChange()`), which is what this always wanted.
+        let _ = themeVersion
+        Group {
+            if let element = singletonElement {
+                singletonBody(element)
+            } else {
+                libraryBody
+            }
+        }
+        .environment(\.ripulThemeVersion, themeVersion)
+        .onReceive(NotificationCenter.default.publisher(for: .ripulThemeDidChange)) { _ in
+            themeVersion &+= 1
         }
     }
 
@@ -207,10 +221,6 @@ public struct RipulStyleKindScreen: View {
         }
         .navigationTitle(styleKind?.label ?? kind)
         .navigationBarTitleDisplayMode(.inline)
-        .id(themeVersion)
-        .onReceive(NotificationCenter.default.publisher(for: .ripulThemeDidChange)) { _ in
-            themeVersion &+= 1
-        }
     }
 
     private func singletonForm(_ element: RipulThemeScope) -> some View {
@@ -304,10 +314,6 @@ public struct RipulStyleKindScreen: View {
         }
         .navigationTitle(styleKind?.label ?? kind)
         .navigationBarTitleDisplayMode(.inline)
-        .id(themeVersion)
-        .onReceive(NotificationCenter.default.publisher(for: .ripulThemeDidChange)) { _ in
-            themeVersion &+= 1
-        }
     }
 }
 
@@ -340,6 +346,14 @@ public struct RipulStyleLibraryScreen: View {
     }
 
     public var body: some View {
+        // Read the counter HERE so a theme change re-runs this body — SwiftUI only
+        // re-invokes bodies for state they actually read. Deliberately NOT
+        // `.id(themeVersion)`: that changes the view's IDENTITY, so SwiftUI tears the
+        // subtree down and rebuilds it — including any pushed NavigationLink destination.
+        // Setting a knob therefore popped you back a screen. The environment counter
+        // refreshes descendants without touching identity (same contract as
+        // `refreshesOnThemeChange()`), which is what this always wanted.
+        let _ = themeVersion
         Form {
             Section {
                 RipulStyleLibraryRows(kind: kind, showsPreviews: showsPreviews)
@@ -351,7 +365,7 @@ public struct RipulStyleLibraryScreen: View {
         }
         .navigationTitle(styleKind?.label ?? kind)
         .navigationBarTitleDisplayMode(.inline)
-        .id(themeVersion)
+        .environment(\.ripulThemeVersion, themeVersion)
         .onReceive(NotificationCenter.default.publisher(for: .ripulThemeDidChange)) { _ in
             themeVersion &+= 1
         }
@@ -541,6 +555,13 @@ public struct RipulScopeOverridesScreen: View {
         self.kind = kind; self.element = element; self.title = title
     }
 
+    /// Theme changes reach this pushed screen as an environment bump from the kind screen
+    /// above. It MUST be read in `body` — the values below are resolved from the engine at
+    /// body-evaluation time, so without the read a knob set here would not show its own
+    /// change. (This used to work only because the kind screen re-identified itself and
+    /// destroyed the whole stack, which is what popped you back a screen.)
+    @Environment(\.ripulThemeVersion) private var themeVersion
+
     private var styleKind: RipulStyleKind? {
         RipulThemeEngine.styleKinds.first { $0.name == kind }
     }
@@ -548,6 +569,7 @@ public struct RipulScopeOverridesScreen: View {
     private var hasOverrides: Bool { RipulThemeEngine.current.styleOverrides[kind]?[element] != nil }
 
     public var body: some View {
+        let _ = themeVersion
         Form {
             if hasStyles {
                 Section {
@@ -596,12 +618,19 @@ struct RipulScopeContent: View {
     let kind: String
     let scope: RipulThemeScope
     @State private var expanded = false
+    /// Theme changes reach this pushed screen as an environment bump from the kind screen
+    /// above. It MUST be read in `body` — the values below are resolved from the engine at
+    /// body-evaluation time, so without the read a knob set here would not show its own
+    /// change. (This used to work only because the kind screen re-identified itself and
+    /// destroyed the whole stack, which is what popped you back a screen.)
+    @Environment(\.ripulThemeVersion) private var themeVersion
 
     private var styleKind: RipulStyleKind? {
         RipulThemeEngine.styleKinds.first { $0.name == kind }
     }
 
     var body: some View {
+        let _ = themeVersion
         DisclosureGroup(isExpanded: $expanded) {
             Picker("Style", selection: Binding<String?>(
                 get: { RipulThemeEngine.current.styleAssignments[kind]?[scope.id] },
