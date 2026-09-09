@@ -22,12 +22,13 @@ import UIKit
 /// Surfaced to a remote agent as `device_explorer_probe`.
 public struct ExplorerProbeTool: NativeTool {
     public let name = "explorer_probe"
-    public let description = "Point the View Explorer's reticule at a screen coordinate and report what it "
+    public let description = "Highlight an app element by pointing the View Explorer's reticule at a screen coordinate and report what it "
         + "resolves — the selected element, the element a tap would actually drive (they differ more often "
         + "than you'd think), whether they diverge, and the readout verbatim. Optionally fire, which presses "
         + "through the identical path a human tap takes and returns via/activated/trace. Coordinates are "
-        + "window-space, the same frames inspect_screen reports. Requires the View Explorer to be open on "
-        + "the device. This is the ONLY way to test point-based resolution; tap_element addresses by "
+        + "window-space, the same frames inspect_screen reports. Automatically opens View Explorer if it is "
+        + "closed; no manual launch is needed. Omit fire or set it to false to highlight without pressing. "
+        + "This is the ONLY way to test point-based resolution; tap_element addresses by "
         + "predicate and exercises a different path entirely."
     public let inputSchema: [String: Any] = ToolSchema.object(
         .number("x", "Window-space x, as reported by inspect_screen frames"),
