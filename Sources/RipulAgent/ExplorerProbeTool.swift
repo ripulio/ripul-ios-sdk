@@ -22,29 +22,46 @@ import UIKit
 /// Surfaced to a remote agent as `device_explorer_probe`.
 public struct ExplorerProbeTool: NativeTool {
     public let name = "explorer_probe"
-    public let description = "Highlight an app element by pointing the View Explorer's reticule at a screen coordinate and report what it "
+    public let description = "Read the user's current View Explorer highlight, or highlight an app element at a screen coordinate. "
+        + "Omit both x and y to read the current selection without moving the reticule, reselecting, pressing, "
+        + "or opening the explorer. Reports isOpen and hasSelection, plus the selected element's text, label, "
+        + "identifier, frame and source readout when available. Supply both x and y to move the reticule and report what it "
         + "resolves — the selected element, the element a tap would actually drive (they differ more often "
         + "than you'd think), whether they diverge, and the readout verbatim. Optionally fire, which presses "
         + "through the identical path a human tap takes and returns via/activated/trace. Coordinates are "
-        + "window-space, the same frames inspect_screen reports. Automatically opens View Explorer if it is "
-        + "closed; no manual launch is needed. Omit fire or set it to false to highlight without pressing. "
+        + "window-space, the same frames inspect_screen reports. With coordinates, automatically opens View Explorer if it is "
+        + "closed; no manual launch is needed. Omit fire or set it to false to highlight without pressing. Fire requires coordinates. "
         + "This is the ONLY way to test point-based resolution; tap_element addresses by "
         + "predicate and exercises a different path entirely."
     public let inputSchema: [String: Any] = ToolSchema.object(
-        .number("x", "Window-space x, as reported by inspect_screen frames"),
-        .number("y", "Window-space y"),
-        .bool("fire", "Also press what resolves, through the same path a human tap takes (default false)")
+        .number("x", "Window-space x. Supply with y to move the highlight; omit both to read the current selection."),
+        .number("y", "Window-space y. Supply with x to move the highlight; omit both to read the current selection."),
+        .bool("fire", "Also press what resolves (default false). Requires both x and y; never fires in read mode.")
     )
 
     public init() {}
 
     public func execute(args: [String: Any]) async throws -> Any {
         #if canImport(UIKit)
-        guard let x = (args["x"] as? NSNumber)?.doubleValue,
-              let y = (args["y"] as? NSNumber)?.doubleValue else {
-            return ["success": false, "error": "x and y are required (window-space coordinates)"]
-        }
         let fire = args["fire"] as? Bool ?? false
+        if args["x"] == nil && args["y"] == nil {
+            guard !fire else {
+                return ["success": false, "error": "fire requires both x and y; reading the current selection never presses it"]
+            }
+            return await MainActor.run { () -> Any in
+                guard let live = ViewInspectorController.live,
+                      let window = live.window, !window.isHidden, window.alpha > 0.01,
+                      !live.isHidden else {
+                    return ["success": true, "isOpen": false, "hasSelection": false]
+                }
+                return live.selectionSnapshot()
+            }
+        }
+        guard let x = (args["x"] as? NSNumber)?.doubleValue,
+              let y = (args["y"] as? NSNumber)?.doubleValue,
+              x.isFinite, y.isFinite else {
+            return ["success": false, "error": "Supply both x and y as finite window-space coordinates, or omit both to read the current selection"]
+        }
 
         // Open the explorer if it isn't up. Asking a human to open it first
         // reintroduces exactly the manual step this tool exists to remove —

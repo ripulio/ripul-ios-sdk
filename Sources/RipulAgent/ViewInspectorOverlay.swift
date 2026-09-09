@@ -9,7 +9,7 @@ let ripulViewExplorerOverlayTag = 0x5249_5055   // "RIPU"
 
 /// Marketing version of the RipulAgent SDK, surfaced in the inspector's copy output as `sdk: …`
 /// so we can always tell which build is actually running on the device. Bump on every release.
-let ripulSDKVersion = "0.7.87"
+let ripulSDKVersion = "0.7.88"
 
 // MARK: - View Inspector Overlay
 //
@@ -1131,37 +1131,7 @@ class ViewInspectorController: UIView {
         onCursorMoved?(cursorPos)
         pickAt(cursorPos)
 
-        func describe(_ v: UIView?) -> [String: Any]? {
-            guard let v else { return nil }
-            let f = v.convert(v.bounds, to: nil)
-            var d: [String: Any] = ["class": String(describing: type(of: v)),
-                                    "frame": ["x": Double(f.minX), "y": Double(f.minY),
-                                              "w": Double(f.width), "h": Double(f.height)]]
-            if let id = ScreenElementFinder.identifier(of: v) { d["id"] = id }
-            return d
-        }
-
-        var result: [String: Any] = [
-            "success": true,
-            "reticule": ["x": Double(windowPoint.x), "y": Double(windowPoint.y)],
-            // The readout verbatim — the exact text the Copy button yields, so a
-            // tool-driven check and a human report are the same artefact.
-            "readout": currentInfo?.sourceReference() ?? "",
-            "outline": currentActionable == nil ? "grey (nothing here responds to a tap)" : "pink",
-        ]
-        if let e = describe(currentTarget) { result["element"] = e }
-        if let a = describe(currentActionable) { result["actionable"] = a }
-        result["diverges"] = currentActionable != nil && currentActionable !== currentTarget
-        // The resolve stage's own account — candidate count, how many are
-        // try-and-see, and whether the POINT (rather than identity) chose the
-        // outcome. `pointMattered` is what decides anchor recording, so the
-        // conformance sweep can assert it directly.
-        if let r = currentResolution {
-            result["candidates"] = r.candidates.count
-            result["untested"] = r.candidates.filter { !$0.promised }.count
-            result["pointMattered"] = r.pointMattered
-        }
-
+        var result = selectionSnapshot()
         if fire {
             if let outcome = fireNow() {
                 result["fired"] = ["via": outcome.via as Any,
@@ -1174,6 +1144,76 @@ class ViewInspectorController: UIView {
                                    "error": "nothing resolved under the reticule to press"]
             }
         }
+        return result
+    }
+
+    /// Read exactly the selection already shown by the explorer. Do not call
+    /// pickAt here: a re-hit-test could replace the user's selection after the
+    /// host changes, and even a same-point probe emits cursor/inspection events.
+    func selectionSnapshot() -> [String: Any] {
+        let host = hostWindow ?? window
+        let windowPoint = host.map { convert(cursorPos, to: $0) } ?? cursorPos
+        var result: [String: Any] = [
+            "success": true,
+            "isOpen": true,
+            "hasSelection": false,
+            "reticule": ["x": Double(windowPoint.x), "y": Double(windowPoint.y)],
+            "readout": "",
+        ]
+        // Failed picks clear the resolution. Removed/hidden views are no longer
+        // a live selection; never report their retained readout as current.
+        guard let info = currentInfo, let target = currentTarget,
+              currentResolution != nil, highlightLayer.path != nil,
+              let host, target.window === host else { return result }
+        var ancestor: UIView? = target
+        while let view = ancestor {
+            guard !view.isHidden, view.alpha > 0.01 else { return result }
+            ancestor = view.superview
+        }
+
+        func describe(_ v: UIView?) -> [String: Any]? {
+            guard let v else { return nil }
+            let f = v.convert(v.bounds, to: host)
+            var d: [String: Any] = ["class": String(describing: type(of: v)),
+                                    "frame": ["x": Double(f.minX), "y": Double(f.minY),
+                                              "w": Double(f.width), "h": Double(f.height)]]
+            if let id = ScreenElementFinder.identifier(of: v) { d["id"] = id }
+            if let text = ScreenElementFinder.contentText(of: v), !text.isEmpty { d["text"] = text }
+            if let label = v.accessibilityLabel, !label.isEmpty { d["label"] = label }
+            if let role = ScreenElementFinder.role(of: v) { d["role"] = role }
+            return d
+        }
+
+        result["hasSelection"] = true
+        // Preserve the exact Copy readout, including the SwiftUI identity that
+        // may come from a spatial stamp rather than the raw target UIView.
+        result["readout"] = info.sourceReference()
+        result["outline"] = currentActionable == nil ? "grey (nothing here responds to a tap)" : "pink"
+        if var element = describe(target) {
+            if let id = info.accessibilityId { element["id"] = id }
+            if element["text"] == nil, let text = info.text, !text.isEmpty { element["text"] = text }
+            if element["label"] == nil, let label = info.accessibilityLabel, !label.isEmpty { element["label"] = label }
+            if let vc = info.owningViewController { element["vc"] = vc }
+            if let outlet = info.propertyRef { element["ibOutlet"] = outlet }
+            result["element"] = element
+        }
+        if let path = highlightLayer.path {
+            let f = convert(path.boundingBoxOfPath, to: host)
+            result["highlightFrame"] = ["x": Double(f.minX), "y": Double(f.minY),
+                                        "w": Double(f.width), "h": Double(f.height)]
+        }
+        if let a = describe(currentActionable) { result["actionable"] = a }
+        result["diverges"] = currentActionable != nil && currentActionable !== currentTarget
+        // The resolve stage's own account — candidate count, how many are
+        // try-and-see, and whether the POINT (rather than identity) chose the
+        // outcome. `pointMattered` is what decides anchor recording, so the
+        // conformance sweep can assert it directly.
+        if let r = currentResolution {
+            result["candidates"] = r.candidates.count
+            result["untested"] = r.candidates.filter { !$0.promised }.count
+            result["pointMattered"] = r.pointMattered
+        }
+
         return result
     }
 
