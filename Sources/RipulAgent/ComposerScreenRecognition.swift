@@ -1,6 +1,8 @@
 import Foundation
 import Vision
 import CoreGraphics
+import ImageIO
+import UniformTypeIdentifiers
 
 /// Top-left normalized rectangles keep observations useful across device sizes.
 struct ComposerScreenText {
@@ -11,6 +13,31 @@ struct ComposerScreenText {
 
 /// Shared by capture and regression tests. Vision runs off the UI thread.
 enum ComposerScreenRecognition {
+    static func jpeg(_ image: CGImage) -> Data? {
+        let scale = min(1, 1600 / CGFloat(max(image.width, image.height)))
+        let width = max(1, Int(CGFloat(image.width) * scale)), height = max(1, Int(CGFloat(image.height) * scale))
+        guard let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8,
+            bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        context.interpolationQuality = .high
+        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        guard let resized = context.makeImage() else { return nil }
+        let data = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(data, UTType.jpeg.identifier as CFString, 1, nil) else { return nil }
+        CGImageDestinationAddImage(destination, resized, [kCGImageDestinationLossyCompressionQuality: 0.7] as CFDictionary)
+        guard CGImageDestinationFinalize(destination) else { return nil }
+        return data as Data
+    }
+
+    /// Short reading-order text; no coordinates, technical roles or duplicated extraction layers.
+    static func simpleText(_ items: [ComposerScreenText]) -> String {
+        var seen = Set<String>()
+        return items.sorted { $0.frame.minY < $1.frame.minY }.compactMap { item -> String? in
+            let text = item.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard text.count > 1, item.confidence >= 0.5, seen.insert(text).inserted else { return nil }
+            return String(text.prefix(200))
+        }.prefix(35).joined(separator: "\n")
+    }
+
     static func recognize(_ image: CGImage) async throws -> [ComposerScreenText] {
         try await withCheckedThrowingContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {

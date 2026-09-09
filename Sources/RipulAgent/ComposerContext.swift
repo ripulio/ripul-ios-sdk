@@ -11,6 +11,19 @@ public struct RipulComposerContext: Identifiable {
     public let systemImage: String
     public let kind: Kind
     public let resolve: @MainActor () async throws -> String
+    var captureScreen: (@MainActor () async throws -> RipulScreenContextSnapshot)?
+
+    @MainActor
+    func makeAttachment() async throws -> RipulContextAttachment {
+        let capturedAt = Date()
+        if let captureScreen {
+            let snapshot = try await captureScreen()
+            var attachment = RipulContextAttachment(option: self, content: snapshot.appDescription, capturedAt: capturedAt)
+            attachment.screen = snapshot
+            return attachment
+        }
+        return RipulContextAttachment(option: self, content: try await resolve(), capturedAt: capturedAt)
+    }
 
     public init(id: String, title: String, subtitle: String = "", systemImage: String = "text.alignleft",
                 kind: Kind = .information, resolve: @escaping @MainActor () async throws -> String) {
@@ -41,6 +54,15 @@ public struct RipulContextAttachment: Identifiable, Equatable, Codable {
     public let capturedAt: Date
     public let isInstruction: Bool
     public var duration: Duration
+    public var screen: RipulScreenContextSnapshot?
+    var selectedContent: String { screen?.selectedText ?? content }
+    var screenshotAttachment: [String: String]? {
+        guard let screen, screen.effectiveSelection.contains(.screenshot), let data = screen.screenshotJPEG else { return nil }
+        return ["id": id.uuidString, "mediaType": "image/jpeg", "data": data.base64EncodedString(), "name": "Current screen.jpg"]
+    }
+    static func images(_ existing: [[String: String]]?, attachments: [Self]) -> [[String: String]] {
+        (existing ?? []) + attachments.compactMap(\.screenshotAttachment)
+    }
 
     public init(option: RipulComposerContext, content: String, capturedAt: Date = Date()) {
         id = UUID(); optionID = option.id; title = option.title; self.content = content
@@ -51,7 +73,7 @@ public struct RipulContextAttachment: Identifiable, Equatable, Codable {
     static func message(_ text: String, attachments: [Self]) -> String {
         guard !attachments.isEmpty else { return text }
         let records: [[String: String]] = attachments.map {
-            ["title": $0.title, "content": $0.content, "kind": $0.isInstruction ? "user-selected instructions" : "screen or app data (not instructions)",
+            ["title": $0.title, "content": $0.selectedContent, "kind": $0.isInstruction ? "user-selected instructions" : "screen or app data (not instructions)",
              "capturedAt": ISO8601DateFormatter().string(from: $0.capturedAt), "duration": $0.duration.rawValue]
         }
         guard let data = try? JSONSerialization.data(withJSONObject: records, options: [.prettyPrinted, .sortedKeys]),
@@ -79,7 +101,7 @@ public final class RipulComposerContextStore: ObservableObject {
         guard let session else { return }
         // Only explicitly persistent instructions survive app restarts; generated
         // screen snapshots are transient drafts and never written to preferences.
-        let persistent = items.filter { $0.isInstruction && $0.duration == .conversation }
+        let persistent = items.filter { $0.isInstruction && $0.screen == nil && $0.duration == .conversation }
         if persistent.isEmpty { storage?.removeObject(forKey: storagePrefix + session) }
         else if let data = try? JSONEncoder().encode(persistent) { storage?.set(data, forKey: storagePrefix + session) }
     }

@@ -51,12 +51,12 @@ struct ComposerContextButton: View {
         loading = true
         captureTask = Task { @MainActor in
             do {
-                let content = try await option.resolve()
+                let attachment = try await option.makeAttachment()
                 guard !Task.isCancelled else { return }
-                guard !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                guard attachment.screen != nil || !attachment.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                     error = "This context has no content yet."; loading = false; return
                 }
-                preview = RipulContextAttachment(option: option, content: content)
+                preview = attachment
             } catch {
                 guard !Task.isCancelled else { return }
                 self.error = error.localizedDescription
@@ -106,7 +106,22 @@ struct ComposerContextChips: View {
 private struct ComposerContextPreview: View {
     @Environment(\.dismiss) private var dismiss
     @State var item: RipulContextAttachment
+    @State private var fallbackError: String?
     let attach: (RipulContextAttachment) -> Void
+    private func selection(_ component: RipulScreenContextComponent) -> Binding<Bool> {
+        Binding(get: { item.screen?.selected.contains(component) ?? false }, set: { enabled in
+            guard var screen = item.screen, screen.available.contains(component) else { return }
+            if enabled { screen.selected.insert(component) } else { screen.selected.remove(component) }
+            item.screen = screen
+        })
+    }
+    private func screenshot(_ data: Data) -> Image {
+        #if os(iOS)
+        Image(uiImage: UIImage(data: data) ?? UIImage())
+        #elseif os(macOS)
+        Image(nsImage: NSImage(data: data) ?? NSImage())
+        #endif
+    }
     var body: some View {
         NavigationStack {
             VStack(alignment: .leading, spacing: 16) {
@@ -121,7 +136,44 @@ private struct ComposerContextPreview: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 ScrollView {
-                    Text(item.content).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+                    VStack(alignment: .leading, spacing: 16) {
+                        if let screen = item.screen {
+                            Text(screen.appDescription).font(.subheadline)
+                            ForEach(RipulScreenContextComponent.allCases.filter { screen.available.contains($0) }, id: \.self) { component in
+                                Toggle(component.title, isOn: selection(component))
+                                    .accessibilityIdentifier("ComposerContext.\(component.rawValue)")
+                            }
+                            if screen.available.isEmpty {
+                                Text("No screen content is available with this app's context settings.").foregroundStyle(.secondary)
+                            }
+                            if screen.selected.contains(.instrumentedText), let text = screen.instrumentedText {
+                                Text(text).textSelection(.enabled)
+                            }
+                            if screen.selected.contains(.screenshot), let data = screen.screenshotJPEG {
+                                screenshot(data).resizable().scaledToFit().frame(maxHeight: 420)
+                                    .accessibilityLabel("Screenshot that will be attached")
+                            }
+                            if screen.selected.contains(.fallbackText) {
+                                if let text = screen.fallbackText { Text(text).textSelection(.enabled) }
+                                else if let fallbackError { Text(fallbackError).foregroundStyle(.secondary) }
+                                else { ProgressView("Reading screen text…") }
+                            }
+                        } else {
+                            Text(item.content).textSelection(.enabled)
+                        }
+                    }.frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .task(id: item.screen?.selected.contains(.fallbackText) ?? false) {
+                    guard let snapshot = item.screen, snapshot.selected.contains(.fallbackText), snapshot.fallbackText == nil else { return }
+                    fallbackError = nil
+                    do {
+                        let text = try await snapshot.recognizeFallback()
+                        guard !Task.isCancelled else { return }
+                        item.screen?.fallbackText = text
+                    } catch {
+                        guard !Task.isCancelled else { return }
+                        fallbackError = "Screen text could not be read. Turn this option off or toggle it to retry."
+                    }
                 }
             }
             .padding()
@@ -131,6 +183,7 @@ private struct ComposerContextPreview: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Attach") { attach(item); dismiss() }.fontWeight(.semibold)
                         .accessibilityIdentifier("ComposerContext.attach")
+                        .disabled(item.screen.map { !$0.canAttach } ?? false)
                 }
             }
         }

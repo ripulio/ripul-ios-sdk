@@ -6,26 +6,57 @@ it locally and opens a preview. **Attach** adds a removable chip; cancel does no
 attach anything. No option is selected automatically and no screen is captured until
 its option is chosen.
 
-## Two capture paths
+## Choose what gets attached
 
-Current screen captures the host window's pixels and component state together when
-selected. It combines two paths:
+Current screen captures a frozen, local draft, then presents independent toggles:
 
-1. **Developer instrumentation:** live components supply their meaning, value and
-   optional hint. These are app data, not agent instructions. Instrumented values and
-   controls take precedence over fallback observations within their visible regions.
-2. **Fallback:** accessible labels/values plus Apple's on-device Vision text
-   recognition of the rendered host screen, including SwiftUI and web content.
-   OCR runs off the UI thread. Rows preserve reading order and x/y positions, so
-   repeated dates and side-by-side fields retain their context. Uncertain readings
-   are marked; the SDK does not invent meanings for ambiguous icons or graphs.
+- **App description:** live component instrumentation or a developer-supplied resolver.
+- **Screenshot:** a preview of the actual JPEG that will be attached to the message.
+- **Recognized screen text:** optional, short OCR text without coordinates or diagnostic
+  labels. Recognition runs only when this option is selected. It uses the same frozen
+  pixels as the screenshot, not a recapture of the preview sheet.
 
-Screen/group annotations can coexist with uninstrumented descendants. No screen
-catalogue is needed. Only visible components contribute; an annotation on a reused
-component must update along with the component's displayed state. No screenshot is
-uploaded, stored in preferences, or included in the message: only the reviewed text
-snapshot is attached. The image is transient input to local text recognition.
-The image and text are not recaptured at send time.
+Defaults select app description when available, otherwise screenshot. Recognized text
+is off by default. Developers control which options are offered and can instead
+preselect description plus screenshot, screenshot alone, or any permitted combination.
+The user can change the selection in the preview; Attach is disabled when nothing is
+selected or selected text recognition is still running.
+
+```swift
+configuration.composerContexts = [
+    .currentScreen(configuration: .init(
+        available: [.instrumentedText, .screenshot],
+        defaults: [.instrumentedText, .screenshot]
+    )),
+    .planningOnly,
+    .whileAway
+]
+```
+
+The same list can be assigned to `AgentConfiguration.composerContexts` or
+`RipulSessionsConfiguration.composerContexts`. Omit `defaults` for adaptive selection;
+an explicit empty set starts with all toggles off. Options not in `available` are
+never offered or sent, even if included in `defaults`.
+
+Developers may supply their own screen description instead of component discovery:
+
+```swift
+.currentScreen(configuration: .init(defaults: [.instrumentedText, .screenshot])) {
+    screenModel.descriptionForAI()
+}
+```
+
+The provider runs only on explicit Current screen selection, before the preview.
+Returning an empty description makes that option unavailable. Component annotations
+remain useful for masking excluded regions even when a custom description is supplied.
+
+The screenshot is sent through the normal multimodal image-attachment route alongside
+any photos already selected, including on voice submissions. It is resized to at most
+1600 pixels on its longest edge and encoded as JPEG; base64 never enters the text
+context. Unselected descriptions, screenshots and recognized text stay local. Screen
+drafts are not saved to preferences. Reopening a chip reviews the original capture;
+selecting Current screen again captures fresh. Nothing is captured or attached to
+ordinary messages automatically.
 
 ### Label a component for AI
 
@@ -65,14 +96,16 @@ editors do not expose the same native field types: hosts must mark sensitive reg
 with this API. Screen-level annotations should only describe the screen's purpose.
 
 Capture excludes SDK overlay windows on iOS, so the embedded assistant's own chat is
-not read. Native macOS captures the app's main window. Very large view trees skip
-visual recognition if the bounded traversal cannot check all privacy regions.
-Custom icons, plots and image meaning are not interpreted by OCR. For richer app
-semantics, label the component or provide a host-defined resolver below. Recognition
-failure is stated in the preview; accessible/developer context remains available.
+not captured. Native macOS captures the app's main window. Very large view trees omit the screenshot when the bounded traversal cannot check
+all privacy regions; accessible text may still be offered.
+Custom icons and plots are not interpreted by OCR; selecting Screenshot sends their
+visual representation to the model instead. For richer app semantics, label the
+component or provide a description resolver. Recognition failure is shown in the
+preview; deselect recognized text to attach the other selected components.
 
 The WAC integration labels its shift editor, shared job header, time/break controls
-and role/rate control; earnings still exercise the visual fallback.
+and role/rate control. Users can additionally select Screenshot to include earnings
+and other uninstrumented content visually.
 
 ## Host-defined choices
 

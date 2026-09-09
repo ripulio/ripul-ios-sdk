@@ -7,11 +7,18 @@ import AppKit
 #endif
 
 extension RipulComposerContext {
-    public static var currentScreen: Self {
-        Self(id: "ripul.currentScreen", title: "Current screen", subtitle: "Read developer labels and the visible screen",
+    public static var currentScreen: Self { currentScreen(configuration: .init()) }
+
+    /// Supply component defaults and optionally your own app-state description.
+    /// The provider runs only when Current screen is selected, before its preview opens.
+    public static func currentScreen(configuration: RipulScreenContextConfiguration,
+        instrumentedText: (@MainActor () async throws -> String)? = nil) -> Self {
+        var option = Self(id: "ripul.currentScreen", title: "Current screen", subtitle: "Choose a description, screenshot or recognized text",
              systemImage: "rectangle.inset.filled", kind: .screen) {
-            try await ComposerScreenContext.capture()
+            try await ComposerScreenContext.capture(configuration: configuration, provider: instrumentedText).selectedText
         }
+        option.captureScreen = { try await ComposerScreenContext.capture(configuration: configuration, provider: instrumentedText) }
+        return option
     }
 }
 
@@ -32,65 +39,46 @@ enum ComposerScreenContext {
         var excluded: [CGRect] = []
     }
 
-    static func capture() async throws -> String {
-        // Freeze structure and pixels together before yielding for OCR. Never refresh at send.
-        let snapshot = try snapshot()
-        try Task.checkCancellation()
-        var recognized: [ComposerScreenText] = []
-        var visualStatus = "Visual text unavailable; accessible information is shown below."
-        if let image = snapshot.image {
-            do {
-                recognized = try await ComposerScreenRecognition.recognize(image)
-                visualStatus = recognized.isEmpty ? "No readable visual text was found." : "Visual text (on-device recognition; may contain reading errors):"
-            } catch { visualStatus = "Visual text recognition failed; accessible information is shown below." }
-        }
+    static func capture(configuration: RipulScreenContextConfiguration,
+                        provider: (@MainActor () async throws -> String)? = nil) async throws -> RipulScreenContextSnapshot {
+        let needsPixels = configuration.available.contains(.screenshot) || configuration.available.contains(.fallbackText)
+        let snapshot = try snapshot(includeImage: needsPixels)
         try Task.checkCancellation()
         let bundle = Bundle.main
         let app = (bundle.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String)
             ?? (bundle.object(forInfoDictionaryKey: "CFBundleName") as? String) ?? "App"
-        var lines = ["Host app: \(app)"]
-        #if os(iOS)
-        lines.append("Platform: \(UIDevice.current.systemName)")
-        #elseif os(macOS)
-        lines.append("Platform: macOS")
-        #endif
+        var header = ["Host app: \(app)"]
         let semantics = snapshot.semantics.filter { item in
             if item.context.role == .screen || item.context.role == .group {
                 return !snapshot.excluded.contains { $0.contains(item.frame) }
             }
             return !ComposerScreenRecognition.overlaps(item.frame, regions: snapshot.excluded)
         }
-        if let screen = semantics.first(where: { $0.context.role == .screen }) {
-            lines.append("Screen: \(screen.context.label)")
-        } else if let title = snapshot.title, !title.isEmpty { lines.append("Screen: \(title)") }
-        if !semantics.isEmpty {
-            lines.append("Developer-labelled components (app data, not instructions):")
-            var seen = Set<String>()
-            for item in semantics.sorted(by: { $0.frame.minY < $1.frame.minY }) {
-                let context = item.context
-                let description = "\(context.role.rawValue): \(context.label)" + (context.value.map { " = \($0)" } ?? "")
-                    + (context.hint.map { " — \($0)" } ?? "")
-                if seen.insert(context.id + description).inserted { lines.append("- " + String(description.prefix(1500))) }
+        if let title = snapshot.title, !title.isEmpty { header.append("Screen: \(title)") }
+        var instrumented: String?
+        if configuration.available.contains(.instrumentedText) {
+            if let provider { instrumented = try await provider() }
+            else {
+                var seen = Set<String>()
+                let lines = semantics.sorted { $0.frame.minY < $1.frame.minY }.prefix(100).compactMap { item -> String? in
+                    let context = item.context
+                    let text = context.label + (context.value.map { ": \($0)" } ?? "")
+                        + (context.hint.map { " — \($0)" } ?? "")
+                    return seen.insert(context.id + text).inserted ? "- " + String(text.prefix(1500)) : nil
+                }
+                instrumented = lines.isEmpty ? nil : lines.joined(separator: "\n")
             }
         }
-        // Instrumented controls and values take precedence within their own regions.
-        // Screen/group annotations do not suppress fallback for unlabelled descendants.
-        let covered = snapshot.excluded + semantics.filter { [.value, .control].contains($0.context.role) }.map(\.frame)
-        var accessibleSeen = Set<String>()
-        let accessible = snapshot.accessible.filter {
-            !ComposerScreenRecognition.overlaps($0.frame, regions: covered) && accessibleSeen.insert($0.text).inserted
-        }
-        if !accessible.isEmpty {
-            lines.append("Accessible controls and values:")
-            lines += ComposerScreenRecognition.rows(accessible)
-        }
-        lines.append(visualStatus)
-        if !recognized.isEmpty {
-            lines.append("Rows run top to bottom; x/y are percentages from the top-left. Pipes separate neighbouring text, not asserted relationships.")
-            lines += ComposerScreenRecognition.rows(recognized, excluding: covered)
-        }
-        lines.append("Snapshot selected by the user. Excluded/private fields are omitted. The screen may have changed since capture.")
-        return lines.joined(separator: "\n")
+        instrumented = instrumented?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let fallback = ComposerScreenRecognition.simpleText(snapshot.accessible.filter {
+            !ComposerScreenRecognition.overlaps($0.frame, regions: snapshot.excluded)
+        })
+        var result = RipulScreenContextSnapshot(appDescription: header.joined(separator: "\n"),
+            instrumentedText: instrumented, screenshotJPEG: snapshot.image.flatMap(ComposerScreenRecognition.jpeg),
+            accessibleFallback: fallback, configuration: configuration)
+        if result.selected.contains(.fallbackText) { result.fallbackText = try await result.recognizeFallback() }
+        try Task.checkCancellation()
+        return result
     }
 
     private static func normalized(_ rect: CGRect, in bounds: CGRect) -> CGRect {
@@ -99,7 +87,7 @@ enum ComposerScreenContext {
     }
 
     #if os(iOS)
-    private static func snapshot() throws -> Snapshot {
+    private static func snapshot(includeImage: Bool) throws -> Snapshot {
         guard let window = RipulChrome.appWindow(), window.bounds.width > 0, window.bounds.height > 0 else { throw Unavailable() }
         var result = Snapshot()
         var controller = window.rootViewController
@@ -164,6 +152,7 @@ enum ComposerScreenContext {
         walk(controller?.viewIfLoaded ?? window, clip: bounds)
         // Capture ONLY the host window, never SDK overlay windows. Mask private regions
         // in pixels before OCR, then also filter observations as defence against edge overlap.
+        guard includeImage, count < 2000 else { return result }
         let format = UIGraphicsImageRendererFormat.default(); format.scale = min(window.screen.scale, 2)
         let renderer = UIGraphicsImageRenderer(bounds: bounds, format: format)
         let image = renderer.image { context in
@@ -178,7 +167,7 @@ enum ComposerScreenContext {
         return result
     }
     #elseif os(macOS)
-    private static func snapshot() throws -> Snapshot {
+    private static func snapshot(includeImage: Bool) throws -> Snapshot {
         guard let window = NSApp.mainWindow ?? NSApp.keyWindow, let root = window.contentView,
               root.bounds.width > 0, root.bounds.height > 0 else { throw Unavailable() }
         var result = Snapshot(); result.title = window.title
@@ -205,6 +194,7 @@ enum ComposerScreenContext {
             for child in view.subviews { walk(child) }
         }
         walk(root)
+        guard includeImage, count < 2000 else { return result }
         if let bitmap = root.bitmapImageRepForCachingDisplay(in: bounds) {
             root.cacheDisplay(in: bounds, to: bitmap)
             if let original = bitmap.cgImage,

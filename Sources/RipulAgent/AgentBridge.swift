@@ -4347,20 +4347,21 @@ public final class AgentBridge: NSObject, ObservableObject {
         guard let webView else { return false }
         let contextSession = currentSourceChatId
         let contextAttachments = composerContexts.attachments(for: contextSession)
+        let combinedImages = RipulContextAttachment.images(imageAttachments, attachments: contextAttachments)
         do {
             var args: [String: Any] = ["text": RipulContextAttachment.message(text, attachments: contextAttachments)]
             // Modality (e.g. "voice") rides as the 4th positional argument;
             // undefined placeholders keep earlier positions stable.
             args["modality"] = modality.map { $0 as Any } ?? NSNull()
-            let hasImages = (imageAttachments?.isEmpty == false)
+            let hasImages = !combinedImages.isEmpty
             let hasAddressedTo = (addressedTo?.isEmpty == false)
             let script: String
             if hasImages && hasAddressedTo {
-                args["images"] = imageAttachments!
+                args["images"] = combinedImages
                 args["addressedTo"] = addressedTo!
                 script = "return await window.__ripulSubmitMessage?.(text, images, addressedTo, modality ?? undefined) ?? { success: false }"
             } else if hasImages {
-                args["images"] = imageAttachments!
+                args["images"] = combinedImages
                 script = "return await window.__ripulSubmitMessage?.(text, images, undefined, modality ?? undefined) ?? { success: false }"
             } else if hasAddressedTo {
                 args["addressedTo"] = addressedTo!
