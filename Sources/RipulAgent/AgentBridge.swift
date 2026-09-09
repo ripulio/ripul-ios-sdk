@@ -1016,15 +1016,6 @@ public final class AgentBridge: NSObject, ObservableObject {
         persistEphemeralIds()
     }
 
-    /// Working directory the NEXT new chat should be created in, mirrored from
-    /// the session list's project filter (selected project's cwd; nil = "All
-    /// Projects" => host default workspace). `createNewChat()` passes it to the
-    /// web `__ripulCreateChat`, which seeds it so the new session's first turn
-    /// starts the CLI in that folder instead of under the default workspace.
-    /// Intentionally NOT @Published — it is written during a web interaction
-    /// (filter change) and must not re-render the WKWebView host.
-    public var pendingNewChatWorkingDirectory: String?
-
     /// When true, the native chat input is hidden even if the page context
     /// says to show it. Used by the commit viewer to enforce read-only mode.
     @Published public var suppressNativeChatInput: Bool = false
@@ -7509,14 +7500,13 @@ public final class AgentBridge: NSObject, ObservableObject {
 
         do {
             logSessionStartMarker("ios.bridge_js_call_start")
-            let wdArgument: Any = pendingNewChatWorkingDirectory ?? NSNull()
             let modelArgument: Any = effectiveModel ?? NSNull()
             let result = try await webView.callAsyncJavaScript(
                 """
                 if (!window.__ripulCreateChat) return {success:false, error:'not ready'};
-                return await window.__ripulCreateChat(workingDirectory, modelOverride ? { modelOverride } : null);
+                return await window.__ripulCreateChat(null, modelOverride ? { modelOverride } : null);
                 """,
-                arguments: ["workingDirectory": wdArgument, "modelOverride": modelArgument],
+                arguments: ["modelOverride": modelArgument],
                 contentWorld: .page
             )
 

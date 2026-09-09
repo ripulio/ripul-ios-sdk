@@ -15,6 +15,7 @@ import SwiftUI
 /// bold below.
 public struct WorkingDirectoryPicker: View {
     let title: String
+    let explanation: String?
     /// Selectable directories, in the order the host reports them.
     let directories: [String]
     /// The directory currently in effect, or `nil` when the session is on the
@@ -36,6 +37,7 @@ public struct WorkingDirectoryPicker: View {
 
     public init(
         title: String = "Working Directory",
+        explanation: String? = nil,
         directories: [String],
         selection: String?,
         defaultPath: String? = nil,
@@ -49,6 +51,7 @@ public struct WorkingDirectoryPicker: View {
         onDismiss: @escaping () -> Void
     ) {
         self.title = title
+        self.explanation = explanation
         self.directories = directories
         self.selection = selection
         self.defaultPath = defaultPath
@@ -65,6 +68,9 @@ public struct WorkingDirectoryPicker: View {
     public var body: some View {
         NavigationStack {
             List {
+                if let explanation {
+                    Section { Text(explanation).font(.footnote).foregroundStyle(.secondary) }
+                }
                 if isLoading {
                     Section { ProgressView("Loading directories…") }
                 } else if let error {

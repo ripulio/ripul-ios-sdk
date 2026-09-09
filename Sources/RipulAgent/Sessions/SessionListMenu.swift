@@ -88,6 +88,15 @@ public struct SessionListMenu: View {
         }
 
         Button {
+            NotificationCenter.default.post(name: .ripulShowAppWorkingDirectory, object: bridge)
+        } label: {
+            Label("App Working Directory…", systemImage: "folder.badge.gearshape")
+        }
+        .uiKitIdentifier("AgentScreen.listMenu.appWorkingDirectory")
+
+        Divider()
+
+        Button {
             Task { await model.refresh() }
         } label: {
             Label("Refresh", systemImage: "arrow.clockwise")

@@ -560,89 +560,108 @@ public struct UnifiedSessionRow: View {
         }
     }
 
+    /// The busy indicator, parked UNDER the timestamp instead of beside it.
+    ///
+    /// Stacked because it is the trailing column's *second* fact, not a
+    /// competitor for the row's horizontal run — every point it took there was
+    /// taken from the title and the tool lozenges, which are what you actually
+    /// read the row for. The timestamp is already the narrowest thing on the
+    /// right, so the dots fit under it for free.
+    ///
+    /// The slot keeps its height whether or not the glyph is in it: a turn
+    /// starting or ending must not resize the row, or a list of live sessions
+    /// twitches every time one of them changes state.
+    ///
+    /// ("Waiting on you" gets nothing here — the unread shading behind the row
+    /// says it, and says it better, since it also distinguishes a reply you
+    /// have not read from one you have.)
     @ViewBuilder
-    private var listTrailingChrome: some View {
-        Group {
-            // Per-session busy indicator. "Waiting on you" used to get a
-            // raised hand here, but the unread shading behind the row already
-            // says it — and says it better, since it also distinguishes a
-            // reply you have not read from one you have. Two signals for one
-            // state just cost the title its width.
-            switch phase {
-            case .running:
+    private var runningIndicatorSlot: some View {
+        ZStack {
+            if phase == .running {
                 Image(systemName: "ellipsis")
                     .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(.tint)
                     .symbolEffect(.variableColor.iterative, options: .repeating)
                     .accessibilityLabel("Running")
+                    .transition(.opacity)
                     .uiKitIdentifier("UnifiedSessionRow.phaseIndicator.running")
-            case .awaitingInput, .idle, .completed, .failed, .none:
-                EmptyView()
             }
+        }
+        .frame(height: 16)
+        .animation(.easeInOut(duration: 0.175), value: phase == .running)
+    }
 
-            // Session-row action buttons declared by tools
-            ForEach(sessionActions) { action in
-                Button {
-                    onSessionAction?(action)
-                } label: {
-                    HStack(spacing: 4) {
-                        if let icon = action.icon {
-                            Image(systemName: icon)
+    @ViewBuilder
+    private var listTrailingChrome: some View {
+        VStack(alignment: .trailing, spacing: 0) {
+            HStack(spacing: 12) {
+                // Session-row action buttons declared by tools
+                ForEach(sessionActions) { action in
+                    Button {
+                        onSessionAction?(action)
+                    } label: {
+                        HStack(spacing: 4) {
+                            if let icon = action.icon {
+                                Image(systemName: icon)
+                                    .font(.caption2.weight(.semibold))
+                                    .uiKitIdentifier("UnifiedSessionRow.actionButton.icon")
+                            }
+                            Text(action.label)
                                 .font(.caption2.weight(.semibold))
-                                .uiKitIdentifier("UnifiedSessionRow.actionButton.icon")
+                                .uiKitIdentifier("UnifiedSessionRow.actionButton.label")
                         }
-                        Text(action.label)
-                            .font(.caption2.weight(.semibold))
-                            .uiKitIdentifier("UnifiedSessionRow.actionButton.label")
+                        .foregroundStyle(action.style == .primary ? Color.accentColor : action.style == .destructive ? Color.red : Color.secondary)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .modifier(GlassCapsuleBackground())
                     }
-                    .foregroundStyle(action.style == .primary ? Color.accentColor : action.style == .destructive ? Color.red : Color.secondary)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .modifier(GlassCapsuleBackground())
+                    .uiKitIdentifier("UnifiedSessionRow.actionButton")
+                    .buttonStyle(.plain)
+                    .transition(.opacity.combined(with: .scale(scale: 0.8)))
                 }
-                .uiKitIdentifier("UnifiedSessionRow.actionButton")
-                .buttonStyle(.plain)
-                .transition(.opacity.combined(with: .scale(scale: 0.8)))
+
+                if isArchiving {
+                    HStack(spacing: 6) {
+                        Text("Archiving")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                            .uiKitIdentifier("UnifiedSessionRow.archivingLabel")
+                        ProgressView().controlSize(.small)
+                            .uiKitIdentifier("UnifiedSessionRow.archivingSpinner")
+                    }
+                    .uiKitIdentifier("UnifiedSessionRow.archivingIndicator")
+                } else if isDeleting {
+                    HStack(spacing: 6) {
+                        Text(isDeletingFromHost ? "Removing from host" : "Removing")
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                            .uiKitIdentifier("UnifiedSessionRow.deletingLabel")
+                        ProgressView().controlSize(.small)
+                            .uiKitIdentifier("UnifiedSessionRow.deletingSpinner")
+                    }
+                    .uiKitIdentifier("UnifiedSessionRow.deletingIndicator")
+                } else {
+                    // Keep the time text in layout while opening (invisible) so
+                    // the trailing slot's width is unchanged when the spinner
+                    // replaces it — otherwise the whole row reflows around the
+                    // narrower spinner as it appears.
+                    ZStack {
+                        RelativeTimeText(date: effectiveLastActive)
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                            .opacity(isOpening ? 0 : 1)
+                            .accessibilityHidden(isOpening)
+                            .uiKitIdentifier("UnifiedSessionRow.timeText")
+                        if isOpening {
+                            ProgressView().controlSize(.small)
+                                .uiKitIdentifier("UnifiedSessionRow.openingSpinner")
+                        }
+                    }
+                }
             }
 
-            if isArchiving {
-                HStack(spacing: 6) {
-                    Text("Archiving")
-                        .font(.caption)
-                        .foregroundStyle(.orange)
-                        .uiKitIdentifier("UnifiedSessionRow.archivingLabel")
-                    ProgressView().controlSize(.small)
-                        .uiKitIdentifier("UnifiedSessionRow.archivingSpinner")
-                }
-                .uiKitIdentifier("UnifiedSessionRow.archivingIndicator")
-            } else if isDeleting {
-                HStack(spacing: 6) {
-                    Text(isDeletingFromHost ? "Removing from host" : "Removing")
-                        .font(.caption)
-                        .foregroundStyle(.red)
-                        .uiKitIdentifier("UnifiedSessionRow.deletingLabel")
-                    ProgressView().controlSize(.small)
-                        .uiKitIdentifier("UnifiedSessionRow.deletingSpinner")
-                }
-                .uiKitIdentifier("UnifiedSessionRow.deletingIndicator")
-            } else {
-                // Keep the time text in layout while opening (invisible) so
-                // the trailing slot's width is unchanged when the spinner
-                // replaces it — otherwise the phase indicator to the left
-                // jumps horizontally as the narrower spinner appears.
-                ZStack {
-                    RelativeTimeText(date: effectiveLastActive)
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                        .opacity(isOpening ? 0 : 1)
-                        .accessibilityHidden(isOpening)
-                        .uiKitIdentifier("UnifiedSessionRow.timeText")
-                    if isOpening {
-                        ProgressView().controlSize(.small)
-                            .uiKitIdentifier("UnifiedSessionRow.openingSpinner")
-                    }
-                }
-            }
+            runningIndicatorSlot
         }
     }
 }

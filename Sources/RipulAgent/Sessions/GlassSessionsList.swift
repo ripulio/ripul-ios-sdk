@@ -141,8 +141,6 @@ public struct GlassSessionsList: View {
     // it. Keeping a copy here would have meant two sources for one highlight.
     @State private var selectedProjectFilter: String? = nil
     @State private var selectedTagFilter: String? = nil
-    /// The shared work scope, re-read rather than cached — see `refreshWorkScope`.
-    @State private var workScope: WorkScopeState? = nil
     @State private var showBatchArchiveConfirm = false
     @State private var showBatchDeleteConfirm = false
     @State private var quickLaunchLoading: String?
@@ -678,88 +676,11 @@ public struct GlassSessionsList: View {
     /// Picker binding that reads through `activeProjectFilter` so an invalid
     /// stale selection presents as "All Projects" without extra bookkeeping.
     ///
-    /// A pure VIEW FILTER: it narrows the rows and nothing else. It used to also
-    /// set `pendingNewChatWorkingDirectory`, which quietly made "show me this
-    /// project" and "put new work here" the same gesture — so you could not do
-    /// either without the other. That mirror still exists (dropping it would
-    /// regress new-chat placement) but is now fed by the work scope below, which
-    /// is persisted and shared with Plans rather than dying with this view.
+    /// A pure view filter: new-session placement uses the saved app directory.
     private var projectFilterBinding: Binding<String?> {
         Binding(get: { activeProjectFilter }, set: { newValue in
             selectedProjectFilter = newValue
         })
-    }
-
-    // MARK: - Work scope
-
-    /// The scope picker's options and provenance, re-read on every change.
-    /// Nil until the first fetch answers, which simply means no scope section.
-    private var scopeSubtitle: String? {
-        guard let scope = workScope, let effective = scope.effective else { return nil }
-        return (effective as NSString).lastPathComponent
-    }
-
-    /// Re-read the shared scope and mirror it to the bridge.
-    ///
-    /// The mirror is the surviving half of the old conflation: new chats must
-    /// still land somewhere deliberate, and now that somewhere is the scope
-    /// rather than whatever the project filter happened to be showing.
-    private func refreshWorkScope() async {
-        // No chatId — this surface has none. listMachineDirectories falls
-        // through to the stored default machine, the same chain web Plans has
-        // always used from the sidebar.
-        let scope = await bridge.workScope(chatId: "")
-        workScope = scope
-        bridge.pendingNewChatWorkingDirectory = scope?.effective
-    }
-
-    /// Folders this list can see that the machine's favourites do not include.
-    ///
-    /// Restricted to sessions on the scope's own machine: scope overrides the
-    /// directory and leaves the machine implicit, so offering a path from
-    /// another machine would resolve against the wrong disk — failing, or worse,
-    /// silently reading a different repo that happens to share the path.
-    ///
-    /// Known gap: a host-local bridge reports its machine as "this host", which
-    /// no session's `machineName` matches, so on the Mac nothing is contributed
-    /// and the picker degrades to the machine's favourites. That is the safe
-    /// direction to fail in.
-    private var scopeOptions: [String] {
-        guard let scope = workScope else { return [] }
-        guard let machine = scope.machineName else { return scope.options }
-        let discovered = unifiedSessions
-            .filter { $0.machineName == machine }
-            .compactMap(\.projectPath)
-        return scope.mergedOptions(discovered: discovered)
-    }
-
-    @ViewBuilder
-    private var workScopeMenuSection: some View {
-        if let scope = workScope {
-            Divider()
-            Section(WorkScopeState.title) {
-                Button {
-                    Task { _ = await bridge.setWorkScope(path: nil) }
-                } label: {
-                    if scope.source != "chosen" {
-                        Label("Automatic", systemImage: "checkmark")
-                    } else {
-                        Text("Automatic")
-                    }
-                }
-                ForEach(scopeOptions, id: \.self) { dir in
-                    Button {
-                        Task { _ = await bridge.setWorkScope(path: dir) }
-                    } label: {
-                        if scope.source == "chosen" && scope.effective == dir {
-                            Label(dir, systemImage: "checkmark")
-                        } else {
-                            Text(dir)
-                        }
-                    }
-                }
-            }
-        }
     }
 
     /// Distinct tags across all sessions, ordered most-recent first (shared with
@@ -816,11 +737,6 @@ public struct GlassSessionsList: View {
                 .pickerStyle(.inline)
                 .uiKitIdentifier("GlassSessionsList.sessions.tagFilterPicker")
             }
-            // A third section in the SAME menu, not a second control — one
-            // entry point, and no extra chrome on the most-used navigation
-            // affordance. The sections above narrow what you see; this one
-            // moves where new work goes.
-            workScopeMenuSection
         } label: {
             HStack(spacing: 5) {
                 Image(systemName: "line.3.horizontal.decrease")
@@ -1111,14 +1027,6 @@ public struct GlassSessionsList: View {
         .onAppear {
             machinesExpanded = storedMachinesExpanded
         }
-        .task {
-            // Seed the new-chat target folder from the shared work scope (it
-            // used to come from the project filter — see projectFilterBinding).
-            await refreshWorkScope()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .ripulWorkScopeChanged)) { _ in
-            Task { await refreshWorkScope() }
-        }
         .onChange(of: machinesExpanded) { _, new in storedMachinesExpanded = new }
         // Drop a stale query when the list shrinks below the search threshold.
         // This used to be a `Color.clear.onAppear { searchText = "" }` sitting
@@ -1133,7 +1041,7 @@ public struct GlassSessionsList: View {
         }
         // NOTE: the new-chat target folder deliberately no longer tracks
         // `selectedProjectPath`. That is the view filter; new work follows the
-        // work scope (see refreshWorkScope). `selectedProjectPath` survives
+        // app working directory. `selectedProjectPath` survives
         // because the Folders panel still re-roots to the filtered project,
         // which is a view concern and correctly stays one.
         .confirmationDialog("Archive \(selectedSessionIds.count) sessions?", isPresented: $showBatchArchiveConfirm, titleVisibility: .visible) {

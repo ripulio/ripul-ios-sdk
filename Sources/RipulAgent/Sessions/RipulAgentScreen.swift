@@ -672,6 +672,7 @@ public struct RipulAgentScreen: View {
             modelPickerSheet(for: target)
         }
         .modifier(workingDirectoryPickerSheet)
+        .modifier(AppWorkingDirectorySheet(bridge: bridge))
         .onChange(of: showingSessionList.wrappedValue) { showing in
             if showing {
                 Task { await model.loadMachinesFromAPI() }
