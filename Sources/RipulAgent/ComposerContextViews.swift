@@ -141,7 +141,7 @@ private struct ComposerContextPreview: View {
                         if let screen = item.screen {
                             Text(screen.appDescription).font(.subheadline)
                             ForEach(RipulScreenContextComponent.allCases.filter { screen.available.contains($0) }, id: \.self) { component in
-                                Toggle(component.title, isOn: selection(component))
+                                Toggle(component == .instrumentedText && item.optionID == "ripul.selectedElement" ? "Element description" : component.title, isOn: selection(component))
                                     .accessibilityIdentifier("ComposerContext.\(component.rawValue)")
                             }
                             if screen.available.isEmpty {

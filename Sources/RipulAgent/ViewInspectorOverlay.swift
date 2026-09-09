@@ -9,7 +9,7 @@ let ripulViewExplorerOverlayTag = 0x5249_5055   // "RIPU"
 
 /// Marketing version of the RipulAgent SDK, surfaced in the inspector's copy output as `sdk: …`
 /// so we can always tell which build is actually running on the device. Bump on every release.
-let ripulSDKVersion = "0.7.88"
+let ripulSDKVersion = "0.7.89"
 
 // MARK: - View Inspector Overlay
 //
@@ -926,6 +926,7 @@ class ViewInspectorController: UIView {
     private var currentInfo: InspectedView?
 
     private var currentTarget: UIView?
+    private weak var currentHighlightView: UIView?
     private var currentTokenAnchor: UIView?
     /// The engine's resolution for the current pick — ONE object that the
     /// readout, the teal outline AND the fire all consume, so the prediction
@@ -1217,6 +1218,30 @@ class ViewInspectorController: UIView {
         return result
     }
 
+    /// Read the selected identity and its current bounds without hit-testing or firing.
+    /// Keep the highlight view as well as the target: a SwiftUI stamp can bound
+    /// a much smaller element than the hosting view that supplies its identity.
+    func composerSelection() -> ComposerElementSelection? {
+        guard let overlay = window, !overlay.isHidden, !isHidden,
+              let host = hostWindow ?? window, let target = currentTarget,
+              let highlighted = currentHighlightView, let info = currentInfo,
+              currentResolution != nil, highlightLayer.path != nil,
+              target.window === host, highlighted.window === host else { return nil }
+        var frame = highlighted.convert(highlighted.bounds, to: host).intersection(host.bounds)
+        for start in [target, highlighted] {
+            var ancestor: UIView? = start
+            while let view = ancestor {
+                guard !view.isHidden, view.alpha > 0.01 else { return nil }
+                if view.clipsToBounds { frame = frame.intersection(view.convert(view.bounds, to: host)) }
+                ancestor = view.superview
+            }
+        }
+        guard !frame.isNull, !frame.isEmpty else { return nil }
+        return ComposerElementSelection(view: target, highlightView: highlighted, window: host,
+            frame: frame, identifier: info.accessibilityId, className: info.className,
+            controller: info.owningViewController, property: info.propertyRef)
+    }
+
     /// The fire itself, callable without a touch so the reticule can be driven
     /// programmatically (`explorer_probe`). Everything a human tap does happens
     /// here — same re-pick, same target choice, same ladder, same pill — so a
@@ -1418,6 +1443,7 @@ class ViewInspectorController: UIView {
             let targetArea = target.bounds.width * target.bounds.height
             return (stampArea > 0 && stampArea < targetArea) ? stamped : target
         }()
+        currentHighlightView = highlightView
         let frameInWindow = highlightView.convert(highlightView.bounds, to: nil)
         let frameInSelf = convert(frameInWindow, from: nil)
         highlightLayer.path = UIBezierPath(roundedRect: frameInSelf, cornerRadius: highlightView.layer.cornerRadius).cgPath

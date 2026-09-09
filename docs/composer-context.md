@@ -58,6 +58,40 @@ drafts are not saved to preferences. Reopening a chip reviews the original captu
 selecting Current screen again captures fresh. Nothing is captured or attached to
 ordinary messages automatically.
 
+### Attach the View Explorer selection
+
+On iOS and Catalyst, **Selected element** captures the element currently highlighted
+by View Explorer. Open the Explorer and highlight a component, then choose
+**Add context → Selected element**. Its preview offers **Element description**, a
+cropped **Screenshot**, and optional recognized text using the same controls as
+Current screen. The description includes current labels, values, available AI
+annotations, identifier, type, owning controller/property when known, and its bounds
+in host-window points. The screenshot includes only those bounds, with Explorer
+chrome removed and private regions masked.
+
+Capture reads the existing selection without moving the crosshair or activating the
+control. It reads live values and bounds when selected, then freezes that draft.
+Moving the Explorer does not change an attachment already reviewed. Choose Selected
+element again to capture the new highlight; Attach replaces the previous element
+chip. Current screen remains a separate attachment. A closed Explorer, removed or
+hidden element, or excluded selection produces an explanatory error.
+
+Developers can configure element choices independently:
+
+```swift
+configuration.composerContexts = [
+    .currentScreen,
+    .selectedElement(configuration: .init(
+        available: [.instrumentedText, .screenshot],
+        defaults: [.instrumentedText, .screenshot]
+    ))
+]
+```
+
+The default is element description, with screenshot opt-in and recognized text off.
+The same exclusion rules below apply. Native macOS has no View Explorer selection
+and does not include this choice in its standard menu.
+
 ### Label a component for AI
 
 SwiftUI automatically updates the annotation when its state changes:
@@ -124,8 +158,9 @@ configuration.composerContexts = RipulComposerContext.standard + [
 
 `RipulSessionsConfiguration.composerContexts` provides the same extension point for
 `RipulAgentConsole` and `RipulDevAssistantOverlay`. Its defaults include Current screen,
-Planning only, and Work while I'm away. Ordinary `AgentConfiguration` defaults to
-Current screen only. Set an empty array to disable choices, or supply your own list.
+Selected element (iOS/Catalyst), Planning only, and Work while I'm away. Ordinary
+`AgentConfiguration` defaults to Current screen and Selected element (iOS/Catalyst).
+Set an empty array to disable choices, or supply your own list.
 Use stable unique IDs: reattaching an option replaces its existing chip.
 
 Screen/data attachments apply to the next message. Instruction shortcuts offer

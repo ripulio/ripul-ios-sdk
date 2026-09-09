@@ -81,14 +81,88 @@ enum ComposerScreenContext {
         return result
     }
 
+    struct ElementUnavailable: LocalizedError {
+        let message: String
+        var errorDescription: String? { message }
+    }
+
+    static func captureSelectedElement(configuration: RipulScreenContextConfiguration) async throws -> RipulScreenContextSnapshot {
+        #if os(iOS)
+        guard let selection = ViewInspectorController.live?.composerSelection() else {
+            throw ElementUnavailable(message: "Open View Explorer and highlight an element first. If the screen changed, select the element again.")
+        }
+        let needsPixels = configuration.available.contains(.screenshot) || configuration.available.contains(.fallbackText)
+        // This captures and masks the host before any asynchronous recognition.
+        let snapshot = try snapshot(includeImage: needsPixels, hostWindow: selection.window)
+        let scope = normalized(selection.frame, in: selection.window.bounds)
+        for start in [selection.view, selection.highlightView] {
+            var ancestor: UIView? = start
+            while let view = ancestor {
+                if view.ripulAIContext?.isExcluded == true || (view as? UITextField)?.isSecureTextEntry == true
+                    || ((view is UITextField || view is UITextView) && view.ripulAIContext == nil) {
+                    throw ElementUnavailable(message: "This element is excluded from context capture by the app.")
+                }
+                ancestor = view.superview
+            }
+        }
+        guard !snapshot.excluded.contains(where: { $0.contains(scope) }) else {
+            throw ElementUnavailable(message: "This element is excluded from context capture by the app.")
+        }
+        let semantics = snapshot.semantics.filter {
+            scope.contains(CGPoint(x: $0.frame.midX, y: $0.frame.midY)) && scope.intersects($0.frame)
+                && !ComposerScreenRecognition.overlaps($0.frame, regions: snapshot.excluded)
+                && $0.frame.width <= scope.width * 1.1 && $0.frame.height <= scope.height * 1.1
+        }
+        let hasPrivateContent = ComposerScreenRecognition.overlaps(scope, regions: snapshot.excluded)
+        // Read live values of the SAME element, never a new point hit or retained Copy text.
+        let view = selection.view
+        let label = hasPrivateContent ? nil : (view.accessibilityLabel ?? (view as? UILabel)?.text ?? (view as? UIButton)?.title(for: .normal))
+        let value = hasPrivateContent ? nil : (view.ripulAIContext?.value ?? view.accessibilityValue
+            ?? (view as? UITextField)?.text ?? (view as? UITextView)?.text)
+        let name = semantics.first?.context.label ?? label ?? selection.identifier ?? selection.className
+        let app = (Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String)
+            ?? (Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String) ?? "App"
+        let f = selection.frame
+        var lines = ["Type: \(selection.className)"]
+        if let role = ScreenElementFinder.role(of: view) { lines.append("Role: \(role)") }
+        if let id = selection.identifier { lines.append("Identifier: \(id)") }
+        if let label, !label.isEmpty { lines.append("Label: \(String(label.prefix(1500)))") }
+        if let value, !value.isEmpty { lines.append("Value: \(String(value.prefix(1500)))") }
+        if let vc = selection.controller { lines.append("View controller: \(vc)") }
+        if let property = selection.property { lines.append("Property: \(property)") }
+        lines.append("Location in host window (points): x=\(Int(f.minX)), y=\(Int(f.minY)), width=\(Int(f.width)), height=\(Int(f.height))")
+        for item in semantics.prefix(30) {
+            let c = item.context
+            lines.append(c.label + (c.value.map { ": " + $0 } ?? "") + (c.hint.map { " — " + $0 } ?? ""))
+        }
+        let image = snapshot.image.flatMap { image -> CGImage? in
+            let rect = CGRect(x: scope.minX * CGFloat(image.width), y: scope.minY * CGFloat(image.height),
+                width: scope.width * CGFloat(image.width), height: scope.height * CGFloat(image.height)).integral
+            return image.cropping(to: rect.intersection(CGRect(x: 0, y: 0, width: image.width, height: image.height)))
+        }
+        let fallback = ComposerScreenRecognition.simpleText(snapshot.accessible.filter {
+            scope.contains($0.frame) && !ComposerScreenRecognition.overlaps($0.frame, regions: snapshot.excluded)
+        })
+        var result = RipulScreenContextSnapshot(appDescription: "Host app: \(app)\nSelected View Explorer element",
+            instrumentedText: configuration.available.contains(.instrumentedText) ? lines.joined(separator: "\n") : nil,
+            screenshotJPEG: image.flatMap(ComposerScreenRecognition.jpeg), accessibleFallback: fallback, configuration: configuration)
+        result.attachmentTitle = "Element — " + String(name.prefix(80))
+        if result.selected.contains(.fallbackText) { result.fallbackText = try await result.recognizeFallback() }
+        try Task.checkCancellation()
+        return result
+        #else
+        throw ElementUnavailable(message: "Selected element context requires the iOS View Explorer.")
+        #endif
+    }
+
     private static func normalized(_ rect: CGRect, in bounds: CGRect) -> CGRect {
         CGRect(x: (rect.minX - bounds.minX) / bounds.width, y: (rect.minY - bounds.minY) / bounds.height,
                width: rect.width / bounds.width, height: rect.height / bounds.height)
     }
 
     #if os(iOS)
-    private static func snapshot(includeImage: Bool) throws -> Snapshot {
-        guard let window = RipulChrome.appWindow(), window.bounds.width > 0, window.bounds.height > 0 else { throw Unavailable() }
+    private static func snapshot(includeImage: Bool, hostWindow: UIWindow? = nil) throws -> Snapshot {
+        guard let window = hostWindow ?? RipulChrome.appWindow(), window.bounds.width > 0, window.bounds.height > 0 else { throw Unavailable() }
         var result = Snapshot()
         var controller = window.rootViewController
         while let current = controller {
@@ -125,7 +199,9 @@ enum ComposerScreenContext {
                 }
             }
         }
+        var chrome: [UIView] = []
         func walk(_ view: UIView, clip: CGRect) {
+            if view is ViewInspectorController || view.tag == ripulViewExplorerOverlayTag { chrome.append(view); return }
             guard count < 2000, !view.isHidden, view.alpha > 0.01 else { return }
             let rect = view.convert(view.bounds, to: window).intersection(clip)
             // Some SwiftUI wrappers have zero bounds but visible, non-clipped descendants.
@@ -149,10 +225,13 @@ enum ComposerScreenContext {
             let nextClip = view.clipsToBounds ? rect : clip
             for child in view.subviews { walk(child, clip: nextClip) }
         }
-        walk(controller?.viewIfLoaded ?? window, clip: bounds)
+        walk(hostWindow == nil ? (controller?.viewIfLoaded ?? window) : window, clip: bounds)
         // Capture ONLY the host window, never SDK overlay windows. Mask private regions
         // in pixels before OCR, then also filter observations as defence against edge overlap.
         guard includeImage, count < 2000 else { return result }
+        let hiddenStates = chrome.map { ($0, $0.isHidden) }
+        chrome.forEach { $0.isHidden = true }
+        defer { hiddenStates.forEach { $0.0.isHidden = $0.1 } }
         let format = UIGraphicsImageRendererFormat.default(); format.scale = min(window.screen.scale, 2)
         let renderer = UIGraphicsImageRenderer(bounds: bounds, format: format)
         let image = renderer.image { context in

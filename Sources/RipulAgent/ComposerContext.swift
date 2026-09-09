@@ -18,7 +18,7 @@ public struct RipulComposerContext: Identifiable {
         let capturedAt = Date()
         if let captureScreen {
             let snapshot = try await captureScreen()
-            var attachment = RipulContextAttachment(option: self, content: snapshot.appDescription, capturedAt: capturedAt)
+            var attachment = RipulContextAttachment(option: self, content: snapshot.appDescription, capturedAt: capturedAt, title: snapshot.attachmentTitle)
             attachment.screen = snapshot
             return attachment
         }
@@ -41,8 +41,14 @@ public struct RipulComposerContext: Identifiable {
         instructions: "We are planning. Discuss and investigate as needed, but do not change code, files, settings, or external state unless I explicitly ask to move into implementation.")
     public static let whileAway = shortcut(id: "ripul.away", title: "Work while I'm away",
         instructions: "I will be away. Complete the requested work and its validation autonomously. Make reasonable decisions within the agreed scope and avoid nonessential questions. If required information or approval is genuinely missing, leave that step pending and continue independent work. Report what you completed and any remaining blockers.")
-    public static var standard: [Self] { [.currentScreen] }
-    public static var developerDefaults: [Self] { [.currentScreen, .planningOnly, .whileAway] }
+    public static var standard: [Self] {
+        #if os(iOS)
+        [.currentScreen, .selectedElement]
+        #else
+        [.currentScreen]
+        #endif
+    }
+    public static var developerDefaults: [Self] { standard + [.planningOnly, .whileAway] }
 }
 
 public struct RipulContextAttachment: Identifiable, Equatable, Codable {
@@ -58,14 +64,14 @@ public struct RipulContextAttachment: Identifiable, Equatable, Codable {
     var selectedContent: String { screen?.selectedText ?? content }
     var screenshotAttachment: [String: String]? {
         guard let screen, screen.effectiveSelection.contains(.screenshot), let data = screen.screenshotJPEG else { return nil }
-        return ["id": id.uuidString, "mediaType": "image/jpeg", "data": data.base64EncodedString(), "name": "Current screen.jpg"]
+        return ["id": id.uuidString, "mediaType": "image/jpeg", "data": data.base64EncodedString(), "name": optionID == "ripul.selectedElement" ? "Selected element.jpg" : "Current screen.jpg"]
     }
     static func images(_ existing: [[String: String]]?, attachments: [Self]) -> [[String: String]] {
         (existing ?? []) + attachments.compactMap(\.screenshotAttachment)
     }
 
-    public init(option: RipulComposerContext, content: String, capturedAt: Date = Date()) {
-        id = UUID(); optionID = option.id; title = option.title; self.content = content
+    public init(option: RipulComposerContext, content: String, capturedAt: Date = Date(), title: String? = nil) {
+        id = UUID(); optionID = option.id; self.title = title ?? option.title; self.content = content
         self.capturedAt = capturedAt; isInstruction = option.kind == .instruction; duration = .nextMessage
     }
 

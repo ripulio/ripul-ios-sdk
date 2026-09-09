@@ -26,6 +26,7 @@ public struct RipulScreenContextConfiguration {
 /// Frozen local capture. Only selected components enter the outgoing message.
 /// This draft is transient; it is never persisted as a conversation shortcut.
 public struct RipulScreenContextSnapshot: Codable, Equatable {
+    public var attachmentTitle: String?
     public var appDescription: String
     public var instrumentedText: String?
     public var screenshotJPEG: Data?
@@ -54,7 +55,7 @@ public struct RipulScreenContextSnapshot: Codable, Equatable {
         var parts = [appDescription]
         if effectiveSelection.contains(.instrumentedText), let text = instrumentedText { parts.append(text) }
         if effectiveSelection.contains(.fallbackText), let text = fallbackText { parts.append("Recognized screen text:\n" + text) }
-        if effectiveSelection.contains(.screenshot), screenshotJPEG != nil { parts.append("The selected screen screenshot is attached as an image.") }
+        if effectiveSelection.contains(.screenshot), screenshotJPEG != nil { parts.append(attachmentTitle == nil ? "The selected screen screenshot is attached as an image." : "A cropped screenshot of the selected element is attached as an image.") }
         return parts.joined(separator: "\n\n")
     }
     var canAttach: Bool {
