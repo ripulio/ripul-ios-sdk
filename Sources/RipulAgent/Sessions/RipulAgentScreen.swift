@@ -2,6 +2,76 @@
 import SwiftUI
 import WebKit
 
+/// Lets host chrome begin beside the actual, resizable sessions column.
+public struct RipulSessionColumnWidthKey: PreferenceKey {
+    public static let defaultValue: CGFloat = 0
+    public static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
+/// Keeps host chrome out of the docked metadata pane on Catalyst.
+public struct RipulMetadataColumnWidthKey: PreferenceKey {
+    public static let defaultValue: CGFloat = 0
+    public static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
+#if targetEnvironment(macCatalyst)
+private struct CatalystMetadataPane<Panel: View>: ViewModifier {
+    let panel: Panel
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    @State private var preferredWidth: CGFloat = 340
+    @State private var resizeStart: CGFloat?
+
+    func body(content: Content) -> some View {
+        if sizeClass == .regular {
+            GeometryReader { geometry in
+                let maximumWidth = max(280, min(480, geometry.size.width - 560))
+                let paneWidth = min(preferredWidth, maximumWidth)
+                HStack(spacing: 0) {
+                    content
+                        .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
+                    Rectangle()
+                        .fill(.separator)
+                        .frame(width: 1)
+                        .overlay {
+                            Color.clear
+                                .frame(width: 10)
+                                .contentShape(Rectangle())
+                                .gesture(
+                                    DragGesture(minimumDistance: 0)
+                                        .onChanged { value in
+                                            if resizeStart == nil { resizeStart = paneWidth }
+                                            preferredWidth = min(maximumWidth, max(280, (resizeStart ?? paneWidth) - value.translation.width))
+                                        }
+                                        .onEnded { _ in resizeStart = nil }
+                                )
+                        }
+                        .accessibilityLabel("Metadata column width")
+                        .accessibilityAdjustableAction { direction in
+                            switch direction {
+                            case .increment: preferredWidth = min(maximumWidth, paneWidth + 40)
+                            case .decrement: preferredWidth = max(280, paneWidth - 40)
+                            @unknown default: break
+                            }
+                        }
+                    panel
+                        .frame(width: paneWidth)
+                        .frame(maxHeight: .infinity, alignment: .top)
+                        .background(Color(uiColor: .secondarySystemBackground))
+                        .preference(key: RipulMetadataColumnWidthKey.self, value: paneWidth + 1)
+                }
+            }
+            .ignoresSafeArea(.container, edges: .top)
+        } else {
+            content
+        }
+    }
+}
+#endif
+
 /// Spring for the chat <-> session-list slide. Used for gesture settles and for
 /// closing back to the list. Bump `response` to slow it further.
 private let chatSlideSpring: Animation = .spring(response: 0.45, dampingFraction: 0.86)
@@ -53,6 +123,7 @@ public struct RipulAgentScreenSlots {
     /// with all of its earned machinery. nil/false = standalone screen,
     /// bar always on.
     public var hidesListModeBar: Bool
+    public var sessionColumnVisibility: Binding<NavigationSplitViewVisibility>?
 
     public init(
         showingSidebar: Binding<Bool>? = nil,
@@ -62,7 +133,8 @@ public struct RipulAgentScreenSlots {
         screenTip: ((String) -> AnyView)? = nil,
         chooseMode: RipulChooseMode? = nil,
         topBarTrailingAccessory: (() -> AnyView)? = nil,
-        hidesListModeBar: Bool = false
+        hidesListModeBar: Bool = false,
+        sessionColumnVisibility: Binding<NavigationSplitViewVisibility>? = nil
     ) {
         self.showingSidebar = showingSidebar
         self.onNavigateToFiles = onNavigateToFiles
@@ -72,6 +144,7 @@ public struct RipulAgentScreenSlots {
         self.chooseMode = chooseMode
         self.topBarTrailingAccessory = topBarTrailingAccessory
         self.hidesListModeBar = hidesListModeBar
+        self.sessionColumnVisibility = sessionColumnVisibility
     }
 }
 
@@ -164,7 +237,10 @@ public struct RipulAgentScreen: View {
     // SAME SlidePanelOverlay as the metadata panel and the Files tab, so it slides in
     // and thumb-tracks back exactly like navigating into/out of a chat session.
     @State private var fileViewerOffset: CGFloat = UIScreen.main.bounds.width
-    @State private var columnVisibility: NavigationSplitViewVisibility = .all
+    @State private var localColumnVisibility: NavigationSplitViewVisibility = .all
+    private var columnVisibility: Binding<NavigationSplitViewVisibility> {
+        slots.sessionColumnVisibility ?? $localColumnVisibility
+    }
     @State private var elementDebuggerActive = false
     /// Debug: overlay the native chat scroller on top of the (still-live) web view.
     @State private var showNativeChatScroller = false
@@ -182,7 +258,11 @@ public struct RipulAgentScreen: View {
     /// Window-level top inset for the floating top bar, fed by
     /// `WindowSafeAreaTopReader` — see topBarOverlay for why it can be neither
     /// inherited from the hierarchy nor read from UIApplication during body.
+    #if targetEnvironment(macCatalyst)
+    @State private var safeAreaTop: CGFloat = 0
+    #else
     @State private var safeAreaTop: CGFloat = 54
+    #endif
 
     private var cache: RipulSessionCache { configuration.cache }
 
@@ -283,8 +363,11 @@ public struct RipulAgentScreen: View {
                     // of sleep lets the tap's render settle before the flip.
                     Task { @MainActor in
                         try? await Task.sleep(nanoseconds: 16_000_000)
-                        withAnimation(chatOpenAnimation) {
+                        bridge.logSessionStartMarker("ios.navigation_requested", chatId: session.sourceChatId)
+                        withAnimation(chatOpenAnimation, completionCriteria: .removed) {
                             showingSessionList.wrappedValue = false
+                        } completion: {
+                            bridge.logSessionStartMarker("ios.navigation_animation_complete", chatId: session.sourceChatId)
                         }
                         try? await Task.sleep(nanoseconds: 700_000_000) // just past the 0.625s open slide
                         bridge.scrollToBottom()
@@ -296,8 +379,11 @@ public struct RipulAgentScreen: View {
                     bridge.navigatingToSessionId = session.id
                     Task { @MainActor in
                         await bridge.focusSession(id: session.id)
-                        withAnimation(chatOpenAnimation) {
+                        bridge.logSessionStartMarker("ios.navigation_requested", chatId: session.sourceChatId)
+                        withAnimation(chatOpenAnimation, completionCriteria: .removed) {
                             showingSessionList.wrappedValue = false
+                        } completion: {
+                            bridge.logSessionStartMarker("ios.navigation_animation_complete", chatId: session.sourceChatId)
                         }
                         // Defer the remaining @Published churn past the open animation.
                         try? await Task.sleep(nanoseconds: 700_000_000) // just past the 0.625s open slide
@@ -329,33 +415,79 @@ public struct RipulAgentScreen: View {
             // there is nothing for a right-drag on the list to slide open.
             showingSidebar: horizontalSizeClass == .regular ? nil : slots.showingSidebar,
             quickActionsEnabled: configuration.quickActionsEnabled,
-            // Regular width pins the list as a split-view column with its own
-            // navigation-bar strip, and the floating bar is overlaid on the
-            // chat detail only — reserving 52pt here would be a stranded gap.
+            // Regular width pins the list beside the chat, whose floating
+            // header stays outside this column. Reserving 52pt here would
+            // leave an empty strip above Machines.
             reservesTopBarSpace: horizontalSizeClass != .regular
         )
     }
 
-    // Regular-width (iPad / Mac Catalyst): persistent sidebar (session list) + chat
-    // detail. Same content as the compact slide-over — only the container differs.
+    #if targetEnvironment(macCatalyst)
+    @State private var catalystSessionsWidth: CGFloat = 420
+    @State private var catalystResizeStart: CGFloat?
+    #endif
+
+    // The Mac sessions pane has no navigation of its own. A nested
+    // NavigationSplitView reserves a title-bar region even with its toolbar
+    // hidden, so use a directly sized pane and splitter on Catalyst.
     private var regularSplit: some View {
-        NavigationSplitView(columnVisibility: $columnVisibility) {
+        #if targetEnvironment(macCatalyst)
+        GeometryReader { geometry in
+            let maximumWidth = max(240, min(640, geometry.size.width - 320))
+            let paneWidth = min(catalystSessionsWidth, maximumWidth)
+            HStack(spacing: 0) {
+                if columnVisibility.wrappedValue != .detailOnly {
+                    sessionListColumn(dismiss: {})
+                        .frame(width: paneWidth)
+                        .preference(key: RipulSessionColumnWidthKey.self, value: paneWidth + 1)
+                    Rectangle()
+                        .fill(.separator)
+                        .frame(width: 1)
+                        .overlay {
+                            Color.clear
+                                .frame(width: 10)
+                                .contentShape(Rectangle())
+                                .gesture(
+                                    DragGesture(minimumDistance: 0)
+                                        .onChanged { value in
+                                            if catalystResizeStart == nil { catalystResizeStart = paneWidth }
+                                            catalystSessionsWidth = min(maximumWidth, max(240, (catalystResizeStart ?? paneWidth) + value.translation.width))
+                                        }
+                                        .onEnded { _ in catalystResizeStart = nil }
+                                )
+                        }
+                        .accessibilityLabel("Sessions column width")
+                        .accessibilityAdjustableAction { direction in
+                            switch direction {
+                            case .increment: catalystSessionsWidth = min(maximumWidth, paneWidth + 40)
+                            case .decrement: catalystSessionsWidth = max(240, paneWidth - 40)
+                            @unknown default: break
+                            }
+                        }
+                }
+                regularChatDetail
+                    .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .ignoresSafeArea(.container, edges: .top)
+        #else
+        NavigationSplitView(columnVisibility: columnVisibility) {
             sessionListColumn(dismiss: {})
                 .navigationSplitViewColumnWidth(min: 420, ideal: 420)
         } detail: {
-            // fillsSafeArea: false keeps the WKWebView confined to its column instead
-            // of full-bleeding under the translucent sidebar. The top bar (glass +
-            // buttons) is overlaid here so it covers only the chat, not the other columns.
-            agentWebView(fillsSafeArea: false)
-                .overlay(alignment: .top) {
-                    // Ignore the top safe-area inset here so the title bar sits flush
-                    // with the top of the chat column (otherwise it floats ~50px down
-                    // inside the glass on Mac Catalyst, which has no status bar).
-                    topBarOverlay
-                        .ignoresSafeArea(edges: .top)
-                }
+            regularChatDetail
         }
         .navigationSplitViewStyle(.balanced)
+        #endif
+    }
+
+    private var regularChatDetail: some View {
+        // Keep the web view and its floating chrome confined to the chat pane.
+        agentWebView(fillsSafeArea: false)
+            .overlay(alignment: .top) {
+                topBarOverlay
+                    .ignoresSafeArea(edges: .top)
+            }
     }
 
     @ViewBuilder private var layout: some View {
@@ -479,10 +611,16 @@ public struct RipulAgentScreen: View {
         }
         // On a wide screen the metadata panel is always docked as a permanent
         // trailing column (no toggle); compact uses the slide-out overlay above.
+        #if targetEnvironment(macCatalyst)
+        // Keep the pane outside the chat/file overlays, as the inspector was,
+        // without the inspector container's reserved title-bar region.
+        .modifier(CatalystMetadataPane(panel: metadataPanel))
+        #else
         .inspector(isPresented: .constant(horizontalSizeClass == .regular)) {
             metadataPanel
                 .inspectorColumnWidth(min: 280, ideal: 340, max: 480)
         }
+        #endif
         // Floating top bar — compact only. On the regular split it's applied to the
         // chat detail instead, so the glass strip doesn't span the sidebar / metadata
         // columns.
@@ -563,9 +701,8 @@ public struct RipulAgentScreen: View {
             showNativeChatScroller = cache.bool(forKey: "showNativeChatScroller")
 
             Task { await bridge.fetchEffort() }
-            if bridge.availableModels.isEmpty {
-                Task { await bridge.fetchModels() }
-            }
+            // Cached models make the picker immediate; always refresh in the background.
+            Task { await bridge.fetchModels() }
             // Seed from last-known-good so the Working Directory menu has the
             // host's favourites immediately, then refresh live — the relay
             // chain (webview callable → event bus → room RPC → host CLI
@@ -867,6 +1004,21 @@ public struct RipulAgentScreen: View {
     /// navigating "back" to it (the burger) is redundant. Also hidden in list
     /// mode when the host has no sidebar to open.
     private func agentLeading(session: ChatSession?) -> (() -> AnyView)? {
+        #if targetEnvironment(macCatalyst)
+        if horizontalSizeClass == .regular {
+            return {
+                AnyView(Button {
+                    columnVisibility.wrappedValue = columnVisibility.wrappedValue == .detailOnly ? .all : .detailOnly
+                } label: {
+                    Image(systemName: "sidebar.left")
+                        .frame(width: 44, height: 44)
+                        .modifier(GlassCircleModifier(glassStyle: "regular"))
+                }
+                .accessibilityLabel("Toggle Sessions Sidebar")
+                .uiKitIdentifier("AgentScreen.topBar.sessionColumnToggle"))
+            }
+        }
+        #endif
         guard horizontalSizeClass != .regular,
               !showingSessionList.wrappedValue || slots.showingSidebar != nil
         else { return nil }
@@ -1466,17 +1618,17 @@ public struct RipulAgentScreen: View {
                         if bridge.selectedEffort == nil { Image(systemName: "checkmark") }
                     }
                 }
-                ForEach(["low", "medium", "high", "xhigh", "max"], id: \.self) { level in
+                ForEach(effortLevels(for: session), id: \.self) { level in
                     Button { Task { await bridge.setEffort(level) } } label: {
                         HStack {
-                            Text(level == "xhigh" ? "XHigh" : level.capitalized)
+                            Text(ModelPickerEffort.label(level))
                             if bridge.selectedEffort == level { Image(systemName: "checkmark") }
                             }
                     }
                 }
             } label: {
                 Label(
-                    bridge.selectedEffort.map { "Effort · \($0 == "xhigh" ? "XHigh" : $0.capitalized)" } ?? "Effort",
+                    bridge.selectedEffort.map { "Effort · \(ModelPickerEffort.label($0))" } ?? "Effort",
                     systemImage: "gauge.with.dots.needle.33percent"
                 )
             }
@@ -1724,9 +1876,6 @@ public struct RipulAgentScreen: View {
     /// than three items further down a menu.
     @ViewBuilder
     private func modelPickerSheet(for target: ModelPickerTarget) -> some View {
-        let effort = ModelPickerEffort(current: bridge.selectedEffort) { level in
-            Task { await bridge.setEffort(level) }
-        }
         switch target {
         case .global:
             ModelPickerSheetContent(
@@ -1734,7 +1883,7 @@ public struct RipulAgentScreen: View {
                 cache: cache,
                 selectedId: bridge.selectedModelId,
                 showsDefaultRow: true,
-                effort: effort,
+                effort: effortControl(forModelId: bridge.selectedModelId),
                 identifierPrefix: "AgentScreen.modelPicker",
                 isLoading: bridge.availableModels.isEmpty,
                 loadFailure: bridge.lastModelsError,
@@ -1767,7 +1916,7 @@ public struct RipulAgentScreen: View {
                     pinCatalog: bridge.availableModels,
                     cache: cache,
                     selectedId: currentRawModelId(for: session),
-                    effort: effort,
+                    effort: effortControl(forModelId: currentRawModelId(for: session)),
                     identifierPrefix: "AgentScreen.rawModelPicker",
                     onPick: { picked in
                         guard let picked else { return }
@@ -1778,6 +1927,28 @@ public struct RipulAgentScreen: View {
                 )
             }
         }
+    }
+
+    /// Effort control scoped to the model it is shown beside. The chosen level
+    /// is a global override, but WHICH levels exist is per-model — Codex reports
+    /// its range per slug (GPT-6-Astra accepts `ultra`; older rows don't), so a
+    /// shared control built from a literal list offers the wrong menu on one of
+    /// them. Models that report nothing fall back to the static range.
+    private func effortControl(forModelId modelId: String?) -> ModelPickerEffort {
+        ModelPickerEffort(
+            current: bridge.selectedEffort,
+            model: modelId.flatMap { id in bridge.availableModels.first(where: { $0.id == id }) },
+            onChange: { level in Task { await bridge.setEffort(level) } }
+        )
+    }
+
+    /// Reasoning levels to offer for a session's current model.
+    private func effortLevels(for session: ChatSession) -> [String] {
+        guard let model = bridge.availableModels.first(where: { $0.id == currentRawModelId(for: session) }),
+              let supported = model.cliSupportedEfforts,
+              !supported.isEmpty
+        else { return ModelPickerEffort.fallbackLevels }
+        return supported
     }
 
     private func pickRawModel(_ picked: ModelInfo, for session: ChatSession) {

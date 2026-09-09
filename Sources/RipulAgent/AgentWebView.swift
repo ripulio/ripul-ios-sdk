@@ -66,6 +66,7 @@ public struct AgentWebView: NSViewRepresentable {
         config.userContentController.add(context.coordinator, name: "agentBridge")
         config.userContentController.add(context.coordinator, name: "agentLog")
         config.userContentController.add(context.coordinator, name: "agentNetwork")
+        config.userContentController.add(context.coordinator, name: "agentStartup")
         config.userContentController.add(context.coordinator, name: "curtainLowered")
 
         // Inject font-face declarations for any requested font families
@@ -135,6 +136,7 @@ public struct AgentWebView: NSViewRepresentable {
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "agentBridge")
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "agentLog")
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "agentNetwork")
+        webView.configuration.userContentController.removeScriptMessageHandler(forName: "agentStartup")
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "curtainLowered")
         webView.configuration.userContentController.removeAllUserScripts()
     }
@@ -172,6 +174,8 @@ public struct AgentWebView: NSViewRepresentable {
             Task { @MainActor in
                 if message.name == "agentLog" {
                     bridge.handleConsoleLog(message.body as? String ?? "")
+                } else if message.name == "agentStartup", message.frameInfo.isMainFrame {
+                    bridge.recordStartupProgress()
                 } else if message.name == "agentNetwork" {
                     bridge.handleNetworkLog(message.body)
                 } else if message.name == "curtainLowered" {
@@ -224,6 +228,10 @@ public struct AgentWebView: NSViewRepresentable {
                     bridge.currentPageContext = .externalNavigation
                 }
             }
+        }
+
+        public func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+            bridge.pageDidStartLoading()
         }
 
         public func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
@@ -412,6 +420,7 @@ private struct AgentWebViewRepresentable: UIViewRepresentable {
         config.userContentController.add(context.coordinator, name: "agentBridge")
         config.userContentController.add(context.coordinator, name: "agentLog")
         config.userContentController.add(context.coordinator, name: "agentNetwork")
+        config.userContentController.add(context.coordinator, name: "agentStartup")
         config.userContentController.add(context.coordinator, name: "curtainLowered")
 
         // Inject font-face declarations for any requested font families
@@ -569,6 +578,7 @@ private struct AgentWebViewRepresentable: UIViewRepresentable {
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "agentBridge")
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "agentLog")
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "agentNetwork")
+        webView.configuration.userContentController.removeScriptMessageHandler(forName: "agentStartup")
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "curtainLowered")
         webView.configuration.userContentController.removeAllUserScripts()
     }
@@ -685,6 +695,8 @@ extension AgentWebView {
             Task { @MainActor in
                 if message.name == "agentLog" {
                     bridge.handleConsoleLog(message.body as? String ?? "")
+                } else if message.name == "agentStartup", message.frameInfo.isMainFrame {
+                    bridge.recordStartupProgress()
                 } else if message.name == "agentNetwork" {
                     bridge.handleNetworkLog(message.body)
                 } else if message.name == "curtainLowered" {
@@ -742,6 +754,10 @@ extension AgentWebView {
                     bridge.currentPageContext = .externalNavigation
                 }
             }
+        }
+
+        public func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+            bridge.pageDidStartLoading()
         }
 
         public func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
@@ -1031,6 +1047,25 @@ extension AgentWebView {
 
     public static let bridgeJavaScript = """
     (function() {
+        // Resource completion catches module/style loads after navigation's
+        // estimatedProgress reaches 1. No fetch/poll traffic counts as progress.
+        // Batch notifications; no payloads or URLs cross the bridge.
+        try {
+            var startupPending = false;
+            var startupObserver = new PerformanceObserver(function(list) {
+                if (!list.getEntries().some(function(e) {
+                    return ['script', 'link', 'css'].indexOf(e.initiatorType) !== -1;
+                }) || startupPending) return;
+                startupPending = true;
+                setTimeout(function() {
+                    startupPending = false;
+                    try { window.webkit.messageHandlers.agentStartup.postMessage('resource'); } catch(e) {}
+                }, 250);
+            });
+            startupObserver.observe({type: 'resource', buffered: true});
+            window.__ripulStopStartupObservation = function() { startupObserver.disconnect(); };
+        } catch(e) {}
+
         // Clear stale host-render-suspended flag before any web JS runs.
         // If a previous crash left ripul:host-render-suspended='1' in localStorage
         // the web app would start with its content tree unmounted, causing a

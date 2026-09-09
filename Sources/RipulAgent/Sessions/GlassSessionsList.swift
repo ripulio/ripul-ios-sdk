@@ -630,6 +630,9 @@ public struct GlassSessionsList: View {
             onNewApiSession: callbacks.onNewApiSession,
             allTargets: offerableQuickLaunchTargets,
             cache: cache,
+            modelsLoading: bridge.isLoadingModels,
+            modelsError: bridge.lastModelsError,
+            onRetryModels: { Task { await bridge.fetchModels() } },
             showCircles: quickLaunchShowCircles
         )
         .padding(.horizontal, 16)

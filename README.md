@@ -34,6 +34,20 @@ dependencies: [
 
 Then `import RipulAgent` in any file that uses the SDK.
 
+### Voice input privacy declarations
+
+Add `NSMicrophoneUsageDescription` and `NSSpeechRecognitionUsageDescription` with
+nonempty explanations to the **host app's Info.plist** to enable native voice
+input. The speech recognition declaration is also needed for Apple transcription
+when cloud transcription falls back to the on-device provider. Signing in with
+a Ripul account does not replace these host app declarations or the user's iOS
+permission grant.
+
+If a required declaration is missing, native chat shows a "Microphone unavailable"
+warning and remains usable for typing. The SDK's speech providers throw a
+localized error before requesting system permission; custom provider callers
+should present that error to the user.
+
 ## Project Structure
 
 ```

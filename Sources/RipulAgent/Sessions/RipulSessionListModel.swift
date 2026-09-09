@@ -660,7 +660,17 @@ public final class RipulSessionListModel: ObservableObject {
                     persistRawModeSession(tabId, provider: label)
                     await bridge.setRawMode(sessionId: tabId, enabled: true)
                 }
-                if let newSession = bridge.sessions.first(where: { $0.id == tabId }) {
+                // Warm re-entry: the tab is already in `sessions`, so this hits
+                // immediately and we navigate with no list rebuild — the fix for
+                // the ~20s re-entry. A fresh open (tab just created) misses here
+                // because openRemoteSession no longer blocks on fetchSessions, so
+                // pull the list once and retry before falling back to dismiss.
+                var newSession = bridge.sessions.first(where: { $0.id == tabId })
+                if newSession == nil {
+                    await bridge.fetchSessions()
+                    newSession = bridge.sessions.first(where: { $0.id == tabId })
+                }
+                if let newSession {
                     onSelect(newSession)
                     // Restore the user's explicit model choice for this session.
                     // The open/import path re-derives the override from the
@@ -796,13 +806,16 @@ public final class RipulSessionListModel: ObservableObject {
                 keepRemote: keepRemote
             )
 
-            // Remove from local state regardless of remote success
+            if success {
+            // Remove only after the requested deletion succeeded
             recentlyArchivedIds.insert(session.id)
             // Also filter by all match keys so the session can't reappear under a different ID
             for key in session.matchKeys { recentlyArchivedIds.insert(key) }
             removeFromRemoteBuckets(sessionId: session.id)
             remoteSessions.removeAll { $0.id == session.id }
             rebuildUnifiedSessions()
+
+            }
 
             if !success {
                 let summary = ([
@@ -1077,6 +1090,7 @@ public final class RipulSessionListModel: ObservableObject {
             return
         }
         connectingMachineId = machine.machineId
+        bridge.logSessionStartMarker("ios.tap", extra: "source=connect machine=\(machine.machineId)")
         let (tabId, error) = await bridge.connectToMachine(machineId: machine.machineId)
         connectingMachineId = nil
 
@@ -1106,6 +1120,7 @@ public final class RipulSessionListModel: ObservableObject {
             return
         }
         connectingMachineId = machine.machineId
+        bridge.logSessionStartMarker("ios.tap", extra: "source=connectWithProvider provider=\(providerKey) model=\(modelId ?? "default")")
         let (tabId, error) = await bridge.connectToMachineWithProvider(machineId: machine.machineId, providerKey: providerKey, modelId: modelId)
         connectingMachineId = nil
 

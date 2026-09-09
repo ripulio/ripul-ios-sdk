@@ -26,6 +26,20 @@ public enum PhotoAttachmentHelper {
         return result
     }
 
+    #if targetEnvironment(macCatalyst)
+    /// Import an image chosen from the Mac file picker using the same resize
+    /// and encoding settings as Photos attachments. Access ends after reading.
+    static func processImageFile(_ url: URL) throws -> NativeImageAttachment {
+        let hasAccess = url.startAccessingSecurityScopedResource()
+        defer { if hasAccess { url.stopAccessingSecurityScopedResource() } }
+        let data = try Data(contentsOf: url)
+        guard let attachment = makeAttachment(from: data) else {
+            throw CocoaError(.fileReadCorruptFile)
+        }
+        return attachment
+    }
+    #endif
+
     /// Max dimension (longest edge) for images sent through the relay WebSocket.
     /// Configurable from the native settings screen. Default 800px produces
     /// ~40-100KB JPEG base64, well within the Cloudflare DO ~1MB WS limit.

@@ -117,6 +117,28 @@ public struct ChatSession: Identifiable, Equatable, Codable {
         self.gitBranch = gitBranch
     }
 
+    /// Navigation seed from a successful creation reply. Keep tab identity and
+    /// source identity separate; neither implies the host's handshake identity.
+    static func creationSeed(
+        from result: [String: Any],
+        providerKey: String? = nil,
+        modelId: String? = nil
+    ) -> ChatSession? {
+        guard result["success"] as? Bool == true,
+              let tabId = result["tabId"] as? String, !tabId.isEmpty,
+              let chatId = result["chatId"] as? String, !chatId.isEmpty else { return nil }
+        return ChatSession(
+            id: tabId, sourceChatId: chatId,
+            displayName: "New Chat", createdAt: Date(),
+            remoteMachineName: result["machineName"] as? String,
+            provider: providerKey,
+            providerLabel: providerKey.flatMap { ProviderConstants.byProviderKey($0)?.displayLabel },
+            model: modelId,
+            hostChatId: result["hostChatId"] as? String,
+            displayNameSource: "auto"
+        )
+    }
+
     // MARK: - Cache
 
     private static let cacheKey = "ripulCachedChatSessions"
@@ -153,7 +175,7 @@ public struct SlashCommandInfo: Identifiable {
 }
 
 /// A model descriptor received from the web app's model catalog.
-public struct ModelInfo: Identifiable, Equatable {
+public struct ModelInfo: Identifiable, Equatable, Codable {
     public let id: String           // Catalog ID (e.g., "anthropic-claude-sonnet-4")
     public let name: String         // Display name (e.g., "Claude Sonnet 4")
     public let modelId: String      // API model ID (e.g., "claude-sonnet-4-20250514")
@@ -169,8 +191,17 @@ public struct ModelInfo: Identifiable, Equatable {
     public let sortOrder: Int?
     public let cliModelId: String?  // Alias passed to the CLI via --model (e.g. "fable")
     public let cliRawMode: Bool
-    public let cliEffort: String?   // low | medium | high | xhigh | max
+    public let cliEffort: String?   // low | medium | high | xhigh | max | ultra
     public let cliMode: String?     // session | stateless
+
+    /// Reasoning levels THIS model accepts, as its CLI reported them. Effort
+    /// menus must offer this rather than a hardcoded list: the range is
+    /// per-model and grows (GPT-6-Astra added `ultra`, which no menu could
+    /// reach while the levels were literals). Nil = the CLI doesn't report a
+    /// range; fall back to ModelPickerEffort.fallbackLevels.
+    public let cliSupportedEfforts: [String]?
+    /// The level the CLI uses when none is chosen, for labelling "Default".
+    public let cliDefaultEffort: String?
 
     // ── Billing metadata (populated from the D1 catalog; nil on older webs) ──
     public let perMInput: Double?   // $ per million input tokens (0 for CLI rows)
@@ -202,6 +233,8 @@ public struct ModelInfo: Identifiable, Equatable {
         cliRawMode: Bool = false,
         cliEffort: String? = nil,
         cliMode: String? = nil,
+        cliSupportedEfforts: [String]? = nil,
+        cliDefaultEffort: String? = nil,
         perMInput: Double? = nil,
         perMOutput: Double? = nil,
         tier: String? = nil
@@ -221,6 +254,8 @@ public struct ModelInfo: Identifiable, Equatable {
         self.cliRawMode = cliRawMode
         self.cliEffort = cliEffort
         self.cliMode = cliMode
+        self.cliSupportedEfforts = cliSupportedEfforts
+        self.cliDefaultEffort = cliDefaultEffort
         self.perMInput = perMInput
         self.perMOutput = perMOutput
         self.tier = tier
@@ -1408,7 +1443,42 @@ public final class AgentBridge: NSObject, ObservableObject {
     /// `RipulSessionListModel` in the loop, so the raw-mode flag and provider
     /// label have to be written from here. Optional because an embedding host
     /// (WAC's dev console) may not run the session list at all.
-    public var sessionCache: RipulSessionCache?
+    public var sessionCache: RipulSessionCache? {
+        didSet { restoreModelCatalogue() }
+    }
+    @Published public private(set) var isLoadingModels = false
+    private var modelCacheUserId: String?
+    private var modelCacheGeneration = 0
+    private var modelRefreshPending = false
+
+    /// The host supplies its persisted account on startup and updates it on
+    /// authentication changes. Embedded hosts that omit this use no disk cache.
+    public func setModelCatalogueAccount(_ userId: String?) {
+        guard userId != modelCacheUserId else { return }
+        if let previous = modelCacheUserId {
+            sessionCache?.removeObject(forKey: "ripul.models.v1.\(previous)")
+        }
+        modelCacheUserId = userId
+        modelCacheGeneration += 1
+        availableModels = []
+        selectedModelId = nil
+        lastModelsError = nil
+        restoreModelCatalogue()
+        if isLoadingModels {
+            modelRefreshPending = true
+        } else if userId != nil, webView != nil {
+            Task { await fetchModels() }
+        }
+    }
+
+    private func restoreModelCatalogue() {
+        guard let userId = modelCacheUserId,
+              let data = sessionCache?.data(forKey: "ripul.models.v1.\(userId)"),
+              let models = try? JSONDecoder().decode([ModelInfo].self, from: data),
+              !models.isEmpty else { return }
+        availableModels = models
+        NSLog("[AgentBridge] models.cache-restored: %d models", models.count)
+    }
 
     private static let stickyChoiceKey = "ripulStickyModelChoice"
 
@@ -2031,8 +2101,18 @@ public final class AgentBridge: NSObject, ObservableObject {
     private var llmProvider: LLMProvider?
     private var sessionsRetryCount = 0
     private static let maxSessionsRetries = 5
-    private var hasAttemptedCacheReload = false
     private var connectionTimeoutTask: Task<Void, Never>?
+    public let startupLoadState = StartupLoadState()
+    /// nil: no authentication wait required; "unknown": auth loading;
+    /// "alive": session found, awaiting token. Read without publishing polls.
+    public var startupAuthenticationState: (() -> String?)?
+    private var startupBudget = StartupLoadBudget()
+    private var startupMonitoring = false
+    private var startupNavigationFinished = false
+    private var startupLastStage = ""
+    private var startupProgressObservation: NSKeyValueObservation?
+    private var startupTimeoutError: String?
+
 
     /// Set this delegate to handle search result clicks from the universal search.
     public weak var searchClickDelegate: SearchClickDelegate?
@@ -2285,6 +2365,11 @@ public final class AgentBridge: NSObject, ObservableObject {
 
     public func attach(to webView: WKWebView) {
         self.webView = webView
+        startupProgressObservation = webView.observe(\.estimatedProgress, options: [.old, .new]) { [weak self] _, change in
+            guard let progress = change.newValue, progress > (change.oldValue ?? 0) else { return }
+            Task { @MainActor [weak self] in self?.recordStartupProgress() }
+        }
+        if !startupMonitoring { beginStartupMonitoring() }
         NSLog("[AgentBridge] Attached to WKWebView")
     }
 
@@ -2307,9 +2392,104 @@ public final class AgentBridge: NSObject, ObservableObject {
         evaluateJavaScript("window.__ripulSessionStartTimer = \(on)")
     }
 
-    /// Called by the web view coordinator when the page finishes loading.
-    /// Starts a timeout — if the bridge doesn't connect within 10 seconds,
-    /// clears the cache and reloads once to evict stale web app bundles.
+    /// One monitor owns download, bridge and optional host authentication waits.
+    /// Also starts before WKWebView creation, so validation cannot spin forever.
+    public func beginStartupMonitoring() {
+        connectionTimeoutTask?.cancel()
+        startupBudget = StartupLoadBudget()
+        startupBudget.sample(at: ProcessInfo.processInfo.systemUptime, isActive: isAppActive)
+        startupMonitoring = true
+        startupNavigationFinished = false
+        startupLastStage = ""
+        startupTimeoutError = nil
+        loadError = nil
+        loadErrorDetails = nil
+        startupLoadState.message = "Preparing app…"
+        startupLoadState.isTakingLonger = false
+        connectionTimeoutTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                guard !Task.isCancelled, let self else { return }
+                self.updateStartupMonitoring(at: ProcessInfo.processInfo.systemUptime, isActive: self.isAppActive)
+                if !self.startupMonitoring { return }
+            }
+        }
+    }
+
+    public func pageDidStartLoading() {
+        isConnected = false
+        // Preserve the overall budget across initial validation and navigation,
+        // including redirects. Explicit Retry starts a new attempt in reload().
+        if !startupMonitoring { beginStartupMonitoring() }
+        startupNavigationFinished = false
+        recordStartupProgress()
+    }
+
+    func recordStartupProgress() {
+        guard startupMonitoring else { return }
+        startupBudget.madeProgress()
+    }
+
+    // Clock input is explicit so deadline/late-success behavior can be tested
+    // without sleeping or depending on network speed.
+    func updateStartupMonitoring(at now: TimeInterval, isActive: Bool) {
+        guard startupMonitoring else { return }
+        startupBudget.sample(at: now, isActive: isActive)
+        guard isActive else { return }
+        checkStartupProgress()
+    }
+
+    private func checkStartupProgress() {
+        let auth = startupAuthenticationState?()
+        if isConnected && auth == nil {
+            startupMonitoring = false
+            startupLoadState.message = "Ready"
+            startupLoadState.isTakingLonger = false
+            stopStartupResourceObservation()
+            if loadError == startupTimeoutError {
+                loadError = nil
+                loadErrorDetails = nil
+            }
+            return
+        }
+        let stage: String
+        if isConnected {
+            stage = auth == "alive" ? "Restoring your session…" : "Signing in…"
+        } else if webView == nil {
+            stage = "Preparing app…"
+        } else if startupNavigationFinished {
+            stage = "Starting app…"
+        } else {
+            stage = "Loading app…"
+        }
+        if stage != startupLastStage {
+            startupLastStage = stage
+            startupLoadState.message = stage
+            startupBudget.reachedMilestone(stage)
+            handleConsoleLog("LOG: [STARTUP_LOAD] " + stage)
+        }
+        let slow = startupBudget.elapsed >= 15
+        if startupLoadState.isTakingLonger != slow { startupLoadState.isTakingLonger = slow }
+        guard loadError == nil, let failure = startupBudget.failure else { return }
+        let error = isConnected ? "Signing in didn’t complete" : "Startup is taking too long"
+        startupTimeoutError = error
+        stopStartupResourceObservation()
+        loadError = error
+        let reason = failure == .overallLimit
+            ? "Startup reached the 2-minute foreground limit."
+            : "No startup progress was detected for 30 seconds."
+        loadErrorDetails = "\(reason) Stage: \(stage) Retry to try again; your cached downloads and sign-in are preserved."
+        handleConsoleLog("WARN: [STARTUP_LOAD] \(reason) stage=\(stage) progress=\(webView?.estimatedProgress ?? 0) auth=\(auth ?? "not-required")")
+        // Keep observing: late completion can still dismiss the error. Never
+        // interrupt a potentially active download or clear its cache here.
+    }
+
+    private func stopStartupResourceObservation() {
+        webView?.evaluateJavaScript("window.__ripulStopStartupObservation?.()", completionHandler: nil)
+    }
+
+    /// Called by the coordinator when navigation completes. Dynamic imports and
+    /// authentication may still be loading; completion is only one milestone.
     public func pageDidFinishLoading() {
         // Push persisted network capture state into the web view
         if isNetworkCaptureEnabled {
@@ -2327,25 +2507,8 @@ public final class AgentBridge: NSObject, ObservableObject {
         // keeps reloads of the same webview accurate after host-prefs:set writes.
         pushHostPrefsToPage()
         pushHostTokenToPage()
-        connectionTimeoutTask?.cancel()
-        connectionTimeoutTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 5_000_000_000) // 5s
-            guard let self, !Task.isCancelled else { return }
-            if !self.isConnected && !self.hasAttemptedCacheReload {
-                self.hasAttemptedCacheReload = true
-                NSLog("[AgentBridge] Bridge did not connect within 5s — clearing cache and reloading (one-time)")
-                self.clearCacheAndReload()
-            } else if !self.isConnected {
-                NSLog("[AgentBridge] Bridge did not connect after cache reload — giving up.")
-                if !self.jsErrorMessages.isEmpty {
-                    self.loadError = "The app failed to load"
-                    self.loadErrorDetails = self.jsErrorMessages.joined(separator: "\n")
-                } else {
-                    self.loadError = "Could not connect"
-                    self.loadErrorDetails = "The page loaded but the app bridge did not respond. This usually means the web app failed to initialize."
-                }
-            }
-        }
+        startupNavigationFinished = true
+        recordStartupProgress()
     }
 
     /// Reload the web view, clearing any load error.
@@ -2354,8 +2517,7 @@ public final class AgentBridge: NSObject, ObservableObject {
             NSLog("[AgentBridge] Cannot reload — webView is nil")
             return
         }
-        loadError = nil
-        loadErrorDetails = nil
+        beginStartupMonitoring()
         isConnected = false
         isThemeReady = false
         initialStatusSyncComplete = false
@@ -2368,6 +2530,7 @@ public final class AgentBridge: NSObject, ObservableObject {
     /// Clear cached resources (JS, CSS, images) and reload the web view.
     /// Preserves cookies, localStorage, and session data so the user stays logged in.
     public func clearCacheAndReload() {
+        beginStartupMonitoring()
         let cacheTypes: Set<String> = [
             WKWebsiteDataTypeDiskCache,
             WKWebsiteDataTypeMemoryCache,
@@ -2410,6 +2573,7 @@ public final class AgentBridge: NSObject, ObservableObject {
     /// Clear ALL website data (cache, cookies, localStorage, IndexedDB, etc.) and reload.
     /// This is a full reset — the user will need to log in again.
     public func clearAllDataAndReload() {
+        beginStartupMonitoring()
         let allTypes = WKWebsiteDataStore.allWebsiteDataTypes()
         let store = webView?.configuration.websiteDataStore ?? WKWebsiteDataStore.default()
         store.removeData(ofTypes: allTypes, modifiedSince: .distantPast) { [weak self] in
@@ -2419,7 +2583,6 @@ public final class AgentBridge: NSObject, ObservableObject {
             NSLog("[AgentBridge] All website data cleared, performing fresh load")
             self?.isConnected = false
             self?.isThemeReady = false
-            self?.hasAttemptedCacheReload = false
             // Use a fresh URLRequest to bypass WKWebView's ES module cache
             if let url = webView.url {
                 var request = URLRequest(url: url)
@@ -2579,6 +2742,18 @@ public final class AgentBridge: NSObject, ObservableObject {
     private func startProcessLifecycleMonitoring() {
         #if os(iOS)
         let nc = NotificationCenter.default
+        // Account at lifecycle boundaries so a suspended task cannot charge
+        // hours in the background to the startup deadline on resume.
+        nc.addObserver(forName: UIApplication.willResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.startupBudget.sample(at: ProcessInfo.processInfo.systemUptime, isActive: false)
+            }
+        }
+        nc.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.startupBudget.sample(at: ProcessInfo.processInfo.systemUptime, isActive: true)
+            }
+        }
         // Main-thread stall detection. Called straight through rather than from
         // a `Task { @MainActor }`: this class is already @MainActor, so the hop
         // bought nothing and added a way for the start to silently not happen —
@@ -3051,7 +3226,6 @@ public final class AgentBridge: NSObject, ObservableObject {
             self.handleConsoleLog("WARN: [WEBVIEW_HEAL] session state + caches purged (cookies kept) — fresh load")
             self.isConnected = false
             self.isThemeReady = false
-            self.hasAttemptedCacheReload = false
             if let url = webView.url,
                var components = URLComponents(url: url, resolvingAgainstBaseURL: true) {
                 var items = (components.queryItems ?? []).filter { $0.name != "_cb" }
@@ -3525,6 +3699,12 @@ public final class AgentBridge: NSObject, ObservableObject {
         case "theme:ready":
             NSLog("[AgentBridge] Theme ready received")
             isThemeReady = true
+        case "models:updated":
+            if isLoadingModels {
+                modelRefreshPending = true
+            } else {
+                Task { await fetchModels() }
+            }
         case "sessions:ready":
             NSLog("[AgentBridge] Sessions ready received")
             isSessionsReady = true
@@ -4095,7 +4275,8 @@ public final class AgentBridge: NSObject, ObservableObject {
     /// the web-side stages. Used to instrument the native side of the
     /// tap → input-ready window when investigating new-chat latency.
     public func logSessionStartMarker(_ stage: String, chatId: String? = nil, extra: String = "") {
-        guard AgentBridge.sessionStartInstrumentation else { return }
+        // Native creation/navigation markers are low-volume and must survive
+        // with debug timing off, so a slow launch can be diagnosed afterwards.
         let ts = Int(Date().timeIntervalSince1970 * 1000)
         let chatStr = chatId.map { " chatId=\($0)" } ?? ""
         let extraStr = extra.isEmpty ? "" : " \(extra)"
@@ -4728,20 +4909,26 @@ public final class AgentBridge: NSObject, ObservableObject {
     /// Waits for the JS callable to be registered before calling.
     @available(iOS 15.0, macOS 13.0, *)
     public func fetchModels() async {
-        // Retry up to 3 times with 2s delays if the result is empty.
-        // Models depend on auth readiness and web app initialization,
-        // both of which may not be complete on the first attempt.
-        for attempt in 1...3 {
-            let success = await fetchModelsOnce()
-            if success && !availableModels.isEmpty { return }
-            if attempt < 3 {
-                NSLog("[AgentBridge] fetchModels: empty on attempt %d, retrying in 2s...", attempt)
-                try? await Task.sleep(nanoseconds: 2_000_000_000)
+        guard !isLoadingModels else { return }
+        isLoadingModels = true
+        defer { isLoadingModels = false }
+        repeat {
+            modelRefreshPending = false
+            for attempt in 1...3 {
+                guard !Task.isCancelled else { return }
+                let success = await fetchModelsOnce()
+                if success { break }
+                if attempt < 3 {
+                    NSLog("[AgentBridge] fetchModels: empty on attempt %d, retrying in 2s...", attempt)
+                    do { try await Task.sleep(nanoseconds: 2_000_000_000) }
+                    catch { return }
+                }
             }
-        }
+        } while modelRefreshPending
     }
 
     private func fetchModelsOnce() async -> Bool {
+        let generation = modelCacheGeneration
         lastModelsError = nil
 
         guard let webView else {
@@ -4774,6 +4961,7 @@ public final class AgentBridge: NSObject, ObservableObject {
                 contentWorld: .page
             )
 
+            guard generation == modelCacheGeneration else { return false }
             guard let dict = result as? [String: Any] else {
                 lastModelsError = "Unexpected response format"
                 return false
@@ -4811,6 +4999,8 @@ public final class AgentBridge: NSObject, ObservableObject {
                     cliRawMode: (item["cliRawMode"] as? Bool) ?? false,
                     cliEffort: item["cliEffort"] as? String,
                     cliMode: item["cliMode"] as? String,
+                    cliSupportedEfforts: item["cliSupportedEfforts"] as? [String],
+                    cliDefaultEffort: item["cliDefaultEffort"] as? String,
                     perMInput: (item["perMInput"] as? NSNumber)?.doubleValue,
                     perMOutput: (item["perMOutput"] as? NSNumber)?.doubleValue,
                     tier: item["tier"] as? String
@@ -4819,9 +5009,30 @@ public final class AgentBridge: NSObject, ObservableObject {
 
             if parsed.isEmpty {
                 lastModelsError = "No models available (raw count: \(modelsArray.count))"
+                // Do NOT overwrite a previously-good catalog with an empty one:
+                // a single timed-out/hung fetch (relay round-trip on the phone,
+                // web app mid-boot) used to zero `availableModels` here, which
+                // silently hides the quick-launch New Session pill until the
+                // next fully-clean fetch. Keep last-good; only an explicit
+                // non-empty response replaces the list.
+                if availableModels.isEmpty {
+                    self.selectedModelId = dict["selectedModelId"] as? String
+                    self.modelSelectionEnabled = (dict["modelSelectionEnabled"] as? Bool) ?? true
+                }
+                NSLog("[AgentBridge] fetchModels error: empty response (keeping %d cached models)", availableModels.count)
+                return false
             }
 
+            let responseUserId = dict["userId"] as? String
+            if let expected = modelCacheUserId, responseUserId != expected {
+                lastModelsError = "Waiting for account models"
+                return false
+            }
             self.availableModels = parsed
+            if let userId = modelCacheUserId, responseUserId == userId,
+               let data = try? JSONEncoder().encode(parsed) {
+                sessionCache?.set(data, forKey: "ripul.models.v1.\(userId)")
+            }
             self.selectedModelId = dict["selectedModelId"] as? String
             self.modelSelectionEnabled = (dict["modelSelectionEnabled"] as? Bool) ?? true
             NSLog("[AgentBridge] fetchModels: %d models, selected: %@",
@@ -5244,7 +5455,9 @@ public final class AgentBridge: NSObject, ObservableObject {
                     provider: (item["provider"] as? String) ?? "codex-cli",
                     group: (item["group"] as? String) ?? "Codex",
                     description: item["description"] as? String,
-                    supportsThinking: (item["supportsThinking"] as? Bool) ?? true
+                    supportsThinking: (item["supportsThinking"] as? Bool) ?? true,
+                    cliSupportedEfforts: item["cliSupportedEfforts"] as? [String],
+                    cliDefaultEffort: item["cliDefaultEffort"] as? String
                 )
             }
         } catch {
@@ -5859,6 +6072,23 @@ public final class AgentBridge: NSObject, ObservableObject {
         }
     }
 
+    /// Make the creation reply navigable without rebuilding the entire session
+    /// list. A push may have beaten the reply; preserve its richer row then.
+    private func publishCreatedSession(_ session: ChatSession) {
+        if !sessions.contains(where: { $0.id == session.id }) {
+            sessions.insert(session, at: 0)
+        }
+        activeSessionId = session.id
+        pendingActiveSourceChatId = session.sourceChatId
+        refreshActiveAgentFlags()
+        logSessionStartMarker("ios.creation_navigation_ready", chatId: session.sourceChatId)
+        Task { [weak self] in
+            // Match post-focus refresh: avoid republishing the list mid-slide.
+            try? await Task.sleep(nanoseconds: 800_000_000)
+            await self?.fetchSessions()
+        }
+    }
+
     /// Connect to a remote machine: creates a new chat tab and pairs it.
     /// Returns the tab ID on success, or nil on failure.
     @available(iOS 15.0, macOS 13.0, *)
@@ -5892,8 +6122,10 @@ public final class AgentBridge: NSObject, ObservableObject {
                 // "whatever this machine defaults to", which is exactly what
                 // the user asked for and exactly what resuming will re-run.
                 rememberCliSession(providerKey: nil, modelId: nil, machineId: machineId)
-                // Refresh sessions so the new tab appears
-                await fetchSessions()
+                guard let session = ChatSession.creationSeed(from: dict) else {
+                    return (nil, "Creation reply is missing the new session identity.")
+                }
+                publishCreatedSession(session)
                 return (tabId, nil)
             } else {
                 var error = dict["error"] as? String ?? "Unknown error"
@@ -5963,9 +6195,13 @@ public final class AgentBridge: NSObject, ObservableObject {
                 // machine connect never did, and matching it exactly is the
                 // point of reproducing the act rather than normalising it.
                 if let tabId { persistCliSessionMetadata(tabId: tabId, providerKey: providerKey) }
-                logSessionStartMarker("ios.fetch_sessions_start", chatId: tabId)
-                await fetchSessions()
-                logSessionStartMarker("ios.fetch_sessions_end", chatId: tabId, extra: "sessionCount=\(sessions.count)")
+                guard let session = ChatSession.creationSeed(
+                    from: dict, providerKey: providerKey,
+                    modelId: modelId ?? ProviderConstants.defaultModelId(for: providerKey)
+                ) else {
+                    return (nil, "Creation reply is missing the new session identity.")
+                }
+                publishCreatedSession(session)
                 return (tabId, nil)
             } else {
                 var error = dict["error"] as? String ?? "Unknown error"
@@ -7243,7 +7479,17 @@ public final class AgentBridge: NSObject, ObservableObject {
                 let provider = dict["provider"] as? String
                 let providerLabel = dict["providerLabel"] as? String
                 NSLog("[AgentBridge] openRemoteSession: opened %@ on %@, tab %@, provider %@", sessionId, machineId, tabId ?? "?", provider ?? "none")
-                await fetchSessions()
+                // Do NOT block the return on a full session-list rebuild.
+                // fetchSessions() runs __ripulGetSessions — a 118-row unified-list
+                // rebuild that was measured at ~20s on a WARM re-entry while the web
+                // view was busy, and it ran on every open before the caller could
+                // navigate. The tab is already open by this point, so refresh the
+                // native list in the BACKGROUND and return immediately. Callers that
+                // need the new tab in `sessions` right away (a fresh open, where the
+                // tab was just created) re-fetch on a lookup miss; warm re-entries
+                // already have the tab and skip the fetch entirely — which is what
+                // makes re-entry instant instead of 20s.
+                Task { [weak self] in await self?.fetchSessions() }
                 return (tabId, provider, providerLabel, nil)
             } else {
                 // Prefix the web app's stable errorCode so ConnectionDiagnosis can
@@ -7733,7 +7979,7 @@ public final class AgentBridge: NSObject, ObservableObject {
         ])
         isConnected = true
         logSessionStartMarker("ios.bridge_connected")
-        connectionTimeoutTask?.cancel()
+        recordStartupProgress()
         loadError = nil
         loadErrorDetails = nil
         jsErrorMessages = []
@@ -8673,7 +8919,12 @@ public final class AgentBridge: NSObject, ObservableObject {
         let method = message["method"] as? String ?? ""
         let args = message["args"] as? [Any] ?? []
 
-        NSLog("[AgentBridge] Capability request: %@.%@", capability, method)
+        // Gated like the other bridge hot-path logs (83f500d29): the web's
+        // deployed-tools discovery polls tabs.query every 2s, so this line was
+        // ~1,800 device-console entries an hour on every native client.
+        if AgentBridge.verboseBridgeLog {
+            NSLog("[AgentBridge] Capability request: %@.%@", capability, method)
+        }
 
         Task { @MainActor in
             do {
@@ -8781,7 +9032,7 @@ public final class AgentBridge: NSObject, ObservableObject {
         // The NativeBridgedContext sends capability:ping instead of the legacy handshake.
         if !isConnected {
             isConnected = true
-            connectionTimeoutTask?.cancel()
+            recordStartupProgress()
             loadError = nil
             loadErrorDetails = nil
             jsErrorMessages = []

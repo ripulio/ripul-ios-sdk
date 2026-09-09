@@ -56,6 +56,8 @@ public final class VoiceModeController: ObservableObject {
     @Published public private(set) var committedText = ""
     /// Elapsed seconds in the thinking phase (agent working).
     @Published public private(set) var thinkingSeconds = 0
+    /// Survives stopping voice mode so the chat can present a dismissible warning.
+    @Published public var microphoneWarning: String?
 
     /// Where the live conversation is drawn. Runtime state, not a setting:
     /// `SpeechPreferences.voiceModeStyle` decides how a session OPENS, this
@@ -201,6 +203,17 @@ public final class VoiceModeController: ObservableObject {
         guard phase == .inactive else { return }
         guard #available(iOS 26.0, macOS 26.0, *) else { return }
         self.bridge = bridge
+        microphoneWarning = nil
+        do {
+            // Check before activating the shared recording session as well as
+            // inside each provider (which also protects dictation and fallback).
+            try SpeechPrivacyRequirements.validate(
+                requiresSpeechRecognition: SpeechPreferences.dictationProviderId != "elevenlabs"
+            )
+        } catch {
+            handleMicrophoneSetupFailure(error)
+            return
+        }
         // The preference chooses the opening presentation; the overlay's own
         // controls take over from here.
         let fromPreference: Presentation = SpeechPreferences.voiceModeStyle == "compact" ? .compact : .fullscreen
@@ -533,7 +546,12 @@ public final class VoiceModeController: ObservableObject {
                 self.setCaptureLive(true)
                 self.noteTranscript()
             } catch {
-                self?.showNotice("Mic failed: \(error.localizedDescription)")
+                guard let self, self.phase == .listening else { return }
+                if error is SpeechPrivacyRequirements.MissingUsageDescription {
+                    self.handleMicrophoneSetupFailure(error)
+                } else {
+                    self.showNotice("Mic failed: \(error.localizedDescription)")
+                }
             }
         }
     }
@@ -1062,6 +1080,16 @@ public final class VoiceModeController: ObservableObject {
     }
 
     // MARK: - Notices
+
+    private func handleMicrophoneSetupFailure(_ error: Error) {
+        if let missing = error as? SpeechPrivacyRequirements.MissingUsageDescription {
+            bridge?.handleConsoleLog("ERROR: [VOICE] Host app is missing \(missing.key)")
+        }
+        // Configuration cannot heal during this process. Stop the audio session
+        // and retry timers, then let the user dismiss the warning and keep typing.
+        if isActive { stop() }
+        microphoneWarning = error.localizedDescription
+    }
 
     private func showNotice(_ message: String) {
         guard isActive else { return }

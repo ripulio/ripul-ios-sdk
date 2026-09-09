@@ -1,5 +1,35 @@
 import SwiftUI
 
+extension View {
+    /// Inserts app-owned top chrome. In a Catalyst column beside the window
+    /// controls, apply the top-edge policy inside NavigationStack as well:
+    /// navigation containers can reintroduce an inset beneath the host shell.
+    public func ripulTopBarInset<Bar: View>(@ViewBuilder content: () -> Bar) -> some View {
+        modifier(RipulTopBarInsetModifier(bar: content()))
+    }
+}
+
+private struct RipulTopBarInsetModifier<Bar: View>: ViewModifier {
+    let bar: Bar
+    #if targetEnvironment(macCatalyst)
+    @Environment(\.ripulTopBarSafeAreaTop) private var topOverride
+    #endif
+
+    func body(content: Content) -> some View {
+        #if targetEnvironment(macCatalyst)
+        if topOverride == 0 {
+            content
+                .safeAreaInset(edge: .top) { bar }
+                .ignoresSafeArea(.container, edges: .top)
+        } else {
+            content.safeAreaInset(edge: .top) { bar }
+        }
+        #else
+        content.safeAreaInset(edge: .top) { bar }
+        #endif
+    }
+}
+
 // MARK: - Glass Top Bar
 
 /// The one top bar. Every iPhone screen wears this — there are no forks.
@@ -195,6 +225,11 @@ public struct GlassTopBar<MenuContent: View, CenterContent: View>: View {
         ZStack(alignment: .top) {
             centerLayer
             edgeLayer
+                #if targetEnvironment(macCatalyst)
+                // Each control already has a glass label; Mac idiom's
+                // automatic bezel would add a second rectangular surface.
+                .buttonStyle(.plain)
+                #endif
         }
         .padding(.horizontal, 12)
         .padding(.top, 4)
@@ -363,6 +398,10 @@ private struct TrailingMenuHost<MenuContent: View>: View, Equatable {
                 .modifier(GlassCircleModifier(glassStyle: "regular"))
                 .modifier(GlassEffectIDModifier(id: "trailing", namespace: namespace))
         }
+        #if targetEnvironment(macCatalyst)
+        .menuStyle(.button)
+        .menuIndicator(.hidden)
+        #endif
         .modifier(MenuOpenModifier(action: onMenuOpen))
         .uiKitIdentifier("GlassTopBar.trailingMenu")
     }

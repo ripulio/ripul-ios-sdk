@@ -224,7 +224,7 @@ public struct RipulSessionsView: View {
         .onReceive(NotificationCenter.default.publisher(for: RemoteMachine.iconsDidChangeNotification)) { _ in
             machineIcons = RemoteMachine.iconsByDisplayName(machines: model.machines, cache: cache)
         }
-        .safeAreaInset(edge: .top) {
+        .ripulTopBarInset {
             if showsTitleLozenge {
                 // Screen title lozenge — standalone mode. Long-press opens the
                 // DevTools console (ConsoleLogViewer), presented by whoever hosts

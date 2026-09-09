@@ -23,13 +23,29 @@ public enum ModelPickerPurpose {
 /// Reasoning effort, which is orthogonal to the model but lives in the same
 /// decision. Surfaces that can't set it pass nil and the section is omitted.
 public struct ModelPickerEffort {
-    public static let levels = ["low", "medium", "high", "xhigh", "max"]
+    /// Range for models whose CLI doesn't report one (Claude Code, and any host
+    /// too old to send it). A FALLBACK — read `levels`, which prefers what the
+    /// model itself accepts. Hardcoding this list at the call site is what kept
+    /// GPT-6-Astra's `ultra` unreachable.
+    public static let fallbackLevels = ["low", "medium", "high", "xhigh", "max"]
 
     public let current: String?
+    /// Levels to offer, from the model when it reported them.
+    public let levels: [String]
+    /// The level this model uses when none is chosen, for labelling "Default".
+    public let defaultLevel: String?
     public let onChange: (String?) -> Void
 
-    public init(current: String?, onChange: @escaping (String?) -> Void) {
+    /// `model` is the model the effort is being chosen FOR — which levels exist
+    /// is a per-model fact, even though the chosen level is a global override.
+    public init(current: String?, model: ModelInfo? = nil, onChange: @escaping (String?) -> Void) {
         self.current = current
+        if let supported = model?.cliSupportedEfforts, !supported.isEmpty {
+            self.levels = supported
+        } else {
+            self.levels = Self.fallbackLevels
+        }
+        self.defaultLevel = model?.cliDefaultEffort
         self.onChange = onChange
     }
 
@@ -392,8 +408,10 @@ public struct ModelPickerSections: View {
 
     private func effortRow(_ effort: ModelPickerEffort) -> some View {
         Menu {
-            Button("Default") { effort.onChange(nil) }
-            ForEach(ModelPickerEffort.levels, id: \.self) { level in
+            Button(effort.defaultLevel.map { "Default (\(ModelPickerEffort.label($0)))" } ?? "Default") {
+                effort.onChange(nil)
+            }
+            ForEach(effort.levels, id: \.self) { level in
                 Button(ModelPickerEffort.label(level)) { effort.onChange(level) }
             }
         } label: {

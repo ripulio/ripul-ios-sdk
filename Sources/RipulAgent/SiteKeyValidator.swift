@@ -9,6 +9,73 @@ public enum SiteKeyValidator {
         public let configJSON: String?
     }
 
+    // MARK: - Launch cache
+
+    /// A previous launch's successful validation, replayed so the web view can
+    /// start immediately instead of waiting a network round-trip.
+    ///
+    /// Why: on an iPhone cold start `AgentView.task` awaited `validate()` BEFORE
+    /// creating the WKWebView — measured at 3.7s of the ~6s to web boot, fully
+    /// serial, for a site key whose answer is the same every launch. The web
+    /// app's own boot (`useSiteKeyConfig`) treats a hash-supplied token+config
+    /// as pre-validated and skips its validate call; with no token it validates
+    /// itself in parallel with chunk loading. So on a warm launch we hand it the
+    /// cached pair when the token is still fresh, or nothing at all when it is
+    /// not — and in both cases the web view starts ~3.7s sooner. The network
+    /// validate then runs in the background to refresh this cache for next time.
+    public struct CachedValidation {
+        public let result: ValidationResult
+        /// Seconds since the cached result was minted by the server.
+        public let ageSeconds: TimeInterval
+        /// True while the cached session token is comfortably inside the
+        /// server's 1-hour lifetime (`TOKEN_EXPIRY_SECONDS` in siteKeyJwt.ts).
+        /// A stale token must NOT be handed to the web: it would be marked valid
+        /// and never re-minted until a 401.
+        public var tokenFresh: Bool { result.sessionToken != nil && ageSeconds < SiteKeyValidator.tokenFreshnessSeconds }
+    }
+
+    /// Margin under the server's 3600s token lifetime.
+    public static let tokenFreshnessSeconds: TimeInterval = 50 * 60
+
+    private static func cacheKey(siteKey: String, contextId: String?, surface: String?, baseURL: URL) -> String {
+        let host = baseURL.host ?? baseURL.absoluteString
+        return "ripul.siteKeyValidation.\(siteKey)|\(host)|\(contextId ?? "")|\(surface ?? "")"
+    }
+
+    /// The last successful validation for this key/host/context, if any.
+    public static func cachedResult(
+        siteKey: String,
+        contextId: String? = nil,
+        surface: String? = nil,
+        baseURL: URL
+    ) -> CachedValidation? {
+        let key = cacheKey(siteKey: siteKey, contextId: contextId, surface: surface, baseURL: baseURL)
+        guard let data = UserDefaults.standard.data(forKey: key),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let validatedAt = json["validatedAt"] as? Double else { return nil }
+        let result = ValidationResult(
+            sessionToken: json["sessionToken"] as? String,
+            configJSON: json["configJSON"] as? String
+        )
+        // A cache entry with neither field is worthless — treat as a miss so the
+        // caller takes the blocking first-launch path.
+        guard result.sessionToken != nil || result.configJSON != nil else { return nil }
+        return CachedValidation(result: result, ageSeconds: Date().timeIntervalSince1970 - validatedAt)
+    }
+
+    private static func storeResult(
+        _ result: ValidationResult,
+        siteKey: String, contextId: String?, surface: String?, baseURL: URL
+    ) {
+        guard result.sessionToken != nil || result.configJSON != nil else { return }
+        var json: [String: Any] = ["validatedAt": Date().timeIntervalSince1970]
+        if let t = result.sessionToken { json["sessionToken"] = t }
+        if let c = result.configJSON { json["configJSON"] = c }
+        if let data = try? JSONSerialization.data(withJSONObject: json) {
+            UserDefaults.standard.set(data, forKey: cacheKey(siteKey: siteKey, contextId: contextId, surface: surface, baseURL: baseURL))
+        }
+    }
+
     /// Validate a site key, optionally requesting a specific solution context.
     ///
     /// - Parameters:
@@ -93,7 +160,10 @@ public enum SiteKeyValidator {
                   sessionToken != nil ? "true" : "false",
                   configJSON != nil ? "true" : "false")
 
-            return ValidationResult(sessionToken: sessionToken, configJSON: configJSON)
+            let result = ValidationResult(sessionToken: sessionToken, configJSON: configJSON)
+            // Remember it for the next launch's fast path (see CachedValidation).
+            storeResult(result, siteKey: siteKey, contextId: contextId, surface: surface, baseURL: baseURL)
+            return result
         } catch {
             NSLog("[SiteKeyValidator] Network error: %@", error.localizedDescription)
             return ValidationResult(sessionToken: nil, configJSON: nil)

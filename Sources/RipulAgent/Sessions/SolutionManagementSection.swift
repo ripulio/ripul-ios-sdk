@@ -50,6 +50,7 @@ struct SolutionManagementSection: View {
     @State private var isExpanded = false
     @State private var showingCollections = false
     @State private var showingContexts = false
+    @State private var showingViewContexts = false
     @State private var showingSiteKeys = false
     @State private var showingModels = false
     @State private var showingUsers = false
@@ -64,130 +65,142 @@ struct SolutionManagementSection: View {
 
     var body: some View {
         GlassSectionPanel(title: "Solution management", isExpanded: $isExpanded) {
-            VStack(spacing: 0) {
-                row(
-                    title: "Tool Collections",
-                    subtitle: "Group tools; agents expand a group on demand",
-                    icon: "folder.badge.gearshape",
-                    identifier: "SolutionManagement.collections"
-                ) { showingCollections = true }
-
-                Divider().padding(.leading, 44)
-
-                row(
-                    title: "Macros",
-                    subtitle: "Recorded workflows; publish one to make it agent-callable",
-                    icon: "record.circle",
-                    identifier: "SolutionManagement.macros"
-                ) { showingMacros = true }
-
-                Divider().padding(.leading, 44)
-
-                row(
-                    title: "View Explorer",
-                    subtitle: "Inspect elements; record macros by double-tapping",
-                    icon: "viewfinder",
-                    identifier: "SolutionManagement.viewExplorer"
-                ) {
-                    // Collapse the console first, then present over the HOST
-                    // window (the explorer inspects the host app, never the
-                    // console's own overlay window).
-                    if #available(iOS 26.0, *) {
-                        RipulDevAssistantOverlay.shared.collapse()
-                        RipulViewExplorer.present(in: ScreenElementFinder.hostWindow())
-                    }
-                }
-
-                Divider().padding(.leading, 44)
-
-                row(
-                    title: "Solution Contexts",
-                    subtitle: "What a session can do — tools and prompt",
-                    icon: "square.stack.3d.up",
-                    identifier: "SolutionManagement.contexts"
-                ) { showingContexts = true }
-
-                // Builds needs iOS 17 (RipulBuildsScreen); this section is
-                // available from 16, so the row simply doesn't appear below that.
-                if #available(iOS 17.0, *), management.buildsApp != nil {
-                    Divider().padding(.leading, 44)
+            ScrollView(.vertical) {
+                VStack(spacing: 0) {
                     row(
-                        title: "Builds",
-                        subtitle: "Install a published build — history and release notes",
-                        icon: "shippingbox",
-                        identifier: "SolutionManagement.builds"
-                    ) { showingBuilds = true }
-                }
+                        title: "Tool Collections",
+                        subtitle: "Group tools; agents expand a group on demand",
+                        icon: "folder.badge.gearshape",
+                        identifier: "SolutionManagement.collections"
+                    ) { showingCollections = true }
 
-                if management.showsSiteKeyAdmin {
                     Divider().padding(.leading, 44)
+
                     row(
-                        title: "Site Keys",
-                        subtitle: "Assign contexts to apps — allowed, default, surfaces",
-                        icon: "key",
-                        identifier: "SolutionManagement.siteKeys"
-                    ) { showingSiteKeys = true }
+                        title: "Macros",
+                        subtitle: "Recorded workflows; publish one to make it agent-callable",
+                        icon: "record.circle",
+                        identifier: "SolutionManagement.macros"
+                    ) { showingMacros = true }
 
                     Divider().padding(.leading, 44)
+
                     row(
-                        title: "Models",
-                        subtitle: "The model catalog — pricing, tiers, defaults",
-                        icon: "cube",
-                        identifier: "SolutionManagement.models"
-                    ) { showingModels = true }
-
-                    Divider().padding(.leading, 44)
-                    row(
-                        title: "Users",
-                        subtitle: "Ripul accounts from Clerk — role, tier, usage",
-                        icon: "person.2",
-                        identifier: "SolutionManagement.users"
-                    ) { showingUsers = true }
-
-                    Divider().padding(.leading, 44)
-                    row(
-                        title: "Voice Profiles",
-                        subtitle: "Speech config site keys bind to — voice, language, terms",
-                        icon: "person.wave.2",
-                        identifier: "SolutionManagement.voiceProfiles"
-                    ) { showingVoiceProfiles = true }
-
-                    Divider().padding(.leading, 44)
-                    row(
-                        title: "Row Billing",
-                        subtitle: "Bill CRM rows via Stripe — account, rules, prices",
-                        icon: "creditcard",
-                        identifier: "SolutionManagement.billing"
-                    ) { showingBilling = true }
-                }
-
-                if bridge.audience == .developer {
-                    Divider().padding(.leading, 44)
-                    Toggle(isOn: Binding(
-                        get: { bridge.isEndUserTestingEnabled },
-                        set: { on in
-                            if on { confirmAbsorption = true } else { bridge.setEndUserTesting(false) }
+                        title: "View Explorer",
+                        subtitle: "Inspect elements; record macros by double-tapping",
+                        icon: "viewfinder",
+                        identifier: "SolutionManagement.viewExplorer"
+                    ) {
+                        // Collapse the console first, then present over the HOST
+                        // window (the explorer inspects the host app, never the
+                        // console's own overlay window).
+                        if #available(iOS 26.0, *) {
+                            RipulDevAssistantOverlay.shared.collapse()
+                            RipulViewExplorer.present(in: ScreenElementFinder.hostWindow())
                         }
-                    )) {
-                        HStack(spacing: 12) {
-                            Image(systemName: "person.badge.key")
-                                .font(.body)
-                                .foregroundStyle(.tint)
-                                .frame(width: 24)
-                            VStack(alignment: .leading, spacing: 1) {
-                                Text("Include end-user tools")
-                                    .font(.subheadline.weight(.medium))
-                                Text("Lend this dev agent the app's tools — this session only")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
+                    }
+
+                    Divider().padding(.leading, 44)
+
+                    row(
+                        title: "Solution Contexts",
+                        subtitle: "What a session can do — tools and prompt",
+                        icon: "square.stack.3d.up",
+                        identifier: "SolutionManagement.contexts"
+                    ) { showingContexts = true }
+
+                    Divider().padding(.leading, 44)
+                    row(
+                        title: "View Contexts",
+                        subtitle: "Tabs, chat features, and appearance",
+                        icon: "rectangle.3.group",
+                        identifier: "SolutionManagement.viewContexts"
+                    ) { showingViewContexts = true }
+
+                    // Builds needs iOS 17 (RipulBuildsScreen); this section is
+                    // available from 16, so the row simply doesn't appear below that.
+                    if #available(iOS 17.0, *), management.buildsApp != nil {
+                        Divider().padding(.leading, 44)
+                        row(
+                            title: "Builds",
+                            subtitle: "Install a published build — history and release notes",
+                            icon: "shippingbox",
+                            identifier: "SolutionManagement.builds"
+                        ) { showingBuilds = true }
+                    }
+
+                    if management.showsSiteKeyAdmin {
+                        Divider().padding(.leading, 44)
+                        row(
+                            title: "Site Keys",
+                            subtitle: "Assign contexts to apps — allowed, default, surfaces",
+                            icon: "key",
+                            identifier: "SolutionManagement.siteKeys"
+                        ) { showingSiteKeys = true }
+
+                        Divider().padding(.leading, 44)
+                        row(
+                            title: "Models",
+                            subtitle: "The model catalog — pricing, tiers, defaults",
+                            icon: "cube",
+                            identifier: "SolutionManagement.models"
+                        ) { showingModels = true }
+
+                        Divider().padding(.leading, 44)
+                        row(
+                            title: "Users",
+                            subtitle: "Ripul accounts from Clerk — role, tier, usage",
+                            icon: "person.2",
+                            identifier: "SolutionManagement.users"
+                        ) { showingUsers = true }
+
+                        Divider().padding(.leading, 44)
+                        row(
+                            title: "Voice Profiles",
+                            subtitle: "Speech config site keys bind to — voice, language, terms",
+                            icon: "person.wave.2",
+                            identifier: "SolutionManagement.voiceProfiles"
+                        ) { showingVoiceProfiles = true }
+
+                        Divider().padding(.leading, 44)
+                        row(
+                            title: "Row Billing",
+                            subtitle: "Bill CRM rows via Stripe — account, rules, prices",
+                            icon: "creditcard",
+                            identifier: "SolutionManagement.billing"
+                        ) { showingBilling = true }
+                    }
+
+                    if bridge.audience == .developer {
+                        Divider().padding(.leading, 44)
+                        Toggle(isOn: Binding(
+                            get: { bridge.isEndUserTestingEnabled },
+                            set: { on in
+                                if on { confirmAbsorption = true } else { bridge.setEndUserTesting(false) }
+                            }
+                        )) {
+                            HStack(spacing: 12) {
+                                Image(systemName: "person.badge.key")
+                                    .font(.body)
+                                    .foregroundStyle(.tint)
+                                    .frame(width: 24)
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text("Include end-user tools")
+                                        .font(.subheadline.weight(.medium))
+                                    Text("Lend this dev agent the app's tools — this session only")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
                             }
                         }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 10)
+                        .uiKitIdentifier("SolutionManagement.endUserTesting")
                     }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 10)
-                    .uiKitIdentifier("SolutionManagement.endUserTesting")
                 }
             }
+            // Keep the other disclosures in the available space; only these rows scroll.
+            .frame(maxHeight: 300)
         }
         .sheet(isPresented: $showingCollections) {
             NavigationStack {
@@ -244,6 +257,19 @@ struct SolutionManagementSection: View {
                 .toolbar {
                     ToolbarItem(placement: .topBarTrailing) {
                         Button("Done") { showingContexts = false }
+                    }
+                }
+            }
+        }
+        .sheet(isPresented: $showingViewContexts) {
+            NavigationStack {
+                RipulViewContextsScreen(client: RipulViewContextsClient(
+                    baseURL: management.baseURL,
+                    tokenProvider: management.tokenProvider
+                ))
+                .toolbar {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button("Done") { showingViewContexts = false }
                     }
                 }
             }

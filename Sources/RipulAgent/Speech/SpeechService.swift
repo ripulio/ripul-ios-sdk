@@ -367,6 +367,7 @@ public final class SpeechService: NSObject, ObservableObject {
     }
 
     private func ensureAuthorization() async throws {
+        try SpeechPrivacyRequirements.validate(requiresSpeechRecognition: true)
         if authorizationGranted { return }
         let speechStatus = await withCheckedContinuation { continuation in
             SFSpeechRecognizer.requestAuthorization { continuation.resume(returning: $0) }

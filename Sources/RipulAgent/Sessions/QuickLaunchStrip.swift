@@ -45,12 +45,13 @@ struct QuickLaunchStrip: View {
     /// "harness default"); the strip always names a model.
     var onNewCliSession: ((RemoteMachine, String, String?) -> Void)?
     var onNewApiSession: ((String) -> Void)?
-    /// Every offerable model, for the trailing "more models" picker. Empty ⇒ no
-    /// picker button, which is the default so embedded SDK hosts that render
-    /// this strip keep exactly the UI they have today.
+    /// Every offerable model. The picker remains available while these load.
     var allTargets: [QuickLaunchTarget] = []
     /// Needed to persist pin/unpin from the picker. Nil ⇒ no picker button.
     var cache: RipulSessionCache?
+    var modelsLoading: Bool = false
+    var modelsError: String? = nil
+    var onRetryModels: (() -> Void)? = nil
     /// Whether the pinned-model circles show. Resolved by the parent from
     /// `QuickLaunchPreferences.showCircles`. Default true so embedded hosts
     /// that never thread the preference keep the circles they render today.
@@ -78,10 +79,9 @@ struct QuickLaunchStrip: View {
         }
     }
 
-    /// The picker is additive: it appears only when the caller supplies both the
-    /// full catalog and a cache to write pins to.
+    /// Cache wiring supplies the picker even before the catalogue arrives.
     private var pickerCache: RipulSessionCache? {
-        allTargets.isEmpty ? nil : cache
+        cache
     }
 
     /// What the strip actually draws. The circles only yield to the lone
@@ -119,6 +119,9 @@ struct QuickLaunchStrip: View {
                     cache: pickerCache,
                     identifierPrefix: identifierPrefix,
                     loadingId: $loadingId,
+                    modelsLoading: modelsLoading,
+                    modelsError: modelsError,
+                    onRetryModels: onRetryModels,
                     onNewCliSession: onNewCliSession,
                     onNewApiSession: onNewApiSession,
                     labelled: !effectiveShowCircles,

@@ -14,35 +14,68 @@
       "providerKey": "claude-cli",
       "label": "Claude",
       "fullLabel": "Claude Code",
-      "keywords": ["claude", "cli"],
+      "keywords": [
+        "claude",
+        "cli"
+      ],
       "color": "#f97316",
       "webIcon": "Terminal",
       "sfSymbol": "terminal.fill",
-      "modelPrefixes": ["claude-cli"],
+      "modelPrefixes": [
+        "claude-cli"
+      ],
       "defaultModelId": "claude-cli-raw-sonnet"
     },
     {
       "id": "codex",
       "providerKey": "codex-cli",
-      "label": "Codex",
-      "fullLabel": "Codex",
-      "keywords": ["codex"],
+      "label": "Codex Legacy",
+      "fullLabel": "Codex Legacy",
+      "keywords": [
+        "codex legacy",
+        "codex-cli"
+      ],
       "color": "#22c55e",
       "webIcon": "Code",
       "sfSymbol": "chevron.left.forwardslash.chevron.right",
-      "modelPrefixes": ["codex-cli"],
-      "defaultModelId": "codex-cli-raw-default"
+      "modelPrefixes": [
+        "codex-cli"
+      ],
+      "defaultModelId": "codex-cli-raw-default",
+      "retired": true
+    },
+    {
+      "id": "codexShared",
+      "providerKey": "codex-shared-cli",
+      "label": "Codex",
+      "fullLabel": "Codex",
+      "keywords": [
+        "codex shared",
+        "codex"
+      ],
+      "color": "#10a37f",
+      "webIcon": "Code",
+      "sfSymbol": "chevron.left.forwardslash.chevron.right",
+      "modelPrefixes": [
+        "codex-shared-cli"
+      ],
+      "defaultModelId": "codex-shared-cli-raw-default"
     },
     {
       "id": "antigravity",
       "providerKey": "antigravity-cli",
       "label": "Antigravity",
       "fullLabel": "Antigravity",
-      "keywords": ["antigravity", "agy"],
+      "keywords": [
+        "antigravity",
+        "agy"
+      ],
       "color": "#4285f4",
       "webIcon": "AutoAwesome",
       "sfSymbol": "sparkles",
-      "modelPrefixes": ["antigravity-cli"],
+      "modelPrefixes": [
+        "antigravity-cli"
+      ],
       "defaultModelId": "antigravity-cli-raw-default"
     }
   ],

@@ -2,6 +2,21 @@
 import SwiftUI
 import UIKit
 
+private struct RipulTopBarSafeAreaTopKey: EnvironmentKey {
+    static let defaultValue: CGFloat? = nil
+}
+
+extension EnvironmentValues {
+    /// Top clearance for floating bars in a host-owned content column. nil
+    /// follows the window's measured safe area. A Catalyst host may use zero
+    /// ONLY beside a pinned sidebar that retains the window-control safe area,
+    /// after extending that content column to the window's top edge.
+    public var ripulTopBarSafeAreaTop: CGFloat? {
+        get { self[RipulTopBarSafeAreaTopKey.self] }
+        set { self[RipulTopBarSafeAreaTopKey.self] = newValue }
+    }
+}
+
 /// Reports the hosting **window's** top safe-area inset into SwiftUI state.
 ///
 /// Mount as a `.background` anywhere in the hierarchy; position is irrelevant
@@ -20,6 +35,7 @@ import UIKit
 /// main-queue async read + report, so the window is never touched inside a
 /// SwiftUI update transaction and the state write never lands mid-update.
 struct WindowSafeAreaTopReader: UIViewRepresentable {
+    @Environment(\.ripulTopBarSafeAreaTop) private var topOverride
     let onChange: (CGFloat) -> Void
 
     func makeUIView(context: Context) -> ReaderView {
@@ -27,15 +43,21 @@ struct WindowSafeAreaTopReader: UIViewRepresentable {
         view.isUserInteractionEnabled = false
         view.backgroundColor = .clear
         view.onChange = onChange
+        view.topOverride = topOverride
         return view
     }
 
     func updateUIView(_ uiView: ReaderView, context: Context) {
         uiView.onChange = onChange
+        if uiView.topOverride != topOverride {
+            uiView.topOverride = topOverride
+            uiView.scheduleReport()
+        }
     }
 
     final class ReaderView: UIView {
         var onChange: ((CGFloat) -> Void)?
+        var topOverride: CGFloat?
         private var lastReported: CGFloat?
 
         override func didMoveToWindow() {
@@ -53,10 +75,10 @@ struct WindowSafeAreaTopReader: UIViewRepresentable {
             scheduleReport()
         }
 
-        private func scheduleReport() {
+        func scheduleReport() {
             DispatchQueue.main.async { [weak self] in
                 guard let self, let window = self.window else { return }
-                let top = window.safeAreaInsets.top
+                let top = self.topOverride ?? window.safeAreaInsets.top
                 guard top != self.lastReported else { return }
                 self.lastReported = top
                 self.onChange?(top)

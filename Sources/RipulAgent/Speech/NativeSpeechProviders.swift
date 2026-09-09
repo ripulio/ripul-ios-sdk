@@ -468,6 +468,7 @@ public final class ElevenLabsNativeSpeechProvider: NSObject, NativeSpeechProvidi
     public func startTranscription(onEvent: @escaping @MainActor (SpeechService.TranscriptionEvent) -> Void) async throws {
         guard !transcribing else { return }
 
+        try SpeechPrivacyRequirements.validate(requiresSpeechRecognition: false)
         #if os(iOS)
         guard await AVAudioApplication.requestRecordPermission() else { throw ProviderError.microphoneDenied }
         #else

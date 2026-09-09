@@ -3,6 +3,7 @@ import SwiftUI
 // MARK: - JSON Model
 
 public struct ProviderDef: Codable {
+    public let retired: Bool?
     public let id: String
     public let providerKey: String?
     public let label: String
@@ -29,11 +30,12 @@ public struct ProviderDef: Codable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, providerKey, label, fullLabel, keywords, color, sfSymbol, modelPrefixes, defaultModelId, webIcon
+        case retired, id, providerKey, label, fullLabel, keywords, color, sfSymbol, modelPrefixes, defaultModelId, webIcon
     }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
+        retired = try c.decodeIfPresent(Bool.self, forKey: .retired)
         id = try c.decode(String.self, forKey: .id)
         providerKey = try c.decodeIfPresent(String.self, forKey: .providerKey)
         label = try c.decode(String.self, forKey: .label)
@@ -102,7 +104,7 @@ public enum ProviderConstants {
     public static let antigravityLegacyLabel = "Antigravity"
 
     /// All CLI providers (those with a providerKey).
-    public static let cliProviders: [ProviderDef] = providers.filter { $0.isCli }
+    public static let cliProviders: [ProviderDef] = providers.filter { $0.isCli && $0.retired != true }
 
     /// The first CLI provider — used as fallback when no provider is specified.
     public static let defaultCliProvider: ProviderDef = cliProviders[0]
@@ -111,19 +113,19 @@ public enum ProviderConstants {
 
     /// Look up a CLI provider by its providerKey (e.g. "claude-cli").
     public static func byProviderKey(_ key: String) -> ProviderDef? {
-        cliProviders.first { $0.providerKey == key }
+        providers.first { $0.providerKey == key }
     }
 
     /// Infer CLI provider from a model ID string (e.g. "antigravity-cli-raw-default" → antigravity).
     public static func byModelId(_ modelId: String?) -> ProviderDef? {
         guard let modelId else { return nil }
-        return cliProviders.first { $0.modelPrefixes.contains(where: { modelId.hasPrefix($0) }) }
+        return providers.first { $0.modelPrefixes.contains(where: { modelId.hasPrefix($0) }) }
     }
 
     /// Whether a providerKey or provider string refers to a CLI provider.
     public static func isCliProvider(_ key: String?) -> Bool {
         guard let key else { return false }
-        return cliProviders.contains { $0.providerKey == key }
+        return providers.contains { $0.providerKey == key }
     }
 
     /// Default model ID for a CLI provider (e.g. "claude-cli" → "claude-cli-raw-sonnet").

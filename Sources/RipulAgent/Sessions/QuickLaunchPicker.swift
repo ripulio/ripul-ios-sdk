@@ -32,6 +32,9 @@ struct QuickLaunchPickerButton: View {
     /// `uiKitIdentifier` namespace, e.g. "GlassSessionsList.machines".
     let identifierPrefix: String
     @Binding var loadingId: String?
+    var modelsLoading: Bool = false
+    var modelsError: String? = nil
+    var onRetryModels: (() -> Void)? = nil
     var onNewCliSession: ((RemoteMachine, String, String?) -> Void)?
     var onNewApiSession: ((String) -> Void)?
     /// Presentation of the trigger. False is the trailing ellipsis circle that
@@ -103,7 +106,10 @@ struct QuickLaunchPickerButton: View {
                 cache: cache,
                 purpose: .launch(machine: machine),
                 identifierPrefix: identifierPrefix,
+                isLoading: modelsLoading,
+                loadFailure: modelsLoading ? nil : modelsError,
                 loadingId: $loadingId,
+                onRetry: onRetryModels,
                 onPick: { model in
                     guard let model else { return }
                     launch(model)

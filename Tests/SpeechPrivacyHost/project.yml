@@ -1,0 +1,67 @@
+name: SpeechPrivacyHost
+options:
+  deploymentTarget:
+    iOS: "26.0"
+configs:
+  Debug: debug
+  DebugMicrophoneOnly: debug
+  Release: release
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    GENERATE_INFOPLIST_FILE: YES
+    CODE_SIGNING_ALLOWED: NO
+packages:
+  RipulAgent:
+    path: ../..
+targets:
+  SpeechPrivacyHost:
+    type: application
+    platform: iOS
+    sources: [App]
+    dependencies:
+      - package: RipulAgent
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.ripul.tests.speech-privacy-host
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+      configs:
+        DebugMicrophoneOnly:
+          INFOPLIST_KEY_NSMicrophoneUsageDescription: Record voice messages
+  SpeechPrivacyHostTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources: [../RipulAgentTests/SpeechPrivacyRequirementsTests.swift]
+    dependencies:
+      - target: SpeechPrivacyHost
+      - package: RipulAgent
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.ripul.tests.speech-privacy-unit
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/SpeechPrivacyHost.app/SpeechPrivacyHost"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+  SpeechPrivacyHostUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources: [UITests]
+    dependencies:
+      - target: SpeechPrivacyHost
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.ripul.tests.speech-privacy-ui
+schemes:
+  PrivacyMissingBoth:
+    build:
+      targets:
+        SpeechPrivacyHost: all
+    test:
+      config: Debug
+      targets: [SpeechPrivacyHostTests, SpeechPrivacyHostUITests]
+  PrivacyMissingSpeech:
+    build:
+      targets:
+        SpeechPrivacyHost: all
+    test:
+      config: DebugMicrophoneOnly
+      targets: [SpeechPrivacyHostTests, SpeechPrivacyHostUITests]

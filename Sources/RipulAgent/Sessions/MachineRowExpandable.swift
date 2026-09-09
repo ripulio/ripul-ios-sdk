@@ -142,9 +142,7 @@ public struct MachineRowExpandable: View {
     @State private var showResultSheet: (action: RemoteActionDescriptor, result: [String: Any])?
     @State private var showSignInSheet = false
     @State private var hostAuthStatus: HostAuthStatusInfo?
-    /// The machine-global active profile, so the account in use is visible on
-    /// the row itself (collapsed subtitle + expanded Claude row) without
-    /// drilling into the switcher sheet.
+    /// The machine-global active profile shown in the expanded Claude row.
     @State private var activeAccount: ClaudeAccountProfile?
     /// Natural height of the expanded body, reported back by the body itself.
     /// Survives collapse/expand cycles, so only the first expansion of a given
@@ -214,9 +212,6 @@ public struct MachineRowExpandable: View {
             if !expanded { loadingTile = nil }
         }
         .onAppear {
-            // The collapsed subtitle carries the active account — a glanceable
-            // answer to "which account will pay?", so it has to be fetched for
-            // folded rows too, not only on expand.
             refreshHostAuthStatus()
         }
         .onChange(of: activeSessions.count) { _ in
@@ -343,16 +338,6 @@ public struct MachineRowExpandable: View {
                              : "\(activeSessions.count) active \(activeSessions.count == 1 ? "session" : "sessions")")
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                        // The account in use, visible without expanding: the
-                        // common pre-launch check is "which account will pay
-                        // for this session?", and that answer must not be a
-                        // drill-down away.
-                        if let account = activeAccount {
-                            Label(account.isDefault ? (account.email ?? "Default") : account.name, systemImage: "person.crop.circle")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .uiKitIdentifier("MachineRowExpandable.activeAccount")
-                        }
                     }
                 }
 
@@ -429,6 +414,9 @@ public struct MachineRowExpandable: View {
             onNewApiSession: onNewApiSession,
             allTargets: quickLaunchAllTargets,
             cache: quickLaunchCache,
+            modelsLoading: hostAuthBridge?.isLoadingModels ?? false,
+            modelsError: hostAuthBridge?.lastModelsError,
+            onRetryModels: hostAuthBridge.map { bridge in { Task { await bridge.fetchModels() } } },
             showCircles: quickLaunchShowCircles,
             // `loadingTile` covers a launch tapped on this row; `isConnecting`
             // covers the machine-level connect that follows (and any connect
@@ -452,7 +440,7 @@ public struct MachineRowExpandable: View {
     /// circle set: the circles are gated off AND the picker exists to replace
     /// them. Mirrors `QuickLaunchStrip.effectiveShowCircles`.
     private var quickLaunchAsButton: Bool {
-        !quickLaunchShowCircles && quickLaunchCache != nil && !quickLaunchAllTargets.isEmpty
+        !quickLaunchShowCircles && quickLaunchCache != nil
     }
 
     // MARK: - Expanded body

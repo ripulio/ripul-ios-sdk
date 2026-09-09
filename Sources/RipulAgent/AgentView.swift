@@ -258,6 +258,7 @@ public struct AgentView<TopBar: View>: View {
 
         }
         .animation(.easeInOut(duration: 0.25), value: voiceMode.isActive)
+        .modifier(SpeechInputWarningModifier(message: $voiceMode.microphoneWarning))
         .onRipulVoiceModeRequest(isConnected: bridge.isConnected) { honorVoiceModeRequest() }
         .onChange(of: bridge.nativeChatScrollerEnabled) { on in
             bridge.evaluateJavaScript("window.__ripulSetNativeChatForwarding?.(\(on))")
@@ -447,13 +448,36 @@ public struct AgentView<TopBar: View>: View {
 
             var config = configuration
             if let siteKey = config.siteKey, config.siteKeyConfig == nil {
-                let result = await SiteKeyValidator.validate(
-                    siteKey: siteKey, baseURL: config.baseURL
-                )
-                if let token = result.sessionToken {
-                    config.sessionToken = token
+                let baseURL = config.baseURL
+                if let cached = SiteKeyValidator.cachedResult(siteKey: siteKey, baseURL: baseURL) {
+                    // WARM LAUNCH: do not hold the web view for a network
+                    // round-trip (measured 3.7s on iPhone cold start). Hand the
+                    // web the cached pair only while the token is fresh — the
+                    // web treats token+config as pre-validated and skips its
+                    // own validate. With a stale token pass NOTHING: the web
+                    // then validates itself, in parallel with its own boot,
+                    // which is still ~3.7s sooner than validating here first.
+                    if cached.tokenFresh, let token = cached.result.sessionToken {
+                        config.sessionToken = token
+                        config.siteKeyConfig = cached.result.configJSON
+                    }
+                    NSLog("[SiteKeyValidator] launch cache hit (age %.0fs, tokenFresh %@) — starting web view now, revalidating in background",
+                          cached.ageSeconds, cached.tokenFresh ? "true" : "false")
+                    // Refresh the cache for the next launch. readyConfig is NOT
+                    // touched afterwards — a reload here would undo the win.
+                    Task.detached(priority: .utility) {
+                        _ = await SiteKeyValidator.validate(siteKey: siteKey, baseURL: baseURL)
+                    }
+                } else {
+                    // FIRST LAUNCH (no cache yet): validate first, as before.
+                    let result = await SiteKeyValidator.validate(
+                        siteKey: siteKey, baseURL: baseURL
+                    )
+                    if let token = result.sessionToken {
+                        config.sessionToken = token
+                    }
+                    config.siteKeyConfig = result.configJSON
                 }
-                config.siteKeyConfig = result.configJSON
             }
             readyConfig = config
         }

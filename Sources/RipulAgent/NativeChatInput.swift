@@ -1,4 +1,7 @@
 import SwiftUI
+#if targetEnvironment(macCatalyst)
+import UniformTypeIdentifiers
+#endif
 
 #if os(iOS)
 import UIKit
@@ -274,7 +277,12 @@ public struct NativeChatInput: View {
     var onEnterVoiceMode: ((Bool) -> Bool)?
     @State private var isDictating = false
     @State private var dictationBase = ""
+    @State private var microphoneWarning: String?
     @State private var showPhotoPicker = false
+    #if targetEnvironment(macCatalyst)
+    @State private var showImageFilePicker = false
+    @State private var imageFileImportError: String?
+    #endif
     @State private var showCamera = false
     @State private var textHeight: CGFloat = 36
     @State private var fileSuggestions: [FileSuggestion] = []
@@ -415,6 +423,7 @@ public struct NativeChatInput: View {
                 isDictating = true
             } catch {
                 isDictating = false
+                microphoneWarning = error.localizedDescription
             }
         }
     }
@@ -468,6 +477,8 @@ public struct NativeChatInput: View {
             .modifier(GlassCircleModifier(glassStyle: "clear"))
             .gesture(longPress.exclusively(before: doubleTap.exclusively(before: singleTap)))
             .accessibilityAddTraits(.isButton)
+            .accessibilityLabel("Microphone")
+            .accessibilityIdentifier("NativeChatInput.microphone")
     }
 
     public var body: some View {
@@ -488,6 +499,11 @@ public struct NativeChatInput: View {
                     singleRowBody
                 }
             }
+            #if targetEnvironment(macCatalyst)
+            // The labels already draw circular glass. Mac idiom's automatic
+            // button style adds a second, rectangular bezel around them.
+            .buttonStyle(.plain)
+            #endif
         }
         .animation(.easeInOut(duration: 0.15), value: textHeight)
         .animation(.easeInOut(duration: 0.2), value: imageAttachments.count)
@@ -505,7 +521,37 @@ public struct NativeChatInput: View {
             }
             collapseIncomingContextTokens(newValue)
         }
+        .modifier(SpeechInputWarningModifier(message: $microphoneWarning))
         .photosPicker(isPresented: $showPhotoPicker, selection: $selectedPhotos, maxSelectionCount: 4, matching: .images)
+        #if targetEnvironment(macCatalyst)
+        .fileImporter(isPresented: $showImageFilePicker, allowedContentTypes: [.image], allowsMultipleSelection: true) { result in
+            switch result {
+            case .success(let urls):
+                guard urls.count <= 4 else {
+                    imageFileImportError = "Choose up to four images at a time."
+                    return
+                }
+                do {
+                    let attachments = try urls.map { try PhotoAttachmentHelper.processImageFile($0) }
+                    imageAttachments.append(contentsOf: attachments)
+                } catch {
+                    imageFileImportError = error.localizedDescription
+                }
+            case .failure(let error):
+                if (error as NSError).code != NSUserCancelledError {
+                    imageFileImportError = error.localizedDescription
+                }
+            }
+        }
+        .alert("Couldn't attach images", isPresented: Binding(
+            get: { imageFileImportError != nil },
+            set: { if !$0 { imageFileImportError = nil } }
+        )) {
+            Button("OK", role: .cancel) { imageFileImportError = nil }
+        } message: {
+            Text(imageFileImportError ?? "")
+        }
+        #endif
         .fullScreenCover(isPresented: $showCamera) {
             CameraPicker { uiImage in
                 let resized = PhotoAttachmentHelper.downsamplePublic(uiImage)
@@ -1286,6 +1332,14 @@ public struct NativeChatInput: View {
 
     private var plusMenuButton: some View {
         Menu {
+            #if targetEnvironment(macCatalyst)
+            Button {
+                dismissKeyboard()
+                showImageFilePicker = true
+            } label: {
+                Label("Choose Images…", systemImage: "folder")
+            }
+            #endif
             Button {
                 showCamera = true
             } label: {
@@ -1334,6 +1388,12 @@ public struct NativeChatInput: View {
                 .contentShape(Circle())
                 .modifier(GlassCircleModifier(glassStyle: isTwoRow ? nil : resolvedChatInputGlassStyle))
         }
+        #if targetEnvironment(macCatalyst)
+        .menuStyle(.button)
+        .menuIndicator(.hidden)
+        .help("Attachments and actions")
+        #endif
+        .accessibilityLabel("Attachments and actions")
         .simultaneousGesture(
             LongPressGesture(minimumDuration: 0.6).onEnded { _ in
                 onPlusLongPress?()
@@ -1660,6 +1720,7 @@ public struct NativeChatInput: View {
     var onEnterVoiceMode: ((Bool) -> Bool)?
     @State private var isDictating = false
     @State private var dictationBase = ""
+    @State private var microphoneWarning: String?
     @State private var showPhotoPicker = false
     @FocusState private var isFocused: Bool
     @State private var fileSuggestions: [FileSuggestion] = []
@@ -2198,6 +2259,7 @@ public struct NativeChatInput: View {
             collapseIncomingContextTokens(newValue)
         }
         .animation(.easeInOut(duration: 0.2), value: showAtSuggestions)
+        .modifier(SpeechInputWarningModifier(message: $microphoneWarning))
         .photosPicker(isPresented: $showPhotoPicker, selection: $selectedPhotos, maxSelectionCount: 4, matching: .images)
         .sheet(isPresented: $showTodoPicker) {
             TodoPickerSheet(
@@ -2280,6 +2342,7 @@ public struct NativeChatInput: View {
                 isDictating = true
             } catch {
                 isDictating = false
+                microphoneWarning = error.localizedDescription
             }
         }
     }
@@ -2331,6 +2394,8 @@ public struct NativeChatInput: View {
             .modifier(GlassCircleModifier(glassStyle: "clear"))
             .gesture(longPress.exclusively(before: doubleTap.exclusively(before: singleTap)))
             .accessibilityAddTraits(.isButton)
+            .accessibilityLabel("Microphone")
+            .accessibilityIdentifier("NativeChatInput.microphone")
     }
 
     private var singleRowBody: some View {
