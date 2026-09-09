@@ -48,6 +48,19 @@ warning and remains usable for typing. The SDK's speech providers throw a
 localized error before requesting system permission; custom provider callers
 should present that error to the user.
 
+### Personal voice settings in the signed-in console
+
+In `RipulAgentConsole`, open the session list's overflow menu → **Profile** →
+**Voice** → **Dictation provider** to choose Apple or ElevenLabs. The same native
+Profile and Voice views are shared with the Ripul app. Profile is available for
+Ripul account sign-in; site-key voice configuration remains separate.
+
+Voice preferences use `SpeechPreferences.store` (host-local `UserDefaults` by
+default). They are not synced by Ripul login or iCloud, so Ripul, a host's production
+app, and its beta app can each have a different choice. Identity and personal
+service keys are account-backed. Hosts that provide their own navigation can
+present `RipulProfileScreen`, with an optional plan section supplied as view content.
+
 ## Project Structure
 
 ```

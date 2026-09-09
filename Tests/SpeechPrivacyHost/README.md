@@ -16,3 +16,9 @@ result bundle. No account, site key, network, or microphone grant is needed.
 
 Standalone macOS package tests run the declaration validation cases but skip
 the host-dependent cases: Xcode's runner supplies its own privacy descriptions.
+
+The `--profile` fixture exercises the shared session menu → Profile → Voice
+route without signing in or making network requests. Its UI regression changes
+the dictation provider, checks the effective speech preference, then relaunches
+to verify persistence in an isolated test defaults suite. `--reset-profile`
+resets only that suite.

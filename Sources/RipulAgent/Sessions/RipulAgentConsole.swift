@@ -42,6 +42,7 @@ public struct RipulAgentConsole: View {
     /// Macro library sheet (docs/plans/automation-macros/phase-4-…), opened
     /// by `.ripulShowMacroLibrary` posts — same pattern as `showDevTools`.
     @State private var showMacroLibrary = false
+    @State private var showProfile = false
 
     private let slots: RipulAgentScreenSlots
     /// CRUD for recorded macros (docs/plans/automation-macros/). Owns no
@@ -184,10 +185,37 @@ public struct RipulAgentConsole: View {
             if signedIn {
                 forceSignIn = false
                 fetchSeededContexts()
+            } else {
+                showProfile = false
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .ripulShowDevTools)) { _ in
             showDevTools = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .ripulShowProfile)) { notification in
+            guard notification.object as? AgentBridge === bridge, authStore.isSignedIn else { return }
+            showProfile = true
+        }
+        .sheet(isPresented: $showProfile) {
+            NavigationStack {
+                RipulProfileScreen(
+                    bridge: bridge,
+                    userName: authStore.userName,
+                    userEmail: authStore.userEmail,
+                    baseURL: configuration.baseURL,
+                    tokenProvider: { authStore.token },
+                    onSignOut: {
+                        showProfile = false
+                        await authStore.signOut()
+                    },
+                    planContent: { EmptyView() }
+                )
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Done") { showProfile = false }
+                    }
+                }
+            }
         }
         .sheet(isPresented: $showDevTools) {
             NavigationStack {

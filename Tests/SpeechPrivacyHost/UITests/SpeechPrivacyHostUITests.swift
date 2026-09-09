@@ -25,6 +25,26 @@ final class SpeechPrivacyHostUITests: XCTestCase {
         XCTAssertTrue(warning.waitForExistence(timeout: 5))
     }
 
+    @MainActor func testProfileMenuChangesProviderAndPersistsAcrossLaunch() {
+        let app = XCUIApplication()
+        app.launchArguments = ["--profile", "--reset-profile"]
+        app.launch()
+        XCTAssertTrue(app.staticTexts["Effective provider: apple"].waitForExistence(timeout: 10))
+        app.buttons["Sessions menu"].tap()
+        app.buttons["Profile"].tap()
+        XCTAssertTrue(app.staticTexts["Test User"].waitForExistence(timeout: 5))
+        app.buttons["Voice"].tap()
+        app.buttons["VoiceSettingsScreen.dictationProvider"].tap()
+        app.buttons["ElevenLabs"].tap()
+        app.navigationBars.buttons["Profile"].tap()
+        app.buttons["Done"].tap()
+        XCTAssertTrue(app.staticTexts["Effective provider: elevenlabs"].waitForExistence(timeout: 5))
+        app.terminate()
+        app.launchArguments = ["--profile"]
+        app.launch()
+        XCTAssertTrue(app.staticTexts["Effective provider: elevenlabs"].waitForExistence(timeout: 10))
+    }
+
     @MainActor func testConversationWarnsAndHostRemainsUsable() { verifyWarning(dictation: false) }
     @MainActor func testDictationWarnsAndHostRemainsUsable() { verifyWarning(dictation: true) }
 }

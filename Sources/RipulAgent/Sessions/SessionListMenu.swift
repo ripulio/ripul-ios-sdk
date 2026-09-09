@@ -1,5 +1,11 @@
 import SwiftUI
 
+public extension Notification.Name {
+    /// Scoped to the originating bridge so another embedded console cannot
+    /// present or sign out the wrong account.
+    static let ripulShowProfile = Notification.Name("ripulShowProfile")
+}
+
 /// The session list's overflow menu: new CLI sessions on the default machine,
 /// new API chats pinned to a backend model, refresh, console logs.
 ///
@@ -83,6 +89,17 @@ public struct SessionListMenu: View {
                 Label("New session from model…", systemImage: "square.stack.3d.up")
             }
             .uiKitIdentifier("AgentScreen.listMenu.newFromModelButton")
+
+            Divider()
+        }
+
+        if bridge.audience == .developer {
+            Button {
+                NotificationCenter.default.post(name: .ripulShowProfile, object: bridge)
+            } label: {
+                Label("Profile", systemImage: "person.crop.circle")
+            }
+            .uiKitIdentifier("AgentScreen.listMenu.profile")
 
             Divider()
         }
