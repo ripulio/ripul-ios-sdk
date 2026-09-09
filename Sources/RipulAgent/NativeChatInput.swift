@@ -220,6 +220,9 @@ public struct NativeChatInput: View {
     let isAgentRunning: Bool
     let isAgentPaused: Bool
     let onSubmit: () -> Void
+    @ObservedObject var contextStore: RipulComposerContextStore
+    var contextSessionID: String?
+    var contextOptions: [RipulComposerContext]
     /// Send a human note (not sent to agent, for human-to-human communication).
     var onSubmitNote: (() -> Void)?
     let onPause: (() -> Void)?
@@ -341,7 +344,10 @@ public struct NativeChatInput: View {
         onQuerySlashCommands: (() async -> [SlashCommandInfo])? = nil,
         onSubmitSlashCommand: ((String) -> Void)? = nil,
         speechProvider: Any? = nil,
-        onEnterVoiceMode: ((Bool) -> Bool)? = nil
+        onEnterVoiceMode: ((Bool) -> Bool)? = nil,
+        contextStore: RipulComposerContextStore? = nil,
+        contextSessionID: String? = nil,
+        contextOptions: [RipulComposerContext] = RipulComposerContext.standard
     ) {
         self._text = text
         self._imageAttachments = imageAttachments
@@ -371,6 +377,9 @@ public struct NativeChatInput: View {
         self.onSubmitSlashCommand = onSubmitSlashCommand
         self.speechProvider = speechProvider
         self.onEnterVoiceMode = onEnterVoiceMode
+        self.contextStore = contextStore ?? RipulComposerContextStore()
+        self.contextSessionID = contextSessionID
+        self.contextOptions = contextOptions
     }
 
     private func dismissKeyboard() {
@@ -1218,6 +1227,7 @@ public struct NativeChatInput: View {
 
                 // Group adjacent glass surfaces so they share the same sampling region.
                 VStack(spacing: 0) {
+                    ComposerContextChips(store: contextStore, session: contextSessionID)
                     if !imageAttachments.isEmpty {
                         imageThumbsRow
                     }
@@ -1226,6 +1236,7 @@ public struct NativeChatInput: View {
                             planModeToggle
                         }
                         textInputView
+                        ComposerContextButton(store: contextStore, session: contextSessionID, options: contextOptions, size: 36)
                         if dictationAvailable {
                             micButton(size: 36)
                         }
@@ -1258,6 +1269,7 @@ public struct NativeChatInput: View {
             VStack(spacing: 6) {
                 // Full-width text area
                 VStack(spacing: 0) {
+                    ComposerContextChips(store: contextStore, session: contextSessionID)
                     if !imageAttachments.isEmpty {
                         imageThumbsRow
                     }
@@ -1272,6 +1284,7 @@ public struct NativeChatInput: View {
                     if showPlanModeToggle {
                         planModeToggle
                     }
+                    ComposerContextButton(store: contextStore, session: contextSessionID, options: contextOptions, size: 40)
                     if dictationAvailable {
                         micButton(size: 40)
                     }
@@ -1452,7 +1465,7 @@ public struct NativeChatInput: View {
 
     @ViewBuilder
     private var actionButton: some View {
-        let hasContent = !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !imageAttachments.isEmpty
+        let hasContent = !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !imageAttachments.isEmpty || !contextStore.attachments(for: contextSessionID).isEmpty
         if isAgentRunning && !isAgentPaused {
             HStack(spacing: 4) {
                 if hasContent, let onSubmitNote {
@@ -1547,7 +1560,7 @@ public struct NativeChatInput: View {
 
     @ViewBuilder
     private var twoRowActionButton: some View {
-        let hasContent = !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !imageAttachments.isEmpty
+        let hasContent = !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !imageAttachments.isEmpty || !contextStore.attachments(for: contextSessionID).isEmpty
         if isAgentRunning && !isAgentPaused {
             HStack(spacing: 4) {
                 if hasContent, let onSubmitNote {
@@ -1675,6 +1688,9 @@ public struct NativeChatInput: View {
     let isAgentRunning: Bool
     let isAgentPaused: Bool
     let onSubmit: () -> Void
+    @ObservedObject var contextStore: RipulComposerContextStore
+    var contextSessionID: String?
+    var contextOptions: [RipulComposerContext]
     /// Send a human note (not sent to agent, for human-to-human communication).
     var onSubmitNote: (() -> Void)?
     let onPause: (() -> Void)?
@@ -1770,7 +1786,10 @@ public struct NativeChatInput: View {
         addressedParticipants: Binding<[String]> = .constant([]),
         onFocusChanged: ((Bool) -> Void)? = nil,
         speechProvider: Any? = nil,
-        onEnterVoiceMode: ((Bool) -> Bool)? = nil
+        onEnterVoiceMode: ((Bool) -> Bool)? = nil,
+        contextStore: RipulComposerContextStore? = nil,
+        contextSessionID: String? = nil,
+        contextOptions: [RipulComposerContext] = RipulComposerContext.standard
     ) {
         self._text = text
         self._imageAttachments = imageAttachments
@@ -1797,6 +1816,9 @@ public struct NativeChatInput: View {
         self.onFocusChanged = onFocusChanged
         self.speechProvider = speechProvider
         self.onEnterVoiceMode = onEnterVoiceMode
+        self.contextStore = contextStore ?? RipulComposerContextStore()
+        self.contextSessionID = contextSessionID
+        self.contextOptions = contextOptions
     }
 
     // MARK: - @ Mention Suggestions
@@ -2404,6 +2426,7 @@ public struct NativeChatInput: View {
                 plusMenuButton
 
                 VStack(spacing: 0) {
+                    ComposerContextChips(store: contextStore, session: contextSessionID)
                     if !imageAttachments.isEmpty {
                         imageThumbsRow
                     }
@@ -2412,6 +2435,7 @@ public struct NativeChatInput: View {
                             planModeToggle
                         }
                         textInputView
+                        ComposerContextButton(store: contextStore, session: contextSessionID, options: contextOptions, size: 36)
                         if dictationAvailable {
                             micButton(size: 36)
                         }
@@ -2444,6 +2468,7 @@ public struct NativeChatInput: View {
         ChatInputGlassGroup {
             VStack(spacing: 6) {
                 VStack(spacing: 0) {
+                    ComposerContextChips(store: contextStore, session: contextSessionID)
                     if !imageAttachments.isEmpty {
                         imageThumbsRow
                     }
@@ -2459,6 +2484,7 @@ public struct NativeChatInput: View {
                     if showPlanModeToggle {
                         planModeToggle
                     }
+                    ComposerContextButton(store: contextStore, session: contextSessionID, options: contextOptions, size: 40)
                     if dictationAvailable {
                         micButton(size: 40)
                     }
@@ -2608,7 +2634,7 @@ public struct NativeChatInput: View {
 
     @ViewBuilder
     private var actionButton: some View {
-        let hasContent = !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !imageAttachments.isEmpty
+        let hasContent = !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !imageAttachments.isEmpty || !contextStore.attachments(for: contextSessionID).isEmpty
         if isAgentRunning && !isAgentPaused {
             HStack(spacing: 4) {
                 if hasContent, let onSubmitNote {
@@ -2680,7 +2706,7 @@ public struct NativeChatInput: View {
 
     @ViewBuilder
     private var twoRowActionButton: some View {
-        let hasContent = !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !imageAttachments.isEmpty
+        let hasContent = !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !imageAttachments.isEmpty || !contextStore.attachments(for: contextSessionID).isEmpty
         if isAgentRunning && !isAgentPaused {
             HStack(spacing: 4) {
                 if hasContent, let onSubmitNote {

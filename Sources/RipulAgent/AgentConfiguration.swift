@@ -11,6 +11,8 @@ public struct AgentConfiguration {
     public var siteKey: String? = nil
     public var sessionToken: String? = nil
     public var theme: AgentTheme = .system
+    /// Context choices offered beside the microphone. Nothing is selected or sent automatically.
+    public var composerContexts: [RipulComposerContext] = RipulComposerContext.standard
     public var newChat: Bool = false
     public var prompt: String? = nil
     /// JSON string of site key config returned from validation.

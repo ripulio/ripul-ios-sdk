@@ -941,6 +941,7 @@ public enum RipulChannelAudience {
 public final class AgentBridge: NSObject, ObservableObject {
     /// Immutable for the bridge's lifetime — assigned in the designated
     /// initializer before `super.init()`. See `RipulChannelAudience`.
+    public let composerContexts = RipulComposerContextStore()
     public let audience: RipulChannelAudience
 
     /// The host's tool registry this channel projects from. The bridge OWNS no
@@ -4344,8 +4345,10 @@ public final class AgentBridge: NSObject, ObservableObject {
         modality: String? = nil
     ) async -> Bool {
         guard let webView else { return false }
+        let contextSession = currentSourceChatId
+        let contextAttachments = composerContexts.attachments(for: contextSession)
         do {
-            var args: [String: Any] = ["text": text]
+            var args: [String: Any] = ["text": RipulContextAttachment.message(text, attachments: contextAttachments)]
             // Modality (e.g. "voice") rides as the 4th positional argument;
             // undefined placeholders keep earlier positions stable.
             args["modality"] = modality.map { $0 as Any } ?? NSNull()
@@ -4371,7 +4374,9 @@ public final class AgentBridge: NSObject, ObservableObject {
                 contentWorld: .page
             )
             if let dict = result as? [String: Any] {
-                return dict["success"] as? Bool ?? false
+                let success = dict["success"] as? Bool ?? false
+                if success { composerContexts.didSend(contextAttachments, session: contextSession) }
+                return success
             }
             return false
         } catch {

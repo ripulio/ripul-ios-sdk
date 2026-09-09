@@ -42,6 +42,7 @@ public struct RipulSessionsConfiguration {
     /// any other web content in the host app.
     public var websiteDataStore: WKWebsiteDataStore
     /// Theme passthrough for the embedded chat.
+    public var composerContexts: [RipulComposerContext] = RipulComposerContext.developerDefaults
     public var theme: AgentTheme
     /// Whether the "New Ripul Agent" tile is offered on online machines.
     public var allowRipulAgents: Bool

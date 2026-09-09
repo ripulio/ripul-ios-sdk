@@ -299,6 +299,7 @@ public struct RipulAgentScreen: View {
             nativeChatInputHeight: 140
         )
         config.websiteDataStore = configuration.websiteDataStore
+        config.composerContexts = configuration.composerContexts
         // Console auto-entry (native-tool-registry phase 3): a cached seeded
         // Developer-context id — written by RipulAgentConsole after its
         // authenticated bootstrap fetch — rides the URL as `context=<id>`; the

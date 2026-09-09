@@ -281,6 +281,7 @@ public struct AgentView<TopBar: View>: View {
                 // WKWebView, the top bar, and reads many bridge.* properties).
                 ChatComposer(
                     bridge: bridge,
+                    contextOptions: configuration.composerContexts,
                     tokenProvider: tokenProvider,
                     onEnterVoiceMode: { [weak bridge] utterance in
                         guard let bridge else { return false }
@@ -591,6 +592,7 @@ public extension AgentView where TopBar == EmptyView {
 @available(iOS 16.0, macOS 14.0, *)
 private struct ChatComposer: View {
     @ObservedObject var bridge: AgentBridge
+    var contextOptions: [RipulComposerContext]
     var tokenProvider: (() -> String?)?
     /// Mic long-press. Receives the composer's current text (empty when the
     /// box is blank); returns true when voice mode actually started, so the
@@ -764,7 +766,10 @@ private struct ChatComposer: View {
             onQuerySlashCommands: bridge.chatInputShowQuickCommands ? { await bridge.getSlashCommands() } : nil,
             onSubmitSlashCommand: bridge.chatInputShowQuickCommands ? { message in handleSlashSubmit(message) } : nil,
             speechProvider: speechProvider,
-            onEnterVoiceMode: onEnterVoiceMode == nil ? nil : handleEnterVoiceMode
+            onEnterVoiceMode: onEnterVoiceMode == nil ? nil : handleEnterVoiceMode,
+            contextStore: bridge.composerContexts,
+            contextSessionID: bridge.currentSourceChatId,
+            contextOptions: contextOptions
         )
         .onChange(of: planMode) { newValue in
             Task { await bridge.setCliPlanMode(newValue) }
@@ -843,7 +848,10 @@ private struct ChatComposer: View {
             },
             addressedParticipants: $addressedParticipants,
             speechProvider: speechProvider,
-            onEnterVoiceMode: onEnterVoiceMode == nil ? nil : handleEnterVoiceMode
+            onEnterVoiceMode: onEnterVoiceMode == nil ? nil : handleEnterVoiceMode,
+            contextStore: bridge.composerContexts,
+            contextSessionID: bridge.currentSourceChatId,
+            contextOptions: contextOptions
         )
         .onChange(of: planMode) { newValue in
             Task { await bridge.setCliPlanMode(newValue) }
@@ -900,7 +908,7 @@ private struct ChatComposer: View {
             imageAttachments = []
             selectedPhotos = []
             addressedParticipants = []
-            if message.isEmpty {
+            if message.isEmpty && bridge.composerContexts.attachments(for: bridge.currentSourceChatId).isEmpty {
                 Task { await bridge.resumeAgent() }
             } else {
                 recordHistory(message)
@@ -913,7 +921,7 @@ private struct ChatComposer: View {
                 }
             }
         } else {
-            guard !message.isEmpty || !imageAttachments.isEmpty else { return }
+            guard !message.isEmpty || !imageAttachments.isEmpty || !bridge.composerContexts.attachments(for: bridge.currentSourceChatId).isEmpty else { return }
             if !message.isEmpty { recordHistory(message) }
             let images = imageAttachments
             let addressed = addressedParticipants
