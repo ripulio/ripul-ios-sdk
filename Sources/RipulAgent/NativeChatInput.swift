@@ -237,10 +237,6 @@ public struct NativeChatInput: View {
     var messageHistory: MessageHistory?
     var chatInputGlassStyle: String?
     var chatInputLayout: String?
-    /// Toggle between plan (read-only) and edit (default) mode for CLI sessions.
-    @Binding var planMode: Bool
-    /// Whether to show the plan/edit mode toggle (e.g., only in raw CLI sessions).
-    var showPlanModeToggle: Bool
     /// Optional callback to query remote host for file suggestions.
     /// When provided, typing `@` followed by text triggers file autocomplete.
     var onQueryFiles: ((String) async -> [FileSuggestion])?
@@ -332,8 +328,6 @@ public struct NativeChatInput: View {
         messageHistory: MessageHistory? = nil,
         chatInputGlassStyle: String? = nil,
         chatInputLayout: String? = nil,
-        planMode: Binding<Bool> = .constant(false),
-        showPlanModeToggle: Bool = false,
         onQueryFiles: ((String) async -> [FileSuggestion])? = nil,
         onQueryElements: (() async -> [ElementSuggestion])? = nil,
         onQueryParticipants: (() async -> [ParticipantSuggestion])? = nil,
@@ -364,8 +358,6 @@ public struct NativeChatInput: View {
         self.messageHistory = messageHistory
         self.chatInputGlassStyle = chatInputGlassStyle
         self.chatInputLayout = chatInputLayout
-        self._planMode = planMode
-        self.showPlanModeToggle = showPlanModeToggle
         self.onQueryFiles = onQueryFiles
         self.onQueryElements = onQueryElements
         self.onQueryParticipants = onQueryParticipants
@@ -1232,9 +1224,7 @@ public struct NativeChatInput: View {
                         imageThumbsRow
                     }
                     HStack(spacing: 4) {
-                        if showPlanModeToggle {
-                            planModeToggle
-                        }
+
                         textInputView
                         ComposerContextButton(store: contextStore, session: contextSessionID, options: contextOptions, size: 36)
                         if dictationAvailable {
@@ -1281,9 +1271,7 @@ public struct NativeChatInput: View {
                 HStack(spacing: 8) {
                     plusMenuButton
                     historyMenuButton
-                    if showPlanModeToggle {
-                        planModeToggle
-                    }
+
                     ComposerContextButton(store: contextStore, session: contextSessionID, options: contextOptions, size: 40)
                     if dictationAvailable {
                         micButton(size: 40)
@@ -1308,37 +1296,6 @@ public struct NativeChatInput: View {
                 }
             }
         }
-    }
-
-    // MARK: - Plan Mode Toggle
-
-    private var planModeToggle: some View {
-        Menu {
-            Button {
-                planMode = false
-            } label: {
-                if !planMode { Label("Edit", systemImage: "checkmark") }
-                else { Text("Edit") }
-            }
-            Button {
-                planMode = true
-            } label: {
-                if planMode { Label("Plan", systemImage: "checkmark") }
-                else { Text("Plan") }
-            }
-        } label: {
-            HStack(spacing: 4) {
-                Image(systemName: planMode ? "eye" : "pencil")
-                    .font(.system(size: 14, weight: .semibold))
-                Text(planMode ? "Plan" : "Edit")
-                    .font(.system(size: 12, weight: .semibold))
-            }
-            .foregroundStyle(.primary)
-            .frame(height: 36)
-            .padding(.horizontal, 10)
-            .modifier(GlassPillModifier())
-        }
-        .animation(.easeInOut(duration: 0.15), value: planMode)
     }
 
     // MARK: - Shared Subviews
@@ -1705,10 +1662,6 @@ public struct NativeChatInput: View {
     var messageHistory: MessageHistory?
     var chatInputGlassStyle: String?
     var chatInputLayout: String?
-    /// Toggle between plan (read-only) and edit (default) mode for CLI sessions.
-    @Binding var planMode: Bool
-    /// Whether to show the plan/edit mode toggle (e.g., only in raw CLI sessions).
-    var showPlanModeToggle: Bool
     /// Optional callback to query remote host for file suggestions.
     /// When provided, typing `@` followed by text triggers file autocomplete.
     var onQueryFiles: ((String) async -> [FileSuggestion])?
@@ -1777,8 +1730,6 @@ public struct NativeChatInput: View {
         messageHistory: MessageHistory? = nil,
         chatInputGlassStyle: String? = nil,
         chatInputLayout: String? = nil,
-        planMode: Binding<Bool> = .constant(false),
-        showPlanModeToggle: Bool = false,
         onQueryFiles: ((String) async -> [FileSuggestion])? = nil,
         onQueryElements: (() async -> [ElementSuggestion])? = nil,
         onQueryParticipants: (() async -> [ParticipantSuggestion])? = nil,
@@ -1806,8 +1757,6 @@ public struct NativeChatInput: View {
         self.messageHistory = messageHistory
         self.chatInputGlassStyle = chatInputGlassStyle
         self.chatInputLayout = chatInputLayout
-        self._planMode = planMode
-        self.showPlanModeToggle = showPlanModeToggle
         self.onQueryFiles = onQueryFiles
         self.onQueryElements = onQueryElements
         self.onQueryParticipants = onQueryParticipants
@@ -2431,9 +2380,7 @@ public struct NativeChatInput: View {
                         imageThumbsRow
                     }
                     HStack(spacing: 4) {
-                        if showPlanModeToggle {
-                            planModeToggle
-                        }
+
                         textInputView
                         ComposerContextButton(store: contextStore, session: contextSessionID, options: contextOptions, size: 36)
                         if dictationAvailable {
@@ -2481,9 +2428,7 @@ public struct NativeChatInput: View {
                 HStack(spacing: 8) {
                     plusMenuButton
                     historyMenuButton
-                    if showPlanModeToggle {
-                        planModeToggle
-                    }
+
                     ComposerContextButton(store: contextStore, session: contextSessionID, options: contextOptions, size: 40)
                     if dictationAvailable {
                         micButton(size: 40)
@@ -2508,37 +2453,6 @@ public struct NativeChatInput: View {
                 }
             }
         }
-    }
-
-    // MARK: - Plan Mode Toggle
-
-    private var planModeToggle: some View {
-        Menu {
-            Button {
-                planMode = false
-            } label: {
-                if !planMode { Label("Edit", systemImage: "checkmark") }
-                else { Text("Edit") }
-            }
-            Button {
-                planMode = true
-            } label: {
-                if planMode { Label("Plan", systemImage: "checkmark") }
-                else { Text("Plan") }
-            }
-        } label: {
-            HStack(spacing: 4) {
-                Image(systemName: planMode ? "eye" : "pencil")
-                    .font(.system(size: 14, weight: .semibold))
-                Text(planMode ? "Plan" : "Edit")
-                    .font(.system(size: 12, weight: .semibold))
-            }
-            .foregroundStyle(.primary)
-            .frame(height: 36)
-            .padding(.horizontal, 10)
-            .modifier(GlassPillModifier())
-        }
-        .animation(.easeInOut(duration: 0.15), value: planMode)
     }
 
     // MARK: - Shared Subviews

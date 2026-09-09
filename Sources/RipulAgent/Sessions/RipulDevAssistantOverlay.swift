@@ -411,7 +411,7 @@ final class RipulDevOverlayRootVC: UIViewController {
     }
 
     /// Circle → compact bar: the live session-row toolbar (active chat's
-    /// title, tool updates, hand when the agent awaits input). Morphs out of
+    /// title, tool updates, running indicator). Morphs out of
     /// the bubble's frame; the bar's expand button (or a bar tap) opens the
     /// panel, its minus returns to the bubble.
     func showCompact() {
@@ -752,9 +752,9 @@ final class RipulDevOverlayRootVC: UIViewController {
 // MARK: - Compact agent bar (live session-row toolbar)
 
 /// The compact state's content: mirrors a session row for the ACTIVE chat —
-/// status glyph, title, live tool subtitle, and a raised hand when the agent
-/// awaits input ("ready"). Expand opens the panel; minus returns to the
-/// bubble; a tap anywhere on the bar expands too (the mini-player idiom).
+/// status glyph, title, and live tool subtitle. Expand opens the panel; minus
+/// returns to the bubble; a tap anywhere on the bar expands too (the
+/// mini-player idiom).
 @available(iOS 26.0, *)
 private struct CompactAgentBarView: View {
     @ObservedObject var bridge: AgentBridge

@@ -125,9 +125,7 @@ public final class SessionListStore: ObservableObject {
     public var listViewedTodoVersions: [String: Int] = [:] { willSet { notify() } }
 
     /// Per-chat agent turn phase, stored RAW (running / awaitingInput /
-    /// completed / failed). The display collapse happens in `turnPhase(for:)`
-    /// so "completed" can be filtered against the viewed stamp — a hand should
-    /// mean "a finished turn you HAVEN'T seen", not "a turn finished once".
+    /// completed / failed). The display collapse happens in `turnPhase(for:)`.
     public var sessionPhases: [String: AgentTurnPhase] = [:] { willSet { notify() } }
 
     /// When the phase above was established (from the event's own timestamp).
@@ -139,16 +137,14 @@ public final class SessionListStore: ObservableObject {
     /// re-render from AgentBridge.objectWillChange don't show live phase changes.
     ///
     /// Collapse rules:
-    /// - `.running` → spinner (live state).
-    /// - `.awaitingInput` → hand: the agent is BLOCKED on you.
-    /// - `.completed` / `.failed` → hand: the turn finished and it's your move.
+    /// - `.running` → the row's live spinner.
+    /// - `.awaitingInput` → the agent is BLOCKED on you.
+    /// - `.completed` / `.failed` → also "your move": the turn finished.
     ///
-    /// The hand deliberately does NOT clear when you merely LOOK at the chat.
-    /// It clears when you ACT — your next message starts a turn, which moves
-    /// the phase off completed. An earlier build cleared on view; that stamped
-    /// "viewed" on session restore and on completions that landed while the app
-    /// was backgrounded, which silently ate the hand in the one case that
-    /// matters most: a long task finishing while you were away.
+    /// The session row draws nothing for the awaiting-input case any more —
+    /// unread shading already says "your move", and says it better. The
+    /// collapse survives for callers that ask whether a session is still
+    /// mid-flight (e.g. the plan checkpoint control).
     public func turnPhase(for chatId: String) -> AgentTurnPhase? {
         guard !updatesSuppressed else { return nil }
         guard let raw = sessionPhases[chatId] else { return nil }

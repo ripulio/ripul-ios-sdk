@@ -27,6 +27,10 @@ public struct WorkingDirectoryPicker: View {
     /// picker (macOS); omitted otherwise.
     let onBrowse: (() -> Void)?
     /// `nil` selects the host default.
+    let isLoading: Bool
+    let error: String?
+    let onRetry: (() -> Void)?
+    let dismissOnPick: Bool
     let onPick: (String?) -> Void
     let onDismiss: () -> Void
 
@@ -37,6 +41,10 @@ public struct WorkingDirectoryPicker: View {
         defaultPath: String? = nil,
         identifierPrefix: String,
         onBrowse: (() -> Void)? = nil,
+        isLoading: Bool = false,
+        error: String? = nil,
+        onRetry: (() -> Void)? = nil,
+        dismissOnPick: Bool = true,
         onPick: @escaping (String?) -> Void,
         onDismiss: @escaping () -> Void
     ) {
@@ -46,6 +54,10 @@ public struct WorkingDirectoryPicker: View {
         self.defaultPath = defaultPath
         self.identifierPrefix = identifierPrefix
         self.onBrowse = onBrowse
+        self.isLoading = isLoading
+        self.error = error
+        self.onRetry = onRetry
+        self.dismissOnPick = dismissOnPick
         self.onPick = onPick
         self.onDismiss = onDismiss
     }
@@ -53,18 +65,25 @@ public struct WorkingDirectoryPicker: View {
     public var body: some View {
         NavigationStack {
             List {
-                Section {
-                    defaultRow
+                if isLoading {
+                    Section { ProgressView("Loading directories…") }
+                } else if let error {
+                    Section {
+                        Text(error).font(.footnote).foregroundStyle(.secondary)
+                        if let onRetry { Button("Retry", action: onRetry) }
+                    }
+                } else {
+                    Section { defaultRow }
                 }
 
-                if directories.isEmpty {
+                if directories.isEmpty && !isLoading && error == nil {
                     Section {
                         Text("No favourite directories yet. Add them in the host's CLI settings.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                             .uiKitIdentifier("\(identifierPrefix).emptyState")
                     }
-                } else {
+                } else if !isLoading && error == nil {
                     Section {
                         ForEach(directories, id: \.self) { dir in
                             directoryRow(dir)
@@ -187,6 +206,10 @@ public struct WorkingDirectoryPickerSheet: ViewModifier {
     let defaultPath: String?
     let identifierPrefix: String
     let onBrowse: (() -> Void)?
+    let isLoading: Bool
+    let error: String?
+    let onRetry: (() -> Void)?
+    let dismissOnPick: Bool
     let onPick: (String?) -> Void
 
     public init(
@@ -196,6 +219,10 @@ public struct WorkingDirectoryPickerSheet: ViewModifier {
         defaultPath: String? = nil,
         identifierPrefix: String,
         onBrowse: (() -> Void)? = nil,
+        isLoading: Bool = false,
+        error: String? = nil,
+        onRetry: (() -> Void)? = nil,
+        dismissOnPick: Bool = true,
         onPick: @escaping (String?) -> Void
     ) {
         self._isPresented = isPresented
@@ -204,6 +231,10 @@ public struct WorkingDirectoryPickerSheet: ViewModifier {
         self.defaultPath = defaultPath
         self.identifierPrefix = identifierPrefix
         self.onBrowse = onBrowse
+        self.isLoading = isLoading
+        self.error = error
+        self.onRetry = onRetry
+        self.dismissOnPick = dismissOnPick
         self.onPick = onPick
     }
 
@@ -218,8 +249,11 @@ public struct WorkingDirectoryPickerSheet: ViewModifier {
             defaultPath: defaultPath,
             identifierPrefix: identifierPrefix,
             onBrowse: onBrowse.map { browse in { isPresented = false; browse() } },
+            isLoading: isLoading,
+            error: error,
+            onRetry: onRetry,
             onPick: { picked in
-                isPresented = false
+                if dismissOnPick { isPresented = false }
                 onPick(picked)
             },
             onDismiss: { isPresented = false }

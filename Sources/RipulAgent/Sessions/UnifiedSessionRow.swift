@@ -193,11 +193,11 @@ public struct UnifiedSessionRow: View {
 
     /// Whether this session's last agent turn has gone unlooked-at.
     ///
-    /// Deliberately NOT derived from `phase`. The hand says the agent is
-    /// waiting on you; this says you have not seen what it said. A session you
-    /// opened, read, and left without replying is still awaiting input but is
-    /// no longer unread — and before this the list had no way to show that
-    /// difference, so everything waiting looked equally new.
+    /// Deliberately NOT derived from `phase`, and now the row's only
+    /// "your move" signal: the phase says the agent is waiting on you, this
+    /// says you have not seen what it said. A session you opened, read, and
+    /// left without replying is still awaiting input but is no longer unread
+    /// — which is the distinction worth the row's ink.
     ///
     /// Every alias is offered because CLI sessions are keyed inconsistently
     /// (`cli_<uuid>` live, bare uuid from the scanner) and matchKeys is exactly
@@ -563,7 +563,11 @@ public struct UnifiedSessionRow: View {
     @ViewBuilder
     private var listTrailingChrome: some View {
         Group {
-            // Per-session busy / awaiting-input indicator.
+            // Per-session busy indicator. "Waiting on you" used to get a
+            // raised hand here, but the unread shading behind the row already
+            // says it — and says it better, since it also distinguishes a
+            // reply you have not read from one you have. Two signals for one
+            // state just cost the title its width.
             switch phase {
             case .running:
                 Image(systemName: "ellipsis")
@@ -572,13 +576,7 @@ public struct UnifiedSessionRow: View {
                     .symbolEffect(.variableColor.iterative, options: .repeating)
                     .accessibilityLabel("Running")
                     .uiKitIdentifier("UnifiedSessionRow.phaseIndicator.running")
-            case .awaitingInput:
-                Image(systemName: "hand.raised.fill")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(.orange)
-                    .accessibilityLabel("Waiting for your input")
-                    .uiKitIdentifier("UnifiedSessionRow.phaseIndicator.awaitingInput")
-            case .idle, .completed, .failed, .none:
+            case .awaitingInput, .idle, .completed, .failed, .none:
                 EmptyView()
             }
 

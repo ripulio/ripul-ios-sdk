@@ -611,7 +611,6 @@ private struct ChatComposer: View {
     @State private var chatMessage = ""
     @State private var selectedPhotos: [PhotosPickerItem] = []
     @State private var imageAttachments: [NativeImageAttachment] = []
-    @State private var planMode = false
     @State private var addressedParticipants: [String] = []
     /// Stable provider instance for the composer mic (ElevenLabs holds a live
     /// WebSocket/engine, so identity must survive re-renders). Recreated on
@@ -718,8 +717,6 @@ private struct ChatComposer: View {
             messageHistory: messageHistory,
             chatInputGlassStyle: bridge.chatInputGlassStyle,
             chatInputLayout: bridge.chatInputLayout,
-            planMode: $planMode,
-            showPlanModeToggle: bridge.chatInputLayout == "twoRow" && bridge.isActiveSessionClaudeCli,
             onQueryFiles: { query in
                 let results = await bridge.queryAutocomplete(category: "files", query: query)
                 return results.compactMap { dict in
@@ -771,9 +768,6 @@ private struct ChatComposer: View {
             contextSessionID: bridge.currentSourceChatId,
             contextOptions: contextOptions
         )
-        .onChange(of: planMode) { newValue in
-            Task { await bridge.setCliPlanMode(newValue) }
-        }
         .onAppear { speechProvider = makeSpeechProvider() }
         // The composer is the bottom counterpart to the title bar: pull DOWN
         // from the top or UP from the bottom, both toward the middle, where the
@@ -806,8 +800,6 @@ private struct ChatComposer: View {
             messageHistory: messageHistory,
             chatInputGlassStyle: bridge.chatInputGlassStyle,
             chatInputLayout: bridge.chatInputLayout,
-            planMode: $planMode,
-            showPlanModeToggle: bridge.isActiveSessionClaudeCli,
             onQueryFiles: { query in
                 let results = await bridge.queryAutocomplete(category: "files", query: query)
                 return results.compactMap { dict in
@@ -853,9 +845,6 @@ private struct ChatComposer: View {
             contextSessionID: bridge.currentSourceChatId,
             contextOptions: contextOptions
         )
-        .onChange(of: planMode) { newValue in
-            Task { await bridge.setCliPlanMode(newValue) }
-        }
         .onAppear { speechProvider = makeSpeechProvider() }
     }
     #endif
@@ -969,9 +958,7 @@ private struct ChatComposer: View {
         chatMessage = ""
         imageAttachments = []
         selectedPhotos = []
-        planMode = false
         Task {
-            await bridge.setCliPlanMode(false)
             await bridge.startNewChat()
         }
     }

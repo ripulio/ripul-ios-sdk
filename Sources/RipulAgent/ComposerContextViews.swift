@@ -28,9 +28,10 @@ struct ComposerContextButton: View {
         } label: {
             Image(systemName: loading ? "hourglass" : "text.badge.plus")
                 .font(.system(size: 18, weight: .medium))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.primary)
                 .frame(width: size, height: size)
-                .contentShape(Rectangle())
+                .contentShape(Circle())
+                .modifier(GlassCircleModifier(glassStyle: "clear"))
         }
         .menuStyle(.borderlessButton)
         .disabled(loading || options.isEmpty || session == nil)

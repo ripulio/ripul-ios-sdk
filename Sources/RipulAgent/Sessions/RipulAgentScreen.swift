@@ -229,6 +229,11 @@ public struct RipulAgentScreen: View {
     @State private var favoriteDirectories: [String] = []
     @State private var sessionWorkingDirectory: String?
     @State private var hostWorkingDirectory: String?
+    @State private var directoryStateSession: String?
+    @State private var directoryLoading = false
+    @State private var directoryWriting = false
+    @State private var directoryError: String?
+    @State private var directoryRequest = UUID()
     @State private var showingWorkingDirectoryPicker = false
     /// Session the open working-directory picker will write to. Captured when
     /// the picker opens rather than read from `bridge.activeSessionId` at pick
@@ -710,14 +715,6 @@ public struct RipulAgentScreen: View {
             Task { await bridge.fetchEffort() }
             // Cached models make the picker immediate; always refresh in the background.
             Task { await bridge.fetchModels() }
-            // Seed from last-known-good so the Working Directory menu has the
-            // host's favourites immediately, then refresh live — the relay
-            // chain (webview callable → event bus → room RPC → host CLI
-            // server) is often still booting at this point, and a failed
-            // one-shot fetch here left the menu empty for the app's lifetime.
-            if favoriteDirectories.isEmpty {
-                favoriteDirectories = cache.stringArray(forKey: "ripulFavoriteDirectories") ?? []
-            }
             Task { await refreshFavoriteDirectories() }
             if let activeSession = bridge.sessions.first(where: { $0.id == bridge.activeSessionId }) {
                 await refreshCodexModelsIfNeeded(for: activeSession)
@@ -1398,7 +1395,6 @@ public struct RipulAgentScreen: View {
             session?.remoteMachineName == nil ? "local" : "remote",
             (commitViewInfo != nil && session?.id == commitViewInfo?.tabId) ? "commit" : "-",
             showNativeChatScroller ? "native" : "web",
-            bridge.navigationStore.showThinkingMode,
             session.map { rawModeSessions.contains($0.id) ? "raw" : "std" } ?? "-",
             favoriteDirectories.joined(separator: ","),
             sessionWorkingDirectory ?? "-",
@@ -1429,6 +1425,79 @@ public struct RipulAgentScreen: View {
             Label("New Chat", systemImage: "plus.message")
         }
         .uiKitIdentifier("AgentScreen.contextMenu.newChatButton")
+
+        // Where the turn runs, which model runs it, how hard it thinks. These
+        // three decide what sending a message actually does, so they lead the
+        // menu — everything below is a session action or a debug switch. Effort
+        // travels with the model on purpose: the level is global but the range
+        // is per-model, and split apart they read as unrelated controls.
+        if let session, session.remoteMachineName != nil {
+            // Opens a sheet rather than a submenu: every favourite shares the
+            // same long parent path, so as flat menu rows they read as one
+            // repeated string truncated before the part that differs. A menu
+            // row cannot show the repo name larger than its path — UIMenu keeps
+            // the title and drops the layout — so the list moved to a real view.
+            Button {
+                workingDirectoryPickerSession = session.id
+                showingWorkingDirectoryPicker = true
+                Task { await refreshFavoriteDirectories(sessionId: session.id) }
+            } label: {
+                Label(workingDirectoryMenuTitle, systemImage: "folder.badge.gearshape")
+            }
+            .uiKitIdentifier("AgentScreen.contextMenu.workingDirectoryMenu")
+        }
+
+        // Both branches open the SAME picker — sections, pins, search, billing
+        // subtitles — differing only in which models it lists. They used to be
+        // two nested `Menu` trees, which meant the chat's model change was the
+        // one place in the app you couldn't see what a model would cost or pin
+        // the one you keep coming back to.
+        if let session, rawModeSessions.contains(session.id) || ProviderConstants.isCliProvider(session.provider) {
+            let rawModels = rawModelsForSession(session)
+            let currentModelId = currentRawModelId(for: session)
+            let currentModelName = rawModels.first(where: { $0.id == currentModelId }).map { shortModelName($0.name) } ?? "Default"
+            Button {
+                modelPickerTarget = .raw(sessionId: session.id)
+            } label: {
+                Label(currentModelName, systemImage: "cpu")
+            }
+            .uiKitIdentifier("AgentScreen.contextMenu.rawModelMenu")
+        } else {
+            Button {
+                modelPickerTarget = .global
+            } label: {
+                Label(selectedModelName, systemImage: "cpu")
+            }
+            .uiKitIdentifier("AgentScreen.contextMenu.modelMenu")
+        }
+
+        // Reasoning effort (orthogonal to the model) — CLI sessions.
+        if let session, rawModeSessions.contains(session.id) || ProviderConstants.isCliProvider(session.provider) {
+            Menu {
+                Button { Task { await bridge.setEffort(nil) } } label: {
+                    HStack {
+                        Text("Default")
+                        if bridge.selectedEffort == nil { Image(systemName: "checkmark") }
+                    }
+                }
+                ForEach(effortLevels(for: session), id: \.self) { level in
+                    Button { Task { await bridge.setEffort(level) } } label: {
+                        HStack {
+                            Text(ModelPickerEffort.label(level))
+                            if bridge.selectedEffort == level { Image(systemName: "checkmark") }
+                            }
+                    }
+                }
+            } label: {
+                Label(
+                    bridge.selectedEffort.map { "Effort · \(ModelPickerEffort.label($0))" } ?? "Effort",
+                    systemImage: "gauge.with.dots.needle.33percent"
+                )
+            }
+            .uiKitIdentifier("AgentScreen.contextMenu.effortMenu")
+        }
+
+        Divider()
 
         // Was a nested menu over the hardcoded "Anthropic API" group; now the
         // shared picker, so every catalog model can start a session and each one
@@ -1500,39 +1569,13 @@ public struct RipulAgentScreen: View {
         }
         .uiKitIdentifier("AgentScreen.contextMenu.consoleLogsButton")
 
-        Picker(selection: Binding(
-            get: { bridge.navigationStore.showThinkingMode },
-            set: { mode in Task { await bridge.setShowThinking(mode) } }
-        ), label: Label("Thinking", systemImage: "brain.head.profile")) {
-            Text("None").tag("none")
-            Text("Folded").tag("folded")
-            Text("Open").tag("open")
-        }
-        .pickerStyle(.palette)
-        .uiKitIdentifier("AgentScreen.contextMenu.thinkingPicker")
-
-        if let session, session.remoteMachineName != nil {
-            if !rawModeSessions.contains(session.id) {
-                Button {
-                    enableRawMode(session: session)
-                } label: {
-                    Label("Enable \(ProviderConstants.defaultCliProvider.label)", systemImage: "terminal")
-                }
-                .uiKitIdentifier("AgentScreen.contextMenu.enableClaudeButton")
-            }
-
-            // Opens a sheet rather than a submenu: every favourite shares the
-            // same long parent path, so as flat menu rows they read as one
-            // repeated string truncated before the part that differs. A menu
-            // row cannot show the repo name larger than its path — UIMenu keeps
-            // the title and drops the layout — so the list moved to a real view.
+        if let session, session.remoteMachineName != nil, !rawModeSessions.contains(session.id) {
             Button {
-                workingDirectoryPickerSession = session.id
-                showingWorkingDirectoryPicker = true
+                enableRawMode(session: session)
             } label: {
-                Label(workingDirectoryMenuTitle, systemImage: "folder.badge.gearshape")
+                Label("Enable \(ProviderConstants.defaultCliProvider.label)", systemImage: "terminal")
             }
-            .uiKitIdentifier("AgentScreen.contextMenu.workingDirectoryMenu")
+            .uiKitIdentifier("AgentScreen.contextMenu.enableClaudeButton")
         }
 
         if cache.bool(forKey: "showElementDebuggerMenu") {
@@ -1556,58 +1599,6 @@ public struct RipulAgentScreen: View {
                 Label("Insert User Notes...", systemImage: "note.text.badge.plus")
             }
             .uiKitIdentifier("AgentScreen.contextMenu.insertNotesButton")
-        }
-
-        Divider()
-
-        // Both branches open the SAME picker — sections, pins, search, billing
-        // subtitles — differing only in which models it lists. They used to be
-        // two nested `Menu` trees, which meant the chat's model change was the
-        // one place in the app you couldn't see what a model would cost or pin
-        // the one you keep coming back to.
-        if let session, rawModeSessions.contains(session.id) || ProviderConstants.isCliProvider(session.provider) {
-            let rawModels = rawModelsForSession(session)
-            let currentModelId = currentRawModelId(for: session)
-            let currentModelName = rawModels.first(where: { $0.id == currentModelId }).map { shortModelName($0.name) } ?? "Default"
-            Button {
-                modelPickerTarget = .raw(sessionId: session.id)
-            } label: {
-                Label(currentModelName, systemImage: "cpu")
-            }
-            .uiKitIdentifier("AgentScreen.contextMenu.rawModelMenu")
-        } else {
-            Button {
-                modelPickerTarget = .global
-            } label: {
-                Label(selectedModelName, systemImage: "cpu")
-            }
-            .uiKitIdentifier("AgentScreen.contextMenu.modelMenu")
-        }
-
-        // Reasoning effort (orthogonal to the model) — CLI sessions.
-        if let session, rawModeSessions.contains(session.id) || ProviderConstants.isCliProvider(session.provider) {
-            Menu {
-                Button { Task { await bridge.setEffort(nil) } } label: {
-                    HStack {
-                        Text("Default")
-                        if bridge.selectedEffort == nil { Image(systemName: "checkmark") }
-                    }
-                }
-                ForEach(effortLevels(for: session), id: \.self) { level in
-                    Button { Task { await bridge.setEffort(level) } } label: {
-                        HStack {
-                            Text(ModelPickerEffort.label(level))
-                            if bridge.selectedEffort == level { Image(systemName: "checkmark") }
-                            }
-                    }
-                }
-            } label: {
-                Label(
-                    bridge.selectedEffort.map { "Effort · \(ModelPickerEffort.label($0))" } ?? "Effort",
-                    systemImage: "gauge.with.dots.needle.33percent"
-                )
-            }
-            .uiKitIdentifier("AgentScreen.contextMenu.effortMenu")
         }
 
         if let session {
@@ -2009,9 +2000,15 @@ public struct RipulAgentScreen: View {
     // MARK: - Working Directory
 
     /// Where the next turn would actually run: the session's override if it has
-    /// one, otherwise whatever the host is defaulting to.
+    /// one, otherwise its recorded directory or the host default.
     private var effectiveWorkingDirectory: String? {
-        sessionWorkingDirectory ?? hostWorkingDirectory
+        guard directoryStateSession == bridge.activeSessionId else { return recordedWorkingDirectory(bridge.activeSessionId) }
+        return sessionWorkingDirectory ?? recordedWorkingDirectory(bridge.activeSessionId) ?? hostWorkingDirectory
+    }
+
+    private func recordedWorkingDirectory(_ sessionId: String?) -> String? {
+        guard let sessionId else { return nil }
+        return model.unifiedSessions.first { $0.ripulSession?.id == sessionId }?.projectPath
     }
 
     /// The menu row reads as the repo name once a directory is in effect, so
@@ -2025,56 +2022,64 @@ public struct RipulAgentScreen: View {
     private var workingDirectoryPickerSheet: WorkingDirectoryPickerSheet {
         WorkingDirectoryPickerSheet(
             isPresented: $showingWorkingDirectoryPicker,
-            directories: favoriteDirectories,
-            // The effective directory, not a per-session override: this screen
-            // never loads the host's saved override for a session, so a nil
-            // `sessionWorkingDirectory` only means "not changed in this app
-            // run". `hostWorkingDirectory` is what the host reports it is
-            // actually using, which is the honest thing to tick.
-            selection: effectiveWorkingDirectory,
-            // Deliberately no `defaultPath` here for the same reason — the host
-            // default is already ticked as one of the rows below, and repeating
-            // it under an unticked "Default" would read as a contradiction.
+            directories: directoryStateSession == workingDirectoryPickerSession ? favoriteDirectories : [],
+            selection: sessionWorkingDirectory,
+            defaultPath: recordedWorkingDirectory(workingDirectoryPickerSession) ?? hostWorkingDirectory,
             identifierPrefix: "AgentScreen.workingDirectoryPicker",
+            isLoading: directoryLoading,
+            error: directoryError,
+            onRetry: { Task { await refreshFavoriteDirectories(sessionId: workingDirectoryPickerSession) } },
+            dismissOnPick: false,
             onPick: { picked in applyWorkingDirectory(picked) }
         )
     }
 
     private func applyWorkingDirectory(_ directory: String?) {
-        guard let sessionId = workingDirectoryPickerSession else { return }
+        guard let sessionId = workingDirectoryPickerSession, !directoryLoading else { return }
+        directoryWriting = true
+        directoryRequest = UUID() // invalidate any read started before this write
+        directoryLoading = true
+        directoryError = nil
         Task {
             let success = await bridge.setWorkingDirectory(sessionId: sessionId, directory: directory)
+            directoryWriting = false
+            directoryLoading = false
+            guard workingDirectoryPickerSession == sessionId else { return }
             if success {
                 sessionWorkingDirectory = directory
+                directoryStateSession = sessionId
+                showingWorkingDirectoryPicker = false
             } else {
-                bridge.logToWebConsole("[AgentScreen] Failed to set working directory to \(directory ?? "default") for \(sessionId)")
+                directoryError = "The host did not confirm the directory change. Reconnect and retry."
             }
         }
     }
 
-    /// Refresh the host's favourite working directories (the Working Directory
-    /// picker). The fetch round-trips the relay to the host's CLI server and
-    /// can fail while that chain boots; an empty result is indistinguishable
-    /// from "host has no favourites", so empty keeps the last-known-good list
-    /// (persisted to the cache) instead of blanking the list — macOS reads
-    /// its local workspace directly and never has this failure mode.
-    private func refreshFavoriteDirectories() async {
-        let result = await bridge.getFavoriteDirectories()
-        let dirs = result.directories
-        let current = result.current
-
-        if dirs.isEmpty {
-            bridge.logToWebConsole("[AgentScreen] refreshFavoriteDirectories: empty result (relay/host unreachable or no favourites) — keeping \(favoriteDirectories.count) cached")
-        } else {
-            if dirs != favoriteDirectories {
-                favoriteDirectories = dirs
-            }
-            cache.set(dirs, forKey: "ripulFavoriteDirectories")
+    /// Always read fresh from this conversation's host. No shared app cache:
+    /// a cached list from another host must never become selectable here.
+    private func refreshFavoriteDirectories(sessionId requestedSession: String? = nil) async {
+        guard !directoryWriting, let sessionId = requestedSession ?? bridge.activeSessionId else { return }
+        if showingWorkingDirectoryPicker, let pickerSession = workingDirectoryPickerSession, sessionId != pickerSession { return }
+        let request = UUID()
+        directoryRequest = request
+        directoryStateSession = sessionId
+        favoriteDirectories = []
+        sessionWorkingDirectory = nil
+        hostWorkingDirectory = nil
+        directoryError = nil
+        directoryLoading = true
+        do {
+            let result = try await bridge.getFavoriteDirectories(sessionId: sessionId)
+            guard directoryRequest == request else { return }
+            favoriteDirectories = result.directories
+            if let pinned = result.sessionDirectory, !favoriteDirectories.contains(pinned) { favoriteDirectories.append(pinned) }
+            hostWorkingDirectory = result.current
+            sessionWorkingDirectory = result.sessionDirectory
+        } catch {
+            guard directoryRequest == request else { return }
+            directoryError = error.localizedDescription
         }
-
-        if let current, current != hostWorkingDirectory {
-            hostWorkingDirectory = current
-        }
+        directoryLoading = false
     }
 
     private func formatLozengeModel(name: String, provider: String) -> String {

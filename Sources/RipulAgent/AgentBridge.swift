@@ -1753,7 +1753,8 @@ public final class AgentBridge: NSObject, ObservableObject {
     /// Raw (uncollapsed) turn phase per chat, keyed by sourceChatId. This is the
     /// single source of truth for the chat-box pause/play buttons; the collapsed
     /// `sessionList.sessionPhases` variant (completed/failed → awaitingInput) is
-    /// only for session-row hand icons. Entries are removed on `.idle`.
+    /// for list-side "is this session mid-flight" reads. Entries are removed
+    /// on `.idle`.
     private var chatTurnPhases: [String: AgentTurnPhase] = [:]
     /// sourceChatId of a just-created chat that isn't in `sessions` yet. Bridges
     /// the gap between `__ripulCreateChat` returning and the sessions push
@@ -1865,14 +1866,16 @@ public final class AgentBridge: NSObject, ObservableObject {
     /// Update the per-session phase map for a single chat. Drops out-of-order
     /// events via per-chat sequence tracking.
     ///
-    /// Phase → indicator mapping:
-    /// - `.running`                 — spinner (agent is actively working)
-    /// - `.awaitingInput`           — "hand" (mid-turn pause: permission / ask_user)
-    /// - `.completed` / `.failed`   — "hand" (turn finished, user's next prompt needed)
+    /// Phase meanings:
+    /// - `.running`                 — spinner on the row (agent is working)
+    /// - `.awaitingInput`           — mid-turn pause: permission / ask_user
+    /// - `.completed` / `.failed`   — turn finished, user's next prompt needed
     /// - `.idle`                    — cleared (never ran anything)
     ///
     /// Treating `.completed` / `.failed` as "awaiting user" matches how people
-    /// read the sessions list — a finished turn *is* waiting for you.
+    /// read the sessions list — a finished turn *is* waiting for you. Only
+    /// `.running` draws on the row itself; "waiting" is carried by unread
+    /// shading, which also knows whether you've read the reply.
     private func applySessionPhase(
         _ phase: AgentTurnPhase,
         chatId: String?,
@@ -1896,8 +1899,7 @@ public final class AgentBridge: NSObject, ObservableObject {
         let phaseDate = Self.parseEpochMs(timestamp) ?? Date()
         switch phase {
         case .running, .awaitingInput, .completed, .failed:
-            // Stored RAW — turnPhase(for:) collapses at read time so completed
-            // can be filtered against the viewed stamp (unseen-completion hand).
+            // Stored RAW — turnPhase(for:) collapses at read time.
             sessionList.sessionPhases[chatId] = phase
             sessionList.phaseTimestampByChatId[chatId] = phaseDate
         case .idle:
@@ -2139,9 +2141,6 @@ public final class AgentBridge: NSObject, ObservableObject {
     /// Parameters are (sourceChatId, confirmedDisplayName).
     public var onCliSessionRenamed: ((_ sessionId: String, _ displayName: String, _ renamedAt: Double?) -> Void)?
 
-    /// Called when the user toggles plan mode in the native chat input.
-    /// The host app should use this to set plan mode on the CLI server directly.
-    public var onPlanModeChanged: ((_ enabled: Bool) -> Void)?
 
     /// - Parameter registry: the host's tool registry this channel projects
     ///   from. Defaults to a fresh empty registry so a host with no native
@@ -4410,28 +4409,6 @@ public final class AgentBridge: NSObject, ObservableObject {
         }
     }
 
-    /// Set CLI plan mode (read-only analysis, no file edits).
-    /// Calls the onPlanModeChanged callback (primary — direct server access)
-    /// and also tries the JS bridge path as a fallback.
-    @available(iOS 15.0, macOS 13.0, *)
-    public func setCliPlanMode(_ enabled: Bool) async {
-        // Primary path: direct native callback (no JS involved)
-        onPlanModeChanged?(enabled)
-        NSLog("[AgentBridge] setCliPlanMode: enabled=%@, hasCallback=%@", enabled ? "true" : "false", onPlanModeChanged != nil ? "true" : "false")
-
-        // Secondary path: also set localStorage via JS for the web app CLI handler
-        guard let webView else { return }
-        do {
-            _ = try await webView.callAsyncJavaScript(
-                "try { localStorage.setItem('cliPlanMode', enabled ? 'true' : 'false'); } catch(e) {} return true;",
-                arguments: ["enabled": enabled],
-                contentWorld: .page
-            )
-        } catch {
-            NSLog("[AgentBridge] setCliPlanMode localStorage error: %@", error.localizedDescription)
-        }
-    }
-
     /// Interrupt (pause) the currently running agent for the active session.
     @available(iOS 15.0, macOS 13.0, *)
     @discardableResult
@@ -5365,42 +5342,29 @@ public final class AgentBridge: NSObject, ObservableObject {
         }
     }
 
-    /// Favourite directories and current working directory from the remote host.
+    /// A live, session-scoped response. An empty list is valid; failures throw.
     @available(iOS 15.0, macOS 13.0, *)
     public struct FavoriteDirectories {
         public let directories: [String]
         public let current: String?
-        public init(directories: [String], current: String?) {
-            self.directories = directories
-            self.current = current
-        }
+        public let sessionDirectory: String?
     }
 
-    /// Fetch favourite directories from the remote host via the relay.
-    /// Retries up to 3 times with 1s delays if the result is empty,
-    /// since the relay connection may not be established yet.
     @available(iOS 15.0, macOS 13.0, *)
-    public func getFavoriteDirectories() async -> FavoriteDirectories {
-        guard let webView else { return FavoriteDirectories(directories: [], current: nil) }
-        for attempt in 1...3 {
-            do {
-                let result = try await webView.callAsyncJavaScript(
-                    "return await window.__ripulGetFavoriteDirectories?.() ?? {directories:[]};",
-                    contentWorld: .page
-                )
-                if let dict = result as? [String: Any],
-                   let dirs = dict["directories"] as? [String], !dirs.isEmpty {
-                    let current = dict["current"] as? String
-                    return FavoriteDirectories(directories: dirs, current: current?.isEmpty == false ? current : nil)
-                }
-            } catch {
-                NSLog("[AgentBridge] getFavoriteDirectories error (attempt %d): %@", attempt, error.localizedDescription)
-            }
-            if attempt < 3 {
-                try? await Task.sleep(nanoseconds: 1_000_000_000)
-            }
+    public func getFavoriteDirectories(sessionId: String) async throws -> FavoriteDirectories {
+        guard let webView else {
+            throw NSError(domain: "RipulDirectories", code: 1, userInfo: [NSLocalizedDescriptionKey: "Chat is still connecting. Try again."])
         }
-        return FavoriteDirectories(directories: [], current: nil)
+        let result = try await webView.callAsyncJavaScript(
+            "return await window.__ripulGetFavoriteDirectories?.(sessionId) ?? {error:'Chat is still connecting. Try again.'};",
+            arguments: ["sessionId": sessionId],
+            contentWorld: .page
+        )
+        guard let dict = result as? [String: Any], let dirs = dict["directories"] as? [String], dict["error"] == nil else {
+            let message = (result as? [String: Any])?["error"] as? String ?? "Could not read directories from this conversation’s host."
+            throw NSError(domain: "RipulDirectories", code: 2, userInfo: [NSLocalizedDescriptionKey: message])
+        }
+        return FavoriteDirectories(directories: dirs, current: dict["current"] as? String, sessionDirectory: dict["sessionDirectory"] as? String)
     }
 
     /// Discover remote actions available on a specific host machine.
