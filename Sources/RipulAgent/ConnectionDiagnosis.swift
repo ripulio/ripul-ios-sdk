@@ -96,9 +96,11 @@ public struct ConnectionDiagnosis {
     }
 }
 
-/// A compact, friendly sheet: summary headline + actionable hint + an expandable,
-/// copyable technical-details section (raw error + live connect-phase trace).
-@available(iOS 16.0, macOS 13.0, *)
+/// A compact, friendly sheet: summary headline + actionable hint + a structured
+/// breakdown of the client diagnostics snapshot (stall point, machine presence,
+/// transport health), with the raw error and raw JSON still one tap from the
+/// clipboard.
+@available(iOS 17.0, macOS 14.0, *)
 public struct ConnectionDiagnosisSheet: View {
     let rawError: String
     var bridge: AgentBridge?
@@ -107,6 +109,14 @@ public struct ConnectionDiagnosisSheet: View {
     @State private var showDetails = false
     @State private var livePhase: String?
     @State private var webDiagnostics: String?
+    @State private var report: ConnectionDiagnosticsReport?
+    @State private var diagnosticsLoaded = false
+    @State private var copied: CopyTarget?
+    #if os(iOS)
+    @State private var detent: PresentationDetent = .medium
+    #endif
+
+    private enum CopyTarget: Equatable { case report, json }
 
     public init(rawError: String, bridge: AgentBridge? = nil, onClose: @escaping () -> Void) {
         self.rawError = rawError
@@ -129,70 +139,134 @@ public struct ConnectionDiagnosisSheet: View {
         return text
     }
 
+    /// What the "Copy JSON" button puts on the clipboard: the diagnostics
+    /// payload pretty-printed when it parsed, verbatim when it didn't.
+    private var diagnosticsJSON: String? {
+        report?.rawJSON ?? webDiagnostics
+    }
+
     public var body: some View {
         let diag = diagnosis
-        VStack(alignment: .leading, spacing: 16) {
-            HStack(spacing: 10) {
-                Image(systemName: "antenna.radiowaves.left.and.right.slash")
-                    .font(.title2)
-                    .foregroundStyle(.orange)
-                Text(diag.summary)
-                    .font(.headline)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            if let hint = diag.hint {
-                Text(hint)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            DisclosureGroup(isExpanded: $showDetails) {
-                VStack(alignment: .leading, spacing: 8) {
-                    ScrollView {
-                        Text(fullDetails)
-                            .font(.system(.caption, design: .monospaced))
-                            .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+        VStack(alignment: .leading, spacing: 0) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    HStack(spacing: 10) {
+                        Image(systemName: "antenna.radiowaves.left.and.right.slash")
+                            .font(.title2)
+                            .foregroundStyle(.orange)
+                        Text(diag.summary)
+                            .font(.headline)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
-                    .frame(maxHeight: 260)
-                    Button { copyDetails(fullDetails) } label: {
-                        Label("Copy details", systemImage: "doc.on.doc").font(.caption)
+                    if let hint = diag.hint {
+                        Text(hint)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+
+                    if let report {
+                        ConnectionDiagnosticsView(report: report)
+                    } else if !diagnosticsLoaded {
+                        HStack(spacing: 8) {
+                            ProgressView().controlSize(.small)
+                            Text("Collecting diagnostics…")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+
+                    rawDetailsDisclosure
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(20)
+            }
+
+            Divider()
+            VStack(spacing: 8) {
+                HStack(spacing: 10) {
+                    Button { copy(fullDetails, as: .report) } label: {
+                        Label(copied == .report ? "Copied" : "Copy report",
+                              systemImage: copied == .report ? "checkmark" : "doc.on.doc")
+                            .font(.caption)
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                    if let diagnosticsJSON {
+                        Button { copy(diagnosticsJSON, as: .json) } label: {
+                            Label(copied == .json ? "Copied" : "Copy JSON",
+                                  systemImage: copied == .json ? "checkmark" : "curlybraces")
+                                .font(.caption)
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.bordered)
                     }
                 }
-                .padding(.top, 6)
-            } label: {
-                Text("Technical details").font(.subheadline.weight(.medium))
+                Button { onClose() } label: {
+                    Text("Close").frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
             }
-            Spacer(minLength: 0)
-            Button { onClose() } label: {
-                Text("Close").frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.borderedProminent)
+            .padding(.horizontal, 20)
+            .padding(.vertical, 12)
         }
-        .padding(20)
         #if os(iOS)
-        .presentationDetents(showDetails ? [.large] : [.medium])
+        .presentationDetents([.medium, .large], selection: $detent)
+        // A raw-JSON dump inside a half sheet is a four-line window onto a
+        // 5KB payload; opening it is a request for the room to read it.
+        .onChange(of: showDetails) { _, expanded in
+            if expanded { detent = .large }
+        }
         #endif
         // Best-effort: pull the live connect-phase trace so the details name WHERE
         // the connect actually stalled (local IDB vs the relay handshake), plus
         // the full client diagnostics snapshot for the copyable report.
         .task {
             if let p = await bridge?.getConnectPhase() { livePhase = p }
-            if let d = await bridge?.fetchWebDiagnostics() { webDiagnostics = d }
+            webDiagnostics = await bridge?.fetchWebDiagnostics()
+            // Parsed once here rather than computed from `body`: re-running
+            // JSONSerialization over a multi-KB payload on every disclosure
+            // toggle and copy-confirmation tick is pure waste.
+            report = webDiagnostics.flatMap { ConnectionDiagnosticsReport.parse(json: $0) }
+            diagnosticsLoaded = true
+            #if os(iOS)
+            // Structured sections need the room; a half sheet crops them to the
+            // headline. Only grow once there is actually something to show.
+            if report != nil { detent = .large }
+            #endif
         }
     }
 
-    private func copyDetails(_ text: String) {
+    /// The verbatim error + raw JSON, demoted below the structured sections but
+    /// never dropped — it is what gets pasted into a bug report.
+    private var rawDetailsDisclosure: some View {
+        DisclosureGroup(isExpanded: $showDetails) {
+            Text(fullDetails)
+                .font(.system(.caption2, design: .monospaced))
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.top, 6)
+        } label: {
+            Text("Raw details").font(.subheadline.weight(.medium))
+        }
+    }
+
+    private func copy(_ text: String, as target: CopyTarget) {
         #if os(macOS)
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
         #else
         UIPasteboard.general.string = text
         #endif
+        withAnimation { copied = target }
+        Task {
+            try? await Task.sleep(for: .seconds(2))
+            withAnimation { if copied == target { copied = nil } }
+        }
     }
 }
 
-@available(iOS 16.0, macOS 13.0, *)
+@available(iOS 17.0, macOS 14.0, *)
 public extension View {
     /// Present a friendly, expandable connection-failure diagnosis instead of a
     /// bare alert. Drives off the existing `String?` error binding — non-nil shows

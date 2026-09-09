@@ -229,6 +229,11 @@ public struct RipulAgentScreen: View {
     @State private var favoriteDirectories: [String] = []
     @State private var sessionWorkingDirectory: String?
     @State private var hostWorkingDirectory: String?
+    @State private var showingWorkingDirectoryPicker = false
+    /// Session the open working-directory picker will write to. Captured when
+    /// the picker opens rather than read from `bridge.activeSessionId` at pick
+    /// time, so a background session switch can't redirect the write.
+    @State private var workingDirectoryPickerSession: String?
     @State private var favoriteFiles: [String] = []
     // Metadata panel — offset from right edge (screenWidth = hidden, 0 = fully visible).
     @State private var metadataOffset: CGFloat = UIScreen.main.bounds.width
@@ -661,6 +666,7 @@ public struct RipulAgentScreen: View {
         .sheet(item: $modelPickerTarget) { target in
             modelPickerSheet(for: target)
         }
+        .modifier(workingDirectoryPickerSheet)
         .onChange(of: showingSessionList.wrappedValue) { showing in
             if showing {
                 Task { await model.loadMachinesFromAPI() }
@@ -1515,48 +1521,16 @@ public struct RipulAgentScreen: View {
                 .uiKitIdentifier("AgentScreen.contextMenu.enableClaudeButton")
             }
 
-            Menu {
-                Button {
-                    Task {
-                        let success = await bridge.setWorkingDirectory(sessionId: session.id, directory: nil)
-                        if success {
-                            sessionWorkingDirectory = nil
-                        } else {
-                            bridge.logToWebConsole("[AgentScreen] Failed to reset working directory for \(session.id)")
-                        }
-                    }
-                } label: {
-                    HStack {
-                        Text("Default")
-                        if sessionWorkingDirectory == nil, hostWorkingDirectory == nil {
-                            Spacer()
-                            Image(systemName: "checkmark")
-                        }
-                    }
-                }
-
-                ForEach(favoriteDirectories, id: \.self) { dir in
-                    Button {
-                        Task {
-                            let success = await bridge.setWorkingDirectory(sessionId: session.id, directory: dir)
-                            if success {
-                                sessionWorkingDirectory = dir
-                            } else {
-                                bridge.logToWebConsole("[AgentScreen] Failed to set working directory to \(dir) for \(session.id)")
-                            }
-                        }
-                    } label: {
-                        HStack {
-                            Text(dir)
-                            if sessionWorkingDirectory == dir || (sessionWorkingDirectory == nil && hostWorkingDirectory == dir) {
-                                Spacer()
-                                Image(systemName: "checkmark")
-                            }
-                        }
-                    }
-                }
+            // Opens a sheet rather than a submenu: every favourite shares the
+            // same long parent path, so as flat menu rows they read as one
+            // repeated string truncated before the part that differs. A menu
+            // row cannot show the repo name larger than its path — UIMenu keeps
+            // the title and drops the layout — so the list moved to a real view.
+            Button {
+                workingDirectoryPickerSession = session.id
+                showingWorkingDirectoryPicker = true
             } label: {
-                Label("Working Directory", systemImage: "folder.badge.gearshape")
+                Label(workingDirectoryMenuTitle, systemImage: "folder.badge.gearshape")
             }
             .uiKitIdentifier("AgentScreen.contextMenu.workingDirectoryMenu")
         }
@@ -2032,11 +2006,57 @@ public struct RipulAgentScreen: View {
         codexModelLoadsInFlight.remove(machineId)
     }
 
-    /// Refresh the host's favourite working directories (Working Directory
-    /// submenu). The fetch round-trips the relay to the host's CLI server and
+    // MARK: - Working Directory
+
+    /// Where the next turn would actually run: the session's override if it has
+    /// one, otherwise whatever the host is defaulting to.
+    private var effectiveWorkingDirectory: String? {
+        sessionWorkingDirectory ?? hostWorkingDirectory
+    }
+
+    /// The menu row reads as the repo name once a directory is in effect, so
+    /// the current working directory is legible without opening the picker —
+    /// the model row earns its place in the menu the same way.
+    private var workingDirectoryMenuTitle: String {
+        guard let dir = effectiveWorkingDirectory, !dir.isEmpty else { return "Working Directory" }
+        return DirectoryPathDisplay.parse(dir).name
+    }
+
+    private var workingDirectoryPickerSheet: WorkingDirectoryPickerSheet {
+        WorkingDirectoryPickerSheet(
+            isPresented: $showingWorkingDirectoryPicker,
+            directories: favoriteDirectories,
+            // The effective directory, not a per-session override: this screen
+            // never loads the host's saved override for a session, so a nil
+            // `sessionWorkingDirectory` only means "not changed in this app
+            // run". `hostWorkingDirectory` is what the host reports it is
+            // actually using, which is the honest thing to tick.
+            selection: effectiveWorkingDirectory,
+            // Deliberately no `defaultPath` here for the same reason — the host
+            // default is already ticked as one of the rows below, and repeating
+            // it under an unticked "Default" would read as a contradiction.
+            identifierPrefix: "AgentScreen.workingDirectoryPicker",
+            onPick: { picked in applyWorkingDirectory(picked) }
+        )
+    }
+
+    private func applyWorkingDirectory(_ directory: String?) {
+        guard let sessionId = workingDirectoryPickerSession else { return }
+        Task {
+            let success = await bridge.setWorkingDirectory(sessionId: sessionId, directory: directory)
+            if success {
+                sessionWorkingDirectory = directory
+            } else {
+                bridge.logToWebConsole("[AgentScreen] Failed to set working directory to \(directory ?? "default") for \(sessionId)")
+            }
+        }
+    }
+
+    /// Refresh the host's favourite working directories (the Working Directory
+    /// picker). The fetch round-trips the relay to the host's CLI server and
     /// can fail while that chain boots; an empty result is indistinguishable
     /// from "host has no favourites", so empty keeps the last-known-good list
-    /// (persisted to the cache) instead of blanking the menu — macOS reads
+    /// (persisted to the cache) instead of blanking the list — macOS reads
     /// its local workspace directly and never has this failure mode.
     private func refreshFavoriteDirectories() async {
         let result = await bridge.getFavoriteDirectories()
