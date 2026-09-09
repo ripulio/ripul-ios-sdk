@@ -66,8 +66,10 @@ public struct RipulElementTap {
 // The explorer mounts in its OWN window, not as a child of the top-most view
 // controller: a host-side panel added directly to the key window (WAC's
 // RecordMenu sidebar is a plain `window.addSubview`) would otherwise cover
-// it. Level is one above the dev-assistant overlay's (`alert + 1`), so while
-// active the explorer outranks every host panel AND the dev chrome.
+// it. Its `alert + 2` level keeps it above host panels, but below the
+// dev-assistant overlay (`alert + 3`). The agent's bubble/compact bar and
+// expanded chat remain interactive while the explorer stays open underneath.
+// Inspection still targets only the host window, never SDK chrome.
 //
 // Being a `RipulChromeWindow` is what keeps that true: it declines key-ness,
 // so a host resolving "the key window" gets the app's window and mounts its

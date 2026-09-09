@@ -131,7 +131,11 @@ public final class RipulDevAssistantOverlay {
     private func present() {
         guard window == nil, let configuration, let scene = Self.activeWindowScene() else { return }
         let win = RipulDevOverlayWindow(windowScene: scene)
-        win.windowLevel = UIWindow.Level(rawValue: UIWindow.Level.alert.rawValue + 1)
+        // Keep the agent usable while View Explorer (alert + 2) is active.
+        // Collapsed chrome only takes touches inside interactiveFrame; the
+        // surrounding app still routes to the explorer's reticule touch layer.
+        // Expanded, the console owns input until it is minimized again.
+        win.windowLevel = UIWindow.Level(rawValue: UIWindow.Level.alert.rawValue + 3)
         win.backgroundColor = .clear
         let root = RipulDevOverlayRootVC()
         root.overlay = self
