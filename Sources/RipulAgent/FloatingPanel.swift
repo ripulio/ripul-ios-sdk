@@ -63,17 +63,25 @@ public struct RipulFloatingPanel<Content: View>: View {
     private let showsResizeGrip: Bool
     private let gripTint: UIColor
     private let store: UserDefaults
+    private let aspectRatio: CGFloat?
+    private let contentInsets: UIEdgeInsets
+    private let avoidsKeyboard: Bool
     private let content: (CGSize) -> Content
 
     /// Live size during a resize drag. nil until the persisted value is read.
     @State private var liveSize: CGSize?
 
+    /// `aspectRatio` locks width/height during resizing. `contentInsets` reserves
+    /// room for surrounding chrome; `avoidsKeyboard` keeps the panel above it.
     public init(storageKey: String,
                 defaultSize: CGSize,
                 minSize: CGSize = CGSize(width: 220, height: 180),
                 showsResizeGrip: Bool = true,
                 gripTint: UIColor = UIColor.white.withAlphaComponent(0.55),
                 store: UserDefaults = .standard,
+                aspectRatio: CGFloat? = nil,
+                contentInsets: UIEdgeInsets = .zero,
+                avoidsKeyboard: Bool = false,
                 @ViewBuilder content: @escaping (CGSize) -> Content) {
         self.storageKey = storageKey
         self.defaultSize = defaultSize
@@ -81,11 +89,18 @@ public struct RipulFloatingPanel<Content: View>: View {
         self.showsResizeGrip = showsResizeGrip
         self.gripTint = gripTint
         self.store = store
+        self.aspectRatio = aspectRatio
+        self.contentInsets = contentInsets
+        self.avoidsKeyboard = avoidsKeyboard
         self.content = content
     }
 
     public var body: some View {
-        let size = liveSize ?? persistedSize
+        let storedSize = liveSize ?? persistedSize
+        let size = aspectRatio.flatMap { ratio -> CGSize? in
+            guard ratio.isFinite, ratio > 0 else { return nil }
+            return CGSize(width: storedSize.width, height: storedSize.width / ratio)
+        } ?? storedSize
         FloatingPanelHost(
             content: content(size),
             size: size,
@@ -95,6 +110,9 @@ public struct RipulFloatingPanel<Content: View>: View {
             posXKey: "\(storageKey).posX",
             posYKey: "\(storageKey).posY",
             store: store,
+            aspectRatio: aspectRatio,
+            contentInsets: contentInsets,
+            avoidsKeyboard: avoidsKeyboard,
             onResize: { liveSize = $0 },
             onResizeEnded: { persist($0) }
         )
@@ -125,6 +143,9 @@ private struct FloatingPanelHost<Content: View>: UIViewControllerRepresentable {
     let posXKey: String
     let posYKey: String
     let store: UserDefaults
+    let aspectRatio: CGFloat?
+    let contentInsets: UIEdgeInsets
+    let avoidsKeyboard: Bool
     let onResize: (CGSize) -> Void
     let onResizeEnded: (CGSize) -> Void
 
@@ -138,6 +159,9 @@ private struct FloatingPanelHost<Content: View>: UIViewControllerRepresentable {
             posXKey: posXKey,
             posYKey: posYKey,
             store: store,
+            aspectRatio: aspectRatio,
+            contentInsets: contentInsets,
+            avoidsKeyboard: avoidsKeyboard,
             onResize: onResize,
             onResizeEnded: onResizeEnded
         )
@@ -147,6 +171,7 @@ private struct FloatingPanelHost<Content: View>: UIViewControllerRepresentable {
         vc.update(content: content,
                   size: size,
                   showsResizeGrip: showsResizeGrip,
+                  aspectRatio: aspectRatio,
                   onResize: onResize,
                   onResizeEnded: onResizeEnded)
     }
@@ -227,6 +252,10 @@ final class RipulFloatingPanelController<Content: View>: UIViewController, UIGes
     private let posYKey: String
     private let store: UserDefaults
     private let minSize: CGSize
+    private var aspectRatio: CGFloat?
+    private let contentInsets: UIEdgeInsets
+    private let avoidsKeyboard: Bool
+    private var keyboardFrame: CGRect = .zero
 
     private let panelView = UIView()
     private let grip: FloatingPanelGripView
@@ -252,6 +281,9 @@ final class RipulFloatingPanelController<Content: View>: UIViewController, UIGes
          posXKey: String,
          posYKey: String,
          store: UserDefaults,
+         aspectRatio: CGFloat? = nil,
+         contentInsets: UIEdgeInsets = .zero,
+         avoidsKeyboard: Bool = false,
          onResize: @escaping (CGSize) -> Void,
          onResizeEnded: @escaping (CGSize) -> Void) {
         self.size = size
@@ -259,6 +291,9 @@ final class RipulFloatingPanelController<Content: View>: UIViewController, UIGes
         self.posXKey = posXKey
         self.posYKey = posYKey
         self.store = store
+        self.aspectRatio = aspectRatio
+        self.contentInsets = contentInsets
+        self.avoidsKeyboard = avoidsKeyboard
         self.onResize = onResize
         self.onResizeEnded = onResizeEnded
         self.grip = FloatingPanelGripView(tint: gripTint)
@@ -320,6 +355,12 @@ final class RipulFloatingPanelController<Content: View>: UIViewController, UIGes
         grip.addGestureRecognizer(resize)
 
         (view as? RipulFloatingPanelRootView)?.panelView = panelView
+        if avoidsKeyboard {
+            NotificationCenter.default.addObserver(self, selector: #selector(keyboardChanged(_:)),
+                name: UIResponder.keyboardWillChangeFrameNotification, object: nil)
+            NotificationCenter.default.addObserver(self, selector: #selector(keyboardChanged(_:)),
+                name: UIResponder.keyboardWillHideNotification, object: nil)
+        }
 
         // Position is restored + clamped in viewDidLayoutSubviews, once there's a
         // window and a real panel size — the first point at which safe-area insets
@@ -361,17 +402,14 @@ final class RipulFloatingPanelController<Content: View>: UIViewController, UIGes
     /// housing. We read the window's insets because SwiftUI can zero out a child
     /// controller's own insets under `.ignoresSafeArea()`.
     private func clampedTranslation(_ proposed: CGPoint) -> CGPoint {
-        let margin: CGFloat = 8
-        let insets = view.window?.safeAreaInsets ?? view.safeAreaInsets
-        let bounds = view.bounds.size
+        let region = availableRegion
         let panel = panelView.bounds.size
-
-        let minX = insets.left + margin
-        let minY = insets.top + margin
+        let minX = region.minX
+        let minY = region.minY
         // max(minX, …) guards a panel wider/taller than the safe region — keep the
         // top-left anchored just inside it.
-        let maxX = max(minX, bounds.width - insets.right - margin - panel.width)
-        let maxY = max(minY, bounds.height - insets.bottom - margin - panel.height)
+        let maxX = max(minX, region.maxX - panel.width)
+        let maxY = max(minY, region.maxY - panel.height)
 
         return CGPoint(x: min(max(proposed.x, minX), maxX),
                        y: min(max(proposed.y, minY), maxY))
@@ -405,13 +443,19 @@ final class RipulFloatingPanelController<Content: View>: UIViewController, UIGes
     /// Clamp a proposed size against the panel's CURRENT top-left. Resizing never
     /// moves the panel — it only grows or shrinks toward the bottom-right, stopping
     /// at the safe-area edge. That's what keeps the grip still under the finger.
-    private func clampedSize(_ proposed: CGSize) -> CGSize {
-        let margin: CGFloat = 8
-        let insets = view.window?.safeAreaInsets ?? view.safeAreaInsets
+    func clampedSize(_ proposed: CGSize) -> CGSize {
+        let region = availableRegion
         let origin = CGPoint(x: panelView.transform.tx, y: panelView.transform.ty)
+        let maxW = max(minSize.width, region.maxX - origin.x)
+        let maxH = max(minSize.height, region.maxY - origin.y)
 
-        let maxW = max(minSize.width, view.bounds.width - insets.right - margin - origin.x)
-        let maxH = max(minSize.height, view.bounds.height - insets.bottom - margin - origin.y)
+        if let ratio = aspectRatio, ratio.isFinite, ratio > 0 {
+            let maxWidth = min(maxW, maxH * ratio)
+            let minWidth = min(maxWidth, max(minSize.width, minSize.height * ratio))
+            let projectedWidth = (proposed.width * ratio + proposed.height) * ratio / (ratio * ratio + 1)
+            let width = min(max(projectedWidth, minWidth), maxWidth)
+            return CGSize(width: width, height: width / ratio)
+        }
 
         return CGSize(width: min(max(proposed.width, minSize.width), maxW),
                       height: min(max(proposed.height, minSize.height), maxH))
@@ -446,13 +490,37 @@ final class RipulFloatingPanelController<Content: View>: UIViewController, UIGes
     func update(content: Content,
                 size: CGSize,
                 showsResizeGrip: Bool,
+                aspectRatio: CGFloat? = nil,
                 onResize: @escaping (CGSize) -> Void,
                 onResizeEnded: @escaping (CGSize) -> Void) {
         self.size = size
+        self.aspectRatio = aspectRatio
         self.onResize = onResize
         self.onResizeEnded = onResizeEnded
         grip.isHidden = !showsResizeGrip
         hosting.rootView = content
+    }
+
+    private var availableRegion: CGRect {
+        let insets = view.window?.safeAreaInsets ?? view.safeAreaInsets
+        var bottom = view.bounds.maxY - insets.bottom
+        if avoidsKeyboard, let window = view.window, !keyboardFrame.isEmpty {
+            let local = view.convert(keyboardFrame, from: window.screen.coordinateSpace)
+            if local.intersects(view.bounds), local.maxY >= view.bounds.maxY - insets.bottom {
+                bottom = min(bottom, local.minY)
+            }
+        }
+        let left = insets.left + contentInsets.left + 8
+        let top = insets.top + contentInsets.top + 8
+        return CGRect(x: left, y: top,
+            width: max(0, view.bounds.width - insets.right - contentInsets.right - 8 - left),
+            height: max(0, bottom - contentInsets.bottom - 8 - top))
+    }
+
+    @objc private func keyboardChanged(_ notification: Notification) {
+        keyboardFrame = notification.name == UIResponder.keyboardWillHideNotification ? .zero
+            : (notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect ?? .zero)
+        view.setNeedsLayout()
     }
 
     // MARK: Gesture arbitration

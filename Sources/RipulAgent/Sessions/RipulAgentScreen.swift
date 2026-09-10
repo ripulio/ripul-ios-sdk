@@ -116,6 +116,9 @@ public struct RipulAgentScreenSlots {
     /// menu (e.g. WAC's minimize-to-bubble). Style it with `GlassButton` /
     /// `GlassCircleModifier` to match the bar's own buttons exactly.
     public var topBarTrailingAccessory: (() -> AnyView)?
+    /// Host presentation preferences in the screen's ellipsis menu, in both list
+    /// and chat mode. Kept separate from per-session actions.
+    public var hostMenuItems: (() -> AnyView)?
     /// The host renders its own root bar over the session LIST (the
     /// first-party Agents|Plans shell: stock segmented control + the same
     /// SessionListMenu). This screen's bar then hides in list mode only —
@@ -133,6 +136,7 @@ public struct RipulAgentScreenSlots {
         screenTip: ((String) -> AnyView)? = nil,
         chooseMode: RipulChooseMode? = nil,
         topBarTrailingAccessory: (() -> AnyView)? = nil,
+        hostMenuItems: (() -> AnyView)? = nil,
         hidesListModeBar: Bool = false,
         sessionColumnVisibility: Binding<NavigationSplitViewVisibility>? = nil
     ) {
@@ -143,6 +147,7 @@ public struct RipulAgentScreenSlots {
         self.screenTip = screenTip
         self.chooseMode = chooseMode
         self.topBarTrailingAccessory = topBarTrailingAccessory
+        self.hostMenuItems = hostMenuItems
         self.hidesListModeBar = hidesListModeBar
         self.sessionColumnVisibility = sessionColumnVisibility
     }
@@ -1078,6 +1083,9 @@ public struct RipulAgentScreen: View {
                 .uiKitIdentifier("AgentScreen.contextMenu.resumeButton")
             }
             agentMenuItems(session: session)
+        }
+        if let hostMenuItems = slots.hostMenuItems {
+            Section { hostMenuItems() }
         }
     }
 

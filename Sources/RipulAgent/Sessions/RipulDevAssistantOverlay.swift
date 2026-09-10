@@ -99,6 +99,7 @@ public final class RipulDevAssistantOverlay {
 
     /// Tear the overlay down completely (the real "close").
     public func dismiss() {
+        (window?.rootViewController as? RipulDevOverlayRootVC)?.hideHostPreview()
         window?.relinquishKey()
         window?.isHidden = true
         window = nil
@@ -231,6 +232,11 @@ final class RipulDevOverlayRootVC: UIViewController {
     /// compact bar (which mirrors the active chat off it). Owning it here also
     /// means the relay comes online before the first panel expand.
     private var sharedBridge: AgentBridge?
+    private var hostPreview: HostScreenPreviewController?
+    private lazy var hostPreviewState = HostScreenPreviewState(store: configuration.cache.userDefaults) { [weak self] in
+        guard let scene = self?.view.window?.windowScene else { return nil }
+        return RipulChrome.appWindow(in: scene)
+    }
 
     /// Same registry as the console configuration, so the compact bar and the
     /// full console project the same tool set (`RipulAgentConsole.init`
@@ -345,6 +351,7 @@ final class RipulDevOverlayRootVC: UIViewController {
             }
         }
         panelHost?.view.frame = view.bounds
+        hostPreview?.view.frame = view.bounds
         if let compactHost, !compactHost.view.isHidden, !compactMorphInFlight {
             compactHost.view.frame = compactFrame
         }
@@ -525,6 +532,7 @@ final class RipulDevOverlayRootVC: UIViewController {
     }
 
     func showBubble() {
+        hideHostPreview()
         // While the replay HUD is active, the strip owns the bottom edge —
         // hide the console, reveal NOTHING (the HUD restores the minimized
         // state when it hides). The controller sets its phase before asking
@@ -693,6 +701,9 @@ final class RipulDevOverlayRootVC: UIViewController {
                         }
                         .uiKitIdentifier("RipulDevConsole.minimizeButton")
                     )
+                },
+                hostMenuItems: { [hostPreviewState] in
+                    AnyView(HostScreenPreviewMenu(state: hostPreviewState))
                 }
             ),
             bridge: sharedBridge
@@ -749,7 +760,28 @@ final class RipulDevOverlayRootVC: UIViewController {
             self.bubble.isHidden = true
             self.bubble.transform = .identity
             self.bubble.alpha = 1
+            if !panel.isHidden { self.showHostPreview() }
         }
+    }
+
+    private func showHostPreview() {
+        if hostPreview == nil {
+            let preview = HostScreenPreviewController(state: hostPreviewState)
+            addChild(preview)
+            preview.view.frame = view.bounds
+            preview.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            view.addSubview(preview.view)
+            preview.didMove(toParent: self)
+            hostPreview = preview
+        }
+        hostPreview?.view.isHidden = false
+        if let preview = hostPreview { view.bringSubviewToFront(preview.view) }
+        hostPreviewState.setAgentExpanded(true)
+    }
+
+    func hideHostPreview() {
+        hostPreviewState.setAgentExpanded(false)
+        hostPreview?.view.isHidden = true
     }
 }
 
