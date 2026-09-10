@@ -28,6 +28,8 @@ extension TypeTextTool: RipulDeveloperOnlyTool {}
 extension ScrollElementTool: RipulDeveloperOnlyTool {}
 extension WaitForElementTool: RipulDeveloperOnlyTool {}
 extension ExplorerProbeTool: RipulDeveloperOnlyTool {}
+extension ScreenAuditTool: RipulDeveloperOnlyTool {}
+extension ShareSheetTool: RipulDeveloperOnlyTool {}
 extension ExplorerConformanceTool: RipulDeveloperOnlyTool {}
 extension SetValueTool: RipulDeveloperOnlyTool {}
 #endif

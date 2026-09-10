@@ -9,7 +9,7 @@ let ripulViewExplorerOverlayTag = 0x5249_5055   // "RIPU"
 
 /// Marketing version of the RipulAgent SDK, surfaced in the inspector's copy output as `sdk: …`
 /// so we can always tell which build is actually running on the device. Bump on every release.
-let ripulSDKVersion = "0.7.95"
+let ripulSDKVersion = "0.7.96"
 
 // MARK: - View Inspector Overlay
 //
@@ -2421,6 +2421,16 @@ struct ScreenAudit {
     var auto: Int { items.filter { $0.bucket == .auto }.count }
     var anonymous: Int { items.filter { $0.bucket == .anonymous }.count }
 
+    /// Shared by the Audit tab and screen_audit. Never select the SDK chrome window.
+    @MainActor static func screenRoot(anchorView: UIView? = nil) -> UIView? {
+        let anchorWindow = anchorView?.window
+        let window = anchorWindow.flatMap { RipulChrome.isRipulWindow($0) ? nil : $0 }
+            ?? RipulChrome.appWindow()
+        guard var vc = window?.rootViewController else { return window }
+        while let presented = vc.presentedViewController, !presented.isBeingDismissed { vc = presented }
+        return vc.view
+    }
+
     @MainActor static func run(on root: UIView) -> ScreenAudit {
         var items: [Item] = []
 
@@ -2606,10 +2616,7 @@ struct InspectorAuditTab: View {
     /// app's window) — the whole visible screen, independent of what's currently selected.
     /// Never the explorer's own chrome window, which is what `isKeyWindow` could hand back.
     private func screenRoot() -> UIView? {
-        let window = anchorView?.window ?? RipulChrome.appWindow()
-        guard var vc = window?.rootViewController else { return window }
-        while let presented = vc.presentedViewController, !presented.isBeingDismissed { vc = presented }
-        return vc.view
+        ScreenAudit.screenRoot(anchorView: anchorView)
     }
 }
 

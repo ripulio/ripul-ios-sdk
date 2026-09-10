@@ -142,6 +142,8 @@ public struct RipulAgentConsole: View {
                 ScrollElementTool(),
                 WaitForElementTool(),
                 ExplorerProbeTool(),
+                ScreenAuditTool(),
+                ShareSheetTool(),
                 ExplorerConformanceTool(),
                 SetValueTool(),
             ] + RipulDevToolCollectionTools.all(
