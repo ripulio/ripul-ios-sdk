@@ -414,7 +414,34 @@ public enum RipulThemeEngine {
 
     /// Public remote manifest loader, when this app follows a backend theme.
     @MainActor public private(set) static var remoteTheme: RipulRemoteThemeClient?
+    /// Hosts with extra mutable fields can export their complete current document.
+    @MainActor public static var exportThemeDocument: ((Data?) throws -> Data)?
     @MainActor private static var remoteThemeForegroundObserver: NSObjectProtocol?
+
+    /// Preserve host-owned JSON when an SDK editor changes the engine's slice.
+    @MainActor
+    public static func themeDocumentForPublishing(over base: Data? = nil) throws -> Data {
+        if let exportThemeDocument { return try exportThemeDocument(base) }
+        guard let spec else { throw RipulThemePublishError.invalidDocument }
+        let original: Data
+        if let base { original = base }
+        else if let remoteTheme { original = remoteTheme.authoritativeDocument }
+        else if let resource = Bundle.main.url(forResource: spec.bundleResource, withExtension: "json") {
+            original = try Data(contentsOf: resource)
+        } else { throw RipulThemePublishError.invalidDocument }
+        guard var json = try JSONSerialization.jsonObject(with: original) as? [String: Any] else {
+            throw RipulThemePublishError.invalidDocument
+        }
+        let encoder = JSONEncoder(); encoder.userInfo[.ripulThemeSpec] = spec
+        let slice = try JSONSerialization.jsonObject(with: encoder.encode(current)) as! [String: Any]
+        for (key, edited) in slice {
+            // A missing optional map and an empty map resolve identically. Merely
+            // opening the editor must not invent an unpublished change.
+            if json[key] == nil, let map = edited as? [String: Any], map.isEmpty { continue }
+            json[key] = edited
+        }
+        return try JSONSerialization.data(withJSONObject: json, options: [.sortedKeys, .prettyPrinted])
+    }
 
     /// Call once after configure and any host facade bootstrap, before constructing UI.
     /// Uses cached server JSON or the bundled file immediately, ignoring editor overrides,

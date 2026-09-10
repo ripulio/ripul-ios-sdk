@@ -29,7 +29,33 @@ public final class RipulRemoteThemeClient {
     private var accepted: CachedTheme?
     private var refreshTask: Task<Void, Never>?
     private var generation = UUID()
+    private var editors: Set<UUID> = []
     private static let maximumBytes = 512 * 1024
+
+    public var authoritativeDocument: Data { accepted?.data ?? fallback }
+    public var authoritativeETag: String? { accepted?.etag }
+
+    /// An editor owns a frozen draft. Foreground refresh must not replace its preview.
+    public func beginEditing() -> UUID {
+        let lease = UUID(); editors.insert(lease); stop(); return lease
+    }
+    public func endEditing(_ lease: UUID) {
+        editors.remove(lease)
+        if editors.isEmpty { refreshInBackground() }
+    }
+    public func preview(_ data: Data) throws { try accept(data) }
+
+    /// Called only after the server acknowledges a successful publication.
+    public func acceptPublication(_ manifest: RipulThemeManifest) throws {
+        stop()
+        try accept(manifest.data)
+        let value = CachedTheme(url: url, etag: manifest.etag, data: manifest.data)
+        accepted = value; origin = .server; lastError = nil
+        do {
+            try FileManager.default.createDirectory(at: cacheFile.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try JSONEncoder().encode(value).write(to: cacheFile, options: .atomic)
+        } catch { lastError = "Theme published, but could not cache it: \(error.localizedDescription)" }
+    }
 
     public convenience init(url: URL, fallback: Data,
                             cacheDirectory: URL? = nil,
@@ -83,7 +109,7 @@ public final class RipulRemoteThemeClient {
     }
 
     public func refreshInBackground() {
-        guard refreshTask == nil else { return }
+        guard editors.isEmpty, refreshTask == nil else { return }
         let currentGeneration = generation
         refreshTask = Task { [weak self] in
             guard let self else { return }

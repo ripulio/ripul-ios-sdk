@@ -85,3 +85,42 @@ To roll back, publish the previous complete document under the same ID.
 - `origin` and `lastError` on the remote client expose loading diagnostics.
 
 Backend deployment requires migration `0044_create_app_themes.sql` before publishing.
+
+## Edit and publish on iPhone
+
+The shared agent screen offers **Solution management → Theme** when the host has
+registered theme kinds. It lists every registered scope, including elements not
+currently mounted. Search finds names, paths, IDs and current text; **Text elements
+only** filters the list to kinds with free-text knobs. Selecting a row opens native
+controls backed by the same engine mutations as View Explorer and the in-app editor.
+This lists theme-bound text/settings; it does not invent bindings for hard-coded
+labels or user-entered record data.
+
+**Theme document** is a native text editor for the complete JSON. **Apply to app**
+validates it through the host's existing full-document callback before previewing.
+Both routes feed one local draft. Drafts, including temporarily invalid JSON, survive
+closing the editor or a failed publish, isolated per app and theme URL. Foreground
+refresh is paused while this editor is open so it cannot replace an in-progress
+preview. Closing resumes ordinary server refresh; the unpublished draft remains
+available when the editor is reopened.
+
+**Review & Publish** shows changed values, additions and removals. Publishing uses
+the signed-in Solution Management account and requires the existing admin permission.
+The full document is sent, including host-specific sections. The server compares the
+reviewed ETag atomically (`If-Match`), or uses create-only `If-None-Match: *` for the
+first publication. A stale draft receives HTTP 412 and is retained. **Reload server
+version** explicitly replaces the draft after confirmation. Network/authentication/
+validation failures leave the draft available to retry.
+
+After successful publication, the phone adopts and caches the acknowledged document;
+other apps following the theme get it on their next refresh. Inline edits made before
+opening this editor are included from the current engine state. Hosts that mutate
+extra fields outside the engine may set `RipulThemeEngine.exportThemeDocument` to
+export their complete current JSON, preserving unknown sections in the optional draft
+base passed to the closure. Otherwise the SDK overlays its current slice on
+the complete captured document and preserves all other host fields.
+
+Hosts can embed `RipulThemeManagementScreen(baseURL:tokenProvider:)` directly; it owns
+its native navigation stack. A hosted theme URL with `/v1/app-themes/<id>` enables
+publishing through the host's usual `/api/admin/app-themes/<id>` service. Runtime theme
+reads remain public and never carry publishing credentials.

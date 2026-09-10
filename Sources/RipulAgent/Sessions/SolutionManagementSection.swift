@@ -58,6 +58,7 @@ struct SolutionManagementSection: View {
     @State private var showingMacros = false
     @State private var showingBuilds = false
     @State private var showingBilling = false
+    @State private var showingTheme = false
     /// Phase-2 absorption confirmation + collision alert (moved here from the
     /// console DevTools Tools tab).
     @State private var confirmAbsorption = false
@@ -67,6 +68,11 @@ struct SolutionManagementSection: View {
         GlassSectionPanel(title: "Solution management", isExpanded: $isExpanded) {
             ScrollView(.vertical) {
                 VStack(spacing: 0) {
+                    if !RipulThemeEngine.styleKinds.isEmpty {
+                        row(title: "Theme", subtitle: "Edit elements and text, then publish to the app",
+                            icon: "paintpalette", identifier: "SolutionManagement.theme") { showingTheme = true }
+                        Divider().padding(.leading, 44)
+                    }
                     row(
                         title: "Tool Collections",
                         subtitle: "Group tools; agents expand a group on demand",
@@ -201,6 +207,9 @@ struct SolutionManagementSection: View {
             }
             // Keep the other disclosures in the available space; only these rows scroll.
             .frame(maxHeight: 300)
+        }
+        .sheet(isPresented: $showingTheme) {
+            RipulThemeManagementScreen(baseURL: management.baseURL, tokenProvider: management.tokenProvider)
         }
         .sheet(isPresented: $showingCollections) {
             NavigationStack {
