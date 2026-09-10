@@ -1,5 +1,8 @@
 # Ripul AI Agent — iOS Reference App
 
+For public runtime theme manifests, instant local fallback, and publishing without
+an app rebuild, see [Backend-hosted themes](docs/remote-themes.md).
+
 ## Why tool-enable your app?
 
 Most apps already have powerful capabilities — calendars, health data, file management, smart home controls, payments — but users access them through buttons, menus, and forms they have to learn. Tool-enabling your app means exposing those same capabilities to an AI agent that can act on behalf of the user through natural language.

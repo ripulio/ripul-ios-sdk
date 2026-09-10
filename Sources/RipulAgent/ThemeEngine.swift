@@ -412,6 +412,40 @@ public enum RipulThemeEngine {
     /// The bundled document slice (the host's build-time theme).
     public private(set) static var bundled = RipulThemeDocument()
 
+    /// Public remote manifest loader, when this app follows a backend theme.
+    @MainActor public private(set) static var remoteTheme: RipulRemoteThemeClient?
+    @MainActor private static var remoteThemeForegroundObserver: NSObjectProtocol?
+
+    /// Call once after configure and any host facade bootstrap, before constructing UI.
+    /// Uses cached server JSON or the bundled file immediately, ignoring editor overrides,
+    /// then refreshes asynchronously at launch and whenever the app returns to foreground.
+    /// Hosts with extra theme fields supply a callback that decodes their complete document
+    /// and updates their facade BEFORE calling `adopt` (so observers see coherent values).
+    @MainActor
+    public static func followRemoteTheme(at url: URL,
+                                          applyDocument: ((Data) throws -> Void)? = nil) throws {
+        guard let spec,
+              let resource = Bundle.main.url(forResource: spec.bundleResource, withExtension: "json") else {
+            throw CocoaError(.fileNoSuchFile)
+        }
+        let fallback = try Data(contentsOf: resource)
+        let apply = applyDocument ?? { data in
+            let decoder = JSONDecoder()
+            decoder.userInfo[.ripulThemeSpec] = spec
+            adopt(try decoder.decode(RipulThemeDocument.self, from: data))
+        }
+        let client = RipulRemoteThemeClient(url: url, fallback: fallback, validateAndApply: apply)
+        remoteTheme?.stop()
+        if let observer = remoteThemeForegroundObserver { NotificationCenter.default.removeObserver(observer) }
+        remoteTheme = client
+        try client.start()
+        remoteThemeForegroundObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main
+        ) { _ in
+            Task { @MainActor in remoteTheme?.refreshInBackground() }
+        }
+    }
+
     /// Configure the engine: register the vocabulary + style kinds and load the live
     /// document (override slice if persisted, else the bundled slice). Call once at launch,
     /// before any resolution (and before `RipulThemeInstrumentation.install()` consumers
