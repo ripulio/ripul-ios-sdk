@@ -10,6 +10,8 @@ final class ThemeManagementModel: ObservableObject {
     @Published var error: String?
     @Published var published = false
     @Published var version = 0
+    @Published private(set) var undoTitle: String?
+    private var undoDraft: (before: Data, after: Data)?
     private(set) var baseline = Data()
     private(set) var etag: String?
     let remote: RipulRemoteThemeClient?
@@ -95,8 +97,12 @@ final class ThemeManagementModel: ObservableObject {
         saveTask?.cancel(); saveNow()
         if let lease { remote?.endEditing(lease) }; lease = nil; started = false
     }
-    func sourceChanged(_ value: String) { text = value; sourceDirty = true; published = false; saveSoon() }
+    func sourceChanged(_ value: String) {
+        guard !busy else { return }
+        text = value; sourceDirty = true; published = false; saveSoon()
+    }
     func applySource() {
+        guard !busy else { return }
         do {
             _ = try RipulThemeManifest(data: data, etag: etag)
             guard let remote else { throw RipulThemePublishError.invalidResponse }
@@ -124,8 +130,42 @@ final class ThemeManagementModel: ObservableObject {
             sourceDirty = false; published = false; error = nil; version &+= 1; saveNow()
         } catch { self.error = error.localizedDescription }
     }
-    func publish() async {
-        guard canPublish, let themeID else { return }; busy = true; defer { busy = false }
+    var canUndoDiscard: Bool {
+        !busy && !sourceDirty && undoDraft.map { Self.canonical(data) == Self.canonical($0.after) } == true
+    }
+    @discardableResult func discard(_ change: ThemeDocumentChanges.Change, title: String) -> Bool {
+        guard !busy, !sourceDirty else { return false }
+        do {
+            let previous = data
+            let updated = try ThemeDocumentChanges.reverting(change, baseline: baseline, draft: previous)
+            try replaceReviewedDraft(updated)
+            undoDraft = (previous, updated); undoTitle = title
+            return true
+        } catch { self.error = error.localizedDescription; return false }
+    }
+    func undoDiscard() {
+        guard canUndoDiscard, let undoDraft else { return }
+        do {
+            try replaceReviewedDraft(undoDraft.before)
+            self.undoDraft = nil; undoTitle = nil
+        } catch { self.error = error.localizedDescription }
+    }
+    private func replaceReviewedDraft(_ document: Data) throws {
+        let manifest = try RipulThemeManifest(data: document, etag: etag)
+        guard let remote else { throw RipulThemePublishError.invalidResponse }
+        // Block synchronous theme notifications until validation and adoption finish.
+        sourceDirty = true; defer { sourceDirty = false }
+        try remote.preview(document)
+        text = manifest.formatted; error = nil; published = false; version &+= 1
+        saveNow()
+    }
+    func publish(reviewed: Data? = nil) async {
+        guard canPublish, let themeID else { return }
+        let sent = reviewed ?? data
+        guard Self.canonical(sent) == Self.canonical(data) else {
+            error = ThemeDocumentChanges.ReviewError.changed.localizedDescription; return
+        }
+        busy = true; defer { busy = false }
         do {
             // A first-launch fallback may predate the first public fetch. Only adopt its
             // version if that exact baseline is still published; otherwise require review.
@@ -133,7 +173,7 @@ final class ThemeManagementModel: ObservableObject {
                 guard Self.canonical(server.data) == Self.canonical(baseline) else { throw RipulThemePublishError.conflict }
                 etag = server.etag
             }
-            let sent = data
+            guard Self.canonical(sent) == Self.canonical(data) else { throw ThemeDocumentChanges.ReviewError.changed }
             try remote?.preview(sent) // host schema validation BEFORE any server write
             let result = try await publisher.publish(id: themeID, data: sent, replacing: etag)
             try remote?.acceptPublication(result)
@@ -296,7 +336,7 @@ public struct RipulThemeManagementScreen: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .ripulThemeDidChange)) { _ in model.captureChanges() }
         .sheet(isPresented: $showSource) { sourceEditor }
-        .sheet(isPresented: $reviewPublish) { publishReview }
+        .sheet(isPresented: $reviewPublish) { ThemePublishReviewScreen(model: model) }
         .confirmationDialog("Replace this draft with the server version?", isPresented: $confirmReload, titleVisibility: .visible) {
             Button("Reload and replace draft", role: .destructive) { Task { await model.reloadServer() } }
         }
@@ -319,35 +359,6 @@ public struct RipulThemeManagementScreen: View {
                         .accessibilityIdentifier("ThemeManagement.applySource")
                 }
             }
-        }
-    }
-    private var publishReview: some View {
-        NavigationStack {
-            List {
-                Section {
-                    Text("Publish the reviewed draft to \(model.themeID ?? "this app")?")
-                    Text("Apps following this theme receive it on their next refresh.").font(.footnote).foregroundStyle(.secondary)
-                }
-                Section("Changes") {
-                    ForEach(ThemeDocumentChanges.compare(model.baseline, model.data), id: \.path) { change in
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text(change.path).font(.caption).foregroundStyle(.secondary)
-                            Text(change.before).strikethrough().foregroundStyle(.secondary)
-                            Text(change.after)
-                        }.textSelection(.enabled)
-                    }
-                }
-                if let error = model.error { Text(error).foregroundStyle(.red) }
-            }
-            .navigationTitle("Publish theme").navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) { Button("Cancel") { reviewPublish = false }.disabled(model.busy) }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button { Task { await model.publish(); if model.published { reviewPublish = false } } } label: {
-                        if model.busy { ProgressView() } else { Text("Publish") }
-                    }.disabled(!model.canPublish).accessibilityIdentifier("ThemeManagement.publish")
-                }
-            }.interactiveDismissDisabled(model.busy)
         }
     }
 }

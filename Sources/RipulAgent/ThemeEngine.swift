@@ -399,6 +399,12 @@ public struct RipulThemeSpec {
 public enum RipulThemeEngine {
 
     private static var spec: RipulThemeSpec?
+    /// Internal presentation metadata for the complete-document publication review.
+    static var reviewSpec: RipulThemeSpec? {
+        guard var copy = spec else { return nil }
+        copy.styleKinds = styleKinds
+        return copy
+    }
     private static var rolesByName: [String: RipulThemeVocabulary.Entry] = [:]
     private static var componentsByName: [String: RipulThemeVocabulary.Entry] = [:]
     private static var kindsByName: [String: RipulStyleKind] = [:]

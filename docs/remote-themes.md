@@ -106,7 +106,25 @@ refresh is paused while this editor is open so it cannot replace an in-progress
 preview. Closing resumes ordinary server refresh; the unpublished draft remains
 available when the editor is reopened.
 
-**Review & Publish** shows changed values, additions and removals. Publishing uses
+**Review & Publish** opens a native before-and-after review, grouped into text,
+colours, styles and other settings. Names come from the app's existing vocabulary
+and scope descriptors. Label overrides are compared individually by their selector,
+so adding or reordering labels does not turn the list into one JSON change. Text
+highlights changed words; colour swatches resolve against each document separately.
+Missing overrides, empty strings and explicit nulls remain distinct. When available,
+the app's current default wording is shown and labelled as **App default**.
+
+Search and filters help find changes; the publish count always includes the entire
+remaining draft. Open a change for its full values and target details. Structured
+host fields appear as labelled properties and list items. **Discard this change**
+restores only that value from the review baseline and validates the resulting draft
+through the host. **Undo** restores the previous draft, provided no intervening edit
+has changed it. Both operations update the app preview and save the durable draft.
+
+The final confirmation names the destination theme and the number of changes.
+Publication sends the exact confirmed document; a changed draft must be reviewed
+again. Success has an explicit completion screen, and failures retain the draft.
+Publishing uses
 the signed-in Solution Management account and requires the existing admin permission.
 The full document is sent, including host-specific sections. The server compares the
 reviewed ETag atomically (`If-Match`), or uses create-only `If-None-Match: *` for the
