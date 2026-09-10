@@ -9,7 +9,7 @@ let ripulViewExplorerOverlayTag = 0x5249_5055   // "RIPU"
 
 /// Marketing version of the RipulAgent SDK, surfaced in the inspector's copy output as `sdk: …`
 /// so we can always tell which build is actually running on the device. Bump on every release.
-let ripulSDKVersion = "0.7.96"
+let ripulSDKVersion = "0.7.97"
 
 // MARK: - View Inspector Overlay
 //
@@ -2474,13 +2474,22 @@ struct ScreenAudit {
         // count a whole SwiftUI field (WacFieldGlassButton, …) as ONE unit instead of skipping it:
         // SwiftUI renders as internal _UIInheritedViews that match no UIKit control class.
         func hostingRootType(of v: UIView) -> String? {
-            guard let vc = v.next as? UIViewController else { return nil }
-            let cls = String(describing: type(of: vc))
-            guard cls.contains("UIHostingController"), vc.viewIfLoaded === v else { return nil }
-            if let lt = cls.firstIndex(of: "<"), let gt = cls.lastIndex(of: ">"), lt < gt {
-                return String(cls[cls.index(after: lt)..<gt])
+            guard let vc = v.next as? UIViewController, vc.viewIfLoaded === v else { return nil }
+            // Hosts often subclass UIHostingController to manage UIKit navigation.
+            // The concrete subclass name contains no UIHostingController; inspect
+            // its superclass chain or the audit silently misses its SwiftUI rows.
+            var candidate: AnyClass? = type(of: vc)
+            while let type = candidate {
+                let cls = String(describing: type)
+                if cls.contains("UIHostingController") {
+                    if let lt = cls.firstIndex(of: "<"), let gt = cls.lastIndex(of: ">"), lt < gt {
+                        return String(cls[cls.index(after: lt)..<gt])
+                    }
+                    return "SwiftUI"
+                }
+                candidate = class_getSuperclass(type)
             }
-            return "SwiftUI"
+            return nil
         }
         // Any identifier stamped inside a host subtree → the hosted field is explicitly NAMED. Covers
         // both `.uiKitIdentifier` (a stamper view's accessibilityIdentifier) and standard SwiftUI

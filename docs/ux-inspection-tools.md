@@ -33,8 +33,13 @@ visibility is returned (`Sources/RipulAgent/ShareSheetTool.swift:116`). The tool
 does not read or select iOS destination activities, which render remotely, or
 send a file. Validate those external destination flows separately when required.
 
-Six simulator regression tests passed on 10 September 2026. They exercise
-classification, modal root selection, actual offered-file bytes and bounds,
+Seven simulator regression tests passed on 10 September 2026. They exercise
+classification, custom UIHostingController subclasses, modal root selection, actual offered-file bytes and bounds,
 untracked-item errors, stale dismissal rejection, and channel gating
 (`Tests/RipulAgentTests/UXInspectionToolsTests.swift:7`). Live host presentation
 and dismissal require an embedding app's device check.
+
+SDK 0.7.97 fixes the shared Audit classifier to recognize custom subclasses of
+UIHostingController by walking the superclass chain. Previously these could
+fall through to UIKit internals and omit the hosted SwiftUI accessibility rows
+(`Sources/RipulAgent/ViewInspectorOverlay.swift:2479`).

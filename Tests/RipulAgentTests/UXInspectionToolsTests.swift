@@ -1,10 +1,25 @@
 #if canImport(UIKit)
 import UIKit
+import SwiftUI
 import XCTest
 @testable import RipulAgent
 
 @MainActor
 final class UXInspectionToolsTests: XCTestCase {
+    func testAuditRecognizesCustomSwiftUIHostingController() {
+        final class CustomHost: UIHostingController<AnyView> {}
+        let host = CustomHost(rootView: AnyView(Text("Fixture")))
+        host.view.accessibilityIdentifier = "fixture.customHost"
+        // UIKit internals must not substitute for SwiftUI accessibility rows.
+        host.view.addSubview(UIControl())
+        let audit = ScreenAudit.run(on: host.view)
+        XCTAssertEqual(audit.items.count, 1)
+        XCTAssertEqual(audit.named, 1)
+        XCTAssertEqual(audit.anonymous, 0)
+        XCTAssertEqual(audit.items.first?.identity, "a11yId: fixture.customHost")
+        XCTAssertTrue(audit.items.first?.className.contains("UIHostingController") == true)
+    }
+
     func testAuditClassifiesControlsAndSkipsHiddenAndExplorerContent() {
         let root = UIView()
         let named = UIButton(); named.accessibilityIdentifier = "fixture.named"
