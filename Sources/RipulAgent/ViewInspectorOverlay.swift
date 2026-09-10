@@ -9,7 +9,7 @@ let ripulViewExplorerOverlayTag = 0x5249_5055   // "RIPU"
 
 /// Marketing version of the RipulAgent SDK, surfaced in the inspector's copy output as `sdk: …`
 /// so we can always tell which build is actually running on the device. Bump on every release.
-let ripulSDKVersion = "0.7.93"
+let ripulSDKVersion = "0.7.94"
 
 // MARK: - View Inspector Overlay
 //
@@ -230,6 +230,7 @@ struct InspectedView {
     let restorationIdentifier: String?
     let container: String?             // nearest app-defined ancestor view (e.g. a cell)
     let propertyRef: String?           // "Owner.property" if a VC/cell holds this view (IBOutlet or stored prop)
+    let nativeLabelCapture: NativeLabelIdentity.Capture?
     let enclosingControl: String?      // nearest UIControl up the tree + its id ("UIButton [addShift.save]")
                                        // — a tap lands on a button's gradient/image subview, not the button
     let hitLeafClass: String?          // the actual view under the finger when it differs from the
@@ -311,6 +312,7 @@ struct InspectedView {
             restorationIdentifier: nonEmpty(view.restorationIdentifier),
             container: nearestAppView(of: view, excluding: className),
             propertyRef: propertyReference(of: view),
+            nativeLabelCapture: (view as? UILabel).map { NativeLabelTheme.capture($0) },
             enclosingControl: nearestControl(of: view, excluding: className),
             hitLeafClass: hitLeaf.map { String(describing: type(of: $0)) },
             registryStamps: registryStamps,
@@ -477,7 +479,7 @@ struct InspectedView {
 
     /// Scan the owner's own class layers (app bundle only — never UIKit internals)
     /// for a stored object property/ivar whose value is `target`, and return its name.
-    private static func storedPropertyName(on owner: NSObject, pointingTo target: UIView) -> String? {
+    static func storedPropertyName(on owner: NSObject, pointingTo target: UIView) -> String? {
         // Pass 0 — Swift Mirror. Reflects Swift stored properties directly, so it
         // catches what the Obj-C runtime misses: `private`/`let`/non-@objc
         // programmatic views (e.g. `private let logoImageView = UIImageView()`),
@@ -734,6 +736,8 @@ struct InspectedView {
         if let actionable = actionableSummary { lines.append("actionable: \(actionable)") }
         if let leaf = hitLeafClass { lines.append("tapped: \(leaf)") }   // actual view under the finger
         if let p = propertyRef { lines.append("property: \(p)") }
+        if let selector = nativeLabelCapture?.selector { lines.append("themeText: \(selector.summary)") }
+        else if let reason = nativeLabelCapture?.reason { lines.append("themeText: preview only — \(reason)") }
         if let c = container { lines.append("container: \(c)") }
         if let vc = owningViewController { lines.append("controller: \(vc)") }
         if let ctrl = enclosingControl { lines.append("control: \(ctrl)") }
@@ -1902,7 +1906,7 @@ struct InspectorEditTab: View {
         let tc = InspectedView.currentTextColor(v)
         let font = InspectedView.currentFont(v)
         nativeTextIdentifier = NativeTabTitleTheme.identifier(for: v, resolvedIdentifier: info.accessibilityId)
-        hasText = info.text != nil && nativeTextIdentifier == nil
+        hasText = info.text != nil && nativeTextIdentifier == nil && info.nativeLabelCapture?.selector == nil
         hasTextColor = tc != nil
         hasFont = font != nil
         origText = info.text ?? ""
@@ -1932,7 +1936,11 @@ struct InspectorEditTab: View {
             InspectorTokenSection(view: info.tokenAnchorView)
 
             if let nativeTextIdentifier {
-                NativeTabTitleFields(identifier: nativeTextIdentifier, savesExplicitly: true)
+                NativeTextFields(target: .tabTitle(nativeTextIdentifier), savesExplicitly: true)
+            } else if let selector = info.nativeLabelCapture?.selector {
+                NativeTextFields(target: .label(selector), savesExplicitly: true)
+            } else if let reason = info.nativeLabelCapture?.reason {
+                Text("Live preview only. " + reason).font(.caption).foregroundStyle(.secondary)
             }
 
             if hasText {

@@ -16,15 +16,14 @@ enum NativeTabTitleTheme {
     }
     private static let items = NSHashTable<UITabBarItem>.weakObjects()
     private static var installed = false
-    private(set) static var current = NativeTextTheme()
     private static var previews: [String: String] = [:]
 
     static func install() {
         guard !installed else { return }; installed = true
-        intercept(UITabBarItem.self, #selector(setter: UITabBarItem.title), #selector(UITabBarItem.ripul_setThemeTitle(_:)))
-        intercept(UITabBarItem.self, #selector(setter: UITabBarItem.accessibilityIdentifier), #selector(UITabBarItem.ripul_setThemeIdentifier(_:)))
-        intercept(UITabBar.self, #selector(UITabBar.setItems(_:animated:)), #selector(UITabBar.ripul_setThemeItems(_:animated:)))
-        intercept(UITabBar.self, #selector(UITabBar.didMoveToWindow), #selector(UITabBar.ripul_themeDidMoveToWindow))
+        NativeTextHooks.intercept(UITabBarItem.self, #selector(setter: UITabBarItem.title), #selector(UITabBarItem.ripul_setThemeTitle(_:)))
+        NativeTextHooks.intercept(UITabBarItem.self, #selector(setter: UITabBarItem.accessibilityIdentifier), #selector(UITabBarItem.ripul_setThemeIdentifier(_:)))
+        NativeTextHooks.intercept(UITabBar.self, #selector(UITabBar.setItems(_:animated:)), #selector(UITabBar.ripul_setThemeItems(_:animated:)))
+        NativeTextHooks.intercept(UITabBar.self, #selector(UITabBar.didMoveToWindow), #selector(UITabBar.ripul_themeDidMoveToWindow))
         // Covers apps opting in after their existing tabs have been constructed.
         func discover(_ view: UIView) {
             if let bar = view as? UITabBar { register(bar.items ?? [], in: bar) }
@@ -33,17 +32,6 @@ enum NativeTabTitleTheme {
         for scene in UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }) {
             for window in scene.windows { discover(window) }
         }
-    }
-
-    private static func intercept(_ type: AnyClass, _ original: Selector, _ replacement: Selector) {
-        guard let old = class_getInstanceMethod(type, original), let new = class_getInstanceMethod(type, replacement) else {
-            assertionFailure("[RipulTheme] Missing public tab item selector"); return
-        }
-        // title is inherited from UIBarItem. Add a subclass-local method instead of
-        // exchanging the inherited method (which would also affect navigation items).
-        if class_addMethod(type, original, method_getImplementation(new), method_getTypeEncoding(new)) {
-            class_replaceMethod(type, replacement, method_getImplementation(old), method_getTypeEncoding(old))
-        } else { method_exchangeImplementations(old, new) }
     }
 
     private static func state(_ item: UITabBarItem) -> State {
@@ -82,17 +70,11 @@ enum NativeTabTitleTheme {
         reapply() // also restores items whose old identifier became ambiguous/unbound
     }
 
-    static func adopt(_ theme: NativeTextTheme) {
-        current = theme
-        previews.removeAll()
-        reapply()
-    }
+    static func clearPreviews() { previews.removeAll() }
 
     static func setOverride(_ title: String?, identifier: String) {
-        current.tabBarItemTitles[identifier] = title
         previews.removeValue(forKey: identifier)
-        reapply()
-        NotificationCenter.default.post(name: .ripulThemeDidChange, object: nil)
+        NativeTextRuntime.mutate { $0.tabBarItemTitles[identifier] = title }
     }
 
     static func preview(_ title: String?, identifier: String) {
@@ -100,7 +82,7 @@ enum NativeTabTitleTheme {
         reapply()
     }
 
-    private static func reapply() {
+    static func reapply() {
         // UIKit may retain a tab item after destroying its rendered owner. Changing
         // that orphan's title can dereference UIKit's unowned view on iOS 27.
         // Reattachment registers it again and applies the latest theme then.
@@ -111,7 +93,7 @@ enum NativeTabTitleTheme {
             guard !record.applying else { continue }
             var title = record.appTitle
             if let id = item.accessibilityIdentifier, counts[id] == 1 {
-                title = previews[id] ?? current.tabBarItemTitles[id] ?? record.appTitle
+                title = previews[id] ?? NativeTextRuntime.current.tabBarItemTitles[id] ?? record.appTitle
             }
             guard item.title != title else { continue }
             record.applying = true
@@ -129,10 +111,10 @@ enum NativeTabTitleTheme {
     }
     static var elements: [Element] {
         let grouped = Dictionary(grouping: items.allObjects.filter { isLive($0) && !($0.accessibilityIdentifier ?? "").isEmpty }, by: { $0.accessibilityIdentifier! })
-        return Set(grouped.keys).union(current.tabBarItemTitles.keys).sorted().map { id in
+        return Set(grouped.keys).union(NativeTextRuntime.current.tabBarItemTitles.keys).sorted().map { id in
             let matching = grouped[id] ?? []
             let item = matching.first
-            return Element(id: id, title: item?.title ?? current.tabBarItemTitles[id] ?? "",
+            return Element(id: id, title: item?.title ?? NativeTextRuntime.current.tabBarItemTitles[id] ?? "",
                            appTitle: item.flatMap { state($0).appTitle }, mounted: item != nil,
                            ambiguous: matching.count > 1)
         }

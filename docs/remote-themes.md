@@ -39,8 +39,8 @@ try RipulThemeEngine.followRemoteTheme(
 
 The host does not need to instrument individual views for this loading change.
 Existing theme consumers continue using their usual resolution and theme-change
-notifications. Identified UIKit tab items also support automatic title overrides
-through the app-wide instrumentation described below.
+notifications. UIKit tab items and supported app-owned labels also support automatic
+text overrides through the app-wide instrumentation described below.
 SwiftUI consumers still need the existing theme environment dependency to refresh.
 
 `RipulRemoteThemeClient` is also available independently of the UIKit engine for
@@ -94,8 +94,9 @@ registered theme kinds or connected a remote theme. It lists every registered sc
 currently mounted. Search finds names, paths, IDs and current text; **Text elements
 only** filters the list to kinds with free-text knobs. Selecting a row opens native
 controls backed by the same engine mutations as View Explorer and the in-app editor.
-It also discovers identified UIKit tab items automatically. Other hard-coded labels
-and user-entered record data are not automatically bound by this adapter.
+It also discovers identified UIKit tab items and app-owned labels with a reliable
+identifier or stored view property. Reused labels additionally need a row context,
+as described below. User-entered record data is not inferred as a theme target.
 
 **Theme document** is a native text editor for the complete JSON. **Apply to app**
 validates it through the host's existing full-document callback before previewing.
@@ -164,3 +165,73 @@ no continuous view scan, timer, or per-frame theme lookup. Explorer trial edits
 are temporary; saved drafts survive closing and server refresh without gaining
 runtime authority until published. The adapter covers UIKit tab items, including
 their rendered descendants in View Explorer, not arbitrary SwiftUI text.
+
+## Automatic UILabel text
+
+The same `RipulThemeInstrumentation.install()` hook also supports app-owned
+`UILabel` text. View Explorer shows **Label text → Save to theme draft** for a
+reliably identified label. Solution Management discovers editable labels and
+lists saved selectors even when their screens are not loaded. Tab titles and
+labels share one editor, draft file, complete-document export, and publication path.
+
+Selectors use reusable strategies, with no host-specific class names in the SDK:
+
+1. An existing label accessibility identifier, scoped to its view controller.
+2. The owning custom view/controller type and stored view property (including
+   storyboard outlets). Custom views in app frameworks are supported too.
+3. For table/collection cells, a row scope in addition to the label anchor:
+   an existing row identifier, or bounded reflection of plain enum cases stored
+   in the row's value-model fields. All captured conditions must match. The SDK
+   does not infer row identity from index paths, coordinates, the current text,
+   arbitrary model strings, or enum associated values.
+
+For example, a shopping app can capture a promotion subtitle without changing
+its normal `subtitle.text = model.copy` assignment:
+
+```json
+{
+  "nativeTextOverrides": {
+    "labels": [{
+      "selector": {
+        "screen": "StorefrontScreen",
+        "ownerType": "OfferRow",
+        "property": "subtitle",
+        "row": {
+          "ownerType": "OfferRow",
+          "enums": [{ "path": ["model", "kind"], "value": "promotion" }]
+        }
+      },
+      "text": "Share an offer"
+    }]
+  }
+}
+```
+
+When a row lacks discoverable context, configure one central callback alongside
+the existing app-wide hook. Individual labels still need no SDK lookup:
+
+```swift
+RipulThemeInstrumentation.labelRowContextProvider = { row in
+    (row as? ProductCell)?.representedCategoryID
+}
+```
+
+The provider supplies row identity; the label still needs an existing identifier
+or stored property. Selectors based on class/property names must be recaptured
+when those names change. Prefer semantic accessibility IDs when already available.
+If multiple labels match in one screen, or competing rules target one label, the
+runtime keeps app text rather than choosing an arbitrary winner. Separate screen
+instances can render the same semantic selector independently.
+
+Runtime hooks watch text/attributed-text assignment, label attachment and cell
+reuse. A single coalesced update after configuration handles text assigned before
+its row model. Changing row context stops the previous override; removing an
+override restores the latest app-supplied value, including nil and attributed
+text. Uniform attributed formatting is preserved. Mixed attribute runs are left
+unchanged and the explorer explains that they need a component adapter.
+
+Discovery walks happen when a rule is introduced, a remote manifest is adopted,
+or an editor explicitly inspects a screen. Ordinary updates revisit weakly tracked
+candidates. There is no frame/layout hook, repeating timer, or code injected into
+host controllers. Labels inside UIKit controls, text inputs, tab bars and Ripul's
+own overlay are excluded so their dedicated adapters retain ownership.

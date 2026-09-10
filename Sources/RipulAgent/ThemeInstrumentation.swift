@@ -81,10 +81,18 @@ extension UIView {
 public enum RipulThemeInstrumentation {
     private static var installed = false
 
+    /// Optional app-wide escape hatch for reusable rows with no existing row ID
+    /// or discoverable enum context. Return the row's semantic kind/key, not its
+    /// index or displayed text. Configure once; individual labels need no lookup.
+    @MainActor public static var labelRowContextProvider: ((UIView) -> String?)? {
+        didSet { NativeLabelTheme.refresh(discover: true) }
+    }
+
     @MainActor public static func install() {
         guard !installed else { return }
         installed = true
         NativeTabTitleTheme.install()
+        NativeLabelTheme.install()
         guard let original = class_getInstanceMethod(UIView.self, #selector(setter: UIView.backgroundColor)),
               let swizzled = class_getInstanceMethod(UIView.self, #selector(UIView.ripul_setBackgroundColor(_:))) else {
             assertionFailure("[RipulTheme] could not swizzle UIView.backgroundColor setter")

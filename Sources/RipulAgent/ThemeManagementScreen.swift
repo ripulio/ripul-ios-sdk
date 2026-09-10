@@ -46,7 +46,7 @@ final class ThemeManagementModel: ObservableObject {
 
     /// The explorer saves into the SAME durable draft as Solution Management, even
     /// when that screen has never been opened. Keep its reviewed baseline and extras.
-    static func saveTabTitleDraft(identifier: String, title: String?,
+    static func saveNativeTextDraft(target: NativeTextTarget, text: String?,
                                   remote: RipulRemoteThemeClient? = nil,
                                   draftURL: URL? = nil) throws {
         guard let remote = remote ?? RipulThemeEngine.remoteTheme else { throw NativeTextDraftError.noRemoteTheme }
@@ -57,7 +57,7 @@ final class ThemeManagementModel: ObservableObject {
         } else { existing = nil }
         let document = try existing.map { Data($0.text.utf8) } ?? RipulThemeEngine.themeDocumentForPublishing()
         var native = try NativeTextTheme.decode(document: document)
-        native.tabBarItemTitles[identifier] = title
+        target.update(&native, text: text)
         let changed = try native.merging(into: document)
         _ = try RipulThemeManifest(data: changed, etag: nil)
         let draft = Draft(text: String(decoding: changed, as: UTF8.self),
@@ -65,7 +65,7 @@ final class ThemeManagementModel: ObservableObject {
                           etag: existing.map { $0.etag } ?? remote.authoritativeETag)
         try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
         try JSONEncoder().encode(draft).write(to: destination, options: .atomic)
-        NativeTabTitleTheme.setOverride(title, identifier: identifier)
+        target.apply(text)
     }
 
     var data: Data { Data(text.utf8) }
@@ -204,14 +204,20 @@ public struct RipulThemeManagementScreen: View {
             search.isEmpty || [item.id, item.title, "Tab bar title"].contains { $0.localizedCaseInsensitiveContains(search) }
         }
     }
+    private var labelElements: [NativeLabelTheme.Element] {
+        NativeLabelTheme.elements.filter { item in
+            search.isEmpty || [item.selector.summary, item.text].contains { $0.localizedCaseInsensitiveContains(search) }
+        }
+    }
     public var body: some View {
         NavigationStack { content }
-            .onAppear { model.start() }
+            .onAppear { NativeLabelTheme.discoverEditableLabels(); model.start() }
             .onDisappear { model.close() }
             .interactiveDismissDisabled(model.busy)
     }
     @ViewBuilder private var content: some View {
         let _ = model.version
+        let labels = labelElements
         List {
             Section {
                 Text(model.published ? "Published to server" : model.hasChanges ? "Unpublished draft" : "No unpublished changes")
@@ -245,7 +251,7 @@ public struct RipulThemeManagementScreen: View {
                 }
                 ForEach(nativeElements) { item in
                     NavigationLink {
-                        Form { NativeTabTitleFields(identifier: item.id, savesExplicitly: false) }
+                        Form { NativeTextFields(target: .tabTitle(item.id), savesExplicitly: false) }
                             .navigationTitle("Tab title").navigationBarTitleDisplayMode(.inline)
                     } label: {
                         VStack(alignment: .leading, spacing: 4) {
@@ -258,8 +264,23 @@ public struct RipulThemeManagementScreen: View {
                     .disabled(model.busy || model.sourceDirty || item.ambiguous)
                     .accessibilityIdentifier("ThemeManagement.nativeText." + item.id)
                 }
-                if elements.isEmpty && nativeElements.isEmpty { Text(search.isEmpty ? "No theme elements match this filter." : "No matching elements.").foregroundStyle(.secondary) }
-            } header: { Text("Elements (\(elements.count + nativeElements.count))") }
+                ForEach(labels) { item in
+                    NavigationLink {
+                        Form { NativeTextFields(target: .label(item.selector), savesExplicitly: false) }
+                            .navigationTitle("Label text").navigationBarTitleDisplayMode(.inline)
+                    } label: {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(item.text.isEmpty ? "Empty label" : item.text).lineLimit(2)
+                            Text(item.selector.summary).font(.caption).foregroundStyle(.secondary)
+                            if item.ambiguous { Text("More than one label matches this target.").font(.caption).foregroundStyle(.secondary) }
+                            else if !item.mounted { Text("This label is not currently loaded.").font(.caption).foregroundStyle(.secondary) }
+                        }
+                    }
+                    .disabled(model.busy || model.sourceDirty || item.ambiguous)
+                    .accessibilityIdentifier("ThemeManagement.nativeLabel." + item.id)
+                }
+                if elements.isEmpty && nativeElements.isEmpty && labels.isEmpty { Text(search.isEmpty ? "No theme elements match this filter." : "No matching elements.").foregroundStyle(.secondary) }
+            } header: { Text("Elements (\(elements.count + nativeElements.count + labels.count))") }
         }
         .searchable(text: $search, prompt: "Find an element or its text")
         .navigationTitle("Theme")

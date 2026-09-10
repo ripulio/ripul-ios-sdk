@@ -8,13 +8,13 @@ final class NativeTabTitleThemeTests: XCTestCase {
     private let id = "tabbar.legalHub"
     private func install() {
         RipulThemeInstrumentation.install()
-        NativeTabTitleTheme.adopt(NativeTextTheme())
+        NativeTextRuntime.adopt(NativeTextTheme())
     }
 
     func testWACTitleBeforeIdentifierAndLaterAppUpdatesRequireNoItemRegistration() {
         install()
-        defer { NativeTabTitleTheme.adopt(NativeTextTheme()) }
-        NativeTabTitleTheme.adopt(NativeTextTheme(tabBarItemTitles: [id: "Help"]))
+        defer { NativeTextRuntime.adopt(NativeTextTheme()) }
+        NativeTextRuntime.adopt(NativeTextTheme(tabBarItemTitles: [id: "Help"]))
         // Exact WAC construction order. No per-item SDK API calls.
         let item = UITabBarItem(title: "Legal hub", image: nil, selectedImage: nil)
         XCTAssertEqual(item.title, "Legal hub")
@@ -22,16 +22,16 @@ final class NativeTabTitleThemeTests: XCTestCase {
         XCTAssertEqual(item.title, "Help")
         item.title = "Legal advice"
         XCTAssertEqual(item.title, "Help", "App refreshes must not erase the server override")
-        NativeTabTitleTheme.adopt(NativeTextTheme())
+        NativeTextRuntime.adopt(NativeTextTheme())
         XCTAssertEqual(item.title, "Legal advice", "Removal restores the latest app-supplied value")
     }
 
     func testIdentifierBeforeTitleEmptyOverrideNilTitleAndRenaming() {
         install()
-        defer { NativeTabTitleTheme.adopt(NativeTextTheme()) }
+        defer { NativeTextRuntime.adopt(NativeTextTheme()) }
         let item = UITabBarItem()
         item.accessibilityIdentifier = id
-        NativeTabTitleTheme.adopt(NativeTextTheme(tabBarItemTitles: [id: ""]))
+        NativeTextRuntime.adopt(NativeTextTheme(tabBarItemTitles: [id: ""]))
         XCTAssertEqual(item.title, "", "Empty title is a valid override")
         item.title = nil
         XCTAssertEqual(item.title, "")
@@ -41,14 +41,14 @@ final class NativeTabTitleThemeTests: XCTestCase {
         XCTAssertEqual(item.title, "Other")
         item.accessibilityIdentifier = id
         XCTAssertEqual(item.title, "")
-        NativeTabTitleTheme.adopt(NativeTextTheme())
+        NativeTextRuntime.adopt(NativeTextTheme())
         XCTAssertEqual(item.title, "Other")
     }
 
     func testUnidentifiedTabsAndOtherBarItemsKeepNormalUIKitBehavior() {
         install()
-        NativeTabTitleTheme.adopt(NativeTextTheme(tabBarItemTitles: [id: "Help"]))
-        defer { NativeTabTitleTheme.adopt(NativeTextTheme()) }
+        NativeTextRuntime.adopt(NativeTextTheme(tabBarItemTitles: [id: "Help"]))
+        defer { NativeTextRuntime.adopt(NativeTextTheme()) }
         let tab = UITabBarItem(title: "Normal", image: nil, tag: 1)
         let bar = UIBarButtonItem(title: "Navigation", style: .plain, target: nil, action: nil)
         bar.accessibilityIdentifier = id
@@ -58,7 +58,7 @@ final class NativeTabTitleThemeTests: XCTestCase {
 
     func testDetachedItemDoesNotBlockReplacementAndRebindsWhenAttachedAgain() {
         install()
-        defer { NativeTabTitleTheme.adopt(NativeTextTheme()) }
+        defer { NativeTextRuntime.adopt(NativeTextTheme()) }
         let item = UITabBarItem(title: "Legal hub", image: nil, tag: 0); item.accessibilityIdentifier = id
         let bar = UITabBar()
         bar.setItems([item], animated: false)
@@ -77,8 +77,8 @@ final class NativeTabTitleThemeTests: XCTestCase {
 
     func testDuplicateIdentifiersFailClosedAndRecreatedItemsBindAgain() {
         install()
-        NativeTabTitleTheme.adopt(NativeTextTheme(tabBarItemTitles: [id: "Help"]))
-        defer { NativeTabTitleTheme.adopt(NativeTextTheme()) }
+        NativeTextRuntime.adopt(NativeTextTheme(tabBarItemTitles: [id: "Help"]))
+        defer { NativeTextRuntime.adopt(NativeTextTheme()) }
         autoreleasepool {
             let first = UITabBarItem(title: "First", image: nil, tag: 0)
             first.accessibilityIdentifier = id
@@ -96,7 +96,7 @@ final class NativeTabTitleThemeTests: XCTestCase {
 
     func testExplorerResolvesActualRenderedTabAndDoesNotUsePosition() async throws {
         install()
-        defer { NativeTabTitleTheme.adopt(NativeTextTheme()) }
+        defer { NativeTextRuntime.adopt(NativeTextTheme()) }
         let window: UIWindow
         if let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first {
             window = UIWindow(windowScene: scene)
@@ -130,7 +130,7 @@ final class NativeTabTitleThemeTests: XCTestCase {
         XCTAssertEqual(selection.text, "Legal hub")
         NativeTabTitleTheme.preview("Preview", identifier: try XCTUnwrap(selection.accessibilityId))
         XCTAssertEqual(legal.tabBarItem.title, "Preview")
-        XCTAssertNil(NativeTabTitleTheme.current.tabBarItemTitles[id], "Trial text must not silently become a saved override")
+        XCTAssertNil(NativeTextRuntime.current.tabBarItemTitles[id], "Trial text must not silently become a saved override")
         NativeTabTitleTheme.preview(nil, identifier: id)
         XCTAssertEqual(legal.tabBarItem.title, "Legal hub")
         NativeTabTitleTheme.setOverride("Help", identifier: id)
@@ -142,7 +142,7 @@ final class NativeTabTitleThemeTests: XCTestCase {
 
     func testFullDocumentAppliesOutsideHostVocabularyAndRejectsInvalidBeforeMutation() throws {
         install()
-        defer { NativeTabTitleTheme.adopt(NativeTextTheme()); RipulThemeEngine.exportThemeDocument = nil }
+        defer { NativeTextRuntime.adopt(NativeTextTheme()); RipulThemeEngine.exportThemeDocument = nil }
         let item = UITabBarItem(title: "Legal hub", image: nil, tag: 0); item.accessibilityIdentifier = id
         let full = Data(#"{"hostExtra":{"keep":true},"nativeTextOverrides":{"tabBarItemTitles":{"tabbar.legalHub":"Help"}}}"#.utf8)
         var hostCalls = 0
@@ -164,7 +164,7 @@ final class NativeTabTitleThemeTests: XCTestCase {
     func testExplorerDraftSurvivesServerResetAndReopensForPublishing() async throws {
         install()
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: folder); RipulThemeEngine.exportThemeDocument = nil; NativeTabTitleTheme.adopt(NativeTextTheme()) }
+        defer { try? FileManager.default.removeItem(at: folder); RipulThemeEngine.exportThemeDocument = nil; NativeTextRuntime.adopt(NativeTextTheme()) }
         let base = Data(#"{"hostExtra":{"keep":true}}"#.utf8)
         RipulThemeEngine.exportThemeDocument = { $0 ?? base }
         let remote = RipulRemoteThemeClient(url: URL(string: "https://example.com/v1/app-themes/app")!, fallback: base,
@@ -174,7 +174,7 @@ final class NativeTabTitleThemeTests: XCTestCase {
         try remote.start(); remote.stop()
         let item = UITabBarItem(title: "Legal hub", image: nil, tag: 0); item.accessibilityIdentifier = id
         let path = folder.appendingPathComponent("draft.json")
-        try ThemeManagementModel.saveTabTitleDraft(identifier: id, title: "Help", remote: remote, draftURL: path)
+        try ThemeManagementModel.saveNativeTextDraft(target: .tabTitle(id), text: "Help", remote: remote, draftURL: path)
         XCTAssertEqual(item.title, "Help")
         try remote.preview(base)
         XCTAssertEqual(item.title, "Legal hub")
@@ -185,7 +185,7 @@ final class NativeTabTitleThemeTests: XCTestCase {
         XCTAssertEqual(ThemeManagementModel.canonical(model.baseline), ThemeManagementModel.canonical(base))
         XCTAssertNotNil((try JSONSerialization.jsonObject(with: model.data) as? [String: Any])?["hostExtra"])
         model.close(); remote.stop()
-        try ThemeManagementModel.saveTabTitleDraft(identifier: "tabbar.home", title: "Start", remote: remote, draftURL: path)
+        try ThemeManagementModel.saveNativeTextDraft(target: .tabTitle("tabbar.home"), text: "Start", remote: remote, draftURL: path)
         model.start()
         XCTAssertEqual(try NativeTextTheme.decode(document: model.data).tabBarItemTitles, [id: "Help", "tabbar.home": "Start"])
         model.close(); remote.stop()
@@ -194,16 +194,16 @@ final class NativeTabTitleThemeTests: XCTestCase {
     func testExplorerKeepsUnversionedDraftBaselineWhenServerVersionArrives() throws {
         install()
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: folder); RipulThemeEngine.exportThemeDocument = nil; NativeTabTitleTheme.adopt(NativeTextTheme()) }
+        defer { try? FileManager.default.removeItem(at: folder); RipulThemeEngine.exportThemeDocument = nil; NativeTextRuntime.adopt(NativeTextTheme()) }
         let base = Data(#"{"host":"original"}"#.utf8)
         RipulThemeEngine.exportThemeDocument = { $0 ?? base }
         let remote = RipulRemoteThemeClient(url: URL(string: "https://example.com/v1/app-themes/app")!, fallback: base,
             cacheDirectory: folder.appendingPathComponent("cache"), validateAndApply: { _ in }, fetch: { _ in throw URLError(.notConnectedToInternet) })
         try remote.start(); remote.stop()
         let path = folder.appendingPathComponent("draft.json")
-        try ThemeManagementModel.saveTabTitleDraft(identifier: id, title: "Help", remote: remote, draftURL: path)
+        try ThemeManagementModel.saveNativeTextDraft(target: .tabTitle(id), text: "Help", remote: remote, draftURL: path)
         try remote.acceptPublication(RipulThemeManifest(data: Data(#"{"host":"another publisher's change"}"#.utf8), etag: "new-version"))
-        try ThemeManagementModel.saveTabTitleDraft(identifier: id, title: "Advice", remote: remote, draftURL: path)
+        try ThemeManagementModel.saveNativeTextDraft(target: .tabTitle(id), text: "Advice", remote: remote, draftURL: path)
         let model = ThemeManagementModel(baseURL: URL(string: "https://example.com")!, tokenProvider: { nil }, remote: remote,
             draftURL: path, capture: { $0 ?? base })
         model.start()

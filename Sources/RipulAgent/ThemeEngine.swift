@@ -422,7 +422,7 @@ public enum RipulThemeEngine {
     @MainActor
     public static func themeDocumentForPublishing(over base: Data? = nil) throws -> Data {
         if let exportThemeDocument {
-            return try NativeTabTitleTheme.current.merging(into: exportThemeDocument(base))
+            return try NativeTextRuntime.current.merging(into: exportThemeDocument(base))
         }
         guard let spec else { throw RipulThemePublishError.invalidDocument }
         let original: Data
@@ -442,7 +442,7 @@ public enum RipulThemeEngine {
             if json[key] == nil, let map = edited as? [String: Any], map.isEmpty { continue }
             json[key] = edited
         }
-        return try NativeTabTitleTheme.current.merging(into: JSONSerialization.data(withJSONObject: json, options: [.sortedKeys, .prettyPrinted]))
+        return try NativeTextRuntime.current.merging(into: JSONSerialization.data(withJSONObject: json, options: [.sortedKeys, .prettyPrinted]))
     }
 
     /// Call once after configure and any host facade bootstrap, before constructing UI.
@@ -483,7 +483,7 @@ public enum RipulThemeEngine {
         // fields during decoding without losing the SDK's automatic bindings.
         let text = try NativeTextTheme.decode(document: data)
         try applyingHost(data)
-        NativeTabTitleTheme.adopt(text)
+        NativeTextRuntime.adopt(text)
         NotificationCenter.default.post(name: .ripulThemeDidChange, object: nil)
     }
 

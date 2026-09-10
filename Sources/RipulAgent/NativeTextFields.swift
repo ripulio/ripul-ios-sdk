@@ -9,28 +9,29 @@ enum NativeTextDraftError: LocalizedError {
 /// Shared text control for View Explorer and Solution Management. The explorer's
 /// trial edits are separate from saved overrides and disappear when it closes.
 @MainActor
-struct NativeTabTitleFields: View {
-    let identifier: String
+struct NativeTextFields: View {
+    let target: NativeTextTarget
     let savesExplicitly: Bool
     @State private var text: String
     @State private var message: String?
     @State private var error: String?
     @State private var lease: UUID?
 
-    init(identifier: String, savesExplicitly: Bool) {
-        self.identifier = identifier; self.savesExplicitly = savesExplicitly
-        _text = State(initialValue: NativeTabTitleTheme.title(for: identifier) ?? "")
+    init(target: NativeTextTarget, savesExplicitly: Bool) {
+        self.target = target; self.savesExplicitly = savesExplicitly
+        _text = State(initialValue: target.text)
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Tab title").font(.headline)
-            Text(identifier).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
-            TextField("Title", text: Binding(get: { text }, set: { value in
+            Text(target.heading).font(.headline)
+            Text(target.summary).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+            Text(target.strategy).font(.caption).foregroundStyle(.secondary)
+            TextField("Text", text: Binding(get: { text }, set: { value in
                     text = value
                     message = nil; error = nil
-                    if savesExplicitly { NativeTabTitleTheme.preview(value, identifier: identifier) }
-                    else { NativeTabTitleTheme.setOverride(value, identifier: identifier) }
+                    if savesExplicitly { target.preview(value) }
+                    else { target.apply(value) }
                 }), axis: .vertical)
                 .textFieldStyle(.roundedBorder)
                 .accessibilityIdentifier("NativeTextTheme.title")
@@ -43,10 +44,10 @@ struct NativeTabTitleFields: View {
                 Text("Changes preview here and are saved in your unpublished theme draft.")
                     .font(.caption).foregroundStyle(.secondary)
             }
-            Button("Use app title") {
+            Button("Use app text") {
                 if savesExplicitly { save(nil) }
-                else { NativeTabTitleTheme.setOverride(nil, identifier: identifier) }
-                if error == nil { text = NativeTabTitleTheme.title(for: identifier) ?? "" }
+                else { target.apply(nil) }
+                if error == nil { text = target.appText ?? "" }
             }
             .accessibilityIdentifier("NativeTextTheme.reset")
             if let message { Text(message).font(.caption) }
@@ -57,7 +58,7 @@ struct NativeTabTitleFields: View {
         }
         .onDisappear {
             if savesExplicitly {
-                NativeTabTitleTheme.preview(nil, identifier: identifier)
+                target.preview(nil)
                 if let lease { RipulThemeEngine.remoteTheme?.endEditing(lease) }; lease = nil
             }
         }
@@ -65,7 +66,7 @@ struct NativeTabTitleFields: View {
 
     private func save(_ title: String?) {
         do {
-            try ThemeManagementModel.saveTabTitleDraft(identifier: identifier, title: title)
+            try ThemeManagementModel.saveNativeTextDraft(target: target, text: title)
             error = nil; message = "Saved to theme draft."
         } catch { self.error = "Could not save the draft: " + error.localizedDescription }
     }

@@ -4,12 +4,18 @@ import Foundation
 /// reads it from the complete manifest before handing that manifest to the host.
 struct NativeTextTheme: Codable, Equatable {
     var tabBarItemTitles: [String: String] = [:]
+    var labels: [NativeLabelOverride] = []
 
-    init(tabBarItemTitles: [String: String] = [:]) { self.tabBarItemTitles = tabBarItemTitles }
-    private enum CodingKeys: String, CodingKey { case tabBarItemTitles }
+    init(tabBarItemTitles: [String: String] = [:], labels: [NativeLabelOverride] = []) {
+        self.tabBarItemTitles = tabBarItemTitles; self.labels = labels
+    }
+    private enum CodingKeys: String, CodingKey { case tabBarItemTitles, labels }
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         tabBarItemTitles = try container.decodeIfPresent([String: String].self, forKey: .tabBarItemTitles) ?? [:]
+        labels = try container.decodeIfPresent([NativeLabelOverride].self, forKey: .labels) ?? []
+        guard labels.count <= 256, Set(labels.map(\.id)).count == labels.count else { throw RipulThemePublishError.invalidDocument }
+        for rule in labels { try rule.selector.validate() }
         guard tabBarItemTitles.keys.allSatisfy({ !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else {
             throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "Tab title overrides need a stable, nonempty accessibility identifier."))
         }
@@ -30,7 +36,16 @@ struct NativeTextTheme: Codable, Equatable {
         if !tabBarItemTitles.isEmpty || section["tabBarItemTitles"] != nil {
             section["tabBarItemTitles"] = tabBarItemTitles
         }
+        if !labels.isEmpty || section["labels"] != nil {
+            section["labels"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(labels))
+        }
         if !section.isEmpty { json["nativeTextOverrides"] = section }
         return try JSONSerialization.data(withJSONObject: json, options: [.sortedKeys, .prettyPrinted, .withoutEscapingSlashes])
+    }
+
+    mutating func setLabel(_ selector: NativeLabelSelector, text: String?) {
+        labels.removeAll { $0.id == selector.id }
+        if let text { labels.append(NativeLabelOverride(selector: selector, text: text)) }
+        labels.sort { $0.id < $1.id }
     }
 }
