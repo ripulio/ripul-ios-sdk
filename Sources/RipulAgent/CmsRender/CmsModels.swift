@@ -71,6 +71,17 @@ public struct CmsBlock: Codable, Identifiable, Equatable {
     public var position: CmsCanvasPosition?
     public var children: CmsPageBlocks?
     public var bindings: [String: CmsBindingEntry]?
+
+    /// Placed content cells use the same nested containers as page slots.
+    /// Include them in traversal so their independent queries and inspector
+    /// edits work even when the grid itself has no record source.
+    var gridContentSlots: [String: CmsPageBlocks] {
+        guard let slots = props.object("gridLayout")?.object("slots") else { return [:] }
+        return slots.compactMapValues { json in
+            guard let data = try? JSONEncoder().encode(json) else { return nil }
+            return try? JSONDecoder().decode(CmsPageBlocks.self, from: data)
+        }
+    }
 }
 
 /// Recursive block container, discriminated by `layout`.
@@ -171,6 +182,7 @@ public indirect enum CmsPageBlocks: Codable, Equatable {
                 for block in items {
                     result.append(block)
                     if let children = block.children { collect(children) }
+                    for slot in block.gridContentSlots.values { collect(slot) }
                 }
             case .template(_, let slots, _), .sidebar(_, let slots, _):
                 for slot in slots.values { collect(slot) }

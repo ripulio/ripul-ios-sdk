@@ -93,6 +93,9 @@ public final class CmsDesignController: ObservableObject {
                 if let children = item.children {
                     collectBlocks(from: children, depth: depth + 1, into: &result)
                 }
+                for (_, slot) in item.gridContentSlots.sorted(by: { $0.key < $1.key }) {
+                    collectBlocks(from: slot, depth: depth + 1, into: &result)
+                }
             }
         case .template(_, let slots, _), .sidebar(_, let slots, _):
             for (_, slot) in slots.sorted(by: { $0.key < $1.key }) {
@@ -284,6 +287,9 @@ public final class CmsDesignController: ObservableObject {
                 if let children = item.children, let found = findBlock(id: id, in: children) {
                     return found
                 }
+                for slot in item.gridContentSlots.values {
+                    if let found = findBlock(id: id, in: slot) { return found }
+                }
             }
         case .template(_, let slots, _), .sidebar(_, let slots, _):
             for slot in slots.values {
@@ -304,6 +310,11 @@ public final class CmsDesignController: ObservableObject {
                 if let children = blockObj["children"],
                    let found = findRawBlock(id: id, in: children) {
                     return found
+                }
+                if let slots = blockObj["props"]?.objectValue?.object("gridLayout")?.object("slots") {
+                    for slot in slots.values {
+                        if let found = findRawBlock(id: id, in: slot) { return found }
+                    }
                 }
             }
         }
@@ -341,6 +352,20 @@ public final class CmsDesignController: ObservableObject {
                     newItems[index] = .object(blockObj)
                     obj["items"] = .array(newItems)
                     return .object(obj)
+                }
+                if var props = blockObj["props"]?.objectValue,
+                   var grid = props.object("gridLayout"), var slots = grid.object("slots") {
+                    for (key, slot) in slots {
+                        if let updated = updatingBlock(in: slot, blockId: blockId, mutate: mutate) {
+                            slots[key] = updated
+                            grid["slots"] = .object(slots)
+                            props["gridLayout"] = .object(grid)
+                            blockObj["props"] = .object(props)
+                            newItems[index] = .object(blockObj)
+                            obj["items"] = .array(newItems)
+                            return .object(obj)
+                        }
+                    }
                 }
             }
         }

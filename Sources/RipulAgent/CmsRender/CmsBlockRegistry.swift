@@ -202,7 +202,7 @@ struct CmsBlockView: View {
     /// want taps to reach the deepest nested child first; empty space still
     /// selects the container itself.
     private var isContainer: Bool {
-        ["section", "container", "template", "sidebar", "pageOutlet", "modal", "recordNavigator", "trailMap"]
+        ["section", "container", "template", "sidebar", "pageOutlet", "modal", "recordNavigator", "trailMap", "fieldGrid"]
             .contains(block.type)
     }
 }

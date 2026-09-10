@@ -229,7 +229,8 @@ public final class ElevenLabsNativeSpeechProvider: NSObject, NativeSpeechProvidi
     private var audioEngine: AVAudioEngine?
     private var audioSink: PendingAudioSink?
     private var onEvent: (@MainActor (SpeechService.TranscriptionEvent) -> Void)?
-    private var transcribing = false
+    private var transcriptionID: UUID?
+    private var transcribing: Bool { transcriptionID != nil }
     private var onPlaybackEnd: (@MainActor () -> Void)?
     private var cachedDefaultVoiceId: String?
 
@@ -467,117 +468,119 @@ public final class ElevenLabsNativeSpeechProvider: NSObject, NativeSpeechProvidi
     /// socket attaches are held in order and flushed the moment it does.
     public func startTranscription(onEvent: @escaping @MainActor (SpeechService.TranscriptionEvent) -> Void) async throws {
         guard !transcribing else { return }
-
-        try SpeechPrivacyRequirements.validate(requiresSpeechRecognition: false)
-        #if os(iOS)
-        guard await AVAudioApplication.requestRecordPermission() else { throw ProviderError.microphoneDenied }
-        #else
-        guard await AVCaptureDevice.requestAccess(for: .audio) else { throw ProviderError.microphoneDenied }
-        #endif
-
-        try VoiceAudioSession.configureForRecording()
-
-        let engine = AVAudioEngine()
-        let input = engine.inputNode
-        let format = input.outputFormat(forBus: 0)
-        let sampleRate = Int(format.sampleRate)
-        guard Self.supportedPcmRates.contains(sampleRate) else {
-            VoiceAudioSession.releaseIfIdle()
-            throw ProviderError.unsupportedSampleRate(format.sampleRate)
-        }
-
-        // Captured strongly by the tap so the audio thread never reaches back
-        // through `self` for the socket (it may not exist yet).
-        let sink = PendingAudioSink()
+        let captureID = UUID()
+        transcriptionID = captureID
         self.onEvent = onEvent
-        audioSink = sink
-        audioEngine = engine
-        transcribing = true
 
-        input.installTap(onBus: 0, bufferSize: 4096, format: format) { [weak self] buffer, _ in
-            guard let channel = buffer.floatChannelData?[0] else { return }
-            let frames = Int(buffer.frameLength)
-            var pcm = [Int16](repeating: 0, count: frames)
-            var energy: Float = 0
-            for i in 0..<frames {
-                let sample = max(-1.0, min(1.0, channel[i]))
-                energy += sample * sample
-                pcm[i] = Int16(max(-32768, min(32767, Int32(sample * 32767))))
+        do {
+            try SpeechPrivacyRequirements.validate(requiresSpeechRecognition: false)
+            #if os(iOS)
+            let permitted = await AVAudioApplication.requestRecordPermission()
+            #else
+            let permitted = await AVCaptureDevice.requestAccess(for: .audio)
+            #endif
+            guard transcriptionID == captureID else { return }
+            guard permitted else { throw ProviderError.microphoneDenied }
+
+            try VoiceAudioSession.configureForRecording()
+
+            let engine = AVAudioEngine()
+            let input = engine.inputNode
+            let format = input.outputFormat(forBus: 0)
+            let sampleRate = Int(format.sampleRate)
+            guard Self.supportedPcmRates.contains(sampleRate) else {
+                VoiceAudioSession.releaseIfIdle()
+                throw ProviderError.unsupportedSampleRate(format.sampleRate)
             }
-            // Mic energy tells the caller the user is still talking even when
-            // the transcript stream has gone quiet — see TranscriptionEvent.
-            if frames > 0 {
-                let rms = (energy / Float(frames)).squareRoot()
-                Task { @MainActor [weak self] in
-                    guard let self, self.transcribing else { return }
-                    self.onEvent?(.audioLevel(rms))
+
+            // Captured strongly by the tap so the audio thread never reaches back
+            // through `self` for the socket (it may not exist yet).
+            let sink = PendingAudioSink()
+            audioSink = sink
+            audioEngine = engine
+
+            input.installTap(onBus: 0, bufferSize: 4096, format: format) { [weak self] buffer, _ in
+                guard let channel = buffer.floatChannelData?[0] else { return }
+                let frames = Int(buffer.frameLength)
+                var pcm = [Int16](repeating: 0, count: frames)
+                var energy: Float = 0
+                for i in 0..<frames {
+                    let sample = max(-1.0, min(1.0, channel[i]))
+                    energy += sample * sample
+                    pcm[i] = Int16(max(-32768, min(32767, Int32(sample * 32767))))
+                }
+                // Mic energy tells the caller the user is still talking even when
+                // the transcript stream has gone quiet — see TranscriptionEvent.
+                if frames > 0 {
+                    let rms = (energy / Float(frames)).squareRoot()
+                    Task { @MainActor [weak self] in
+                        guard let self, self.transcriptionID == captureID else { return }
+                        self.onEvent?(.audioLevel(rms))
+                    }
+                }
+                let payloadData = pcm.withUnsafeBufferPointer { Data(buffer: $0) }
+                let payload: [String: Any] = [
+                    "message_type": "input_audio_chunk",
+                    "audio_base_64": payloadData.base64EncodedString(),
+                    "sample_rate": sampleRate,
+                ]
+                if let json = try? JSONSerialization.data(withJSONObject: payload),
+                   let text = String(data: json, encoding: .utf8) {
+                    sink.push(text)
                 }
             }
-            let payloadData = pcm.withUnsafeBufferPointer { Data(buffer: $0) }
-            let payload: [String: Any] = [
-                "message_type": "input_audio_chunk",
-                "audio_base_64": payloadData.base64EncodedString(),
-                "sample_rate": sampleRate,
-            ]
-            if let json = try? JSONSerialization.data(withJSONObject: payload),
-               let text = String(data: json, encoding: .utf8) {
-                sink.push(text)
-            }
-        }
-        engine.prepare()
-        do {
+            engine.prepare()
             try engine.start()
-        } catch {
-            teardownCapture()
-            throw error
-        }
 
-        // Mic is hot from here — the handshake below no longer costs the user
-        // the start of their sentence.
-        struct TokenResponse: Decodable { let token: String }
-        let singleUseToken: String
-        do {
+            // Mic is hot from here — the handshake below no longer costs the user
+            // the start of their sentence.
+            struct TokenResponse: Decodable { let token: String }
             let tokenData = try await send(path: "api/v1/speech/realtime-token", method: "POST")
-            singleUseToken = try JSONDecoder().decode(TokenResponse.self, from: tokenData).token
+            let singleUseToken = try JSONDecoder().decode(TokenResponse.self, from: tokenData).token
+            // stopTranscription() while the token was in flight.
+            guard transcriptionID == captureID else { return }
+
+            var components = URLComponents(string: "wss://api.elevenlabs.io/v1/speech-to-text/realtime")!
+            var queryItems = [
+                URLQueryItem(name: "token", value: singleUseToken),
+                URLQueryItem(name: "model_id", value: "scribe_v2_realtime"),
+                URLQueryItem(name: "audio_format", value: "pcm_\(sampleRate)"),
+                URLQueryItem(name: "commit_strategy", value: "vad"),
+            ]
+            let language = SpeechPreferences.speechLanguage
+            if language != "auto", !language.isEmpty {
+                queryItems.append(URLQueryItem(name: "language_code", value: language))
+            }
+            for keyterm in SpeechPreferences.speechKeyterms {
+                queryItems.append(URLQueryItem(name: "keyterms", value: keyterm))
+            }
+            components.queryItems = queryItems
+            let ws = URLSession.shared.webSocketTask(with: components.url!)
+            wsTask = ws
+            ws.resume()
+            listen(on: ws, captureID: captureID)
+            sink.attach(ws)
         } catch {
+            // A cancelled attempt may fail after another attempt has started.
+            // Its failure must never tear down that newer microphone/socket.
+            guard transcriptionID == captureID else { return }
             teardownCapture()
             throw error
         }
-        // stopTranscription() while the token was in flight.
-        guard transcribing else { return }
-
-        var components = URLComponents(string: "wss://api.elevenlabs.io/v1/speech-to-text/realtime")!
-        var queryItems = [
-            URLQueryItem(name: "token", value: singleUseToken),
-            URLQueryItem(name: "model_id", value: "scribe_v2_realtime"),
-            URLQueryItem(name: "audio_format", value: "pcm_\(sampleRate)"),
-            URLQueryItem(name: "commit_strategy", value: "vad"),
-        ]
-        let language = SpeechPreferences.speechLanguage
-        if language != "auto", !language.isEmpty {
-            queryItems.append(URLQueryItem(name: "language_code", value: language))
-        }
-        for keyterm in SpeechPreferences.speechKeyterms {
-            queryItems.append(URLQueryItem(name: "keyterms", value: keyterm))
-        }
-        components.queryItems = queryItems
-        let ws = URLSession.shared.webSocketTask(with: components.url!)
-        wsTask = ws
-        ws.resume()
-        listen()
-        sink.attach(ws)
     }
 
     /// Tears the mic down without emitting `.ended` — used when start-up fails
     /// after capture is already running. The caller is throwing, and the
     /// controller answers `.ended` by scheduling a restart.
     private func teardownCapture() {
-        transcribing = false
+        transcriptionID = nil
         audioEngine?.stop()
         audioEngine?.inputNode.removeTap(onBus: 0)
         audioEngine = nil
         audioSink?.close()
         audioSink = nil
+        wsTask?.cancel(with: .normalClosure, reason: nil)
+        wsTask = nil
         onEvent = nil
         VoiceAudioSession.releaseIfIdle()
     }
@@ -586,31 +589,31 @@ public final class ElevenLabsNativeSpeechProvider: NSObject, NativeSpeechProvidi
         finish(error: nil)
     }
 
-    private func listen() {
-        wsTask?.receive { [weak self] result in
-            switch result {
-            case .failure(let error):
-                Task { @MainActor [weak self] in
-                    guard let self, self.transcribing else { return }
+    private func listen(on socket: URLSessionWebSocketTask, captureID: UUID) {
+        socket.receive { [weak self] result in
+            Task { @MainActor [weak self] in
+                guard let self, self.transcriptionID == captureID, self.wsTask === socket else { return }
+                switch result {
+                case .failure(let error):
                     var detail = error.localizedDescription
-                    if let task = self.wsTask, task.closeCode != .invalid {
-                        let reason = task.closeReason.flatMap { String(data: $0, encoding: .utf8) } ?? ""
-                        detail += " [ws close \(task.closeCode.rawValue)\(reason.isEmpty ? "" : ": " + reason)]"
+                    if socket.closeCode != .invalid {
+                        let reason = socket.closeReason.flatMap { String(data: $0, encoding: .utf8) } ?? ""
+                        detail += " [ws close \(socket.closeCode.rawValue)\(reason.isEmpty ? "" : ": " + reason)]"
                     }
                     self.finish(error: detail)
-                }
-            case .success(let message):
-                let text: String?
-                switch message {
-                case .string(let s): text = s
-                case .data(let d): text = String(data: d, encoding: .utf8)
-                @unknown default: text = nil
-                }
-                Task { @MainActor [weak self] in
-                    if let text { self?.handleFrame(text) }
-                }
-                Task { @MainActor [weak self] in
-                    self?.listen()
+                case .success(let message):
+                    let text: String?
+                    switch message {
+                    case .string(let s): text = s
+                    case .data(let d): text = String(data: d, encoding: .utf8)
+                    @unknown default: text = nil
+                    }
+                    if let text { self.handleFrame(text) }
+                    // An error frame may have finished this capture. Process
+                    // it before scheduling another receive on the SAME socket.
+                    if self.transcriptionID == captureID, self.wsTask === socket {
+                        self.listen(on: socket, captureID: captureID)
+                    }
                 }
             }
         }
@@ -643,17 +646,9 @@ public final class ElevenLabsNativeSpeechProvider: NSObject, NativeSpeechProvidi
 
     private func finish(error: String?) {
         guard transcribing else { return }
-        transcribing = false
-        audioEngine?.stop()
-        audioEngine?.inputNode.removeTap(onBus: 0)
-        audioEngine = nil
-        audioSink?.close()
-        audioSink = nil
-        wsTask?.cancel(with: .normalClosure, reason: nil)
-        wsTask = nil
-        VoiceAudioSession.releaseIfIdle()
-        if let error { onEvent?(.error(error)) }
-        onEvent?(.ended)
-        onEvent = nil
+        let callback = onEvent
+        teardownCapture()
+        if let error { callback?(.error(error)) }
+        callback?(.ended)
     }
 }

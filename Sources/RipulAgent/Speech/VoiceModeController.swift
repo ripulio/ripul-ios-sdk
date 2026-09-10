@@ -41,6 +41,7 @@ public final class VoiceModeController: ObservableObject {
 
     @Published public private(set) var phase: Phase = .inactive {
         didSet {
+            if phase != .listening { listeningID = nil }
             // Leaving .speaking discards the clip — skip, stop, notice and
             // every listening path route through here, so this is the one
             // place the flag can't be forgotten. `.paused` is excluded: a
@@ -97,6 +98,10 @@ public final class VoiceModeController: ObservableObject {
 
     private weak var bridge: AgentBridge?
     private var sttProvider: Any?
+    private var sttFallback: Any?
+    /// Events and startup completions belong to one capture attempt. A stopped
+    /// provider can still complete asynchronously after listening has restarted.
+    private var listeningID: UUID?
     private var ttsProvider: Any?
     private var ttsFallback: Any?
     private var runningSink: AnyCancellable?
@@ -156,9 +161,6 @@ public final class VoiceModeController: ObservableObject {
     /// by the `ambientBusy` guard.
     private var narrationQueue: [String] = []
     private var narratedThisTurn: Bool { !narratedMessageIds.isEmpty }
-    /// True once the current STT provider has produced any transcription —
-    /// distinguishes "connection never came up" from a mid-session drop.
-    private var sttDelivered = false
     /// One automatic ElevenLabs→Apple swap per activation.
     private var sttFellBack = false
     /// Consecutive mic failures with nothing transcribed; bounded so a mic
@@ -181,6 +183,12 @@ public final class VoiceModeController: ObservableObject {
     private var remoteCommandsActive = false
 
     public init() {}
+
+    @available(iOS 26.0, macOS 26.0, *)
+    init(transcriptionProvider: any NativeSpeechProviding, fallback: any NativeSpeechProviding) {
+        sttProvider = transcriptionProvider
+        sttFallback = fallback
+    }
 
     // MARK: - Lifecycle
 
@@ -243,6 +251,7 @@ public final class VoiceModeController: ObservableObject {
         default:
             sttProvider = AppleSpeechProvider()
         }
+        sttFallback = AppleSpeechProvider()
         // Speaking is quality-first regardless of the dictation preference.
         ttsProvider = ElevenLabsNativeSpeechProvider(tokenProvider: tokens, tokenRefresher: mintToken)
         ttsFallback = AppleSpeechProvider()
@@ -251,7 +260,6 @@ public final class VoiceModeController: ObservableObject {
         // the debug scroller has its own toggle for the same channel.
         bridge.evaluateJavaScript("window.__ripulSetNativeChatForwarding?.(true)")
 
-        sttDelivered = false
         sttFellBack = false
         micFailureCount = 0
         pendingReply = nil
@@ -517,7 +525,7 @@ public final class VoiceModeController: ObservableObject {
 
     // MARK: - Listening
 
-    private func beginListening(keepText: Bool) {
+    func beginListening(keepText: Bool) {
         guard #available(iOS 26.0, macOS 26.0, *),
               let stt = sttProvider as? any NativeSpeechProviding else {
             phase = .inactive
@@ -528,6 +536,8 @@ public final class VoiceModeController: ObservableObject {
             committedText = ""
         }
         phase = .listening
+        let attemptID = UUID()
+        listeningID = attemptID
         // Back to the capture category before the engine starts. Safe here and
         // only here: nothing is capturing yet, and `captureLive` keeps the UI
         // honest about the extra beat this costs.
@@ -540,17 +550,18 @@ public final class VoiceModeController: ObservableObject {
         Task { @MainActor [weak self] in
             do {
                 try await stt.startTranscription { [weak self] event in
-                    self?.handleTranscription(event)
+                    guard let self, self.listeningID == attemptID else { return }
+                    self.handleTranscription(event)
                 }
-                guard let self, self.phase == .listening else { return }
+                guard let self, self.phase == .listening, self.listeningID == attemptID else { return }
                 self.setCaptureLive(true)
                 self.noteTranscript()
             } catch {
-                guard let self, self.phase == .listening else { return }
+                guard let self, self.phase == .listening, self.listeningID == attemptID else { return }
                 if error is SpeechPrivacyRequirements.MissingUsageDescription {
                     self.handleMicrophoneSetupFailure(error)
                 } else {
-                    self.showNotice("Mic failed: \(error.localizedDescription)")
+                    self.handleTranscriptionFailure(error.localizedDescription)
                 }
             }
         }
@@ -561,13 +572,11 @@ public final class VoiceModeController: ObservableObject {
         guard phase == .listening else { return }
         switch event {
         case .partial(let text):
-            sttDelivered = true
             micFailureCount = 0
             setCaptureLive(true)
             partialText = text
             noteTranscript()
         case .committed(let text):
-            sttDelivered = true
             micFailureCount = 0
             setCaptureLive(true)
             if !text.isEmpty {
@@ -603,38 +612,49 @@ public final class VoiceModeController: ObservableObject {
                 lastVoiceActivityAt = Self.now
             }
         case .error(let message):
-            setCaptureLive(false)
-            // The overlay notice is transient and user-facing; the full cause
-            // (server error frames, close codes) goes to the console buffer so
-            // device_console_logs can answer "why" after the fact.
-            nerror("[VOICE] STT error: \(message)")
-            micFailureCount += 1
-            if !sttDelivered, !sttFellBack, sttProvider is ElevenLabsNativeSpeechProvider {
-                // The cloud mic never came up (network wobble, WS rejection).
-                // Swap to on-device — the notice-expiry restart picks up the
-                // new provider — instead of re-dialing the same failure.
-                sttFellBack = true
-                sttProvider = AppleSpeechProvider()
-                showNotice("Cloud mic unavailable — using on-device dictation")
-            } else if micFailureCount >= 5 {
-                // Even on-device can't start (permissions?). Exit cleanly
-                // rather than showing the same notice forever.
-                stop()
-            } else {
-                showNotice(message)
-            }
+            handleTranscriptionFailure(message)
         case .ended:
             // Engine ended on its own while we still want the mic — restart,
             // preserving whatever the user already said. The mic is down for
             // the whole restart (a token mint plus a WS handshake, on
             // ElevenLabs), which is emphatically not the user falling silent.
             setCaptureLive(false)
+            let endedID = listeningID
             Task { @MainActor [weak self] in
                 try? await Task.sleep(nanoseconds: 300_000_000)
-                guard let self, self.phase == .listening else { return }
+                guard let self, self.phase == .listening, self.listeningID == endedID else { return }
                 self.beginListening(keepText: true)
             }
         }
+    }
+
+    @available(iOS 26.0, macOS 26.0, *)
+    private func handleTranscriptionFailure(_ message: String) {
+        setCaptureLive(false)
+        let failedProvider = sttProvider as? any NativeSpeechProviding
+        nerror("[VOICE] STT error provider=\(failedProvider?.id ?? "unknown"): \(message)")
+        micFailureCount += 1
+        if !sttFellBack, failedProvider?.id == "elevenlabs" {
+            // A TLS/socket failure can happen after minutes of successful
+            // transcription. Keep Apple for the rest of this conversation.
+            // Its partial results start afresh, so retain the cloud's last
+            // uncommitted words before the first Apple partial replaces them.
+            if !partialText.isEmpty {
+                committedText = committedText.isEmpty ? partialText : committedText + " " + partialText
+                partialText = ""
+            }
+            sttFellBack = true
+            sttProvider = sttFallback ?? AppleSpeechProvider()
+            showNotice("Cloud transcription interrupted — using on-device dictation")
+            nlog("[VOICE] STT recovery: switched to Apple on-device dictation")
+        } else if micFailureCount >= 5 {
+            stop()
+        } else {
+            showNotice("Transcription interrupted: \(message)")
+        }
+        // Invalidate the attempt via the phase change above BEFORE stopping:
+        // a provider may synchronously emit `.ended` from stopTranscription.
+        failedProvider?.stopTranscription()
     }
 
     private func noteTranscript() {
@@ -1096,7 +1116,11 @@ public final class VoiceModeController: ObservableObject {
         phase = .notice(message)
         noticeTask?.cancel()
         noticeTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: 2_200_000_000)
+            do {
+                try await Task.sleep(nanoseconds: 2_200_000_000)
+            } catch {
+                return
+            }
             guard let self, case .notice = self.phase else { return }
             self.beginListening(keepText: true)
         }

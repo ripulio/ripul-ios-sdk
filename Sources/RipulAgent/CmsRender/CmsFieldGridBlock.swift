@@ -16,9 +16,10 @@ import SwiftUI
 /// selection, `hidePickerWhenSingle`), collapsible header, title divider,
 /// flow layout (auto/fixed columns, min width, gap/padding in theme units),
 /// value styles outlined/plain/underline, label placements, formats.
-/// Degradations: `layoutMode: grid` renders as flow; `fieldGroups`,
-/// `columnDefsRef`/`columnViewRef` indirection deferred (inline fields or
-/// every column).
+/// An optional record source adds fields to a Layout Grid. Placed fields
+/// and ordinary block cells stack in authored reading order on the phone,
+/// matching the web's mobile layout. `fieldGroups` and `columnDefsRef`
+/// indirection remain deferred.
 struct CmsFieldGridBlockView: View {
     let block: CmsBlock
     @EnvironmentObject var runtime: CmsRuntime
@@ -40,7 +41,7 @@ struct CmsFieldGridBlockView: View {
     var body: some View {
         content
             .onAppear {
-                runtime.ensureLoaded(querySlug)
+                if !querySlug.isEmpty { runtime.ensureLoaded(querySlug) }
                 if !configured {
                     configured = true
                     if block.props.bool("collapsible") ?? false,
@@ -53,6 +54,10 @@ struct CmsFieldGridBlockView: View {
             .onChange(of: resultFingerprint) { _ in
                 seedSelectionIfNeeded()
             }
+            .onChange(of: querySlug) { slug in
+                if !slug.isEmpty { runtime.ensureLoaded(slug) }
+                seedSelectionIfNeeded()
+            }
     }
 
     private var resultFingerprint: String {
@@ -63,7 +68,7 @@ struct CmsFieldGridBlockView: View {
     /// recordPicker mode's autoSelectFirst: when nothing is selected, select
     /// the first row into the SHARED store so it propagates page-wide.
     private func seedSelectionIfNeeded() {
-        guard (block.props.string("titleMode") ?? "text") == "recordPicker" else { return }
+        guard !querySlug.isEmpty, (block.props.string("titleMode") ?? "text") == "recordPicker" else { return }
         guard (runtime.selections[querySlug] ?? []).isEmpty,
               case .ok(let result) = runtime.state(for: querySlug),
               let first = result.rows.first else { return }
@@ -72,6 +77,25 @@ struct CmsFieldGridBlockView: View {
 
     @ViewBuilder
     private var content: some View {
+        if querySlug.isEmpty || !block.gridContentSlots.isEmpty {
+            // Independent content stays mounted while the optional source is
+            // loading, waiting, empty or failed. Only its record fields wait.
+            let data = recordData
+            panel(rows: data.rows, row: runtime.selections[querySlug]?.first, fields: fields(schema: data.schema))
+        } else {
+            recordContent
+        }
+    }
+
+    private var recordData: (rows: [[String: CmsJSON]], schema: [CmsQueryResultColumn]) {
+        if !querySlug.isEmpty, case .ok(let result) = runtime.state(for: querySlug) {
+            return (result.rows, result.schema)
+        }
+        return ([], [])
+    }
+
+    @ViewBuilder
+    private var recordContent: some View {
         switch runtime.state(for: querySlug) {
         case .idle, .loading:
             HStack { Spacer(); ProgressView(); Spacer() }
@@ -91,14 +115,51 @@ struct CmsFieldGridBlockView: View {
             // picker mode seeds it; plain mode follows whoever selected).
             let row = (runtime.selections[querySlug] ?? []).first
             let fields = fields(schema: result.schema)
-            VStack(alignment: .leading, spacing: 10) {
-                header(rows: result.rows, row: row)
-                if block.props.bool("titleDivider") ?? false {
-                    Divider()
+            panel(rows: result.rows, row: row, fields: fields)
+        }
+    }
+
+    private func panel(rows: [[String: CmsJSON]], row: [String: CmsJSON]?, fields: [Field]) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            header(rows: rows, row: row)
+            if block.props.bool("titleDivider") ?? false { Divider() }
+            if expanded {
+                Group {
+                    if querySlug.isEmpty || block.props.string("layoutMode") == "grid" {
+                        placedContent(row: row, fields: fields)
+                    } else {
+                        fieldFlow(row: row, fields: fields)
+                    }
                 }
-                if expanded {
-                    fieldFlow(row: row, fields: fields)
-                        .padding(CGFloat(block.props.double("padding") ?? 0) * 8)
+                .padding(CGFloat(block.props.double("padding") ?? 0) * 8)
+            }
+        }
+    }
+
+    private func placedContent(row: [String: CmsJSON]?, fields: [Field]) -> some View {
+        let layout = block.props.object("gridLayout") ?? [:]
+        let placements = layout.object("placements") ?? [:]
+        let visibleFields = fields.filter { layout.bool("hideUnplaced") != true || placements[$0.key] != nil }
+        let fieldsByKey = Dictionary(visibleFields.map { ($0.key, $0) }, uniquingKeysWith: { first, _ in first })
+        let slots = block.gridContentSlots
+        let keys = (visibleFields.map(\.key) + slots.keys.sorted().map { "__slot:\($0)" }).enumerated().sorted { a, b in
+            let ap = placements[a.element]?.objectValue ?? [:]
+            let bp = placements[b.element]?.objectValue ?? [:]
+            let ar = ap.double("row") ?? .greatestFiniteMagnitude
+            let br = bp.double("row") ?? .greatestFiniteMagnitude
+            if ar != br { return ar < br }
+            let ac = ap.double("col") ?? Double(a.offset)
+            let bc = bp.double("col") ?? Double(b.offset)
+            return ac == bc ? a.offset < b.offset : ac < bc
+        }.map(\.element)
+        return VStack(alignment: .leading, spacing: CGFloat(block.props.double("gap") ?? 2) * 8) {
+            ForEach(keys, id: \.self) { key in
+                if let field = fieldsByKey[key] {
+                    fieldCell(field, row: row)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                } else if let slot = slots[String(key.dropFirst("__slot:".count))] {
+                    CmsBlockContainerView(container: slot)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
         }
@@ -110,7 +171,7 @@ struct CmsFieldGridBlockView: View {
     private func header(rows: [[String: CmsJSON]], row: [String: CmsJSON]?) -> some View {
         let title = block.props.string("title") ?? ""
         let collapsible = block.props.bool("collapsible") ?? false
-        let pickerMode = (block.props.string("titleMode") ?? "text") == "recordPicker"
+        let pickerMode = !querySlug.isEmpty && (block.props.string("titleMode") ?? "text") == "recordPicker"
         let hideSingle = (block.props.bool("hidePickerWhenSingle") ?? false) && rows.count <= 1
         if !title.isEmpty || collapsible || (pickerMode && !hideSingle) {
             HStack(spacing: 8) {
@@ -182,6 +243,7 @@ struct CmsFieldGridBlockView: View {
     // MARK: - Field flow
 
     private func fields(schema: [CmsQueryResultColumn]) -> [Field] {
+        guard !querySlug.isEmpty else { return [] }
         // Shared column view (columnViewRef) wins over inline fields — the
         // web's `columnViewColumns ?? sharedColumns ?? props.fields`
         // (columnDefsRef deferred). Carries labels/order/format/image config.
