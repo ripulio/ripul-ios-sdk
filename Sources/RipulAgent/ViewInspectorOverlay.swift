@@ -9,7 +9,7 @@ let ripulViewExplorerOverlayTag = 0x5249_5055   // "RIPU"
 
 /// Marketing version of the RipulAgent SDK, surfaced in the inspector's copy output as `sdk: …`
 /// so we can always tell which build is actually running on the device. Bump on every release.
-let ripulSDKVersion = "0.7.98"
+let ripulSDKVersion = "0.7.99"
 
 // MARK: - View Inspector Overlay
 //
@@ -2474,6 +2474,12 @@ struct ScreenAudit {
         // count a whole SwiftUI field (WacFieldGlassButton, …) as ONE unit instead of skipping it:
         // SwiftUI renders as internal _UIInheritedViews that match no UIKit control class.
         func hostingRootType(of v: UIView) -> String? {
+            // NavigationStack/List can move rows into independent UIKit cells,
+            // outside the original UIHostingController's root. They still expose
+            // SwiftUI accessibility elements and stamps, not UIKit text controls.
+            if String(describing: type(of: v)).hasPrefix("CellHostingView<") {
+                return "SwiftUI row"
+            }
             guard let vc = v.next as? UIViewController, vc.viewIfLoaded === v else { return nil }
             // Hosts often subclass UIHostingController to manage UIKit navigation.
             // The concrete subclass name contains no UIHostingController; inspect
@@ -2481,7 +2487,7 @@ struct ScreenAudit {
             var candidate: AnyClass? = type(of: vc)
             while let type = candidate {
                 let cls = String(describing: type)
-                if cls.contains("UIHostingController") {
+                if cls.contains("UIHostingController") || cls.contains("NavigationStackHostingController") {
                     if let lt = cls.firstIndex(of: "<"), let gt = cls.lastIndex(of: ">"), lt < gt {
                         return String(cls[cls.index(after: lt)..<gt])
                     }

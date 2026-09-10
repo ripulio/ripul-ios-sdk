@@ -43,3 +43,8 @@ SDK 0.7.97 fixes the shared Audit classifier to recognize custom subclasses of
 UIHostingController by walking the superclass chain. Previously these could
 fall through to UIKit internals and omit the hosted SwiftUI accessibility rows
 (`Sources/RipulAgent/ViewInspectorOverlay.swift:2479`).
+
+SDK 0.7.99 also recognizes NavigationStack hosting roots and the materialized
+CellHostingView rows produced by SwiftUI List. This covers lists whose visible
+rows have moved outside the original UIHostingController root
+(`Sources/RipulAgent/ViewInspectorOverlay.swift:2487`).
