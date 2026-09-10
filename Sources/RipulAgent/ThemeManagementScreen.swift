@@ -35,9 +35,37 @@ final class ThemeManagementModel: ObservableObject {
         self.publisher = publisher ?? RipulThemePublisher(baseURL: baseURL, tokenProvider: tokenProvider)
         let url = remote?.url
         themeID = url?.deletingLastPathComponent().path == "/v1/app-themes" ? url?.lastPathComponent : nil
+        self.draftURL = draftURL ?? Self.draftLocation(for: url)
+    }
+
+    private static func draftLocation(for url: URL?) -> URL {
         let key = SHA256.hash(data: Data((url?.absoluteString ?? "local-theme").utf8)).map { String(format: "%02x", $0) }.joined()
-        self.draftURL = draftURL ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        return FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Ripul/ThemeDrafts/" + key + ".json")
+    }
+
+    /// The explorer saves into the SAME durable draft as Solution Management, even
+    /// when that screen has never been opened. Keep its reviewed baseline and extras.
+    static func saveTabTitleDraft(identifier: String, title: String?,
+                                  remote: RipulRemoteThemeClient? = nil,
+                                  draftURL: URL? = nil) throws {
+        guard let remote = remote ?? RipulThemeEngine.remoteTheme else { throw NativeTextDraftError.noRemoteTheme }
+        let destination = draftURL ?? draftLocation(for: remote.url)
+        let existing: Draft?
+        if FileManager.default.fileExists(atPath: destination.path) {
+            existing = try JSONDecoder().decode(Draft.self, from: Data(contentsOf: destination))
+        } else { existing = nil }
+        let document = try existing.map { Data($0.text.utf8) } ?? RipulThemeEngine.themeDocumentForPublishing()
+        var native = try NativeTextTheme.decode(document: document)
+        native.tabBarItemTitles[identifier] = title
+        let changed = try native.merging(into: document)
+        _ = try RipulThemeManifest(data: changed, etag: nil)
+        let draft = Draft(text: String(decoding: changed, as: UTF8.self),
+                          baseline: existing?.baseline ?? remote.authoritativeDocument,
+                          etag: existing.map { $0.etag } ?? remote.authoritativeETag)
+        try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try JSONEncoder().encode(draft).write(to: destination, options: .atomic)
+        NativeTabTitleTheme.setOverride(title, identifier: identifier)
     }
 
     var data: Data { Data(text.utf8) }
@@ -171,6 +199,11 @@ public struct RipulThemeManagementScreen: View {
         }
         return items.sorted { ($0.subtitle + $0.scope.label).localizedStandardCompare($1.subtitle + $1.scope.label) == .orderedAscending }
     }
+    private var nativeElements: [NativeTabTitleTheme.Element] {
+        NativeTabTitleTheme.elements.filter { item in
+            search.isEmpty || [item.id, item.title, "Tab bar title"].contains { $0.localizedCaseInsensitiveContains(search) }
+        }
+    }
     public var body: some View {
         NavigationStack { content }
             .onAppear { model.start() }
@@ -210,8 +243,23 @@ public struct RipulThemeManagementScreen: View {
                     .disabled(model.busy || model.sourceDirty)
                     .accessibilityIdentifier("ThemeManagement.element." + item.id)
                 }
-                if elements.isEmpty { Text(search.isEmpty ? "No registered theme elements match this filter." : "No matching elements.").foregroundStyle(.secondary) }
-            } header: { Text("Elements (\(elements.count))") }
+                ForEach(nativeElements) { item in
+                    NavigationLink {
+                        Form { NativeTabTitleFields(identifier: item.id, savesExplicitly: false) }
+                            .navigationTitle("Tab title").navigationBarTitleDisplayMode(.inline)
+                    } label: {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(item.title.isEmpty ? "Untitled tab" : item.title)
+                            Text("Tab bar · " + item.id).font(.caption).foregroundStyle(.secondary)
+                            if item.ambiguous { Text("Identifier is used by more than one tab item.").font(.caption).foregroundStyle(.secondary) }
+                            else if !item.mounted { Text("This tab is not currently loaded.").font(.caption).foregroundStyle(.secondary) }
+                        }
+                    }
+                    .disabled(model.busy || model.sourceDirty || item.ambiguous)
+                    .accessibilityIdentifier("ThemeManagement.nativeText." + item.id)
+                }
+                if elements.isEmpty && nativeElements.isEmpty { Text(search.isEmpty ? "No theme elements match this filter." : "No matching elements.").foregroundStyle(.secondary) }
+            } header: { Text("Elements (\(elements.count + nativeElements.count))") }
         }
         .searchable(text: $search, prompt: "Find an element or its text")
         .navigationTitle("Theme")

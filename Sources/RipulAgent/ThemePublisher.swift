@@ -68,7 +68,9 @@ public final class RipulThemePublisher {
         request.httpMethod = "PUT"; request.httpBody = data
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        if let etag { request.setValue(etag, forHTTPHeaderField: "If-Match") }
+        // This API's version is the manifest's SHA-256 digest. Cloudflare may mark
+        // that same digest weak when compressing GET responses; D1 stores it strong.
+        if let etag { request.setValue(etag.hasPrefix("W/\"") ? String(etag.dropFirst(2)) : etag, forHTTPHeaderField: "If-Match") }
         else { request.setValue("*", forHTTPHeaderField: "If-None-Match") }
         let (body, response) = try await fetch(request)
         guard let http = response as? HTTPURLResponse else { throw RipulThemePublishError.invalidResponse }

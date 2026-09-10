@@ -68,7 +68,7 @@ struct SolutionManagementSection: View {
         GlassSectionPanel(title: "Solution management", isExpanded: $isExpanded) {
             ScrollView(.vertical) {
                 VStack(spacing: 0) {
-                    if !RipulThemeEngine.styleKinds.isEmpty {
+                    if !RipulThemeEngine.styleKinds.isEmpty || RipulThemeEngine.remoteTheme != nil {
                         row(title: "Theme", subtitle: "Edit elements and text, then publish to the app",
                             icon: "paintpalette", identifier: "SolutionManagement.theme") { showingTheme = true }
                         Divider().padding(.leading, 44)

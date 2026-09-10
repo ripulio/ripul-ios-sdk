@@ -421,7 +421,9 @@ public enum RipulThemeEngine {
     /// Preserve host-owned JSON when an SDK editor changes the engine's slice.
     @MainActor
     public static func themeDocumentForPublishing(over base: Data? = nil) throws -> Data {
-        if let exportThemeDocument { return try exportThemeDocument(base) }
+        if let exportThemeDocument {
+            return try NativeTabTitleTheme.current.merging(into: exportThemeDocument(base))
+        }
         guard let spec else { throw RipulThemePublishError.invalidDocument }
         let original: Data
         if let base { original = base }
@@ -440,7 +442,7 @@ public enum RipulThemeEngine {
             if json[key] == nil, let map = edited as? [String: Any], map.isEmpty { continue }
             json[key] = edited
         }
-        return try JSONSerialization.data(withJSONObject: json, options: [.sortedKeys, .prettyPrinted])
+        return try NativeTabTitleTheme.current.merging(into: JSONSerialization.data(withJSONObject: json, options: [.sortedKeys, .prettyPrinted]))
     }
 
     /// Call once after configure and any host facade bootstrap, before constructing UI.
@@ -461,7 +463,9 @@ public enum RipulThemeEngine {
             decoder.userInfo[.ripulThemeSpec] = spec
             adopt(try decoder.decode(RipulThemeDocument.self, from: data))
         }
-        let client = RipulRemoteThemeClient(url: url, fallback: fallback, validateAndApply: apply)
+        let client = RipulRemoteThemeClient(url: url, fallback: fallback, validateAndApply: { data in
+            try applyRemoteDocument(data, applyingHost: apply)
+        })
         remoteTheme?.stop()
         if let observer = remoteThemeForegroundObserver { NotificationCenter.default.removeObserver(observer) }
         remoteTheme = client
@@ -471,6 +475,16 @@ public enum RipulThemeEngine {
         ) { _ in
             Task { @MainActor in remoteTheme?.refreshInBackground() }
         }
+    }
+
+    @MainActor
+    static func applyRemoteDocument(_ data: Data, applyingHost: (Data) throws -> Void) throws {
+        // Validate both schemas before changing SDK state. A host can discard unknown
+        // fields during decoding without losing the SDK's automatic bindings.
+        let text = try NativeTextTheme.decode(document: data)
+        try applyingHost(data)
+        NativeTabTitleTheme.adopt(text)
+        NotificationCenter.default.post(name: .ripulThemeDidChange, object: nil)
     }
 
     /// Configure the engine: register the vocabulary + style kinds and load the live

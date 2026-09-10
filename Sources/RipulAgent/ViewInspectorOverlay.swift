@@ -9,7 +9,7 @@ let ripulViewExplorerOverlayTag = 0x5249_5055   // "RIPU"
 
 /// Marketing version of the RipulAgent SDK, surfaced in the inspector's copy output as `sdk: …`
 /// so we can always tell which build is actually running on the device. Bump on every release.
-let ripulSDKVersion = "0.7.92"
+let ripulSDKVersion = "0.7.93"
 
 // MARK: - View Inspector Overlay
 //
@@ -265,7 +265,7 @@ struct InspectedView {
         let shadowOpacity: Float
     }
 
-    static func inspect(_ view: UIView, depth: Int = 0, resolvedIdentifier: String? = nil, hitLeaf: UIView? = nil, registryStamps: [String] = [], registryMatchView: UIView? = nil, actionableSummary: String? = nil) -> InspectedView {
+    @MainActor static func inspect(_ view: UIView, depth: Int = 0, resolvedIdentifier: String? = nil, hitLeaf: UIView? = nil, registryStamps: [String] = [], registryMatchView: UIView? = nil, actionableSummary: String? = nil) -> InspectedView {
         let rawClassName = String(describing: type(of: view))
         // A tap that resolves a SwiftUI stamp often lands on the stamp's own host container —
         // "UIKitPlatformViewHost<…UIKitIdentifierStamper>" is inspector plumbing, not the
@@ -303,7 +303,7 @@ struct InspectedView {
             ),
             childCount: view.subviews.count,
             depth: depth,
-            text: textContent(of: view),
+            text: NativeTabTitleTheme.identifier(for: view, resolvedIdentifier: resolvedId).flatMap { NativeTabTitleTheme.title(for: $0) } ?? textContent(of: view),
             imageName: imageName(of: view),
             owningViewController: vcChain.first,
             viewControllerChain: vcChain,
@@ -352,7 +352,8 @@ struct InspectedView {
     // MARK: Source-finding extractors
 
     /// Visible text of the common text-bearing controls.
-    static func textContent(of v: UIView) -> String? {
+    @MainActor static func textContent(of v: UIView) -> String? {
+        if let id = NativeTabTitleTheme.identifier(for: v) { return NativeTabTitleTheme.title(for: id) }
         if let l = v as? UILabel { return nonEmpty(l.text) }
         if let f = v as? UITextField { return nonEmpty(f.text) ?? nonEmpty(f.placeholder) }
         if let t = v as? UITextView { return nonEmpty(t.text) }
@@ -673,8 +674,9 @@ struct InspectedView {
 
     /// Live-set the text of a text-bearing view — backs the inspector's inline edit
     /// so a trial copy change is visible in-context before it's handed off.
-    static func applyText(_ s: String, to v: UIView) {
-        if let l = v as? UILabel { l.text = s }
+    @MainActor static func applyText(_ s: String, to v: UIView) {
+        if let id = NativeTabTitleTheme.identifier(for: v) { NativeTabTitleTheme.preview(s, identifier: id) }
+        else if let l = v as? UILabel { l.text = s }
         else if let f = v as? UITextField { f.text = s }
         else if let t = v as? UITextView { t.text = s }
         else if let b = v as? UIButton { b.setTitle(s, for: .normal) }
@@ -1873,6 +1875,7 @@ struct InspectorTokenSection: View {
 @available(iOS 16.0, *)
 struct InspectorEditTab: View {
     let info: InspectedView
+    private let nativeTextIdentifier: String?
 
     // Editable state, seeded from the live view.
     @State private var text: String
@@ -1898,7 +1901,8 @@ struct InspectorEditTab: View {
         let v = info.view
         let tc = InspectedView.currentTextColor(v)
         let font = InspectedView.currentFont(v)
-        hasText = info.text != nil
+        nativeTextIdentifier = NativeTabTitleTheme.identifier(for: v, resolvedIdentifier: info.accessibilityId)
+        hasText = info.text != nil && nativeTextIdentifier == nil
         hasTextColor = tc != nil
         hasFont = font != nil
         origText = info.text ?? ""
@@ -1926,6 +1930,10 @@ struct InspectorEditTab: View {
             // Anchored on the resolved stamp for SwiftUI elements (declared token colours live
             // there), falling back to the inspected view for UIKit.
             InspectorTokenSection(view: info.tokenAnchorView)
+
+            if let nativeTextIdentifier {
+                NativeTabTitleFields(identifier: nativeTextIdentifier, savesExplicitly: true)
+            }
 
             if hasText {
                 labeled("Text") {
@@ -2069,7 +2077,8 @@ struct InspectorEditTab: View {
     }
 
     private func resetAll() {
-        text = origText; InspectedView.applyText(origText, to: info.view)
+        text = origText
+        if hasText { InspectedView.applyText(origText, to: info.view) }
         bg = origBg; info.view.backgroundColor = UIColor(origBg)
         tint = origTint; info.view.tintColor = UIColor(origTint)
         if hasTextColor { textColor = origTextColor; InspectedView.applyTextColor(UIColor(origTextColor), to: info.view) }
@@ -2404,7 +2413,7 @@ struct ScreenAudit {
     var auto: Int { items.filter { $0.bucket == .auto }.count }
     var anonymous: Int { items.filter { $0.bucket == .anonymous }.count }
 
-    static func run(on root: UIView) -> ScreenAudit {
+    @MainActor static func run(on root: UIView) -> ScreenAudit {
         var items: [Item] = []
 
         func hasControlAncestor(_ v: UIView) -> Bool {

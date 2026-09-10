@@ -39,7 +39,8 @@ try RipulThemeEngine.followRemoteTheme(
 
 The host does not need to instrument individual views for this loading change.
 Existing theme consumers continue using their usual resolution and theme-change
-notifications. This does not add automatic text replacement to unbound elements.
+notifications. Identified UIKit tab items also support automatic title overrides
+through the app-wide instrumentation described below.
 SwiftUI consumers still need the existing theme environment dependency to refresh.
 
 `RipulRemoteThemeClient` is also available independently of the UIKit engine for
@@ -89,12 +90,12 @@ Backend deployment requires migration `0044_create_app_themes.sql` before publis
 ## Edit and publish on iPhone
 
 The shared agent screen offers **Solution management → Theme** when the host has
-registered theme kinds. It lists every registered scope, including elements not
+registered theme kinds or connected a remote theme. It lists every registered scope, including elements not
 currently mounted. Search finds names, paths, IDs and current text; **Text elements
 only** filters the list to kinds with free-text knobs. Selecting a row opens native
 controls backed by the same engine mutations as View Explorer and the in-app editor.
-This lists theme-bound text/settings; it does not invent bindings for hard-coded
-labels or user-entered record data.
+It also discovers identified UIKit tab items automatically. Other hard-coded labels
+and user-entered record data are not automatically bound by this adapter.
 
 **Theme document** is a native text editor for the complete JSON. **Apply to app**
 validates it through the host's existing full-document callback before previewing.
@@ -124,3 +125,42 @@ Hosts can embed `RipulThemeManagementScreen(baseURL:tokenProvider:)` directly; i
 its native navigation stack. A hosted theme URL with `/v1/app-themes/<id>` enables
 publishing through the host's usual `/api/admin/app-themes/<id>` service. Runtime theme
 reads remain public and never carry publishing credentials.
+
+## Automatic UIKit tab titles
+
+Call `RipulThemeInstrumentation.install()` once at launch, alongside the app-wide
+theme connection above. Existing `UITabBarItem.accessibilityIdentifier` values are
+the bindings. There is no per-item SDK registration or theme lookup in title code.
+An item without an identifier needs a stable identifier before it can be targeted;
+the adapter never uses its current wording, screen coordinates, or tab position.
+
+For example, WAC already sets `tabbar.legalHub` on its Legal hub tab. In **View
+Explorer → Edit**, change **Tab title**, then **Save to theme draft**. Open **Solution
+management → Theme → Review & Publish** to review and publish that complete draft.
+The same tab can be found directly in Theme by searching its title or identifier.
+
+```json
+{
+  "nativeTextOverrides": {
+    "tabBarItemTitles": {
+      "tabbar.legalHub": "Help"
+    }
+  }
+}
+```
+
+This section lives alongside the existing host theme fields. The SDK reads and
+exports it even when the host's typed theme ignores unknown JSON fields. It uses
+public `UITabBarItem.title`; UIKit's internal tab-button views are never modified.
+Title-before-identifier construction, later title assignments, reordered tabs,
+and recreated items are supported. Removing an override restores the most recent
+title supplied by the app. Empty strings intentionally hide the title. Duplicate
+identifiers among live tab items disable the ambiguous override and editor row.
+
+The registry holds items weakly. Hooks run on item title/identifier assignment,
+tab item replacement and attachment; theme changes update the tracked items.
+Installation performs one discovery walk for tabs already in a window. There is
+no continuous view scan, timer, or per-frame theme lookup. Explorer trial edits
+are temporary; saved drafts survive closing and server refresh without gaining
+runtime authority until published. The adapter covers UIKit tab items, including
+their rendered descendants in View Explorer, not arbitrary SwiftUI text.

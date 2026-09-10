@@ -81,9 +81,10 @@ extension UIView {
 public enum RipulThemeInstrumentation {
     private static var installed = false
 
-    public static func install() {
+    @MainActor public static func install() {
         guard !installed else { return }
         installed = true
+        NativeTabTitleTheme.install()
         guard let original = class_getInstanceMethod(UIView.self, #selector(setter: UIView.backgroundColor)),
               let swizzled = class_getInstanceMethod(UIView.self, #selector(UIView.ripul_setBackgroundColor(_:))) else {
             assertionFailure("[RipulTheme] could not swizzle UIView.backgroundColor setter")

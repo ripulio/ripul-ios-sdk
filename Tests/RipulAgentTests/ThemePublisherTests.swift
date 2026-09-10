@@ -38,6 +38,13 @@ final class ThemePublisherTests: XCTestCase {
         XCTAssertNil(loaded)
         _ = try await client.publish(id: "app", data: Data("{}".utf8), replacing: nil)
     }
+    func testCDNWeakDigestIsPublishedAsStoredManifestVersion() async throws {
+        let client = RipulThemePublisher(baseURL: base, tokenProvider: { "test" }, fetch: { request in
+            XCTAssertEqual(request.value(forHTTPHeaderField: "If-Match"), "\"reviewed-digest\"")
+            return (Data(#"{"etag":"new"}"#.utf8), self.response(200))
+        })
+        _ = try await client.publish(id: "app", data: Data("{}".utf8), replacing: "W/\"reviewed-digest\"")
+    }
     func testInvalidOversizedAndSignedOutDraftsNeverWrite() async throws {
         var calls = 0
         let client = RipulThemePublisher(baseURL: base, tokenProvider: { nil }, fetch: { _ in
