@@ -117,6 +117,7 @@ final class UnifiedInspectorTests: XCTestCase {
         try await waitForWeb(session)
         await session.editStyle("padding-left", value: "31px")
         XCTAssertEqual(session.web?.styles["padding-left"], "31px")
+        XCTAssertEqual(session.web?.box.padding.left, 31)
         let identifier = await session.evaluate("$0.getAttribute('data-ui')")
         XCTAssertEqual(identifier, "\"chat.message\"")
         _ = try await web.evaluateJavaScript("document.querySelector('button').outerHTML = '<button data-ui=\"chat.message\">Replacement</button>'")

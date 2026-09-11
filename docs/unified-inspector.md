@@ -21,6 +21,13 @@ theme token editing, audit and macro recording. Web selections expose CSS layout
 and appearance edits and an Eval tab, where `$0` is the selected DOM element.
 Web CSS edits change the current page; they are not source-code changes.
 
+For web elements, **Layout** includes the nested margin (orange), border (yellow),
+padding (green), and content (blue) box diagram. Tap any edge to edit its CSS value;
+numbers default to pixels, other CSS units are accepted, and clearing a value
+removes the inline override. Edits override stylesheet rules and refresh the
+diagram immediately. Content dimensions use untransformed CSS layout dimensions
+and account for `box-sizing`, rather than the selection's screen bounding box.
+
 **Add to chat** freezes a selection snapshot and opens the existing context
 preview. The user chooses description, screenshot and optional recognized text,
 then attaches it to the chat that opened the Inspector. Nothing is sent until
@@ -53,6 +60,7 @@ selections; web selections provide DOM activation and evaluation.
 - SDK `UnifiedInspectorTests`, `ExplorerSelectionTests`, `ComposerElementContextTests`.
 - App `MacroRecordingToggleUITests` covers recording, the separate-window
   Inspector's explicit activation and touch pass-through, and single/double taps
-  on the production chat title overlay and session-list title.
+  on the production chat title overlay and session-list title. It also verifies
+  all twelve box-model edges and live edits through the native value editor.
 - `node --test tests/unified-inspector.browser.test.mjs` in `chrome-extension`
   exercises the actual React overlay and DOM provider in WebKit and Chromium.

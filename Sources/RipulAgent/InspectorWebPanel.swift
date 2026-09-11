@@ -20,7 +20,10 @@ struct InspectorWebPanel: View {
                     Text("\(key): \(element.attributes[key] ?? "")").textSelection(.enabled)
                 }
             case .edit, .layout:
-                if tab == .layout { Text("Layout values are CSS pixels. Changes apply immediately.").foregroundStyle(.gray) }
+                if tab == .layout {
+                    InspectorBoxModelView(session: session, element: element)
+                    Text("Tap an edge to edit. Values are CSS pixels.").foregroundStyle(.gray)
+                }
                 ForEach(styleKeys, id: \.self) { key in
                     InspectorWebStyleRow(session: session, property: key, value: element.styles[key] ?? "")
                         .id(element.id + key)
@@ -57,9 +60,94 @@ struct InspectorWebPanel: View {
 
     private var styleKeys: [String] {
         tab == .layout
-            ? ["display", "position", "width", "height", "padding-top", "padding-right", "padding-bottom", "padding-left",
-               "margin-top", "margin-right", "margin-bottom", "margin-left", "border-top-width", "border-right-width", "border-bottom-width", "border-left-width"]
+            ? ["display", "position", "box-sizing", "width", "height"]
             : ["color", "background-color", "font-size", "font-weight", "line-height", "border-radius", "opacity", "z-index"]
+    }
+}
+
+/// Native rendering of the web Inspector's concentric CSS box model.
+/// Each entire edge is a tap target; numeric edits default to px, while CSS
+/// units and keywords are preserved. Selection identity is owned by the panel.
+@available(iOS 16.0, *)
+private struct InspectorBoxModelView: View {
+    @ObservedObject var session: InspectorSession
+    let element: InspectorWebElement
+    @State private var editingProperty = ""
+    @State private var draft = ""
+    @State private var editing = false
+
+    var body: some View {
+        ring("margin", color: .orange) {
+            ring("border", color: .yellow) {
+                ring("padding", color: .green) {
+                    Text("\(format(element.box.content.width)) × \(format(element.box.content.height))")
+                        .fontWeight(.semibold)
+                        .lineLimit(1).minimumScaleFactor(0.7)
+                        .frame(maxWidth: .infinity).frame(height: 44)
+                        .foregroundStyle(.cyan)
+                        .background(Color.cyan.opacity(0.18))
+                        .overlay(Rectangle().strokeBorder(Color.cyan, style: StrokeStyle(lineWidth: 1, dash: [3, 2])))
+                        .accessibilityLabel("Content size")
+                        .accessibilityValue("\(format(element.box.content.width)) by \(format(element.box.content.height)) CSS pixels")
+                        .uiKitIdentifier("Inspector.boxModel.content")
+                }
+            }
+        }
+        .alert("Edit \(editingProperty)", isPresented: $editing) {
+            TextField("CSS value", text: $draft)
+                .keyboardType(.numbersAndPunctuation)
+                .autocorrectionDisabled().textInputAutocapitalization(.never)
+            Button("Cancel", role: .cancel) {}
+            Button("Apply") {
+                let property = editingProperty
+                let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+                let value = Double(trimmed).map { $0.isFinite } == true ? trimmed + "px" : trimmed
+                Task { await session.editStyle(property, value: value) }
+            }
+        } message: {
+            Text("Enter a number in pixels or a CSS value. Clear it to remove the inline override.")
+        }
+    }
+
+    private func ring<Content: View>(_ layer: String, color: Color, @ViewBuilder content: () -> Content) -> some View {
+        VStack(spacing: 0) {
+            edge(layer, "top", color: color).frame(height: 28)
+            HStack(spacing: 0) {
+                edge(layer, "left", color: color).frame(width: 32)
+                content()
+                edge(layer, "right", color: color).frame(width: 32)
+            }
+            edge(layer, "bottom", color: color).frame(height: 28)
+        }
+        .background(color.opacity(0.13))
+        .overlay(Rectangle().strokeBorder(color.opacity(0.8), style: StrokeStyle(lineWidth: 1, dash: [3, 2])).allowsHitTesting(false))
+        .overlay(alignment: .topLeading) {
+            Text(layer).font(.system(size: 9, weight: .semibold, design: .monospaced))
+                .foregroundStyle(color).padding(4).allowsHitTesting(false)
+        }
+    }
+
+    private func edge(_ layer: String, _ side: String, color: Color) -> some View {
+        let property = "\(layer)-\(side)" + (layer == "border" ? "-width" : "")
+        let value = element.styles[property] ?? "0px"
+        let display = value.hasSuffix("px") ? String(value.dropLast(2)) : value
+        return Button {
+            editingProperty = property
+            draft = value
+            editing = true
+        } label: {
+            Text(display).lineLimit(1).minimumScaleFactor(0.65)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain).foregroundStyle(color)
+        .accessibilityLabel("\(layer) \(side)")
+        .accessibilityValue(value)
+        .uiKitIdentifier("Inspector.boxModel.\(property)")
+    }
+
+    private func format(_ value: Double) -> String {
+        value.formatted(.number.precision(.fractionLength(0...2)))
     }
 }
 

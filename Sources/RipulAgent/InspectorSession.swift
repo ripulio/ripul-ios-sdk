@@ -14,10 +14,17 @@ struct InspectorWebElement: Decodable, Identifiable {
         var cgRect: CGRect { CGRect(x: x, y: y, width: width, height: height) }
     }
     struct Viewport: Decodable { let width, height, offsetLeft, offsetTop: Double }
+    struct BoxModel: Decodable {
+        struct Sides: Decodable { let top, right, bottom, left: Double }
+        struct Size: Decodable { let width, height: Double }
+        let margin, border, padding: Sides
+        let content: Size
+    }
     struct Node: Decodable, Identifiable { let id, label: String }
     let id, label, tag, text, identifier, role, correlationId: String
     let rect: Box
     let viewport: Viewport
+    let box: BoxModel
     let styles, attributes: [String: String]
     let ancestors, children: [Node]
     let `private`: Bool
@@ -204,8 +211,8 @@ final class InspectorSession: ObservableObject {
         let ticket = generation
         do {
             let info = try Self.decode(try await Self.call(view, "style", [id, property, value]))
-            if ticket == generation { web = info }
-        } catch { self.error = error.localizedDescription }
+            if ticket == generation { web = info; error = nil }
+        } catch { if ticket == generation { self.error = error.localizedDescription } }
     }
 
     func evaluate(_ expression: String) async -> String {

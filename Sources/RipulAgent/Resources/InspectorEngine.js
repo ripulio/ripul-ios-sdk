@@ -38,6 +38,24 @@
   const summary = el => ({ id: key(el), label: label(el) });
   const viewport = () => ({ width: visualViewport?.width || innerWidth, height: visualViewport?.height || innerHeight,
     offsetLeft: visualViewport?.offsetLeft || 0, offsetTop: visualViewport?.offsetTop || 0 });
+  const boxModel = (el, style) => {
+    const sides = (prefix, suffix = '') => Object.fromEntries(
+      ['top', 'right', 'bottom', 'left'].map(side =>
+        [side, parseFloat(style.getPropertyValue(`${prefix}-${side}${suffix}`)) || 0]));
+    const margin = sides('margin'), border = sides('border', '-width'), padding = sides('padding');
+    const contentSize = (axis, first, last) => {
+      const computed = parseFloat(style.getPropertyValue(axis));
+      // Computed dimensions are untransformed CSS pixels. The selection rect
+      // is a viewport bounding box and scales/rotates with CSS transforms.
+      const size = Number.isFinite(computed) ? computed :
+        (axis === 'width' ? el.offsetWidth : el.offsetHeight) ?? el.getBoundingClientRect()[axis];
+      const includesEdges = !Number.isFinite(computed) || style.boxSizing === 'border-box';
+      return Math.max(0, size - (includesEdges ? border[first] + border[last] + padding[first] + padding[last] : 0));
+    };
+    return { margin, border, padding, content: {
+      width: contentSize('width', 'left', 'right'), height: contentSize('height', 'top', 'bottom')
+    } };
+  };
   const clear = () => {
     if (highlighted && savedOutline) {
       for (const [name, value, priority] of savedOutline) {
@@ -57,7 +75,7 @@
     const privateSelf = isPrivate(el);
     const privateChildren = privateDescendants(el);
     const text = privateSelf || privateChildren.length ? '' : (el.textContent || '').trim().slice(0, 1500);
-    const properties = ['display','position','width','height','padding-top','padding-right','padding-bottom','padding-left',
+    const properties = ['display','position','width','height','box-sizing','padding-top','padding-right','padding-bottom','padding-left',
       'margin-top','margin-right','margin-bottom','margin-left','border-top-width','border-right-width','border-bottom-width',
       'border-left-width','color','background-color','font-size','font-weight','line-height','border-radius','opacity','z-index'];
     const path = []; let parent = el;
@@ -65,7 +83,7 @@
     return { id: key(el), label: label(el), tag: el.tagName.toLowerCase(), text,
       identifier: el.getAttribute('data-ui') || el.id || '', role: el.getAttribute('role') || '',
       correlationId: el.closest('[data-correlation-id]')?.getAttribute('data-correlation-id') || '',
-      rect: r, viewport: visible,
+      rect: r, viewport: visible, box: boxModel(el, style),
       styles: Object.fromEntries(properties.map(p => [p, style.getPropertyValue(p)])),
       attributes: Object.fromEntries([...el.attributes].filter(a => !/^(value|style|on)/i.test(a.name)).map(a => [a.name, a.value.slice(0, 500)])),
       ancestors: path.slice(0, -1), children: [...el.children].slice(0, 150).map(summary),
@@ -102,7 +120,8 @@
     clear,
     style(id, property, value) {
       const el = get(id); inspect(el);
-      el.style.setProperty(property, value);
+      if (value && !CSS.supports(property, value)) throw new Error(`Invalid value for ${property}: ${value}`);
+      el.style.setProperty(property, value, 'important');
       return show(el);
     },
     activate(id) {
