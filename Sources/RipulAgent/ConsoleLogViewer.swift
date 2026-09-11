@@ -521,7 +521,6 @@ private struct ToolsTabView: View {
     @ObservedObject var bridge: AgentBridge
     @Environment(\.dismiss) private var dismiss
     @State private var scrollHudOn = false
-    @State private var elementInspectorOn = false
     @State private var wsDebugOn = false
     @State private var perfHudOn = false
     // Native, reactive gate for the chat "Rebuild from JSONL" menu items —
@@ -532,22 +531,14 @@ private struct ToolsTabView: View {
     var body: some View {
         List {
             Section {
-                #if os(iOS)
                 Button {
-                    bridge.wantsShowViewInspector = true
+                    bridge.showInspector()
                     dismiss()
                 } label: {
-                    Label("View Explorer", systemImage: "viewfinder")
+                    Label("Inspector", systemImage: "viewfinder")
                 }
-                #endif
-            } header: {
-                Text("Native")
             } footer: {
-                #if os(iOS)
-                Text("Inspect any UIView in the running app — tap to pick, drag the HUD to move it.")
-                #else
-                Text("View Explorer is iOS-only.")
-                #endif
+                Text("Inspect elements, explore their hierarchy and attach a selection to chat.")
             }
 
             // Solution management (collections, contexts, testing mode) moved to
@@ -555,9 +546,6 @@ private struct ToolsTabView: View {
             Section {
                 Toggle(isOn: webHudBinding($scrollHudOn, key: "enableScrollHud")) {
                     Label("Scroll HUD", systemImage: "scroll")
-                }
-                Toggle(isOn: webHudBinding($elementInspectorOn, key: "enableElementDebugger")) {
-                    Label("Element Inspector", systemImage: "cursorarrow.and.square.on.square.dashed")
                 }
                 Toggle(isOn: webHudBinding($wsDebugOn, key: "enableSessionChannelDebug")) {
                     Label("WS Debug Panel", systemImage: "network")
@@ -589,7 +577,6 @@ private struct ToolsTabView: View {
                 )
                 if let dict = result as? [String: Any] {
                     scrollHudOn = dict["enableScrollHud"] as? Bool ?? false
-                    elementInspectorOn = dict["enableElementDebugger"] as? Bool ?? false
                     wsDebugOn = dict["enableSessionChannelDebug"] as? Bool ?? false
                     perfHudOn = dict["enablePerfHud"] as? Bool ?? false
                 }

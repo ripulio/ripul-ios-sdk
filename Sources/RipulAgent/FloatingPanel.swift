@@ -306,6 +306,7 @@ final class RipulFloatingPanelController<Content: View>: UIViewController, UIGes
 
     override func loadView() {
         view = RipulFloatingPanelRootView()
+        if posXKey == "viewInspector.posX" { view.tag = ripulViewExplorerOverlayTag }
     }
 
     override func viewDidLoad() {

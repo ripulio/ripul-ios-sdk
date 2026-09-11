@@ -118,7 +118,6 @@ public struct AgentView<TopBar: View>: View {
             }
         }
     }
-    @AppStorage("showNativeViewInspector") private var showingViewInspector = false
     @State private var chatInputMeasuredHeight: CGFloat = 0
 
     @StateObject private var messageHistory = MessageHistory()
@@ -383,7 +382,7 @@ public struct AgentView<TopBar: View>: View {
         }
         .onChange(of: bridge.wantsShowViewInspector) { wants in
             if wants {
-                showingViewInspector = true
+                bridge.showInspector()
                 bridge.wantsShowViewInspector = false
             }
         }

@@ -104,7 +104,7 @@ struct ComposerContextChips: View {
 }
 
 @available(iOS 16.0, macOS 14.0, *)
-private struct ComposerContextPreview: View {
+struct ComposerContextPreview: View {
     @Environment(\.dismiss) private var dismiss
     @State var item: RipulContextAttachment
     @State private var fallbackError: String?

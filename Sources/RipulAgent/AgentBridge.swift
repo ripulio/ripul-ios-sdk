@@ -2356,6 +2356,11 @@ public final class AgentBridge: NSObject, ObservableObject {
 
     public func attach(to webView: WKWebView) {
         self.webView = webView
+        #if os(iOS)
+        let inspectorCapability = "window.__ripulNativeInspectorAvailable = true; window.dispatchEvent(new Event('ripul:native-inspector'));"
+        webView.configuration.userContentController.addUserScript(WKUserScript(source: inspectorCapability, injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        webView.evaluateJavaScript(inspectorCapability, completionHandler: nil)
+        #endif
         startupProgressObservation = webView.observe(\.estimatedProgress, options: [.old, .new]) { [weak self] _, change in
             guard let progress = change.newValue, progress > (change.oldValue ?? 0) else { return }
             Task { @MainActor [weak self] in self?.recordStartupProgress() }
@@ -3677,6 +3682,10 @@ public final class AgentBridge: NSObject, ObservableObject {
         }
 
         switch messageType {
+        case "inspector:toggle":
+            toggleElementDebugger()
+        case "inspector:show":
+            showInspector()
         case "handshake":
             handleHandshake(dict)
         case "host:info":
@@ -8335,8 +8344,20 @@ public final class AgentBridge: NSObject, ObservableObject {
     /// Toggle the on-page element debugger HUD (`ElementDebuggerOverlay`).
     /// Called from the iPhone title-lozenge double-tap.
     public func toggleElementDebugger() {
-        NSLog("[AgentBridge] toggleElementDebugger -> JS bridge")
+        #if os(iOS)
+        if RipulViewExplorer.isPresented { RipulViewExplorer.dismiss() }
+        else { showInspector() }
+        #else
         evaluateVoidJavaScript("window.__ripulToggleElementDebugger?.()")
+        #endif
+    }
+
+    public func showInspector() {
+        #if os(iOS)
+        RipulViewExplorer.present(in: webView?.window ?? RipulChrome.appWindow(), bridge: self)
+        #else
+        evaluateVoidJavaScript("window.__ripulUpdateUserSettings?.({ enableElementDebugger: true })")
+        #endif
     }
 
     /// Ask the web file viewer to close (triggered by the native back button).

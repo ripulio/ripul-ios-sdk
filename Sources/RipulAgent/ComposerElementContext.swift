@@ -22,7 +22,7 @@ extension RipulComposerContext {
     /// Uses the same developer availability/defaults and user preview as Current screen.
     public static func selectedElement(configuration: RipulScreenContextConfiguration) -> Self {
         var option = Self(id: "ripul.selectedElement", title: "Selected element",
-            subtitle: "The element highlighted in View Explorer", systemImage: "scope", kind: .screen) {
+            subtitle: "The element selected in Inspector", systemImage: "scope", kind: .screen) {
             try await ComposerScreenContext.captureSelectedElement(configuration: configuration).selectedText
         }
         option.captureScreen = { try await ComposerScreenContext.captureSelectedElement(configuration: configuration) }

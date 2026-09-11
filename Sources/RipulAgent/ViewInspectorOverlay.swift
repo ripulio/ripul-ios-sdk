@@ -1,6 +1,7 @@
 #if os(iOS)
 import SwiftUI
 import UIKit
+import WebKit
 import ObjectiveC
 
 /// Tag stamped by `RipulViewExplorer` on its overlay host view so the inspector's
@@ -9,7 +10,7 @@ let ripulViewExplorerOverlayTag = 0x5249_5055   // "RIPU"
 
 /// Marketing version of the RipulAgent SDK, surfaced in the inspector's copy output as `sdk: …`
 /// so we can always tell which build is actually running on the device. Bump on every release.
-let ripulSDKVersion = "0.7.100"
+let ripulSDKVersion = "0.7.101"
 
 // MARK: - View Inspector Overlay
 //
@@ -902,6 +903,15 @@ struct ViewTreeNode: Identifiable {
 /// Transparent UIView installed over the key window that captures all touches
 /// and implements the virtual cursor + hit testing.
 class ViewInspectorController: UIView {
+    weak var session: InspectorSession?
+    var capturesTouches = true {
+        didSet {
+            highlightLayer.isHidden = !capturesTouches
+            actionableLayer.isHidden = !capturesTouches
+        }
+    }
+
+    override func point(inside point: CGPoint, with event: UIEvent?) -> Bool { capturesTouches && super.point(inside: point, with: event) }
     var onInspect: ((InspectedView) -> Void)?
     var onCursorMoved: ((CGPoint) -> Void)?
     var onDismiss: (() -> Void)?
@@ -952,24 +962,14 @@ class ViewInspectorController: UIView {
     private let doubleTapInterval: TimeInterval = 0.45
     private let doubleTapDistance: CGFloat = 60
 
-    // Single-tap actuation state: a tap (short, no drag) FIRES the
-    // highlighted element through the shared actuation engine — delayed just
-    // past the double-tap window and cancelled if a second tap begins, so
-    // the existing double-tap confirm/record gesture is untouched. Dragging
-    // still picks live (the highlight follows the reticule) — inspection
-    // needs no tap at all.
+    // A short tap pins after the double-tap window. Activation is an explicit
+    // HUD action; double-tap still belongs to native theme/macro confirmation.
     private var touchDownTime: TimeInterval = 0
     private var touchMoved = false
-    private var pendingTapFire: DispatchWorkItem?
-    private var suppressNextTapFire = false
-    private let tapFireDelay: TimeInterval = 0.28
+    private var pendingPinToggle: DispatchWorkItem?
+    private var suppressNextPinToggle = false
+    private let pinDelay: TimeInterval = 0.46
     private let tapMaxDuration: TimeInterval = 0.3
-
-    /// Settings-tab toggle ("Single tap fires the highlighted element"),
-    /// read raw because this is a UIView, not a SwiftUI View.
-    private var singleTapFiresEnabled: Bool {
-        UserDefaults.standard.object(forKey: "viewInspector.singleTapFires") as? Bool ?? true
-    }
 
     override init(frame: CGRect) {
         cursorPos = CGPoint(x: frame.width / 2, y: frame.height / 2)
@@ -977,6 +977,7 @@ class ViewInspectorController: UIView {
         Self.live = self
         backgroundColor = .clear
         isMultipleTouchEnabled = false
+        addGestureRecognizer(UIHoverGestureRecognizer(target: self, action: #selector(pointerMoved(_:))))
 
         highlightLayer.fillColor = UIColor.systemPink.withAlphaComponent(0.12).cgColor
         highlightLayer.strokeColor = UIColor.systemPink.cgColor
@@ -993,6 +994,13 @@ class ViewInspectorController: UIView {
     }
 
     required init?(coder: NSCoder) { fatalError() }
+
+    @objc private func pointerMoved(_ gesture: UIHoverGestureRecognizer) {
+        guard gesture.state == .changed || gesture.state == .began else { return }
+        cursorPos = gesture.location(in: self)
+        onCursorMoved?(cursorPos)
+        pickAt(cursorPos)
+    }
 
     func resetCursor() {
         cursorPos = CGPoint(x: bounds.width / 2, y: bounds.height / 2)
@@ -1015,9 +1023,9 @@ class ViewInspectorController: UIView {
             lastTapPosition = nil
             // The first tap of the pair scheduled a single-tap fire — cancel it
             // (this is a double-tap) and don't let this tap's end schedule another.
-            pendingTapFire?.cancel()
-            pendingTapFire = nil
-            suppressNextTapFire = true
+            pendingPinToggle?.cancel()
+            pendingPinToggle = nil
+            suppressNextPinToggle = true
             if let element = currentTokenAnchor ?? currentTarget {
                 // The RETICULE, not the finger. The crosshair is a relative,
                 // accelerated cursor (touchesMoved integrates the delta), so
@@ -1085,40 +1093,27 @@ class ViewInspectorController: UIView {
         guard let t = touches.first else { return }
 
         // A tap that completed a double-tap shouldn't ALSO fire the element.
-        if suppressNextTapFire {
-            suppressNextTapFire = false
+        if suppressNextPinToggle {
+            suppressNextPinToggle = false
             return
         }
 
-        // Single tap = fire the highlighted element: short touch, no drag —
-        // scheduled just past the double-tap window so a second tap can
-        // cancel it (see touchesBegan).
+        // Pin after a short tap. A second tap cancels this so recording/theme
+        // confirmation does not also change the pin.
         guard !touchMoved,
               t.timestamp - touchDownTime < tapMaxDuration,
-              singleTapFiresEnabled else { return }
-        pendingTapFire?.cancel()
-        let work = DispatchWorkItem { [weak self] in self?.fireHighlightedElement() }
-        pendingTapFire = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + tapFireDelay, execute: work)
+              session != nil else { return }
+        pendingPinToggle?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.session?.pinned.toggle() }
+        pendingPinToggle = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + pinDelay, execute: work)
     }
 
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
         lastTouch = nil
-        pendingTapFire?.cancel()
-        pendingTapFire = nil
-        suppressNextTapFire = false
-    }
-
-    /// Fire the currently highlighted element through the shared actuation
-    /// engine — the exact 4-path ladder a macro step would use, so what you
-    /// drive by pointing is what a recording would replay. Pulses the
-    /// highlight border around the element it actuated (pink on success, red
-    /// on failure) so the user SEES which element was pressed — "the tap
-    /// worked but the app ignored it" and "the tap hit the wrong element"
-    /// look identical without it.
-    private func fireHighlightedElement() {
-        pendingTapFire = nil
-        fireNow()
+        pendingPinToggle?.cancel()
+        pendingPinToggle = nil
+        suppressNextPinToggle = false
     }
 
     /// Move the reticule to a point in HOST-WINDOW coordinates — the same space
@@ -1167,6 +1162,18 @@ class ViewInspectorController: UIView {
             "reticule": ["x": Double(windowPoint.x), "y": Double(windowPoint.y)],
             "readout": "",
         ]
+        if let web = session?.web, let view = session?.webView, view.window != nil {
+            let sx = view.bounds.width / web.viewport.width, sy = sx
+            let rect = CGRect(x: (web.rect.x - web.viewport.offsetLeft) * sx,
+                y: (web.rect.y - web.viewport.offsetTop) * sy, width: web.rect.width * sx, height: web.rect.height * sy)
+            let frame = view.convert(rect, to: host)
+            result["hasSelection"] = true
+            result["surface"] = "web"
+            result["readout"] = web.reference
+            result["element"] = ["id": web.identifier, "class": web.tag, "text": web.text, "role": web.role]
+            result["highlightFrame"] = ["x": frame.minX, "y": frame.minY, "w": frame.width, "h": frame.height]
+            return result
+        }
         // Failed picks clear the resolution. Removed/hidden views are no longer
         // a live selection; never report their retained readout as current.
         guard let info = currentInfo, let target = currentTarget,
@@ -1264,7 +1271,7 @@ class ViewInspectorController: UIView {
         // fire then pressed an element resolved against a layout that no longer
         // existed, which is why a second tap on the notes field closed the
         // panel instead of entering it. Press what is under the cursor NOW.
-        pickAt(cursorPos)
+        if session?.pinned != true { pickAt(cursorPos) }
         // Fire the SAME `ResolvedTarget` the pick just computed and the
         // readout just described. The readout is a promise the actuator keeps
         // by construction — there is no second resolution to drift from the
@@ -1273,7 +1280,7 @@ class ViewInspectorController: UIView {
         guard let resolution = currentResolution else { return nil }
         let element = resolution.promisedView ?? resolution.target
         UISelectionFeedbackGenerator().selectionChanged()
-        let frameInSelf = convert(element.convert(element.bounds, to: nil), from: nil)
+        let frameInSelf = element.convert(element.bounds, to: self)
         let outcome = ScreenActuationEngine.actuate(resolution)
         NSLog("[RipulViewExplorer] single-tap fire via=%@ trace=%@", outcome.via ?? "none", outcome.trace)
         let headline = outcome.via.map { "via \($0)" } ?? "not tappable"
@@ -1310,17 +1317,43 @@ class ViewInspectorController: UIView {
 
     // MARK: Hit testing
 
+    func selectNativeView(_ view: UIView, remembering: Bool = true) {
+        guard let host = view.window else { session?.invalidate(); return }
+        hostWindow = host
+        let info = InspectedView.inspect(view)
+        currentTarget = view; currentHighlightView = view; currentTokenAnchor = info.tokenAnchorView; currentInfo = info
+        currentResolution = ScreenActuationEngine.resolveTap(on: view, matchId: info.accessibilityId,
+            matchText: info.text, at: view.convert(CGPoint(x: view.bounds.midX, y: view.bounds.midY), to: host))
+        currentActionable = currentResolution?.promisedView
+        let frame = view.convert(view.bounds, to: self)
+        highlightLayer.path = UIBezierPath(rect: frame).cgPath; actionableLayer.path = nil
+        session?.selectNative(info, remembering: remembering)
+        onInspect?(info)
+    }
+
+    func activateSelection() {
+        guard let target = currentTarget, target.window != nil else { session?.invalidate(); return }
+        // Explicit activation addresses the retained selection, including tree
+        // navigation and pinned elements, rather than a fresh point hit.
+        let resolution = ScreenActuationEngine.resolveTap(on: target,
+            matchId: currentInfo?.accessibilityId, matchText: currentInfo?.text,
+            at: target.convert(CGPoint(x: target.bounds.midX, y: target.bounds.midY), to: target.window))
+        let outcome = ScreenActuationEngine.actuate(resolution)
+        onFireOutcome?(outcome.via.map { "via " + $0 } ?? "Not tappable")
+    }
+
     private func pickAt(_ point: CGPoint) {
+        guard session?.pinned != true, session?.interacting != true else { return }
         // Pick against the HOST window when the explorer runs in its own
         // overlay window (self.window is the overlay, not the host); for
         // embedded mounts, self.window IS the host window.
-        guard let window = hostWindow ?? self.window else {
+        guard var window = hostWindow ?? self.window else {
             highlightLayer.path = nil
             currentResolution = nil
             currentActionable = nil
             return
         }
-        let windowPoint = convert(point, to: window)
+        var windowPoint = convert(point, to: window)
 
         // Probe what's under the cursor. We must make the ENTIRE inspector overlay
         // transparent to hitTest, not just the touch layer: a launcher-presented
@@ -1335,6 +1368,23 @@ class ViewInspectorController: UIView {
         isHidden = true
         overlayRoot?.isUserInteractionEnabled = false
         var hit = window.hitTest(windowPoint, with: nil)
+        // The host screen and the embedded agent may occupy different windows.
+        // Follow the visible content, including the agent, while skipping our HUD.
+        if let scene = window.windowScene {
+            let candidates = scene.windows.filter {
+                !$0.isHidden && !($0 is RipulExplorerOverlayWindow)
+                    && ($0.windowLevel == .normal || $0 is RipulChromeWindow)
+            }.sorted { $0.windowLevel.rawValue > $1.windowLevel.rawValue }
+            for candidate in candidates {
+                let candidatePoint = convert(point, to: candidate)
+                if let candidateHit = candidate.hitTest(candidatePoint, with: nil),
+                   candidateHit !== candidate, !isInspectorOwnView(candidateHit) {
+                    window = candidate; windowPoint = candidatePoint; hit = candidateHit
+                    break
+                }
+            }
+        }
+        hostWindow = window
         overlayRoot?.isUserInteractionEnabled = savedRootInteraction
         isHidden = false
         isUserInteractionEnabled = true
@@ -1363,6 +1413,17 @@ class ViewInspectorController: UIView {
         // subtree — a geometric walk that ignores `isUserInteractionEnabled` (and
         // our own overlay) — to reach the deepest leaf under the cursor.
         let leaf = deepestDescendant(of: hitView, at: windowPoint)
+        var ancestor: UIView? = leaf
+        while let candidate = ancestor {
+            if let webView = candidate as? WKWebView, let session {
+                currentTarget = nil; currentHighlightView = nil; currentTokenAnchor = nil
+                currentInfo = nil; currentResolution = nil; currentActionable = nil
+                highlightLayer.path = nil; actionableLayer.path = nil
+                session.pickWeb(webView, at: convert(point, to: webView))
+                return
+            }
+            ancestor = candidate.superview
+        }
 
         // Promote a decorative leaf to its enclosing control: a tap on a button's gradient image or
         // its title label should inspect the BUTTON (headline "UIButton [addSick.save]"), not the
@@ -1450,8 +1511,7 @@ class ViewInspectorController: UIView {
             return (stampArea > 0 && stampArea < targetArea) ? stamped : target
         }()
         currentHighlightView = highlightView
-        let frameInWindow = highlightView.convert(highlightView.bounds, to: nil)
-        let frameInSelf = convert(frameInWindow, from: nil)
+        let frameInSelf = highlightView.convert(highlightView.bounds, to: self)
         highlightLayer.path = UIBezierPath(roundedRect: frameInSelf, cornerRadius: highlightView.layer.cornerRadius).cgPath
         // Grey the selection when nothing there answers a tap, so "I can select
         // this but pressing it will do nothing" is legible at a glance rather
@@ -1464,7 +1524,7 @@ class ViewInspectorController: UIView {
 
         // The second box, only when a tap would hit something else.
         if let actionable = currentActionable, actionable !== highlightView, actionable !== target {
-            let f = convert(actionable.convert(actionable.bounds, to: nil), from: nil)
+            let f = actionable.convert(actionable.bounds, to: self)
             actionableLayer.path = UIBezierPath(roundedRect: f,
                                                 cornerRadius: actionable.layer.cornerRadius).cgPath
         } else {
@@ -1493,6 +1553,7 @@ class ViewInspectorController: UIView {
         currentTarget = target
         currentTokenAnchor = info.tokenAnchorView
         currentInfo = info
+        session?.selectNative(info)
         onInspect?(info)
     }
 
@@ -1579,7 +1640,6 @@ class ViewInspectorController: UIView {
         while let c = cur {
             if c === self { return true }
             if c.tag == ripulViewExplorerOverlayTag { return true }
-            if c is RipulFloatingPanelRootView { return true }
             cur = c.superview
         }
         return false
@@ -1655,6 +1715,8 @@ class ViewInspectorController: UIView {
 // MARK: - UIKit Representable
 
 struct ViewInspectorTouchLayer: UIViewRepresentable {
+    let session: InspectorSession
+    let capturesTouches: Bool
     var hostWindow: UIWindow? = nil
     let onInspect: (InspectedView) -> Void
     let onCursorMoved: (CGPoint) -> Void
@@ -1663,6 +1725,9 @@ struct ViewInspectorTouchLayer: UIViewRepresentable {
 
     func makeUIView(context: Context) -> ViewInspectorController {
         let v = ViewInspectorController(frame: UIScreen.main.bounds)
+        v.session = session
+        session.controller = v
+        v.capturesTouches = capturesTouches
         v.hostWindow = hostWindow
         v.onInspect = onInspect
         v.onCursorMoved = onCursorMoved
@@ -1673,7 +1738,7 @@ struct ViewInspectorTouchLayer: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: ViewInspectorController, context: Context) {
-        uiView.hostWindow = hostWindow ?? uiView.hostWindow
+        uiView.capturesTouches = capturesTouches
         uiView.onInspect = onInspect
         uiView.onCursorMoved = onCursorMoved
         uiView.onElementTap = onElementTap
@@ -2642,14 +2707,9 @@ struct InspectorSettingsTab: View {
     /// Whether the crosshair reticule is hidden when the HUD is folded.
     /// Off by default so the reticule remains visible while folded.
     @AppStorage("viewInspector.hideReticuleWhenFolded") private var hideReticuleWhenFolded = false
-    /// Single tap fires the highlighted element (through the shared
-    /// actuation engine). On by default — dragging still inspects; a tap
-    /// presses.
-    @AppStorage("viewInspector.singleTapFires") private var singleTapFires = true
-
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Explorer settings")
+            Text("Inspector settings")
                 .font(.system(size: 10, weight: .semibold, design: .monospaced))
                 .foregroundStyle(.pink).textCase(.uppercase).tracking(0.5)
 
@@ -2659,18 +2719,6 @@ struct InspectorSettingsTab: View {
                         .font(.system(size: 11, design: .monospaced))
                         .foregroundStyle(.white)
                     Text("Hide the crosshair when the panel is folded so it doesn't overlay the app.")
-                        .font(.system(size: 10, design: .monospaced))
-                        .foregroundStyle(.gray)
-                }
-            }
-            .tint(.pink)
-
-            Toggle(isOn: $singleTapFires) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Single tap fires the element")
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundStyle(.white)
-                    Text("Tap once to press what's highlighted; double-tap still records/confirms.")
                         .font(.system(size: 10, design: .monospaced))
                         .foregroundStyle(.gray)
                 }
@@ -2906,6 +2954,11 @@ struct MacroSaveSheet: View {
 
 @available(iOS 16.0, *)
 struct InspectorHUD: View {
+    @ObservedObject var session: InspectorSession
+    @State private var contextPreview: RipulContextAttachment?
+    @State private var destinationSession: String?
+    @State private var destinationBridge: AgentBridge?
+    @State private var capturingContext = false
     let inspected: InspectedView?
     let history: [UIView]
     @Binding var folded: Bool
@@ -2933,12 +2986,13 @@ struct InspectorHUD: View {
 
     @State private var tab: InspectorTab
 
-    init(inspected: InspectedView?, history: [UIView], folded: Binding<Bool>, showRulers: Binding<Bool>,
+    init(session: InspectorSession, inspected: InspectedView?, history: [UIView], folded: Binding<Bool>, showRulers: Binding<Bool>,
          consoleAction: (() -> Void)?, onUp: @escaping () -> Void, onBack: @escaping () -> Void,
          onExit: @escaping () -> Void, onSelectView: @escaping (UIView) -> Void, size: CGSize,
          isRecording: Binding<Bool>, autoPauseSeconds: Binding<Double>, recordedSteps: [MacroStep],
          onDeleteStep: @escaping (IndexSet) -> Void, onStopAndSave: @escaping () -> Void,
-         initialTab: InspectorTab = .edit) {
+         initialTab: InspectorTab = .properties) {
+        self.session = session
         self.inspected = inspected
         self.history = history
         self._folded = folded
@@ -2960,8 +3014,10 @@ struct InspectorHUD: View {
 
     /// Declaration order is tab order.
     enum InspectorTab: String, CaseIterable {
-        case edit = "Edit"
-        case properties = "Properties"
+        case properties = "Identity"
+        case layout = "Layout"
+        case edit = "Appearance"
+        case eval = "Eval"
         case tree = "Tree"
         case audit = "Audit"
         case macro = "Macro"
@@ -2973,7 +3029,7 @@ struct InspectorHUD: View {
             case .properties: return "list.bullet.rectangle"
             case .settings: return "gearshape"
             case .macro: return "record.circle"
-            case .edit, .tree, .audit: return nil
+            case .edit, .tree, .audit, .layout, .eval: return nil
             }
         }
     }
@@ -2984,6 +3040,7 @@ struct InspectorHUD: View {
             header
 
             if !folded {
+                selectionToolbar
                 // Tab bar
                 tabBar
 
@@ -2992,7 +3049,7 @@ struct InspectorHUD: View {
                     bodyContent
                         .padding(10)
                 }
-                .frame(maxHeight: size.height - 70)
+                .frame(maxHeight: max(60, size.height - 112))
             }
         }
         .frame(width: size.width)
@@ -3005,6 +3062,58 @@ struct InspectorHUD: View {
         )
         .shadow(color: .black.opacity(0.4), radius: 10, y: 4)
         .fixedSize()
+        .sheet(item: $contextPreview) { item in
+            ComposerContextPreview(item: item) { attachment in
+                destinationBridge?.composerContexts.attach(attachment, to: destinationSession)
+                folded = true
+            }
+        }
+        .onChange(of: session.web != nil) { isWeb in
+            if isWeb && (tab == .audit || tab == .macro) { tab = .properties }
+            if !isWeb && tab == .eval { tab = .properties }
+        }
+    }
+
+    private var selectionToolbar: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 7) {
+                Text(session.web == nil ? "Native" : "Web")
+                    .foregroundStyle(.orange).font(.system(size: 10, weight: .semibold))
+                Text(session.label).lineLimit(1).foregroundStyle(.white)
+                Spacer(minLength: 0)
+            }
+            HStack(spacing: 7) {
+                hudIconButton(session.pinned ? "pin.fill" : "pin", label: "Pin selection", disabled: !session.hasSelection,
+                    tone: .pink, active: session.pinned) { session.pinned.toggle() }
+                    .uiKitIdentifier("Inspector.pin")
+                hudIconButton("doc.on.doc", label: "Copy reference", disabled: !session.hasSelection) { session.copy() }
+                    .uiKitIdentifier("Inspector.copy")
+                hudButton("Activate", disabled: !session.hasSelection) { session.activate() }
+                    .uiKitIdentifier("Inspector.activate")
+                hudButton(capturingContext ? "Capturing…" : "Add to chat", disabled: !session.hasSelection || capturingContext) {
+                    guard let bridge = RipulViewExplorer.contextBridge, let id = bridge.activeSessionId else {
+                        session.error = "Open a chat, then choose Add to chat. You can also copy this reference."; return
+                    }
+                    destinationBridge = bridge; destinationSession = id; capturingContext = true
+                    session.pinned = true
+                    Task {
+                        do { contextPreview = try await RipulComposerContext.selectedElement.makeAttachment() }
+                        catch { session.error = error.localizedDescription }
+                        capturingContext = false
+                    }
+                }.uiKitIdentifier("Inspector.addToChat")
+                Spacer(minLength: 0)
+                hudIconButton("hand.point.up.left", label: session.interacting ? "Resume inspecting" : "Interact with app",
+                    tone: .cyan, active: session.interacting) {
+                    session.interacting.toggle()
+                    if !session.interacting { session.refresh() }
+                }.uiKitIdentifier("Inspector.interact")
+            }
+            if let error = session.error { Text(error).foregroundStyle(.orange).textSelection(.enabled) }
+            if session.interacting { Text("Interact with the app. Tap the hand to resume inspecting.").foregroundStyle(.cyan) }
+        }
+        .font(.system(size: 10, design: .monospaced))
+        .padding(.horizontal, 10).padding(.vertical, 6)
     }
 
     private var header: some View {
@@ -3015,32 +3124,19 @@ struct InspectorHUD: View {
             } label: {
                 HStack(spacing: 4) {
                     Text(folded ? "▸" : "▾")
-                    // Icon stands in for the "View Inspector" wordmark — the header
-                    // row is narrow and every point of it is wanted by the buttons.
+                    // Compact, consistent identity for both native and web targets.
                     Image(systemName: "scope")
                         .font(.system(size: 12, weight: .bold))
-                        .accessibilityLabel("View Inspector")
-                    if folded, let info = inspected {
-                        let summary = {
-                            if let aid = info.accessibilityId, !aid.isEmpty {
-                                return aid
-                            }
-                            if let t = info.text, !t.isEmpty {
-                                return "\(info.className) \u{201C}\(t)\u{201D}"
-                            }
-                            return info.className
-                        }()
-                        let hasA11yId = info.accessibilityId != nil && !(info.accessibilityId?.isEmpty ?? true)
-                        Text("— \(summary)")
-                            .fontWeight(.regular)
-                            .foregroundStyle(hasA11yId ? Color.orange : .white)
-                            .lineLimit(1)
-                    }
+                        .accessibilityLabel("Inspector")
+                    Text(folded && session.hasSelection ? session.label : "Inspector")
+                        .layoutPriority(1).lineLimit(1).foregroundStyle(.white)
+
                 }
                 .font(.system(size: 11, design: .monospaced))
                 .foregroundStyle(Color.pink.opacity(0.8))
             }
             .buttonStyle(.plain)
+            .uiKitIdentifier("Inspector.fold")
 
             Spacer()
 
@@ -3048,18 +3144,18 @@ struct InspectorHUD: View {
                 hudIconButton("terminal", label: "Console", tone: .cyan, action: consoleAction)
                     .uiKitIdentifier("InspectorHUD.consoleButton")
             }
-            hudIconButton("record.circle", label: isRecording ? "Stop Recording" : "Record Macro",
+            hudIconButton("record.circle", label: isRecording ? "Stop Recording" : "Record Macro", disabled: session.web != nil,
                           tone: .red, active: isRecording) {
-                if isRecording { onStopAndSave() } else { isRecording = true; tab = .macro }
+                if isRecording { onStopAndSave() } else { isRecording = true; tab = .macro; folded = false }
             }
             .uiKitIdentifier("InspectorHUD.recordButton")
             hudIconButton("ruler", label: "Ruler", tone: .cyan, active: showRulers) { showRulers.toggle() }
                 .uiKitIdentifier("InspectorHUD.rulersButton")
-            hudButton("← Back", disabled: history.isEmpty, action: onBack)
+            hudIconButton("arrow.uturn.backward", label: "Back", disabled: session.historyCount == 0, action: onBack)
                 .uiKitIdentifier("InspectorHUD.backButton")
-            hudButton("↑ Up", disabled: inspected?.view.superview == nil, action: onUp)
+            hudIconButton("arrow.up", label: "Parent element", disabled: !session.canGoUp, action: onUp)
                 .uiKitIdentifier("InspectorHUD.upButton")
-            hudButton("Exit", tone: .red, action: onExit)
+            hudIconButton("xmark", label: "Close Inspector", tone: .red, action: onExit)
                 .uiKitIdentifier("InspectorHUD.exitButton")
         }
         .padding(.horizontal, 10)
@@ -3068,8 +3164,9 @@ struct InspectorHUD: View {
     }
 
     private var tabBar: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
         HStack(spacing: 2) {
-            ForEach(InspectorTab.allCases, id: \.self) { t in
+            ForEach(InspectorTab.allCases.filter { session.web == nil ? $0 != .eval : ($0 != .audit && $0 != .macro) }, id: \.self) { t in
                 Button {
                     tab = t
                 } label: {
@@ -3099,6 +3196,7 @@ struct InspectorHUD: View {
             Spacer()
         }
         .padding(.horizontal, 6)
+        }
         .background(.white.opacity(0.04))
         .overlay(alignment: .bottom) {
             Rectangle().fill(.white.opacity(0.1)).frame(height: 1)
@@ -3116,20 +3214,22 @@ struct InspectorHUD: View {
             InspectorMacroTab(isRecording: $isRecording, autoPauseSeconds: $autoPauseSeconds,
                               steps: recordedSteps,
                               onDelete: onDeleteStep, onStopAndSave: onStopAndSave)
+        } else if let web = session.web {
+            InspectorWebPanel(session: session, tab: tab, element: web).id(web.id)
         } else if let info = inspected {
             switch tab {
-            case .properties:
+            case .properties, .layout:
                 InspectorPropertiesTab(info: info)
             case .edit:
                 InspectorEditTab(info: info)
                     .id(ObjectIdentifier(info.view))   // reset editor state per selection
             case .tree:
                 InspectorTreeTab(selectedView: info.view, onSelect: onSelectView)
-            case .audit, .settings, .macro:
+            case .audit, .settings, .macro, .eval:
                 EmptyView()   // handled above
             }
         } else {
-            Text("Drag your finger to inspect views — or open the Audit tab")
+            Text("Drag to inspect native or web elements. Tap to pin; use Activate to press. Fold the panel to interact with the app.")
                 .font(.system(size: 11, design: .monospaced))
                 .foregroundStyle(.gray)
                 .italic()
@@ -3214,13 +3314,13 @@ public struct ViewInspectorOverlay: View {
     /// overlay is embedded in the host's own view hierarchy (pick against
     /// the enclosing window instead).
     let hostWindow: UIWindow?
-    @State private var inspected: InspectedView?
+    @StateObject private var session = InspectorSession()
+    private var inspected: InspectedView? { session.native }
     @State private var cursorPosition: CGPoint = CGPoint(
         x: UIScreen.main.bounds.width / 2,
         y: UIScreen.main.bounds.height / 2
     )
-    @State private var history: [UIView] = []
-    @State private var currentView: UIView?
+    private var history: [UIView] { [] }
     /// When folded, the HUD header stays visible but touch capture is removed so
     /// normal app interaction resumes. The crosshair reticule can optionally stay
     /// visible via the settings panel.
@@ -3279,17 +3379,9 @@ public struct ViewInspectorOverlay: View {
                 // Touch capture layer — mounted whenever the explorer is active.
                 // Folding only collapses the HUD; the reticule stays movable/inspectable.
                 ViewInspectorTouchLayer(
+                    session: session, capturesTouches: !session.interacting && !folded,
                     hostWindow: hostWindow,
-                    onInspect: { info in
-                        if info.view !== currentView {
-                            if let old = currentView {
-                                history.append(old)
-                                if history.count > 50 { history.removeFirst() }
-                            }
-                            currentView = info.view
-                        }
-                        inspected = info
-                    },
+                    onInspect: { _ in },
                     onCursorMoved: { pos in
                         cursorPosition = pos
                     },
@@ -3341,7 +3433,7 @@ public struct ViewInspectorOverlay: View {
 
                 // Crosshair — shown when unfolded; when folded it stays visible
                 // unless the user enables "Hide reticule when folded" in Settings.
-                if !folded || !hideReticuleWhenFolded {
+                if !session.interacting && (!folded || !hideReticuleWhenFolded) {
                     CrosshairReticle(position: cursorPosition)
                         .ignoresSafeArea()
                 }
@@ -3362,13 +3454,15 @@ public struct ViewInspectorOverlay: View {
                     defaultSize: CGSize(width: min(360, UIScreen.main.bounds.width - 16),
                                         height: UIScreen.main.bounds.height * 0.3),
                     minSize: CGSize(width: 220, height: 180),
-                    showsResizeGrip: !folded
+                    showsResizeGrip: !folded,
+                    avoidsKeyboard: true
                 ) { size in
                     // Broken out of the call below: the 16-argument HUD
                     // construction plus the enum ternary tipped the type
                     // checker past its limit once.
-                    let hudInitialTab: InspectorHUD.InspectorTab = startRecording ? .macro : .edit
+                    let hudInitialTab: InspectorHUD.InspectorTab = startRecording ? .macro : .properties
                     InspectorHUD(
+                        session: session,
                         inspected: inspected,
                         history: history,
                         folded: $folded,
@@ -3391,6 +3485,13 @@ public struct ViewInspectorOverlay: View {
                 .ignoresSafeArea()
             }
             .transition(.opacity)
+            .onDisappear { session.close() }
+            .onChange(of: folded) { value in
+                if value { session.clearWebHighlight() } else { session.refresh() }
+            }
+            .onChange(of: session.interacting) { value in
+                if value { session.clearWebHighlight() }
+            }
             .modifier(RecordingPresentationModifier(
                 pendingRecordTap: $pendingRecordTap,
                 showTypeTextAlert: $showTypeTextAlert,
@@ -3551,25 +3652,10 @@ public struct ViewInspectorOverlay: View {
         }
     }
 
-    private func navigateUp() {
-        guard let current = currentView, let parent = current.superview else { return }
-        selectView(parent)
-    }
+    private func navigateUp() { session.up() }
+    private func navigateBack() { session.back() }
+    private func selectView(_ view: UIView) { session.selectView(view) }
 
-    private func navigateBack() {
-        guard let prev = history.popLast() else { return }
-        currentView = prev
-        inspected = InspectedView.inspect(prev)
-    }
-
-    private func selectView(_ view: UIView) {
-        if let old = currentView {
-            history.append(old)
-            if history.count > 50 { history.removeFirst() }
-        }
-        currentView = view
-        inspected = InspectedView.inspect(view)
-    }
 }
 
 // MARK: - Edit hand-off (View Explorer → coding agent)

@@ -92,8 +92,8 @@ struct SolutionManagementSection: View {
                     Divider().padding(.leading, 44)
 
                     row(
-                        title: "View Explorer",
-                        subtitle: "Inspect elements; record macros by double-tapping",
+                        title: "Inspector",
+                        subtitle: "Inspect native and web elements; record macros",
                         icon: "viewfinder",
                         identifier: "SolutionManagement.viewExplorer"
                     ) {
@@ -102,7 +102,7 @@ struct SolutionManagementSection: View {
                         // console's own overlay window).
                         if #available(iOS 26.0, *) {
                             RipulDevAssistantOverlay.shared.collapse()
-                            RipulViewExplorer.present(in: ScreenElementFinder.hostWindow())
+                            RipulViewExplorer.present(in: ScreenElementFinder.hostWindow(), bridge: bridge)
                         }
                     }
 

@@ -1589,14 +1589,9 @@ public struct RipulAgentScreen: View {
 
         if cache.bool(forKey: "showElementDebuggerMenu") {
             Button {
-                let next = !elementDebuggerActive
-                elementDebuggerActive = next
-                cache.set(next, forKey: "elementDebuggerActive")
-                bridge.evaluateJavaScript(
-                    "window.__ripulUpdateUserSettings?.((s) => ({ ...s, enableElementDebugger: \(next) }))"
-                )
+                bridge.toggleElementDebugger()
             } label: {
-                Label(elementDebuggerActive ? "Disable Debugger" : "Enable Debugger", systemImage: elementDebuggerActive ? "hand.tap.fill" : "hand.tap")
+                Label("Inspector", systemImage: "viewfinder")
             }
             .uiKitIdentifier("AgentScreen.contextMenu.elementDebuggerToggle")
         }

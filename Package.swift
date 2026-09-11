@@ -24,6 +24,7 @@ let package = Package(
             ],
             resources: [
                 .process("Resources/providers.json"),
+                .process("Resources/InspectorEngine.js"),
                 .process("Resources/RipulBranding.xcassets"),
             ]
         ),

@@ -14,13 +14,6 @@ public struct CmsBrowserView: View {
     /// Per-definition test identity: nil/absent = owner; else the site key's
     /// publishable key for visitor mode.
     @State private var visitorKeyByCms: [String: String] = [:]
-    /// The host app's "Native View Inspector" toggle (Settings). On iOS this
-    /// AppStorage reads `.standard` — the SAME store the app writes
-    /// (`UserDefaults.appDefaults` == `.standard`) — so the inspector state
-    /// is shared. A portal opens in a full-screen cover, which presents ABOVE
-    /// ContentView's own inspector overlay; so the cover carries its own
-    /// overlay to float the inspector over the portal.
-    @AppStorage("showNativeViewInspector") private var showNativeViewInspector = false
     /// Portal presentation — FULL SCREEN, not a navigation push. A portal
     /// is a self-contained app experience: pushing it hands the left screen
     /// edge to the host back-swipe, which fights the portal's own sidebar
@@ -91,17 +84,6 @@ public struct CmsBrowserView: View {
                 .buttonStyle(.plain)
                 .padding(12)
             }
-            // The View Explorer, floated ABOVE the portal (ContentView's own
-            // overlay is below this full-screen cover). Same shared flag, so
-            // toggling it in Settings lights it up here too.
-            #if os(iOS)
-            .overlay {
-                if #available(iOS 16.0, *) {
-                    ViewInspectorOverlay(isActive: $showNativeViewInspector)
-                        .animation(nil)
-                }
-            }
-            #endif
         }
     }
 

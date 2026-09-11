@@ -66,7 +66,7 @@ final class ComposerElementContextTests: XCTestCase {
     func testClosedRemovedHiddenAndExcludedSelectionsAreRejected() async throws {
         ViewInspectorController.live = nil
         do { _ = try await RipulComposerContext.selectedElement.makeAttachment(); XCTFail("No selection should fail") }
-        catch { XCTAssertTrue(error.localizedDescription.contains("View Explorer")) }
+        catch { XCTAssertTrue(error.localizedDescription.contains("Inspector")) }
         let (window, button, inspector) = fixture()
         defer { window.isHidden = true }
         button.ripulAIContext = .excluded

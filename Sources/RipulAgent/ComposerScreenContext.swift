@@ -88,8 +88,11 @@ enum ComposerScreenContext {
 
     static func captureSelectedElement(configuration: RipulScreenContextConfiguration) async throws -> RipulScreenContextSnapshot {
         #if os(iOS)
+        if let session = ViewInspectorController.live?.session, session.web != nil {
+            return try await session.captureWeb(configuration: configuration)
+        }
         guard let selection = ViewInspectorController.live?.composerSelection() else {
-            throw ElementUnavailable(message: "Open View Explorer and highlight an element first. If the screen changed, select the element again.")
+            throw ElementUnavailable(message: "Open Inspector and highlight an element first. If the screen changed, select the element again.")
         }
         let needsPixels = configuration.available.contains(.screenshot) || configuration.available.contains(.fallbackText)
         // This captures and masks the host before any asynchronous recognition.
@@ -143,7 +146,7 @@ enum ComposerScreenContext {
         let fallback = ComposerScreenRecognition.simpleText(snapshot.accessible.filter {
             scope.contains($0.frame) && !ComposerScreenRecognition.overlaps($0.frame, regions: snapshot.excluded)
         })
-        var result = RipulScreenContextSnapshot(appDescription: "Host app: \(app)\nSelected View Explorer element",
+        var result = RipulScreenContextSnapshot(appDescription: "Host app: \(app)\nSelected Inspector element",
             instrumentedText: configuration.available.contains(.instrumentedText) ? lines.joined(separator: "\n") : nil,
             screenshotJPEG: image.flatMap(ComposerScreenRecognition.jpeg), accessibleFallback: fallback, configuration: configuration)
         result.attachmentTitle = "Element — " + String(name.prefix(80))
@@ -151,7 +154,7 @@ enum ComposerScreenContext {
         try Task.checkCancellation()
         return result
         #else
-        throw ElementUnavailable(message: "Selected element context requires the iOS View Explorer.")
+        throw ElementUnavailable(message: "Selected element context requires the iOS Inspector.")
         #endif
     }
 

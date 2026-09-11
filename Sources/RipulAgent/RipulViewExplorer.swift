@@ -66,10 +66,9 @@ public struct RipulElementTap {
 // The explorer mounts in its OWN window, not as a child of the top-most view
 // controller: a host-side panel added directly to the key window (WAC's
 // RecordMenu sidebar is a plain `window.addSubview`) would otherwise cover
-// it. Its `alert + 2` level keeps it above host panels, but below the
-// dev-assistant overlay (`alert + 3`). The agent's bubble/compact bar and
-// expanded chat remain interactive while the explorer stays open underneath.
-// Inspection still targets only the host window, never SDK chrome.
+// it. Its `alert + 4` level keeps it above host panels and the
+// dev-assistant overlay (`alert + 3`), so one cursor can inspect both. Folding
+// or Interact mode lets touches pass through to those windows.
 //
 // Being a `RipulChromeWindow` is what keeps that true: it declines key-ness,
 // so a host resolving "the key window" gets the app's window and mounts its
@@ -77,13 +76,35 @@ public struct RipulElementTap {
 
 @available(iOS 16.0, *)
 final class RipulExplorerOverlayWindow: RipulChromeWindow {
-    // Full-capture while the explorer is active: the touch layer IS the
-    // interaction (reticule drag, tap-to-fire, HUD). No passthrough needed.
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        let hit = super.hitTest(point, with: event)
+        guard rootViewController?.presentedViewController == nil else { return hit }
+        // Route through the actual panel root. SwiftUI can return its full-screen
+        // hosting view for a button gesture; treating that as either a full-screen
+        // hit or a miss breaks the separate-window panel's touch routing.
+        func panelHit(_ view: UIView) -> UIView? {
+            guard !view.isHidden, view.alpha > 0.01 else { return nil }
+            if let panel = view as? RipulFloatingPanelRootView {
+                return panel.hitTest(panel.convert(point, from: self), with: event)
+            }
+            for child in view.subviews.reversed() {
+                if let found = panelHit(child) { return found }
+            }
+            return nil
+        }
+        if let root = rootViewController?.view, let panel = panelHit(root) { return panel }
+        if let capture = ViewInspectorController.live, capture.window === self,
+           capture.capturesTouches, !capture.isHidden, capture.isUserInteractionEnabled {
+            return capture
+        }
+        return nil
+    }
 }
 
 @available(iOS 16.0, *)
 @MainActor
 public enum RipulViewExplorer {
+    static weak var contextBridge: AgentBridge?
 
     /// The overlay window hosting the live explorer, or `nil` when not shown.
     /// STRONG: a standalone UIWindow has no owner — the previous `weak`
@@ -127,7 +148,8 @@ public enum RipulViewExplorer {
     /// `recording: true` opens it already in macro-record mode (the Macro
     /// tab armed) — used by the macro library's "Record new" entry point.
     @discardableResult
-    public static func present(in window: UIWindow? = nil, recording: Bool = false) -> Bool {
+    public static func present(in window: UIWindow? = nil, recording: Bool = false, bridge: AgentBridge? = nil) -> Bool {
+        if let bridge { contextBridge = bridge }
         guard self.window == nil else { return true }
         guard let target = window ?? RipulChrome.appWindow(),
               let scene = target.windowScene else { return false }
@@ -135,7 +157,7 @@ public enum RipulViewExplorer {
         hostWindow = target
         let win = RipulExplorerOverlayWindow(windowScene: scene)
         win.frame = scene.screen.bounds
-        win.windowLevel = UIWindow.Level(rawValue: UIWindow.Level.alert.rawValue + 2)
+        win.windowLevel = UIWindow.Level(rawValue: UIWindow.Level.alert.rawValue + 4)
         win.backgroundColor = .clear
         let hosting = UIHostingController(rootView: RipulViewExplorerRoot(
             hostWindow: target,
@@ -143,6 +165,7 @@ public enum RipulViewExplorer {
             onDismiss: { dismiss() }
         ))
         hosting.view.backgroundColor = .clear
+        hosting.view.tag = ripulViewExplorerOverlayTag
         win.installRoot(hosting)
         win.isHidden = false
         self.window = win
@@ -152,6 +175,7 @@ public enum RipulViewExplorer {
     /// Remove the View Explorer if shown.
     public static func dismiss() {
         guard let win = window else { return }
+        ViewInspectorController.live?.session?.close()
         win.relinquishKey()
         win.isHidden = true
         window = nil

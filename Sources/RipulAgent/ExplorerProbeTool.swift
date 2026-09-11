@@ -48,14 +48,15 @@ public struct ExplorerProbeTool: NativeTool {
             guard !fire else {
                 return ["success": false, "error": "fire requires both x and y; reading the current selection never presses it"]
             }
-            return await MainActor.run { () -> Any in
+            return await Task { @MainActor () -> Any in
                 guard let live = ViewInspectorController.live,
                       let window = live.window, !window.isHidden, window.alpha > 0.01,
                       !live.isHidden else {
                     return ["success": true, "isOpen": false, "hasSelection": false]
                 }
+                await live.session?.readWebSelection()
                 return live.selectionSnapshot()
-            }
+            }.value
         }
         guard let x = (args["x"] as? NSNumber)?.doubleValue,
               let y = (args["y"] as? NSNumber)?.doubleValue,
@@ -77,15 +78,24 @@ public struct ExplorerProbeTool: NativeTool {
             try? await Task.sleep(nanoseconds: 400_000_000)
         }
 
-        return await MainActor.run { () -> Any in
+        return await Task { @MainActor () -> Any in
             guard let live = ViewInspectorController.live, live.window != nil else {
                 return ["success": false,
                         "error": "The View Explorer could not be opened (needs iOS 16+ and a foreground scene)."]
             }
-            var result = live.probe(atWindowPoint: CGPoint(x: x, y: y), fire: fire)
+            _ = live.probe(atWindowPoint: CGPoint(x: x, y: y), fire: false)
+            await live.session?.waitForPick()
+            var result = live.selectionSnapshot()
+            if fire {
+                if let session = live.session, session.web != nil {
+                    result["fired"] = await session.activateWeb()
+                } else {
+                    result = live.probe(atWindowPoint: CGPoint(x: x, y: y), fire: true)
+                }
+            }
             if opened { result["openedExplorer"] = true }
             return result
-        }
+        }.value
         #else
         return ["success": false, "error": "explorer_probe requires UIKit"]
         #endif
