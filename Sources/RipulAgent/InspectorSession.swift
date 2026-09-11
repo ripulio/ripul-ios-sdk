@@ -35,6 +35,12 @@ struct InspectorWebElement: Decodable, Identifiable {
          "Text: \(text)", "Correlation: \(correlationId)",
          "Bounds (CSS pixels): \(rect.x), \(rect.y), \(rect.width) × \(rect.height)"].joined(separator: "\n")
     }
+    var details: String {
+        ["Tag: \(tag)", "Role: \(role)",
+         "Path: " + (ancestors.map(\.label) + [label]).joined(separator: " > "),
+         "Text: \(text)", "Correlation: \(correlationId)",
+         "Bounds (CSS pixels): \(rect.x), \(rect.y), \(rect.width) × \(rect.height)"].joined(separator: "\n")
+    }
 }
 
 /// One owner for native and DOM selection. A generation discards late WebKit
@@ -62,7 +68,12 @@ final class InspectorSession: ObservableObject {
     private static let source = (try? String(contentsOf: Bundle.module.url(forResource: "InspectorEngine", withExtension: "js")!)) ?? ""
 
     var hasSelection: Bool { native != nil || web != nil }
-    var label: String { web?.label ?? native?.accessibilityId ?? native?.text ?? native?.className ?? "Inspector" }
+    var identity: String? {
+        let candidates = web.map { [$0.identifier, $0.label, $0.tag] }
+            ?? [native?.accessibilityId, native?.text, native?.className].compactMap { $0 }
+        return candidates.first { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    }
+    var label: String { identity ?? "Inspector" }
     var canGoUp: Bool { web.map { !$0.ancestors.isEmpty || webView != nil } ?? (native?.view.superview != nil) }
 
     func waitForPick() async {
@@ -232,6 +243,11 @@ final class InspectorSession: ObservableObject {
 
     func copy() {
         UIPasteboard.general.string = web?.reference ?? native?.sourceReference()
+    }
+
+    func copyIdentity() {
+        guard let identity else { return }
+        UIPasteboard.general.string = identity
     }
 
     func captureWeb(configuration: RipulScreenContextConfiguration) async throws -> RipulScreenContextSnapshot {

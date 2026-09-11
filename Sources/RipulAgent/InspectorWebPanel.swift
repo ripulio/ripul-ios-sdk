@@ -12,11 +12,12 @@ struct InspectorWebPanel: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text(element.label).fontWeight(.semibold).foregroundStyle(.orange)
             switch tab {
             case .properties:
-                Text(element.reference).textSelection(.enabled)
-                ForEach(element.attributes.keys.sorted(), id: \.self) { key in
+                Text(element.details).textSelection(.enabled)
+                ForEach(element.attributes.keys.sorted().filter {
+                    !["id", "data-ui"].contains($0) || element.attributes[$0] != session.identity
+                }, id: \.self) { key in
                     Text("\(key): \(element.attributes[key] ?? "")").textSelection(.enabled)
                 }
             case .edit, .layout:

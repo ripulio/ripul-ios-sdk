@@ -10,7 +10,7 @@ let ripulViewExplorerOverlayTag = 0x5249_5055   // "RIPU"
 
 /// Marketing version of the RipulAgent SDK, surfaced in the inspector's copy output as `sdk: …`
 /// so we can always tell which build is actually running on the device. Bump on every release.
-let ripulSDKVersion = "0.7.104"
+let ripulSDKVersion = "0.7.105"
 
 // MARK: - View Inspector Overlay
 //
@@ -2188,27 +2188,7 @@ struct InspectorPropertiesTab: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            section("Identity") {
-                if let aid = info.accessibilityId, !aid.isEmpty {
-                    // Orange pill badge — prominent, like web ElementDebuggerOverlay data-ui
-                    Button {
-                        UIPasteboard.general.string = aid
-                    } label: {
-                        Text(aid)
-                            .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 3)
-                            .background(Color.orange.opacity(0.7))
-                            .clipShape(Capsule())
-                            .overlay(
-                                Capsule()
-                                    .stroke(Color.orange, lineWidth: 1)
-                            )
-                    }
-                    .buttonStyle(.plain)
-                    .padding(.bottom, 2)
-                }
+            section("Details") {
                 copyableRow("Class", info.className, valueColor: .green)
                 if let label = info.accessibilityLabel, !label.isEmpty {
                     row("a11y Label", label)
@@ -2240,19 +2220,6 @@ struct InspectorPropertiesTab: View {
                 if let rid = info.restorationIdentifier {
                     copyableRow("Restoration", rid)
                 }
-                Button {
-                    UIPasteboard.general.string = info.sourceReference()
-                } label: {
-                    Text("⧉ Copy reference")
-                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                        .foregroundStyle(.black)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 4)
-                        .background(Color.pink.opacity(0.9))
-                        .clipShape(RoundedRectangle(cornerRadius: 5))
-                }
-                .buttonStyle(.plain)
-                .padding(.top, 3)
             }
 
             section("Geometry") {
@@ -2972,6 +2939,53 @@ struct MacroSaveSheet: View {
 // MARK: - HUD Panel
 
 @available(iOS 16.0, *)
+private struct InspectorIdentityLozenge: View {
+    @ObservedObject var session: InspectorSession
+    @State private var copied = false
+    @State private var copySequence = 0
+    private var kind: String { session.web == nil ? "Native" : "Web" }
+
+    var body: some View {
+        Button {
+            session.copyIdentity()
+            copied = true
+            copySequence += 1
+        } label: {
+            HStack(spacing: 8) {
+                if session.hasSelection {
+                    Text(kind).foregroundStyle(.orange)
+                        .font(.system(size: 12, weight: .semibold))
+                    Rectangle().fill(Color.orange.opacity(0.4)).frame(width: 1, height: 14)
+                }
+                Text(session.identity ?? "Select an element")
+                    .font(.system(size: 13, weight: .medium, design: .monospaced))
+                    .lineLimit(1).truncationMode(.middle)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .foregroundStyle(session.hasSelection ? .white : .gray)
+                Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                    .foregroundStyle(copied ? .green : .orange)
+                    .font(.system(size: 12, weight: .semibold))
+            }
+            .padding(.horizontal, 12).frame(height: 44)
+            .background(Color.orange.opacity(0.13), in: Capsule())
+            .overlay(Capsule().strokeBorder(Color.orange.opacity(0.45), lineWidth: 1))
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain).disabled(!session.hasSelection)
+        .accessibilityLabel(copied ? "Identity copied" : "Copy \(kind) identity")
+        .accessibilityValue(session.identity ?? "No selection")
+        .accessibilityHint("Copies the full identity to the clipboard")
+        .uiKitIdentifier("Inspector.identity")
+        .onChange(of: kind + (session.identity ?? "")) { _ in copied = false }
+        .task(id: copySequence) {
+            guard copied else { return }
+            try? await Task.sleep(nanoseconds: 1_200_000_000)
+            if !Task.isCancelled { copied = false }
+        }
+    }
+}
+
+@available(iOS 16.0, *)
 struct InspectorHUD: View {
     @ObservedObject var session: InspectorSession
     @State private var contextPreview: RipulContextAttachment?
@@ -3033,7 +3047,7 @@ struct InspectorHUD: View {
 
     /// Declaration order is tab order.
     enum InspectorTab: String, CaseIterable {
-        case properties = "Identity"
+        case properties = "Details"
         case layout = "Layout"
         case edit = "Appearance"
         case eval = "Eval"
@@ -3068,7 +3082,7 @@ struct InspectorHUD: View {
                     bodyContent
                         .padding(10)
                 }
-                .frame(maxHeight: max(60, size.height - 112))
+                .frame(maxHeight: max(60, size.height - 144))
             }
         }
         .frame(width: size.width)
@@ -3095,12 +3109,7 @@ struct InspectorHUD: View {
 
     private var selectionToolbar: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 7) {
-                Text(session.web == nil ? "Native" : "Web")
-                    .foregroundStyle(.orange).font(.system(size: 10, weight: .semibold))
-                Text(session.label).lineLimit(1).foregroundStyle(.white)
-                Spacer(minLength: 0)
-            }
+            InspectorIdentityLozenge(session: session)
             HStack(spacing: 7) {
                 hudIconButton(session.pinned ? "pin.fill" : "pin", label: "Pin selection", disabled: !session.hasSelection,
                     tone: .pink, active: session.pinned) { session.pinned.toggle() }

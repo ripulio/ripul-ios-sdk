@@ -5,6 +5,11 @@ and HTML inside a WKWebView on iOS and Catalyst. The Tools menu, Settings,
 solution management and the chat title double-tap launch the same window.
 Browser and native macOS clients use the web Inspector.
 
+The Web/Native identity lozenge at the top names the current selection. Tap it to
+copy the full identity, even when it is visually truncated; a checkmark confirms
+the copy. **Copy reference** still copies the detailed inspection report. The
+Details tab and other panels omit the repeated identity badges.
+
 Single-tap the chat title to expand or collapse it. Double-tap opens Inspector
 and preserves the title's expanded state. The single tap waits for the system's
 double-tap recognition window; the expanded title's navigation buttons retain
@@ -16,7 +21,7 @@ does not press it. **Back**, **Parent element** and the Tree tab navigate the sa
 selection. Folding the panel or choosing **Interact with app** returns touches
 to the app while retaining the selection. Unfolding/resuming refreshes it.
 
-Identity, Layout, Appearance and Tree share the panel. Native selections retain
+Details, Layout, Appearance and Tree share the panel. Native selections retain
 theme token editing, audit and macro recording. Web selections expose CSS layout
 and appearance edits and an Eval tab, where `$0` is the selected DOM element.
 Web CSS edits change the current page; they are not source-code changes.
