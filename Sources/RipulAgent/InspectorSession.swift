@@ -3,6 +3,12 @@ import SwiftUI
 import UIKit
 import WebKit
 
+struct InspectorNativeSelection {
+    let info: InspectedView
+    let highlight: UIView
+    let localPoint: CGPoint
+}
+
 struct InspectorWebElement: Decodable, Identifiable {
     struct Box: Decodable { let x, y, width, height: Double
         var cgRect: CGRect { CGRect(x: x, y: y, width: width, height: height) }
@@ -40,7 +46,7 @@ final class InspectorSession: ObservableObject {
     private var picking = false
     private var pendingPick: (WKWebView, CGPoint, Int)?
     private struct Target {
-        weak var native: UIView?
+        var native: InspectorNativeSelection?
         weak var webView: WKWebView?
         let webID: String?
     }
@@ -90,7 +96,10 @@ final class InspectorSession: ObservableObject {
     }
 
     private func remember(_ next: Target, remembering: Bool) {
-        let same = target?.native === next.native && target?.webView === next.webView && target?.webID == next.webID
+        let same = target?.native?.info.view === next.native?.info.view
+            && target?.native?.info.accessibilityId == next.native?.info.accessibilityId
+            && target?.native?.highlight === next.native?.highlight
+            && target?.webView === next.webView && target?.webID == next.webID
         if !same, remembering, let target {
             history.append(target)
             if history.count > 50 { history.removeFirst() }
@@ -102,7 +111,9 @@ final class InspectorSession: ObservableObject {
     func selectNative(_ info: InspectedView, remembering: Bool = true) {
         generation += 1; pendingPick = nil
         clearWebHighlight()
-        remember(Target(native: info.view, webID: nil), remembering: remembering)
+        let selection = controller?.nativeSelection ?? InspectorNativeSelection(info: info, highlight: info.view,
+            localPoint: CGPoint(x: info.view.bounds.midX, y: info.view.bounds.midY))
+        remember(Target(native: selection, webID: nil), remembering: remembering)
         web = nil; webView = nil; native = info; error = nil
     }
 
@@ -174,7 +185,9 @@ final class InspectorSession: ObservableObject {
     func back() {
         while let previous = history.popLast() {
             historyCount = history.count
-            if let view = previous.native, view.window != nil { selectView(view, remembering: false); return }
+            if let selection = previous.native, selection.info.view.window != nil {
+                controller?.restoreNativeSelection(selection, remembering: false); return
+            }
             if let view = previous.webView, view.window != nil, let id = previous.webID {
                 selectWeb(id: id, remembering: false, in: view); return
             }
@@ -183,7 +196,7 @@ final class InspectorSession: ObservableObject {
 
     func refresh() {
         if let id = web?.id { selectWeb(id: id, remembering: false) }
-        else if let view = native?.view { selectView(view, remembering: false) }
+        else if let selection = controller?.nativeSelection { controller?.restoreNativeSelection(selection, remembering: false) }
     }
 
     func editStyle(_ property: String, value: String) async {

@@ -71,6 +71,28 @@ final class UnifiedInspectorTests: XCTestCase {
         XCTAssertNil(session.web)
     }
 
+    func testNativeLogicalPartAndPointSurviveWebHistoryAndRefresh() async throws {
+        let (window, _, button, inspector, session) = try await fixture()
+        defer { session.close(); window.isHidden = true }
+        let part = UIView(frame: CGRect(x: 8, y: 5, width: 40, height: 20))
+        button.addSubview(part)
+        button.accessibilityIdentifier = nil // Model a hosting view named by a logical sub-element stamp.
+        let selected = InspectorNativeSelection(info: InspectedView.inspect(button, resolvedIdentifier: "logical.button.icon"),
+            highlight: part, localPoint: CGPoint(x: 7, y: 6))
+        inspector.restoreNativeSelection(selected, remembering: true)
+        _ = inspector.probe(atWindowPoint: CGPoint(x: 90, y: 165), fire: false)
+        try await waitForWeb(session)
+        session.back()
+        XCTAssertEqual(session.native?.accessibilityId, "logical.button.icon")
+        part.frame.origin.x += 10
+        session.refresh()
+        XCTAssertEqual(session.native?.accessibilityId, "logical.button.icon")
+        XCTAssertEqual(inspector.composerSelection()?.frame, part.convert(part.bounds, to: window))
+        session.pinned = true
+        _ = inspector.probe(atWindowPoint: CGPoint(x: 300, y: 600), fire: false)
+        XCTAssertEqual(inspector.selectedPointInHost, part.convert(CGPoint(x: 7, y: 6), to: window))
+    }
+
     func testPinnedWebSelectionSurvivesMovementAndTreeUsesSameSelection() async throws {
         let (window, _, _, inspector, session) = try await fixture()
         defer { session.close(); window.isHidden = true }

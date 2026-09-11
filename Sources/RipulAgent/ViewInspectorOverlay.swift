@@ -10,7 +10,7 @@ let ripulViewExplorerOverlayTag = 0x5249_5055   // "RIPU"
 
 /// Marketing version of the RipulAgent SDK, surfaced in the inspector's copy output as `sdk: …`
 /// so we can always tell which build is actually running on the device. Bump on every release.
-let ripulSDKVersion = "0.7.101"
+let ripulSDKVersion = "0.7.102"
 
 // MARK: - View Inspector Overlay
 //
@@ -944,6 +944,15 @@ class ViewInspectorController: UIView {
     private var currentTarget: UIView?
     private weak var currentHighlightView: UIView?
     private var currentTokenAnchor: UIView?
+    private var selectionLocalPoint = CGPoint.zero
+    var nativeSelection: InspectorNativeSelection? {
+        guard let info = currentInfo, let highlight = currentHighlightView else { return nil }
+        return InspectorNativeSelection(info: info, highlight: highlight, localPoint: selectionLocalPoint)
+    }
+    var selectedPointInHost: CGPoint? {
+        guard let highlight = currentHighlightView, let host = highlight.window else { return nil }
+        return highlight.convert(selectionLocalPoint, to: host)
+    }
     /// The engine's resolution for the current pick — ONE object that the
     /// readout, the teal outline AND the fire all consume, so the prediction
     /// cannot drift from the behaviour (the "two places encoding one policy"
@@ -1039,7 +1048,7 @@ class ViewInspectorController: UIView {
                 // overlay window, and every consumer (macro recording, the
                 // actuation engine's point path) resolves this against host
                 // views.
-                let hostPoint = (hostWindow ?? window).map { convert(cursorPos, to: $0) } ?? cursorPos
+                let hostPoint = selectedPointInHost ?? cursorPos
                 let tap = RipulElementTap(view: element,
                                           targetView: currentTarget ?? element,
                                           point: hostPoint,
@@ -1318,14 +1327,23 @@ class ViewInspectorController: UIView {
     // MARK: Hit testing
 
     func selectNativeView(_ view: UIView, remembering: Bool = true) {
-        guard let host = view.window else { session?.invalidate(); return }
-        hostWindow = host
         let info = InspectedView.inspect(view)
-        currentTarget = view; currentHighlightView = view; currentTokenAnchor = info.tokenAnchorView; currentInfo = info
+        restoreNativeSelection(InspectorNativeSelection(info: info, highlight: view,
+            localPoint: CGPoint(x: view.bounds.midX, y: view.bounds.midY)), remembering: remembering)
+    }
+
+    func restoreNativeSelection(_ selection: InspectorNativeSelection, remembering: Bool) {
+        let view = selection.info.view, highlight = selection.highlight
+        guard let host = view.window, highlight.window === host, !view.isHidden, !highlight.isHidden else { session?.invalidate(); return }
+        hostWindow = host
+        let info = InspectedView.inspect(view, resolvedIdentifier: selection.info.accessibilityId,
+            registryMatchView: selection.info.tokenAnchorView)
+        currentTarget = view; currentHighlightView = highlight; currentTokenAnchor = info.tokenAnchorView; currentInfo = info
+        selectionLocalPoint = selection.localPoint
         currentResolution = ScreenActuationEngine.resolveTap(on: view, matchId: info.accessibilityId,
-            matchText: info.text, at: view.convert(CGPoint(x: view.bounds.midX, y: view.bounds.midY), to: host))
+            matchText: info.text, at: selectedPointInHost)
         currentActionable = currentResolution?.promisedView
-        let frame = view.convert(view.bounds, to: self)
+        let frame = highlight.convert(highlight.bounds, to: self)
         highlightLayer.path = UIBezierPath(rect: frame).cgPath; actionableLayer.path = nil
         session?.selectNative(info, remembering: remembering)
         onInspect?(info)
@@ -1337,7 +1355,7 @@ class ViewInspectorController: UIView {
         // navigation and pinned elements, rather than a fresh point hit.
         let resolution = ScreenActuationEngine.resolveTap(on: target,
             matchId: currentInfo?.accessibilityId, matchText: currentInfo?.text,
-            at: target.convert(CGPoint(x: target.bounds.midX, y: target.bounds.midY), to: target.window))
+            at: selectedPointInHost)
         let outcome = ScreenActuationEngine.actuate(resolution)
         onFireOutcome?(outcome.via.map { "via " + $0 } ?? "Not tappable")
     }
@@ -1511,6 +1529,7 @@ class ViewInspectorController: UIView {
             return (stampArea > 0 && stampArea < targetArea) ? stamped : target
         }()
         currentHighlightView = highlightView
+        selectionLocalPoint = convert(point, to: highlightView)
         let frameInSelf = highlightView.convert(highlightView.bounds, to: self)
         highlightLayer.path = UIBezierPath(roundedRect: frameInSelf, cornerRadius: highlightView.layer.cornerRadius).cgPath
         // Grey the selection when nothing there answers a tap, so "I can select
