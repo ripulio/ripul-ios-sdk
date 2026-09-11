@@ -37,6 +37,13 @@ Hosts mark bindings as colour tokens, style assignments or information and can
 supply their existing style/override actions through `remapSections(for:view:)`
 ([provider contract](../Sources/RipulAgent/RipulTokenInspection.swift)).
 
+Native Appearance editing is theme-based. It also retains saved theme text edits
+for supported labels and tab titles. Temporary view overrides (background, tint,
+text colour, opacity, corner radius, font size, visibility and unsaved copy) and
+their preview reset/handoff controls have been removed. The Details tab continues
+to report the view's current properties
+([implementation](../Sources/RipulAgent/ViewInspectorOverlay.swift)).
+
 For web elements, **Layout** includes the nested margin (orange), border (yellow),
 padding (green), and content (blue) box diagram. Tap any edge to edit its CSS value;
 numbers default to pixels, other CSS units are accepted, and clearing a value

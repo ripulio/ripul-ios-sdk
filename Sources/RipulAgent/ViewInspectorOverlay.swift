@@ -10,7 +10,7 @@ let ripulViewExplorerOverlayTag = 0x5249_5055   // "RIPU"
 
 /// Marketing version of the RipulAgent SDK, surfaced in the inspector's copy output as `sdk: …`
 /// so we can always tell which build is actually running on the device. Bump on every release.
-let ripulSDKVersion = "0.7.106"
+let ripulSDKVersion = "0.7.107"
 
 // MARK: - View Inspector Overlay
 //
@@ -674,56 +674,6 @@ struct InspectedView {
         let windowRect = window.convert(screenFrame, from: window.screen.coordinateSpace)
         return UIKitIdentifierRegistry.shared.bestMatch(at: CGPoint(x: windowRect.midX, y: windowRect.midY))?.identifier
     }
-
-    /// Live-set the text of a text-bearing view — backs the inspector's inline edit
-    /// so a trial copy change is visible in-context before it's handed off.
-    @MainActor static func applyText(_ s: String, to v: UIView) {
-        if let id = NativeTabTitleTheme.identifier(for: v) { NativeTabTitleTheme.preview(s, identifier: id) }
-        else if let l = v as? UILabel { l.text = s }
-        else if let f = v as? UITextField { f.text = s }
-        else if let t = v as? UITextView { t.text = s }
-        else if let b = v as? UIButton { b.setTitle(s, for: .normal) }
-    }
-
-    // MARK: Live property editing (backs the Edit tab)
-
-    /// The view's foreground/text colour, where it has one.
-    static func currentTextColor(_ v: UIView) -> UIColor? {
-        if let l = v as? UILabel { return l.textColor }
-        if let f = v as? UITextField { return f.textColor }
-        if let t = v as? UITextView { return t.textColor }
-        if let b = v as? UIButton { return b.titleColor(for: .normal) }
-        return nil
-    }
-    static func applyTextColor(_ c: UIColor, to v: UIView) {
-        if let l = v as? UILabel { l.textColor = c }
-        else if let f = v as? UITextField { f.textColor = c }
-        else if let t = v as? UITextView { t.textColor = c }
-        else if let b = v as? UIButton { b.setTitleColor(c, for: .normal) }
-    }
-
-    /// The view's font, where it has one.
-    static func currentFont(_ v: UIView) -> UIFont? {
-        if let l = v as? UILabel { return l.font }
-        if let f = v as? UITextField { return f.font }
-        if let t = v as? UITextView { return t.font }
-        if let b = v as? UIButton { return b.titleLabel?.font }
-        return nil
-    }
-    static func applyFontSize(_ size: CGFloat, to v: UIView) {
-        if let l = v as? UILabel { l.font = l.font.withSize(size) }
-        else if let f = v as? UITextField { f.font = (f.font ?? .systemFont(ofSize: size)).withSize(size) }
-        else if let t = v as? UITextView { t.font = (t.font ?? .systemFont(ofSize: size)).withSize(size) }
-        else if let b = v as? UIButton { b.titleLabel?.font = (b.titleLabel?.font ?? .systemFont(ofSize: size)).withSize(size) }
-    }
-
-    static func applyCornerRadius(_ r: CGFloat, to v: UIView) {
-        v.layer.cornerRadius = r
-        if r > 0 { v.clipsToBounds = true }
-    }
-
-    /// A comparable string for a colour (hex), used for change detection + from/to.
-    static func hex(_ c: UIColor?) -> String { c?.hexString ?? "—" }
 
     /// A compact, greppable one-paste reference for finding this element in source.
     func sourceReference() -> String {
@@ -1885,233 +1835,27 @@ struct InspectorTokenSection: View {
     }
 }
 
-// MARK: - Properties Tab
+// MARK: - Appearance Tab
 
-/// Dedicated element editor (the "Edit" tab): trial changes to the inspected
-/// view's properties live — text plus common visual props — then hand the whole
-/// change set to Ripul via the adaptive "Discuss in <chat>" button. Keyed by the
-/// selected view's identity (via `.id`) so its state resets per selection.
+/// Theme assignments and persisted theme text for the selected element.
 @available(iOS 16.0, *)
-struct InspectorEditTab: View {
+struct InspectorAppearanceTab: View {
     let info: InspectedView
-    private let nativeTextIdentifier: String?
-
-    // Editable state, seeded from the live view.
-    @State private var text: String
-    @State private var bg: Color
-    @State private var tint: Color
-    @State private var textColor: Color
-    @State private var alpha: Double
-    @State private var corner: Double
-    @State private var fontSize: Double
-    @State private var isHidden: Bool
-    @State private var sent = false
-    @State private var targetTick = 0
-
-    // Originals (for change detection + reset), captured once.
-    private let hasText: Bool, hasTextColor: Bool, hasFont: Bool
-    private let origText: String
-    private let origBg: Color, origTint: Color, origTextColor: Color
-    private let origAlpha: Double, origCorner: Double, origFontSize: Double
-    private let origHidden: Bool
-
-    init(info: InspectedView) {
-        self.info = info
-        let v = info.view
-        let tc = InspectedView.currentTextColor(v)
-        let font = InspectedView.currentFont(v)
-        nativeTextIdentifier = NativeTabTitleTheme.identifier(for: v, resolvedIdentifier: info.accessibilityId)
-        hasText = info.text != nil && nativeTextIdentifier == nil && info.nativeLabelCapture?.selector == nil
-        hasTextColor = tc != nil
-        hasFont = font != nil
-        origText = info.text ?? ""
-        origBg = Color(uiColor: v.backgroundColor ?? .clear)
-        origTint = Color(uiColor: v.tintColor ?? .clear)
-        origTextColor = Color(uiColor: tc ?? .clear)
-        origAlpha = Double(v.alpha)
-        origCorner = Double(v.layer.cornerRadius)
-        origFontSize = Double(font?.pointSize ?? 14)
-        origHidden = v.isHidden
-        _text = State(initialValue: info.text ?? "")
-        _bg = State(initialValue: Color(uiColor: v.backgroundColor ?? .clear))
-        _tint = State(initialValue: Color(uiColor: v.tintColor ?? .clear))
-        _textColor = State(initialValue: Color(uiColor: tc ?? .clear))
-        _alpha = State(initialValue: Double(v.alpha))
-        _corner = State(initialValue: Double(v.layer.cornerRadius))
-        _fontSize = State(initialValue: Double(font?.pointSize ?? 14))
-        _isHidden = State(initialValue: v.isHidden)
-    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            // Design tokens styling this element, when the host registered a token provider. Sits
-            // above the raw property editors — it's the "what do I change to retheme this" answer.
-            // Anchored on the resolved stamp for SwiftUI elements (declared token colours live
-            // there), falling back to the inspected view for UIKit.
             InspectorTokenSection(view: info.tokenAnchorView)
 
-            if let nativeTextIdentifier {
-                NativeTextFields(target: .tabTitle(nativeTextIdentifier), savesExplicitly: true)
+            if let identifier = NativeTabTitleTheme.identifier(for: info.view, resolvedIdentifier: info.accessibilityId) {
+                NativeTextFields(target: .tabTitle(identifier), savesExplicitly: true)
             } else if let selector = info.nativeLabelCapture?.selector {
                 NativeTextFields(target: .label(selector), savesExplicitly: true)
-            } else if let reason = info.nativeLabelCapture?.reason {
-                Text("Live preview only. " + reason).font(.caption).foregroundStyle(.secondary)
             }
-
-            if hasText {
-                labeled("Text") {
-                    TextField("text", text: $text, axis: .vertical)
-                        .textFieldStyle(.plain)
-                        .font(.system(size: 12, design: .monospaced))
-                        .foregroundStyle(.white)
-                        .padding(6)
-                        .background(Color.white.opacity(0.08))
-                        .clipShape(RoundedRectangle(cornerRadius: 5))
-                        .onChange(of: text) { v in InspectedView.applyText(v, to: info.view); sent = false }
-                }
-            }
-
-            colorRow("Background", $bg) { info.view.backgroundColor = UIColor($0) }
-            if hasTextColor {
-                colorRow("Text colour", $textColor) { InspectedView.applyTextColor(UIColor($0), to: info.view) }
-            }
-            colorRow("Tint", $tint) { info.view.tintColor = UIColor($0) }
-
-            sliderRow("Alpha", $alpha, 0...1, "%.2f") { info.view.alpha = CGFloat($0) }
-            sliderRow("Corner", $corner, 0...40, "%.0f") { InspectedView.applyCornerRadius(CGFloat($0), to: info.view) }
-            if hasFont {
-                sliderRow("Font size", $fontSize, 8...40, "%.0f") { InspectedView.applyFontSize(CGFloat($0), to: info.view) }
-            }
-
-            Toggle(isOn: $isHidden) {
-                Text("Hidden").font(.system(size: 11, design: .monospaced)).foregroundStyle(.gray)
-            }
-            .tint(.pink)
-            .onChange(of: isHidden) { info.view.isHidden = $0; sent = false }
-
-            HStack(spacing: 10) {
-                // No target → "Discuss in Ripul" opens the chooser; set → sends the edits.
-                Button { primaryAction() } label: {
-                    Label(primaryTitle, systemImage: "paperplane.fill")
-                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                        .foregroundStyle(.black)
-                        .lineLimit(1)
-                        .padding(.horizontal, 10).padding(.vertical, 4)
-                        .background(Color.pink.opacity(0.9))
-                        .clipShape(RoundedRectangle(cornerRadius: 5))
-                }
-                .buttonStyle(.plain)
-                if RipulEditHandoff.targetSessionId != nil {
-                    Button("clear") { RipulEditHandoff.clearSession() }
-                        .font(.system(size: 10, design: .monospaced)).foregroundStyle(.gray).buttonStyle(.plain)
-                }
-                Button("reset") { resetAll() }
-                    .font(.system(size: 10, design: .monospaced)).foregroundStyle(.gray).buttonStyle(.plain)
-                Spacer()
-            }
-            .id(targetTick)
         }
-        .onReceive(NotificationCenter.default.publisher(for: RipulEditHandoff.targetChangedNotification)) { _ in
-            targetTick &+= 1
-        }
-    }
-
-    // MARK: rows
-
-    @ViewBuilder private func labeled(_ title: String, @ViewBuilder _ control: () -> some View) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text(title).font(.system(size: 10, weight: .semibold, design: .monospaced))
-                .foregroundStyle(.pink).textCase(.uppercase).tracking(0.5)
-            control()
-        }
-    }
-
-    private func colorRow(_ title: String, _ binding: Binding<Color>, apply: @escaping (Color) -> Void) -> some View {
-        HStack(spacing: 8) {
-            Text(title).font(.system(size: 11, design: .monospaced)).foregroundStyle(.gray)
-                .frame(width: 92, alignment: .leading)
-            ColorPicker("", selection: binding, supportsOpacity: true).labelsHidden()
-            Spacer()
-        }
-        .onChange(of: binding.wrappedValue) { v in apply(v); sent = false }
-    }
-
-    private func sliderRow(_ title: String, _ binding: Binding<Double>, _ range: ClosedRange<Double>, _ fmt: String, apply: @escaping (Double) -> Void) -> some View {
-        HStack(spacing: 8) {
-            Text(title).font(.system(size: 11, design: .monospaced)).foregroundStyle(.gray)
-                .frame(width: 92, alignment: .leading)
-            Slider(value: binding, in: range).tint(.pink)
-            Text(String(format: fmt, binding.wrappedValue))
-                .font(.system(size: 10, design: .monospaced)).foregroundStyle(.white).frame(width: 36, alignment: .trailing)
-        }
-        .onChange(of: binding.wrappedValue) { v in apply(v); sent = false }
-    }
-
-    // MARK: send
-
-    private var primaryTitle: String {
-        if sent { return "Sent ✓" }
-        if let name = RipulEditHandoff.targetSessionTitle ?? RipulEditHandoff.targetSessionId {
-            return "Discuss in \(name)"
-        }
-        return "Discuss in Ripul"
-    }
-
-    private func primaryAction() {
-        if RipulEditHandoff.targetSessionId == nil { RipulEditHandoff.chooseSession() }
-        else { send() }
-    }
-
-    private func currentEdits() -> [RipulEditIntent.Edit] {
-        var e: [RipulEditIntent.Edit] = []
-        func add(_ p: String, _ from: String, _ to: String) {
-            if from != to { e.append(.init(property: p, from: from, to: to)) }
-        }
-        if hasText { add("text", origText, text) }
-        add("backgroundColor", InspectedView.hex(UIColor(origBg)), InspectedView.hex(UIColor(bg)))
-        add("tintColor", InspectedView.hex(UIColor(origTint)), InspectedView.hex(UIColor(tint)))
-        if hasTextColor { add("textColor", InspectedView.hex(UIColor(origTextColor)), InspectedView.hex(UIColor(textColor))) }
-        add("alpha", String(format: "%.2f", origAlpha), String(format: "%.2f", alpha))
-        add("cornerRadius", String(format: "%.0f", origCorner), String(format: "%.0f", corner))
-        if hasFont { add("fontSize", String(format: "%.0f", origFontSize), String(format: "%.0f", fontSize)) }
-        add("hidden", "\(origHidden)", "\(isHidden)")
-        return e
-    }
-
-    private func send() {
-        let appName = Bundle.main.infoDictionary?["CFBundleName"] as? String
-        let edits = currentEdits()
-        let intent = RipulEditIntent(
-            target: .init(
-                app: appName,
-                controller: info.owningViewController,
-                container: info.container,
-                property: info.propertyRef,
-                className: info.className,
-                text: info.text,
-                accessibilityId: info.accessibilityId,
-                storyboard: nil,
-                vcChain: info.viewControllerChain),
-            edits: edits.isEmpty ? nil : edits,
-            sessionId: RipulEditHandoff.targetSessionId,
-            callback: RipulEditHandoff.callbackURLString)
-        RipulEditHandoff.send(intent)
-        withAnimation { sent = true }
-    }
-
-    private func resetAll() {
-        text = origText
-        if hasText { InspectedView.applyText(origText, to: info.view) }
-        bg = origBg; info.view.backgroundColor = UIColor(origBg)
-        tint = origTint; info.view.tintColor = UIColor(origTint)
-        if hasTextColor { textColor = origTextColor; InspectedView.applyTextColor(UIColor(origTextColor), to: info.view) }
-        alpha = origAlpha; info.view.alpha = CGFloat(origAlpha)
-        corner = origCorner; InspectedView.applyCornerRadius(CGFloat(origCorner), to: info.view)
-        if hasFont { fontSize = origFontSize; InspectedView.applyFontSize(CGFloat(origFontSize), to: info.view) }
-        isHidden = origHidden; info.view.isHidden = origHidden
-        sent = false
     }
 }
+
+// MARK: - Properties Tab
 
 @available(iOS 16.0, *)
 struct InspectorPropertiesTab: View {
@@ -3180,7 +2924,7 @@ struct InspectorHUD: View {
             case .properties, .layout:
                 InspectorPropertiesTab(info: info)
             case .edit:
-                InspectorEditTab(info: info)
+                InspectorAppearanceTab(info: info)
                     .id(ObjectIdentifier(info.view))   // reset editor state per selection
             case .tree:
                 InspectorTreeTab(selectedView: info.view, onSelect: onSelectView)
