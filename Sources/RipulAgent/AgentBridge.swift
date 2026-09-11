@@ -2055,6 +2055,8 @@ public final class AgentBridge: NSObject, ObservableObject {
     @Published public var pendingDateQuestion: UserDateQuestion?
     /// A file view request awaiting native sheet presentation.
     @Published public var pendingFileView: FileViewRequest?
+    /// Tool-call inspection updates stay off the bridge's own publisher.
+    public let toolCallDetails = ToolCallDetailsStore()
     /// True while the web file viewer is open — native chat input should be hidden.
     @Published public var fileViewerExpanded: Bool = false
     /// Filename shown in the native title bar while the file viewer is open; nil when closed.
@@ -3895,6 +3897,12 @@ public final class AgentBridge: NSObject, ObservableObject {
                 NSLog("[AgentBridge] Link open — url: %@", urlString)
                 linkOpenDelegate?.agentBridge(self, didRequestOpenLink: url)
             }
+        case "toolCallDetails:open":
+            toolCallDetails.receive(dict, opening: true)
+        case "toolCallDetails:update":
+            toolCallDetails.receive(dict, opening: false)
+        case "toolCallDetails:close":
+            if let id = dict["requestId"] as? String { toolCallDetails.close(requestId: id) }
         case "file:view":
             if let filePath = dict["filePath"] as? String {
                 let content = dict["content"] as? String
@@ -9007,6 +9015,7 @@ public final class AgentBridge: NSObject, ObservableObject {
             "id": requestId,
             "success": true,
             "result": caps,
+            "uiFeatures": ["toolCallDetails"],
         ])
 
         // Capability ping proves the bridge is alive — treat it like a handshake.

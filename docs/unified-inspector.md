@@ -26,6 +26,17 @@ theme token editing, audit and macro recording. Web selections expose CSS layout
 and appearance edits and an Eval tab, where `$0` is the selected DOM element.
 Web CSS edits change the current page; they are not source-code changes.
 
+Native **Appearance** rows lead with the property and show its assigned token or
+style plus a colour swatch for colour tokens only. Opening a colour row shows its
+shared definition: colour source, resulting colour and **Edit shared token**.
+The editor states that changes apply wherever the token is used; it changes the
+shared source, preserving the element's assigned token. Style rows instead offer
+**Change style** for the selected element. Both the inspector and element-tap
+sheet use the same detail/editor views ([implementation](../Sources/RipulAgent/ThemeRemap.swift)).
+Hosts mark bindings as colour tokens, style assignments or information and can
+supply their existing style/override actions through `remapSections(for:view:)`
+([provider contract](../Sources/RipulAgent/RipulTokenInspection.swift)).
+
 For web elements, **Layout** includes the nested margin (orange), border (yellow),
 padding (green), and content (blue) box diagram. Tap any edge to edit its CSS value;
 numbers default to pixels, other CSS units are accepted, and clearing a value

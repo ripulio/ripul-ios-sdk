@@ -440,6 +440,12 @@ public struct AgentView<TopBar: View>: View {
         .sheet(item: $bridge.pendingFileView) { request in
             FileViewerSheet(request: request)
         }
+        .modifier(ToolCallDetailsPresenter(store: bridge.toolCallDetails, onDismiss: { requestId in
+            bridge.send([
+                "type": "agent-framework:toolCallDetails:dismissed",
+                "requestId": requestId,
+            ])
+        }))
         .task {
             if !skipBridgeSetup {
                 bridge.searchClickDelegate = searchClickDelegate

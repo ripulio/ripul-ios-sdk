@@ -14,11 +14,14 @@ import UIKit
 
 /// One design token currently styling an inspected view (e.g. its text colour is `rowTitle`).
 public struct RipulTokenBinding: Identifiable, Equatable {
+    /// Colour definitions are shared; style assignments belong to the selected element.
+    public enum Kind: Equatable { case colourToken, styleAssignment, information }
+    public let kind: Kind
     /// Stable within a single view — typically the styled property key ("textColor", "background").
     public let id: String
     /// Human label for the styled property: "Text colour", "Background", "Tint".
     public let property: String
-    /// The token itself — the thing a designer remaps: "cardIcon", "rowTitle".
+    /// The assigned token or style. Editing a colour token changes its shared definition.
     public let tokenName: String
     /// What the token currently resolves to, display-only (e.g. the role "accent"). nil if n/a.
     public let resolvesTo: String?
@@ -28,7 +31,9 @@ public struct RipulTokenBinding: Identifiable, Equatable {
     public let options: [RipulTokenOption]
 
     public init(id: String, property: String, tokenName: String,
-                resolvesTo: String?, swatchHex: String, options: [RipulTokenOption]) {
+                resolvesTo: String?, swatchHex: String, options: [RipulTokenOption],
+                kind: Kind = .colourToken) {
+        self.kind = kind
         self.id = id
         self.property = property
         self.tokenName = tokenName
@@ -93,6 +98,23 @@ public protocol RipulTokenProvider: AnyObject {
     /// host's theme. Returns the new resolved "#RRGGBB" for the swatch, or nil if it couldn't apply.
     @discardableResult
     func remap(_ binding: RipulTokenBinding, to option: RipulTokenOption) -> String?
+
+    /// Options for this binding, including host-owned style navigation and override actions.
+    func remapSections(for binding: RipulTokenBinding, view: UIView) -> [RipulThemeRemapSection]
+}
+
+public extension RipulTokenProvider {
+    func remapSections(for binding: RipulTokenBinding, view: UIView) -> [RipulThemeRemapSection] {
+        binding.optionGroups.map { group in
+            RipulThemeRemapSection(id: group.id, title: group.title ?? "Colour source", rows: group.items.map { option in
+                RipulThemeRemapOptionRow(id: option.id, label: option.label,
+                                        swatchHex: binding.kind == .colourToken ? option.swatchHex : nil,
+                                        isCurrent: binding.resolvesTo == option.id) { [weak self] in
+                    self?.remap(binding, to: option)
+                }
+            })
+        }
+    }
 }
 
 /// Registration point. The host sets `provider` once at launch; a nil provider hides the feature.

@@ -1,8 +1,8 @@
 import Foundation
 import WebKit
 
-/// `AgentBridge` access to the repo navigator callables — the read-only git
-/// queries behind the iPhone's GitKraken-style graph.
+/// `AgentBridge` access to the repo navigator callables — the git
+/// queries and branch actions behind the iPhone's GitKraken-style graph.
 ///
 /// Same shape as PlanReviewBridge: the web layer owns the relay round-trip to
 /// the paired Mac and hands back the host's payload untouched; nothing here
@@ -105,7 +105,7 @@ extension AgentBridge {
     }
 
     /// Push a branch with no upstream yet (`git push -u origin <branch>` on
-    /// the host) — the navigator's one mutation. Returns git's stderr text
+    /// the host). Returns git's stderr text
     /// on rejection so the row can show why.
     public func repoPushBranch(machineId: String, repoPath: String, branch: String) async -> Result<String, RepoNavigatorError> {
         let result = await callRepoNavigator(
@@ -124,6 +124,28 @@ extension AgentBridge {
                 return .failure(RepoNavigatorError("The push did not complete."))
             }
             return .success(branch)
+        }
+    }
+
+    /// Switch on the selected host, preserving Git's working-tree protections.
+    public func repoSwitchBranch(machineId: String, repoPath: String, branch: String, isRemote: Bool) async -> Result<String, RepoNavigatorError> {
+        let result = await callRepoNavigator(
+            "return await window.__ripulRepoSwitchBranch?.(machineId, repoPath, branch, isRemote) ?? { success: false, error: 'Branch switching requires the latest app and host build.' };",
+            ["machineId": machineId, "repoPath": repoPath, "branch": branch, "isRemote": isRemote])
+        switch result {
+        case .failure(let error): return .failure(error)
+        case .success(let value):
+            guard let dict = value as? [String: Any] else {
+                return .failure(RepoNavigatorError("The web layer returned no switch result."))
+            }
+            if let error = dict["error"] as? String, !error.isEmpty {
+                return .failure(RepoNavigatorError(error))
+            }
+            guard dict["success"] as? Bool == true,
+                  let currentBranch = dict["branch"] as? String, !currentBranch.isEmpty else {
+                return .failure(RepoNavigatorError("The host did not confirm the branch switch. Refresh to check the current branch."))
+            }
+            return .success(currentBranch)
         }
     }
 

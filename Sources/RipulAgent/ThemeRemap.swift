@@ -91,6 +91,22 @@ public enum RipulThemeRemapSheetPresenter {
     /// dismisses itself first, then fires. When nil, the row is hidden.
     public static var editorAction: (() -> Void)?
 
+    /// Open one assignment from the inspector, using the same detail/editor as element taps.
+    @MainActor public static func present(binding: RipulTokenBinding, view: UIView) {
+        guard let top = RipulChrome.presentationRoot() else { return }
+        let item = RipulAppearanceItem(id: binding.id, read: { [weak view] in
+            guard let view else { return nil }
+            return RipulTokenInspector.bindings(for: view).first { $0.id == binding.id }
+        }, sections: { [weak view] in
+            guard let view, let provider = RipulTokenInspector.provider,
+                  let current = provider.tokenBindings(for: view).first(where: { $0.id == binding.id }) else { return [] }
+            return provider.remapSections(for: current, view: view)
+        })
+        let host = UIHostingController(rootView: RipulAppearanceDetailSheet(item: item))
+        host.sheetPresentationController?.detents = [.medium(), .large()]
+        top.present(host, animated: true)
+    }
+
     @MainActor public static func present(targets: [any RipulThemeRemapTarget], tap: RipulElementTap) {
         // Presented from the top-most chrome window when one is up — this sheet
         // is fired FROM the explorer, and presenting it from the app's window
@@ -104,14 +120,184 @@ public enum RipulThemeRemapSheetPresenter {
     }
 }
 
-// MARK: - The sheet (ONE consistent popup for every themeable element)
+// MARK: - Appearance assignments and shared definitions
 
-/// THE remap popup. Dumb chrome: a header identifying the tapped element, then one List
-/// section per section the targets vend. All semantics — what the rows are, what selecting
-/// one writes — live in the host's providers and their targets. Selecting a row applies
-/// immediately (the element changes behind the sheet) and the sheet stays open; content
-/// re-resolves on `.ripulThemeDidChange` so the current checkmark moves and the header
-/// summary updates. Styled with system defaults — hosts restyle via their own surfaces.
+/// Live reads keep the assignment and its definition up to date after any theme edit.
+@MainActor
+struct RipulAppearanceItem: Identifiable {
+    let id: String
+    let read: () -> RipulTokenBinding?
+    let sections: () -> [RipulThemeRemapSection]
+}
+
+@available(iOS 16.0, *)
+struct RipulAppearanceRow: View {
+    let binding: RipulTokenBinding
+
+    var body: some View {
+        HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(binding.property)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(.primary)
+                Text(binding.tokenName)
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 4)
+            if binding.kind == .colourToken {
+                RipulAppearanceSwatch(hex: binding.swatchHex)
+            }
+        }
+        .accessibilityElement(children: .combine)
+    }
+}
+
+@available(iOS 16.0, *)
+private struct RipulAppearanceSwatch: View {
+    let hex: String
+    var body: some View {
+        RoundedRectangle(cornerRadius: 4)
+            .fill(Color(UIColor(ripulHexString: hex) ?? .clear))
+            .frame(width: 22, height: 22)
+            .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.secondary.opacity(0.3), lineWidth: 1))
+            .accessibilityHidden(true)
+    }
+}
+
+@available(iOS 16.0, *)
+@MainActor
+private struct RipulAppearanceDetailSheet: View {
+    let item: RipulAppearanceItem
+    @Environment(\.dismiss) private var dismiss
+    var body: some View {
+        NavigationStack {
+            RipulAppearanceDetailView(item: item)
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Done") { dismiss() }
+                            .uiKitIdentifier("inspector.appearance.done")
+                    }
+                }
+        }
+    }
+}
+
+@available(iOS 16.0, *)
+@MainActor
+struct RipulAppearanceDetailView: View {
+    let item: RipulAppearanceItem
+    @State private var themeVersion = 0
+
+    var body: some View {
+        let _ = themeVersion
+        let binding = item.read()
+        List {
+            if let binding {
+                Section {
+                    Text(binding.tokenName)
+                        .font(.system(size: 20, weight: .semibold, design: .monospaced))
+                        .textSelection(.enabled)
+                    detail("Used for", binding.property)
+                    if binding.kind == .colourToken {
+                        if let source = binding.resolvesTo { detail("Colour source", source) }
+                        HStack {
+                            Text("Resulting colour")
+                            Spacer()
+                            Text(binding.swatchHex).font(.system(size: 13, design: .monospaced))
+                            RipulAppearanceSwatch(hex: binding.swatchHex)
+                        }
+                        .accessibilityElement(children: .combine)
+                    } else if let summary = binding.resolvesTo {
+                        detail("Style settings", summary)
+                    }
+                }
+                Section {
+                    NavigationLink {
+                        RipulAppearanceOptionsView(item: item)
+                    } label: {
+                        Text(binding.kind == .colourToken ? "Edit shared token" : "Change style")
+                    }
+                    .uiKitIdentifier("inspector.appearance.edit.\(binding.id)")
+                } footer: {
+                    Text(binding.kind == .colourToken
+                         ? "Changes apply wherever this token is used."
+                         : "The style assignment applies to this element. Individual overrides still apply.")
+                }
+            } else {
+                Text("This appearance assignment is no longer available.")
+            }
+        }
+        .navigationTitle(binding?.kind == .colourToken ? "Shared token" : "Style assignment")
+        .navigationBarTitleDisplayMode(.inline)
+        .onReceive(NotificationCenter.default.publisher(for: .ripulThemeDidChange)) { _ in themeVersion += 1 }
+    }
+
+    private func detail(_ title: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title).font(.system(size: 13)).foregroundStyle(.secondary)
+            Text(value).font(.system(size: 15)).textSelection(.enabled)
+        }
+        .accessibilityElement(children: .combine)
+    }
+}
+
+@available(iOS 16.0, *)
+@MainActor
+private struct RipulAppearanceOptionsView: View {
+    let item: RipulAppearanceItem
+    @State private var themeVersion = 0
+
+    var body: some View {
+        let _ = themeVersion
+        let binding = item.read()
+        List {
+            if let binding {
+                Section {
+                    Text(binding.tokenName).font(.system(size: 17, weight: .semibold, design: .monospaced))
+                    Text(binding.kind == .colourToken
+                         ? "Choose where this shared token gets its colour. Changes apply wherever this token is used."
+                         : "Choose a style for this element. Individual overrides still apply until cleared.")
+                        .font(.system(size: 14))
+                        .foregroundStyle(.secondary)
+                }
+                ForEach(item.sections()) { section in
+                    Section(section.title) {
+                        ForEach(section.rows) { row in
+                            Button {
+                                let line = row.select()
+                                themeVersion += 1
+                                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                                RipulThemeRemapSheetPresenter.onLog?("[RipulTheme] appearance: \(row.label) — \(line ?? "no change")")
+                            } label: {
+                                HStack(spacing: 12) {
+                                    if let hex = row.swatchHex { RipulAppearanceSwatch(hex: hex) }
+                                    Text(row.label)
+                                        .foregroundStyle(row.role == .destructive ? Color.red : Color.primary)
+                                    Spacer()
+                                    if row.isCurrent { Image(systemName: "checkmark") }
+                                    if row.role == .navigation {
+                                        Image(systemName: "chevron.right").foregroundStyle(.secondary)
+                                    }
+                                }
+                                .frame(minHeight: 32)
+                            }
+                            .uiKitIdentifier("inspector.appearance.option.\(item.id).\(row.id)")
+                        }
+                    }
+                }
+            } else {
+                Text("This appearance assignment is no longer available.")
+            }
+        }
+        .navigationTitle(binding?.kind == .colourToken ? "Edit shared token" : "Change style")
+        .navigationBarTitleDisplayMode(.inline)
+        .onReceive(NotificationCenter.default.publisher(for: .ripulThemeDidChange)) { _ in themeVersion += 1 }
+    }
+}
+
+/// Element taps open the same assignment-first presentation as the inspector.
 @available(iOS 16.0, *)
 @MainActor
 public struct RipulThemeRemapSheetView: View {
@@ -126,97 +312,55 @@ public struct RipulThemeRemapSheetView: View {
     }
 
     public var body: some View {
+        let _ = themeVersion
         NavigationStack {
             List {
                 Section {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("\(String(describing: type(of: tap.view))) · \(tap.view.accessibilityIdentifier ?? "—")")
-                            .font(.system(size: 13, weight: .medium))
-                            .foregroundStyle(.secondary)
-                        ForEach(Array(targets.enumerated()), id: \.offset) { _, target in
-                            Text(target.summary)
-                                .font(.system(size: 15, weight: .semibold))
-                                .foregroundStyle(.primary)
+                    ForEach(items) { item in
+                        if let binding = item.read() {
+                            NavigationLink {
+                                RipulAppearanceDetailView(item: item)
+                            } label: {
+                                RipulAppearanceRow(binding: binding)
+                            }
+                            .uiKitIdentifier("inspector.appearance.\(item.id)")
                         }
                     }
-                    .padding(.vertical, 2)
-
-                    // Escape hatch into the host's full theme editor (hidden when the host
-                    // hasn't wired one). Dismisses the sheet first so the editor can present.
-                    if let editorAction = RipulThemeRemapSheetPresenter.editorAction {
+                } header: {
+                    Text(tap.view.accessibilityIdentifier ?? String(describing: type(of: tap.view)))
+                }
+                if let editorAction = RipulThemeRemapSheetPresenter.editorAction {
+                    Section {
                         Button {
                             dismiss()
                             DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { editorAction() }
                         } label: {
-                            HStack {
-                                Label("Open Theme editor", systemImage: "slider.horizontal.3")
-                                Spacer()
-                                Image(systemName: "chevron.right")
-                                    .font(.system(size: 12, weight: .semibold))
-                                    .foregroundStyle(.secondary)
-                            }
+                            Label("Open Theme editor", systemImage: "slider.horizontal.3")
                         }
-                        .tint(.primary)
-                    }
-                }
-                ForEach(sections) { section in
-                    SwiftUI.Section(section.title) {
-                        ForEach(section.rows) { row in
-                            rowView(row)
-                        }
+                        .uiKitIdentifier("inspector.appearance.themeEditor")
                     }
                 }
             }
-            .navigationTitle("Remap element")
+            .navigationTitle("Appearance")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
+                        .uiKitIdentifier("inspector.appearance.done")
                 }
             }
         }
-        .onReceive(NotificationCenter.default.publisher(for: .ripulThemeDidChange)) { _ in
-            themeVersion += 1
-        }
+        .onReceive(NotificationCenter.default.publisher(for: .ripulThemeDidChange)) { _ in themeVersion += 1 }
     }
 
-    /// Recomputed on every render (providers are stateless value reads), so a theme change
-    /// re-resolves checkmarks and summaries immediately. `themeVersion` is the re-render trigger.
-    private var sections: [RipulThemeRemapSection] {
-        _ = themeVersion
-        return targets.flatMap { $0.remapSections() }
-    }
-
-    @ViewBuilder private func rowView(_ row: RipulThemeRemapOptionRow) -> some View {
-        Button {
-            let line = row.select()
-            UIImpactFeedbackGenerator(style: .light).impactOccurred()
-            RipulThemeRemapSheetPresenter.onLog?("[RipulTheme] remap sheet: \(row.label) — \(line ?? "no change")")
-        } label: {
-            HStack(spacing: 12) {
-                if let hex = row.swatchHex {
-                    Circle()
-                        .fill(Color(UIColor(ripulHexString: hex) ?? .clear))
-                        .frame(width: 18, height: 18)
-                        .overlay(Circle().stroke(Color.secondary.opacity(0.3), lineWidth: 1))
-                }
-                Text(row.label)
-                    .font(.system(size: 16))
-                    .foregroundStyle(row.role == .destructive ? Color.red : Color.primary)
-                Spacer()
-                if row.isCurrent {
-                    Image(systemName: "checkmark")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(Color.accentColor)
-                }
-                if row.role == .navigation {
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                }
+    private var items: [RipulAppearanceItem] {
+        targets.flatMap { target in
+            target.tokenBindings().map { binding in
+                RipulAppearanceItem(id: binding.id,
+                                    read: { target.tokenBindings().first { $0.id == binding.id } },
+                                    sections: { target.remapSections() })
             }
         }
-        .tint(.primary)
     }
 }
 

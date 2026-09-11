@@ -5,12 +5,49 @@ import SwiftUI
 struct PreviewTestHost: App {
     var body: some Scene {
         WindowGroup {
-            if ProcessInfo.processInfo.arguments.contains("--preview-ui-tests") {
+            if ProcessInfo.processInfo.arguments.contains("--tool-details-ui-tests") {
+                ToolDetailsHarnessSurface()
+                    .preferredColorScheme(ProcessInfo.processInfo.arguments.contains("--light-appearance") ? .light : .dark)
+            } else if ProcessInfo.processInfo.arguments.contains("--preview-ui-tests") {
                 PreviewHarnessSurface().ignoresSafeArea()
             } else {
                 Text("Host preview rendering tests")
             }
         }
+    }
+}
+
+private struct ToolDetailsHarnessSurface: View {
+    @StateObject private var store = ToolCallDetailsStore()
+    @State private var dismissed = false
+
+    var body: some View {
+        VStack {
+            Button("Open tool details") {
+                let chosen = ProcessInfo.processInfo.arguments.first { $0.hasPrefix("--renderer=") }?.replacingOccurrences(of: "--renderer=", with: "")
+                let data = try! Data(contentsOf: Bundle.main.url(forResource: "tool-call-renderers", withExtension: "json")!)
+                let fixtures = try! JSONSerialization.jsonObject(with: data) as! [[String: Any]]
+                let fixture = fixtures.first { $0["name"] as? String == (chosen ?? "terminal") }!
+                func text(_ value: Any) -> String {
+                    if let value = value as? String { return value }
+                    return String(decoding: try! JSONSerialization.data(withJSONObject: value, options: [.fragmentsAllowed, .prettyPrinted, .sortedKeys]), as: UTF8.self)
+                }
+                store.receive([
+                    "requestId": "ui-fixture", "title": ToolValue.title((fixture["toolName"] as! String).replacingOccurrences(of: "^mcp__ripul_tools_+", with: "", options: .regularExpression)),
+                    "calls": (1...(chosen == nil ? 2 : 1)).map { number in [
+                        "id": "call-\(number)", "toolName": fixture["toolName"]!, "status": "success",
+                        "timestamp": 1_789_106_000_000,
+                        "arguments": text(chosen == nil ? ["command": "command \(number)"] : fixture["args"]!),
+                        "rendererName": fixture["rendererName"]!,
+                        "renderArguments": chosen == nil ? ["command": "command \(number)"] : fixture["renderArguments"]!,
+                        "result": chosen == nil ? "Result for call \(number)" : text(fixture["result"]!),
+                        "diagnostics": text(["toolName": fixture["toolName"]!, "arguments": fixture["args"]!, "status": "success", "duration": 42.5, "background": false, "error": NSNull()]),
+                    ] as [String: Any] },
+                ], opening: true)
+            }
+            if dismissed { Text("Details dismissed") }
+        }
+        .modifier(ToolCallDetailsPresenter(store: store, onDismiss: { _ in dismissed = true }))
     }
 }
 

@@ -10,7 +10,7 @@ let ripulViewExplorerOverlayTag = 0x5249_5055   // "RIPU"
 
 /// Marketing version of the RipulAgent SDK, surfaced in the inspector's copy output as `sdk: …`
 /// so we can always tell which build is actually running on the device. Bump on every release.
-let ripulSDKVersion = "0.7.105"
+let ripulSDKVersion = "0.7.106"
 
 // MARK: - View Inspector Overlay
 //
@@ -1833,124 +1833,55 @@ struct RulerGuides: View {
     }
 }
 
-// MARK: - Design-token section
+// MARK: - Appearance assignments
 
-/// The Design-token block at the top of the Edit tab: the tokens the host reports as styling the
-/// tapped view, each remappable in place. Empty (renders nothing) when no provider is registered or
-/// the view carries no token metadata — so it's invisible in hosts that don't opt in.
+/// Shows what styles the selected element. Shared definitions are opened separately.
 @available(iOS 16.0, *)
 struct InspectorTokenSection: View {
     let view: UIView
-    /// Bumped after a remap to force `body` to recompute the bindings against the new theme.
     @State private var refresh = 0
 
     var body: some View {
-        // Compute the bindings EAGERLY in body — never via @State + .onAppear. A `Group` whose
-        // content is initially empty has no child for `.onAppear` to attach to, so the previous
-        // version's reload never fired and the section stayed permanently blank. Reading `refresh`
-        // here ties a remap's state bump to a recompute.
-        _ = refresh
+        let _ = refresh
         let provider = RipulTokenInspector.provider
         let bindings = provider?.tokenBindings(for: view) ?? []
-
-        return VStack(alignment: .leading, spacing: 6) {
-            Text("Design token")
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Appearance")
                 .font(.system(size: 10, weight: .semibold, design: .monospaced))
                 .foregroundStyle(.pink).textCase(.uppercase).tracking(0.5)
-
-            if !bindings.isEmpty {
-                ForEach(bindings) { binding in row(binding) }
-            } else {
-                // Always render the header so the section can never be silently invisible again.
-                // This line tells us WHY it's empty: no host provider vs. provider found no token.
-                Text(provider == nil ? "no token provider registered"
-                                     : "no token reported for this view")
+            if bindings.isEmpty {
+                Text(provider == nil ? "no token provider registered" : "no token reported for this view")
                     .font(.system(size: 10, design: .monospaced))
-                    .foregroundStyle(.gray)
+                    .foregroundStyle(.secondary)
+            }
+            ForEach(bindings) { binding in
+                if binding.kind == .information {
+                    RipulAppearanceRow(binding: binding)
+                } else {
+                    Button {
+                        RipulThemeRemapSheetPresenter.present(binding: binding, view: view)
+                    } label: {
+                        HStack(spacing: 8) {
+                            RipulAppearanceRow(binding: binding)
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(.secondary)
+                        }
+                        .frame(minHeight: 44)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityHint(binding.kind == .colourToken ? "View shared token details" : "View style assignment")
+                    .uiKitIdentifier("inspector.appearance.\(binding.id)")
+                }
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(8)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color.pink.opacity(0.10))
         .clipShape(RoundedRectangle(cornerRadius: 6))
-    }
-
-    private func row(_ binding: RipulTokenBinding) -> some View {
-        HStack(spacing: 8) {
-            swatch(binding.swatchHex)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(binding.tokenName)
-                    .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(.white)
-                Text(binding.property + (binding.resolvesTo.map { " → \($0)" } ?? ""))
-                    .font(.system(size: 10, design: .monospaced))
-                    .foregroundStyle(.gray)
-            }
-            Spacer(minLength: 6)
-            if binding.options.count == 1, let only = binding.options.first {
-                // A single option is an ACTION, not a choice (e.g. the host's "open a custom
-                // picker" entry) — fire it directly instead of opening a one-item menu.
-                Button { remap(binding, only) } label: { remapLozenge() }
-            } else if !binding.options.isEmpty {
-                Menu {
-                    // Render sections when the provider has grouped the options (peers / roles /
-                    // primitives); fall back to a flat list for ungrouped nil-section options.
-                    ForEach(binding.optionGroups) { group in
-                        if let title = group.title {
-                            Section(title) {
-                                ForEach(group.items) { option in
-                                    Button { remap(binding, option) } label: {
-                                        Label { Text(option.label) } icon: { Image(uiImage: Self.swatchImage(option.swatchHex)) }
-                                    }
-                                }
-                            }
-                        } else {
-                            ForEach(group.items) { option in
-                                Button { remap(binding, option) } label: {
-                                    Label { Text(option.label) } icon: { Image(uiImage: Self.swatchImage(option.swatchHex)) }
-                                }
-                            }
-                        }
-                    }
-                } label: { remapLozenge() }
-            }
-            // options.isEmpty = read-only row (diagnostic) — no remap control at all.
-        }
-    }
-
-    /// The pink "remap" button label, shared by the direct-fire button and the options menu.
-    private func remapLozenge() -> some View {
-        Text("remap")
-            .font(.system(size: 10, weight: .semibold, design: .monospaced))
-            .foregroundStyle(.black)
-            .padding(.horizontal, 8).padding(.vertical, 3)
-            .background(Color.pink.opacity(0.9))
-            .clipShape(RoundedRectangle(cornerRadius: 5))
-    }
-
-    private func swatch(_ hex: String) -> some View {
-        RoundedRectangle(cornerRadius: 3)
-            .fill(Color(ripulHex: hex) ?? .clear)
-            .frame(width: 18, height: 18)
-            .overlay(RoundedRectangle(cornerRadius: 3).stroke(Color.white.opacity(0.25), lineWidth: 0.5))
-    }
-
-    /// A small solid-colour swatch image for a menu item. `.alwaysOriginal` so UIMenu shows the real
-    /// colour instead of tinting it.
-    private static func swatchImage(_ hex: String) -> UIImage {
-        let color = UIColor(Color(ripulHex: hex) ?? .clear)
-        let size = CGSize(width: 16, height: 16)
-        return UIGraphicsImageRenderer(size: size).image { _ in
-            color.setFill()
-            UIBezierPath(roundedRect: CGRect(origin: .zero, size: size), cornerRadius: 3).fill()
-        }.withRenderingMode(.alwaysOriginal)
-    }
-
-    private func remap(_ binding: RipulTokenBinding, _ option: RipulTokenOption) {
-        RipulTokenInspector.provider?.remap(binding, to: option)
-        // A remap changes the mapping, which can move OTHER bindings that share the token — bump
-        // refresh so body recomputes the whole set against the new theme.
-        refresh += 1
+        .environment(\.colorScheme, .dark)
+        .onReceive(NotificationCenter.default.publisher(for: .ripulThemeDidChange)) { _ in refresh += 1 }
     }
 }
 
