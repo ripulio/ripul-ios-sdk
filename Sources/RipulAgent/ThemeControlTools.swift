@@ -1,5 +1,6 @@
 #if os(iOS)
 import Foundation
+import UIKit
 
 // DEV tools that let an agent DRIVE the host app's theme, not just read it.
 //
@@ -22,6 +23,14 @@ private func ripulKnob(from value: Any) -> RipulKnob? {
     if let i = value as? Int { return .number(Double(i)) }
     if let s = value as? String { return .string(s) }
     return nil
+}
+
+@MainActor
+private func colourAssignments(prefix: String? = nil) -> [[String: Any]] {
+    RipulElementColours.assignments.filter { prefix == nil || $0.element == prefix || $0.element.hasPrefix(prefix! + ".") }.map { value in
+        ["element": value.element, "property": value.property, "defaultToken": value.defaultToken,
+         "reference": value.reference, "override": value.override as Any? ?? NSNull(), "hex": value.colour.ripulHexString]
+    }
 }
 
 // MARK: - list_theme_scopes
@@ -49,7 +58,7 @@ public struct RipulListThemeScopesTool: NativeTool {
                      "hasOverrides": doc.styleOverrides[kind.name]?[scope.id] != nil]
                 }
             }
-            return ["scopes": scopes]
+            return ["scopes": scopes, "colourAssignments": colourAssignments()]
         }
     }
 }
@@ -80,6 +89,10 @@ public struct RipulGetThemeStyleTool: NativeTool {
                           userInfo: [NSLocalizedDescriptionKey: "scope is required"])
         }
         return try await MainActor.run {
+            let colours = colourAssignments(prefix: id)
+            if RipulThemeEngine.kind(containingScope: id) == nil, !colours.isEmpty {
+                return ["scope": id, "kind": "elementColours", "colourAssignments": colours]
+            }
             guard let kind = RipulThemeEngine.kind(containingScope: id) else {
                 throw NSError(domain: "theme", code: 2, userInfo: [NSLocalizedDescriptionKey:
                     "Unknown scope '\(id)'. Call list_theme_scopes for valid ids."])
@@ -89,6 +102,7 @@ public struct RipulGetThemeStyleTool: NativeTool {
             var payload: [String: Any] = ["scope": id, "kind": kind.name,
                                           "overrides": overrides.mapValues { $0.jsonValue },
                                           "resolved": resolved.knobs.mapValues { $0.jsonValue }]
+            payload["colourAssignments"] = colours
             // Composite kinds: each part's own resolution, addressable as "<scope>.<part>"
             // (those child ids are themselves scopes — set_theme_knob works on them).
             if !resolved.slots.isEmpty {
@@ -112,7 +126,7 @@ public struct RipulSetThemeKnobTool: NativeTool {
         + "(a scope id from list_theme_scopes, a knob that scope declares, and a value). "
         + "Writes a per-scope override, which beats any assigned named style. "
         + "Knob names are declared by each scope's kind — read them from get_theme_style's "
-        + "resolved output. Use reset_theme_scope to undo."
+        + "resolved output. Element colours use colour.<property>, a token or hex value, and inherit to reset just that property. Use reset_theme_scope for style overrides."
     }
     public var inputSchema: [String: Any] {
         ["type": "object",
@@ -132,6 +146,20 @@ public struct RipulSetThemeKnobTool: NativeTool {
               let raw = args["value"] else {
             throw NSError(domain: "theme", code: 1,
                           userInfo: [NSLocalizedDescriptionKey: "scope, knob and value are required"])
+        }
+        if knobName.hasPrefix("colour.") {
+            return try await MainActor.run {
+                let property = String(knobName.dropFirst("colour.".count))
+                guard let binding = RipulElementColours.assignments.first(where: { $0.element == id && $0.property == property }),
+                      let reference = raw as? String,
+                      reference == "inherit" || ColourTokenAddress.token(reference) != nil || UIColor(ripulHexString: reference) != nil else {
+                    throw NSError(domain: "theme", code: 3, userInfo: [NSLocalizedDescriptionKey: "Choose a known element colour property and token, hex colour or inherit."])
+                }
+                let before = binding.override
+                binding.setReference(reference == "inherit" ? nil : reference)
+                return ["ok": true, "scope": id, "property": property, "previousOverride": before as Any? ?? NSNull(),
+                        "colourAssignments": colourAssignments(prefix: id)] as [String: Any]
+            }
         }
         // Numbers often arrive as strings over JSON; coerce so "3" and 3 both work.
         let coerced: Any = (raw as? String).flatMap { Double($0) } ?? raw

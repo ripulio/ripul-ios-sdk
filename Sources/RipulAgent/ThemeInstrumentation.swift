@@ -49,6 +49,7 @@ extension UIColor {
     public func ripulAlpha(_ alpha: CGFloat) -> UIColor {
         let faded = withAlphaComponent(alpha)
         if let token = ripulToken { faded.ripulToken = token }
+        faded.ripulColourAssignment = ripulColourAssignment
         return faded
     }
 }
@@ -65,6 +66,7 @@ extension UIView {
     }
 
     @objc fileprivate func ripul_setBackgroundColor(_ color: UIColor?) {
+        let color = RipulElementColours.resolved(view: self, property: "background", colour: color) ?? color
         // Only touch the associated object when it's relevant: the incoming colour carries a
         // token, OR this view already had one (so a restyle to an untokened colour CLEARS it,
         // never leaving a stale tag). Keeps the swizzle off the scrolling hot path.
@@ -91,6 +93,7 @@ public enum RipulThemeInstrumentation {
     @MainActor public static func install() {
         guard !installed else { return }
         installed = true
+        RipulElementColours.install()
         NativeTabTitleTheme.install()
         NativeLabelTheme.install()
         guard let original = class_getInstanceMethod(UIView.self, #selector(setter: UIView.backgroundColor)),

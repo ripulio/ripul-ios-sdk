@@ -104,6 +104,7 @@ public enum RipulThemeRemapSheetPresenter {
         })
         let host = UIHostingController(rootView: RipulAppearanceDetailSheet(item: item))
         host.sheetPresentationController?.detents = [.medium(), .large()]
+        if binding.assignment != nil { host.sheetPresentationController?.selectedDetentIdentifier = .large }
         top.present(host, animated: true)
     }
 
@@ -191,6 +192,14 @@ struct RipulAppearanceDetailView: View {
     @State private var themeVersion = 0
 
     var body: some View {
+        if let binding = item.read(), let assignment = binding.assignment {
+            ElementColourScreen(assignment: assignment, propertyLabel: binding.property)
+        } else {
+            legacyBody
+        }
+    }
+
+    @ViewBuilder private var legacyBody: some View {
         let _ = themeVersion
         let binding = item.read()
         List {

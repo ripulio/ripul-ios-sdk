@@ -124,6 +124,10 @@ public struct RipulThemeColoursScreen: View {
     public var body: some View {
         Form {
             Section {
+                NavigationLink("Individual colour overrides") { RipulElementColourOverridesScreen() }
+                    .uiKitIdentifier("theme.individualColours")
+            }
+            Section {
                 ForEach(componentTree) { node in
                     NavigationLink(node.name) { RipulTokenNodeScreen(node: node) }
                 }
@@ -218,9 +222,9 @@ public struct RipulTokenNodeScreen: View {
                 Section {
                     ForEach(Array(node.leaves.enumerated()), id: \.offset) { _, leaf in
                         switch leaf {
-                        case .component(let e): RipulComponentTokenRow(name: e.name, label: e.label)
-                        case .role(let e):      RipulSemanticTokenRow(name: e.name)
-                        case .primitive(let e): RipulPrimitiveRow(name: e.name, label: e.label)
+                        case .component(let e): NavigationLink(e.label) { ColourTokenDefinitionScreen(token: .component(e.name)) }
+                        case .role(let e): NavigationLink(e.label) { ColourTokenDefinitionScreen(token: .role(e.name)) }
+                        case .primitive(let e): NavigationLink(e.label) { ColourTokenDefinitionScreen(token: .primitive(e.name)) }
                         case .scope(let s, let kind): RipulScopeAssignmentRow(scope: s, kind: kind)
                         }
                     }

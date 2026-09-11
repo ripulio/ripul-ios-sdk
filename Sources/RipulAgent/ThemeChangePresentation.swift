@@ -35,6 +35,11 @@ struct ThemeChangePresentation: Identifiable {
             defaultText = NativeTabTitleTheme.elements.first { $0.id == keys[2] }?.appTitle
             return
         }
+        if keys.first == "elementColors", keys.count == 3 {
+            category = .colors; isColor = true; title = Self.readable(keys[1])
+            context = "Individual colour overrides"; property = Self.readable(keys[2]); unset = "Author default"
+            return
+        }
         guard let spec else { return }
         let vocabularies: [(String, String, [RipulThemeVocabulary.Entry])] = [
             (spec.primitivesKey, "Palette", spec.vocabulary.primitives),

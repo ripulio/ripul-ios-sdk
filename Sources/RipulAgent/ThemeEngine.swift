@@ -75,6 +75,8 @@ public struct RipulThemeDocument: Equatable {
     public var semantic: [String: String] = [:]
     /// Component token -> reference (another component, a semantic label, a primitive, or hex).
     public var components: [String: String] = [:]
+    /// Stable element id -> property -> token reference or literal colour; absent means author default.
+    public var elementColors: [String: [String: String]] = [:]
     /// kind -> style name -> sparse knobs (USER styles; built-ins come from the kind).
     public var namedStyles: [String: [String: [String: RipulKnob]]] = [:]
     /// kind -> element id -> assigned style name (missing = the kind's default tier).
@@ -107,6 +109,7 @@ extension RipulThemeDocument: Codable {
         semantic = try c.decodeIfPresent([String: String].self, forKey: SliceKeys(stringValue: semanticKey)!) ?? [:]
         let componentsKey = spec?.componentsKey ?? "components"
         components = try c.decodeIfPresent([String: String].self, forKey: SliceKeys(stringValue: componentsKey)!) ?? [:]
+        elementColors = try c.decodeIfPresent([String: [String: String]].self, forKey: SliceKeys(stringValue: "elementColors")!) ?? [:]
         for kind in spec?.styleKinds ?? [] {
             if let keys = kind.persistedKeys {
                 namedStyles[kind.name] = try c.decodeIfPresent([String: [String: RipulKnob]].self,
@@ -125,6 +128,7 @@ extension RipulThemeDocument: Codable {
         try c.encode(primitives, forKey: SliceKeys(stringValue: spec?.primitivesKey ?? "colors")!)
         try c.encode(semantic, forKey: SliceKeys(stringValue: spec?.semanticKey ?? "semantic")!)
         try c.encode(components, forKey: SliceKeys(stringValue: spec?.componentsKey ?? "components")!)
+        try c.encode(elementColors, forKey: SliceKeys(stringValue: "elementColors")!)
         for kind in spec?.styleKinds ?? [] {
             guard let keys = kind.persistedKeys else { continue }
             try c.encode(namedStyles[kind.name] ?? [:], forKey: SliceKeys(stringValue: keys.styles)!)
@@ -708,7 +712,8 @@ public enum RipulThemeEngine {
 
     /// The hex a primitive currently holds (document entry, else its registered seed).
     public static func primitiveHex(_ name: String) -> String? {
-        current.primitives[name]
+        let name = name.hasPrefix("palette:") ? String(name.dropFirst(8)) : name
+        return current.primitives[name]
             ?? spec?.vocabulary.primitives.first { $0.name == name }?.defaultReference
     }
 
@@ -787,11 +792,12 @@ public enum RipulThemeEngine {
     /// True if pointing semantic `label` at `target` would close an alias cycle.
     public static func aliasWouldCycle(label name: String, to target: String) -> Bool {
         var seen: Set<String> = [name]
-        var cursor: String? = target
+        var cursor: String? = target.hasPrefix("semantic:") ? String(target.dropFirst(9)) : target
         while let c = cursor {
             if seen.contains(c) { return true }
             seen.insert(c)
             let ref = reference(forLabel: c)
+            if ref.hasPrefix("semantic:") { cursor = String(ref.dropFirst(9)); continue }
             if current.primitives[ref] != nil { return false }   // chain ends at a primitive
             cursor = isSemanticLabel(ref) ? ref : nil            // … or at a hex
         }
@@ -805,11 +811,12 @@ public enum RipulThemeEngine {
 
     private static func color(component name: String, chain: Set<String>) -> UIColor {
         let ref = reference(forComponent: name)
+        if ref.hasPrefix("semantic:") { return color(label: String(ref.dropFirst(9))).ripulTagged(name) }
         if componentsByName[ref] != nil, !chain.contains(ref) {
             return color(component: ref, chain: chain.union([ref])).ripulTagged(name)
         }
         if isSemanticLabel(ref) { return color(label: ref).ripulTagged(name) }
-        if let hex = current.primitives[ref], let resolved = UIColor(ripulHexString: hex) {
+        if let hex = primitiveHex(ref), let resolved = UIColor(ripulHexString: hex) {
             return resolved.ripulTagged(name)
         }
         guard let resolved = UIColor(ripulHexString: ref) else { return .magenta }
@@ -822,7 +829,12 @@ public enum RipulThemeEngine {
 
     private static func color(label name: String, chain: Set<String>) -> UIColor {
         let ref = reference(forLabel: name)
-        if let hex = current.primitives[ref], let resolved = UIColor(ripulHexString: hex) {
+        if ref.hasPrefix("semantic:") {
+            let target = String(ref.dropFirst(9))
+            guard !chain.contains(target), isSemanticLabel(target) else { return .magenta }
+            return color(label: target, chain: chain.union([target])).ripulTagged(name)
+        }
+        if let hex = primitiveHex(ref), let resolved = UIColor(ripulHexString: hex) {
             return resolved.ripulTagged(name)
         }
         if isSemanticLabel(ref), !chain.contains(ref) {
@@ -835,6 +847,10 @@ public enum RipulThemeEngine {
     /// Resolve a token NAME — a component token OR a semantic label — to its colour.
     /// The repaint walker's only entry point. nil for names that are neither (e.g. hex).
     public static func color(forTokenName token: String) -> UIColor? {
+        if token.hasPrefix("semantic:") {
+            let name = String(token.dropFirst(9))
+            return isSemanticLabel(name) ? color(label: name) : nil
+        }
         if componentsByName[token] != nil { return color(component: token) }
         if isSemanticLabel(token) { return color(label: token) }
         return nil
@@ -1033,21 +1049,7 @@ public enum RipulThemeEngine {
     }
 
     private static func reapplyLiveTokenColors(in view: UIView) {
-        if let token = view.ripulBackgroundToken, let color = color(forTokenName: token) {
-            view.backgroundColor = color
-        }
-        if let label = view as? UILabel, let token = label.textColor?.ripulToken,
-           let color = color(forTokenName: token) {
-            label.textColor = color
-        }
-        if let field = view as? UITextField, let token = field.textColor?.ripulToken,
-           let color = color(forTokenName: token) {
-            field.textColor = color
-        }
-        if let textView = view as? UITextView, let token = textView.textColor?.ripulToken,
-           let color = color(forTokenName: token) {
-            textView.textColor = color
-        }
+        RipulElementColours.reapply(view)
         view.subviews.forEach { reapplyLiveTokenColors(in: $0) }
     }
 }

@@ -10,7 +10,7 @@ let ripulViewExplorerOverlayTag = 0x5249_5055   // "RIPU"
 
 /// Marketing version of the RipulAgent SDK, surfaced in the inspector's copy output as `sdk: …`
 /// so we can always tell which build is actually running on the device. Bump on every release.
-let ripulSDKVersion = "0.7.107"
+let ripulSDKVersion = "0.7.108"
 
 // MARK: - View Inspector Overlay
 //
@@ -195,11 +195,13 @@ public extension View {
     ///                          tokenColors: ["Text colour": Color.Component.rowTitle])
     func uiKitIdentifier(_ identifier: String,
                          tokenColors: KeyValuePairs<String, UIColor> = [:]) -> some View {
-        self
-            .accessibilityIdentifier(identifier)
-            .background(UIKitIdentifierStamper(
-                identifier: identifier,
-                tokenColors: tokenColors.map { RipulDeclaredTokenColor(property: $0.key, color: $0.value) }))
+        uiKitIdentifier(identifier, declaredColours: tokenColors.map { RipulDeclaredTokenColor(property: $0.key, color: $0.value) })
+    }
+
+    /// A compound control can expose separate assignments for each of its rendered parts.
+    func uiKitIdentifier(_ identifier: String, declaredColours: [RipulDeclaredTokenColor]) -> some View {
+        self.accessibilityIdentifier(identifier)
+            .background(UIKitIdentifierStamper(identifier: identifier, tokenColors: declaredColours))
     }
 }
 

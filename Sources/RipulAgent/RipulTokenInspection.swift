@@ -16,6 +16,7 @@ import UIKit
 public struct RipulTokenBinding: Identifiable, Equatable {
     /// Colour definitions are shared; style assignments belong to the selected element.
     public enum Kind: Equatable { case colourToken, styleAssignment, information }
+    public let assignment: RipulColourAssignment?
     public let kind: Kind
     /// Stable within a single view — typically the styled property key ("textColor", "background").
     public let id: String
@@ -32,7 +33,8 @@ public struct RipulTokenBinding: Identifiable, Equatable {
 
     public init(id: String, property: String, tokenName: String,
                 resolvesTo: String?, swatchHex: String, options: [RipulTokenOption],
-                kind: Kind = .colourToken) {
+                kind: Kind = .colourToken, assignment: RipulColourAssignment? = nil) {
+        self.assignment = assignment
         self.kind = kind
         self.id = id
         self.property = property
