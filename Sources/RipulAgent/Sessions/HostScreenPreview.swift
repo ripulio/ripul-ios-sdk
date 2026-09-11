@@ -193,6 +193,7 @@ private struct HostScreenPreviewView: View {
                                 Image(systemName: "pip")
                                     .font(.system(size: 22, weight: .medium))
                                     .frame(width: 56, height: 56)
+                                    .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
                             .accessibilityLabel("Expand host screen preview")
@@ -202,6 +203,7 @@ private struct HostScreenPreviewView: View {
                                 Image(systemName: "minus")
                                     .font(.system(size: 16, weight: .semibold))
                                     .frame(width: 44, height: 44)
+                                    .contentShape(Rectangle())
                                     .glassEffect(.regular.interactive(), in: Circle())
                             }
                             .buttonStyle(.plain)
@@ -223,17 +225,22 @@ private struct HostScreenPreviewView: View {
     }
 }
 
-/// SwiftUI hosting backgrounds cover the whole overlay. Only hits inside the
-/// shared floating panel belong to us; all other hits stay with the agent UI.
+/// SwiftUI hosting backgrounds cover the whole overlay. Let the shared panel
+/// root decide which touches it owns. Filtering SwiftUI's provisional hit by
+/// ancestry can reject visible buttons and send their taps to the agent below.
 final class HostScreenPreviewPassthroughView: UIView {
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
-        guard let hit = super.hitTest(point, with: event) else { return nil }
-        var ancestor: UIView? = hit
-        while let current = ancestor, current !== self {
-            if current is RipulFloatingPanelRootView { return hit }
-            ancestor = current.superview
+        func panelHit(in view: UIView) -> UIView? {
+            guard !view.isHidden, view.alpha > 0.01, view.isUserInteractionEnabled else { return nil }
+            if let panel = view as? RipulFloatingPanelRootView {
+                return panel.hitTest(panel.convert(point, from: self), with: event)
+            }
+            for child in view.subviews.reversed() {
+                if let hit = panelHit(in: child) { return hit }
+            }
+            return nil
         }
-        return nil
+        return panelHit(in: self)
     }
 }
 

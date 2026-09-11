@@ -121,7 +121,9 @@ final class HostScreenPreviewTests: XCTestCase {
 
     func testOnlyPanelTouchesAreClaimedByPreviewOverlay() {
         let overlay = HostScreenPreviewPassthroughView(frame: CGRect(x: 0, y: 0, width: 320, height: 640))
-        let hostingBackground = UIView(frame: overlay.bounds)
+        // SwiftUI may provisionally return its background instead of a panel
+        // descendant. The overlay must still route the touch to the panel.
+        let hostingBackground = PreviewHostingBackground(frame: overlay.bounds)
         overlay.addSubview(hostingBackground)
         let floatingRoot = RipulFloatingPanelRootView(frame: overlay.bounds)
         hostingBackground.addSubview(floatingRoot)
@@ -132,6 +134,9 @@ final class HostScreenPreviewTests: XCTestCase {
         XCTAssertNil(overlay.hitTest(CGPoint(x: 280, y: 200), with: nil))
         XCTAssertNil(overlay.hitTest(CGPoint(x: 100, y: 600), with: nil))
         panel.isHidden = true
+        XCTAssertNil(overlay.hitTest(CGPoint(x: 100, y: 200), with: nil))
+        panel.isHidden = false
+        hostingBackground.isUserInteractionEnabled = false
         XCTAssertNil(overlay.hitTest(CGPoint(x: 100, y: 200), with: nil))
     }
 
@@ -205,6 +210,10 @@ final class HostScreenPreviewTests: XCTestCase {
         try await Task.sleep(nanoseconds: 200_000_000)
         XCTAssertNil(preview.view.hitTest(CGPoint(x: 40, y: 150), with: nil))
     }
+}
+
+private final class PreviewHostingBackground: UIView {
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? { self }
 }
 
 private extension UIView {
