@@ -5,6 +5,11 @@ and HTML inside a WKWebView on iOS and Catalyst. The Tools menu, Settings,
 solution management and the chat title double-tap launch the same window.
 Browser and native macOS clients use the web Inspector.
 
+Single-tap the chat title to expand or collapse it. Double-tap opens Inspector
+and preserves the title's expanded state. The single tap waits for the system's
+double-tap recognition window; the expanded title's navigation buttons retain
+their own actions.
+
 Drag to aim on a touchscreen, or move a mouse/trackpad pointer. Tap to pin the
 selection. **Activate** explicitly presses the selected control; selecting it
 does not press it. **Back**, **Parent element** and the Tree tab navigate the same
@@ -46,7 +51,8 @@ selections; web selections provide DOM activation and evaluation.
 ## Verification
 
 - SDK `UnifiedInspectorTests`, `ExplorerSelectionTests`, `ComposerElementContextTests`.
-- App `MacroRecordingToggleUITests` covers recording and the separate-window
-  Inspector's explicit activation and touch pass-through.
+- App `MacroRecordingToggleUITests` covers recording, the separate-window
+  Inspector's explicit activation and touch pass-through, and single/double taps
+  on the production chat title overlay and session-list title.
 - `node --test tests/unified-inspector.browser.test.mjs` in `chrome-extension`
   exercises the actual React overlay and DOM provider in WebKit and Chromium.

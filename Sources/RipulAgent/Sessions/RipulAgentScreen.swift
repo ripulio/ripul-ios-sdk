@@ -893,10 +893,7 @@ public struct RipulAgentScreen: View {
             // open is fresh even if every earlier trigger raced the relay boot.
             onMenuOpen: { Task { await refreshFavoriteDirectories() } },
             centerInset: centerLozengeInset,
-            onDoubleTapTitle: {
-                bridge.logToWebConsole("[AgentScreen] title lozenge double-tap -> bridge.toggleElementDebugger")
-                bridge.toggleElementDebugger()
-            },
+            onDoubleTapTitle: toggleTitleInspector,
             // No tap here in chat: the morphing pill is `chatTitleMorphOverlay`,
             // stacked over this slot, and it owns the single/double taps.
             // Elsewhere the lozenge names a screen and never had a tap.
@@ -935,6 +932,11 @@ public struct RipulAgentScreen: View {
             && !showingMetadata
             && bridge.fileViewerTitle == nil
             && commitViewInfo == nil
+    }
+
+    private func toggleTitleInspector() {
+        bridge.logToWebConsole("[AgentScreen] title lozenge double-tap -> Inspector")
+        bridge.toggleElementDebugger()
     }
 
     private func toggleTitleLozenge() {
@@ -1169,17 +1171,30 @@ public struct RipulAgentScreen: View {
         if expandedTitleAvailable {
             let session = bridge.sessions.first(where: { $0.id == bridge.activeSessionId })
             let expanded = chatTitleLozengeExpanded
-            VStack(alignment: .leading, spacing: expanded ? 9 : 0) {
+            VStack(alignment: .leading, spacing: 0) {
                 lozengeHeader(session: session, expanded: expanded)
+                    .frame(maxWidth: expanded ? .infinity : nil, alignment: .leading)
+                    .padding(.horizontal, expanded ? 14 : 12)
+                    .padding(.top, expanded ? 10 : 0)
+                    .padding(.bottom, expanded ? 9 : 0)
+                    .frame(minHeight: expanded ? nil : 44)
+                    .contentShape(Rectangle())
+                    // This visible overlay owns both taps; the bar's recognizer
+                    // is underneath it. The header excludes the disclosed
+                    // controls so their taps cannot also collapse the panel.
+                    .modifier(TitleTapGestures(
+                        onTap: toggleTitleLozenge,
+                        onDoubleTap: toggleTitleInspector
+                    ))
                 if expanded {
                     // No .transition: the reveal is the panel's height growth
                     // alone. A transition would translate/fade the block while
                     // the frame is also animating and the two fight.
                     expandedTitleContent(session: session)
+                        .padding(.horizontal, 14)
+                        .padding(.bottom, 10)
                 }
             }
-            .padding(.horizontal, expanded ? 14 : 12)
-            .padding(.vertical, expanded ? 10 : 0)
             .frame(minHeight: 44)
             // Pinned to the full width the bar allows when expanded, so the
             // panel does not resize itself as its own metadata changes — a
@@ -1195,13 +1210,6 @@ public struct RipulAgentScreen: View {
             .glassEffect(.regular, in: .rect(cornerRadius: expanded ? 16 : 22))
             // Driven by withAnimation inside toggleTitleLozenge — no
             // .animation(value:) here.
-            // Single tap ONLY — no double-tap on this view. A double-tap
-            // recognizer makes the single tap wait out the double-tap window
-            // (~300ms) before firing, which read as the morph lagging the
-            // finger. The element debugger the double-tap used to open is
-            // still reachable via long-press -> dev tools. Buttons inside the
-            // expanded panel win over the tap.
-            .onTapGesture(count: 1) { toggleTitleLozenge() }
             .simultaneousGesture(
                 LongPressGesture(minimumDuration: 1.0).onEnded { _ in
                     NotificationCenter.default.post(name: .ripulShowDevTools, object: nil)

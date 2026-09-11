@@ -126,12 +126,8 @@ public struct GlassTopBar<MenuContent: View, CenterContent: View>: View {
     /// `MenuContent == EmptyView` check below only catches emptiness that is
     /// visible in the type, which a menu chosen by an `if` at render time is not.
     var showsMenu: Bool = true
-    /// Double-tap on the lozenge. Used by the agent screen for the element debugger.
+    /// Double-tap on the lozenge. Used by the agent screen for Inspector.
     var onDoubleTapTitle: (() -> Void)? = nil
-    /// Corner radius for the centre pill, for screens whose centre content can
-    /// grow tall (the agent screen's expanded title). nil = `Capsule`, whose
-    /// radius is half the HEIGHT — correct for a fixed 44pt row, an oval that
-    /// clips its own corners for anything taller. See `GlassGrowablePillModifier`.
     /// Single tap on the lozenge. Used by the agent screen to toggle the
     /// expanded chat-title panel. Coexists with `onDoubleTapTitle`: SwiftUI
     /// resolves a lone tap as the single tap and a paired tap as the double,
@@ -284,8 +280,7 @@ public struct GlassTopBar<MenuContent: View, CenterContent: View>: View {
                 NotificationCenter.default.post(name: .ripulShowDevTools, object: nil)
             }
         )
-        .modifier(TitleTapModifier(action: onTapTitle))
-        .modifier(TitleDoubleTapModifier(action: onDoubleTapTitle))
+        .modifier(TitleTapGestures(onTap: onTapTitle, onDoubleTap: onDoubleTapTitle))
         .uiKitIdentifier("GlassTopBar.titleLozenge")
     }
 
@@ -456,33 +451,30 @@ private struct ConditionalGlassPill: ViewModifier {
     }
 }
 
-/// Single tap is conditional for the same reason as the double tap below.
-/// Applied BEFORE the double-tap modifier so the two recognise as an
-/// exclusive sequence (a paired tap resolves to the double, a lone tap to
-/// the single after the double's recognition window fails).
+/// Shared by the bar's centre slot and the chat title's sibling overlay.
+/// The double tap must fail before a single tap can mutate the pill's layout.
+/// Apply to the title header, keeping disclosed controls outside its hit area.
 @available(iOS 15.0, macOS 13.0, *)
-private struct TitleTapModifier: ViewModifier {
-    let action: (() -> Void)?
+struct TitleTapGestures: ViewModifier {
+    let onTap: (() -> Void)?
+    let onDoubleTap: (() -> Void)?
 
     func body(content: Content) -> some View {
-        if let action {
-            content.onTapGesture(count: 1, perform: action)
-        } else {
-            content
-        }
-    }
-}
-
-/// Double-tap is conditional, and `.onTapGesture(count:)` cannot be applied
-/// conditionally inside a `ViewBuilder` without changing the view's type — which
-/// would tear down the glass namespace on every state change.
-@available(iOS 15.0, macOS 13.0, *)
-private struct TitleDoubleTapModifier: ViewModifier {
-    let action: (() -> Void)?
-
-    func body(content: Content) -> some View {
-        if let action {
-            content.onTapGesture(count: 2, perform: action)
+        if let onTap, let onDoubleTap {
+            content.gesture(
+                TapGesture(count: 2)
+                    .exclusively(before: TapGesture(count: 1))
+                    .onEnded { value in
+                        switch value {
+                        case .first: onDoubleTap()
+                        case .second: onTap()
+                        }
+                    }
+            )
+        } else if let onDoubleTap {
+            content.onTapGesture(count: 2, perform: onDoubleTap)
+        } else if let onTap {
+            content.onTapGesture(count: 1, perform: onTap)
         } else {
             content
         }
