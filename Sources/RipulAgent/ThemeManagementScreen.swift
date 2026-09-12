@@ -66,7 +66,7 @@ final class ThemeManagementModel: ObservableObject {
         var native = try NativeTextTheme.decode(document: document)
         try edit(&native)
         try RipulElementText.validate(native)
-        let changed = try native.merging(into: document)
+        let changed = try native.merging(into: document, baseline: existing?.baseline ?? remote.authoritativeDocument)
         _ = try RipulThemeManifest(data: changed, etag: nil)
         let draft = Draft(text: String(decoding: changed, as: UTF8.self),
                           baseline: existing?.baseline ?? remote.authoritativeDocument,

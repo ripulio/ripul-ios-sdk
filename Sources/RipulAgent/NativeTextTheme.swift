@@ -33,7 +33,7 @@ struct NativeTextTheme: Codable, Equatable {
     }
 
     /// Preserve all host fields and future SDK sections, replacing just this adapter's map.
-    func merging(into document: Data) throws -> Data {
+    func merging(into document: Data, baseline: Data? = nil) throws -> Data {
         guard var json = try JSONSerialization.jsonObject(with: document) as? [String: Any] else {
             throw RipulThemePublishError.invalidDocument
         }
@@ -48,6 +48,17 @@ struct NativeTextTheme: Codable, Equatable {
         let extra = try JSONSerialization.jsonObject(with: JSONEncoder().encode(self)) as! [String: Any]
         for key in ["tokens", "elements", "tabBarItemTokens"] {
             if let map = extra[key] as? [String: Any], !map.isEmpty || section[key] != nil { section[key] = map }
+        }
+        // Reset should restore the baseline's absent/empty shape, without hiding
+        // unrelated or future fields. Otherwise an undone edit reviews as Empty group.
+        if let baseline, let base = try JSONSerialization.jsonObject(with: baseline) as? [String: Any] {
+            let original = base["nativeTextOverrides"] as? [String: Any] ?? [:]
+            for key in ["tokens", "elements", "tabBarItemTokens", "tabBarItemTitles", "labels"] where original[key] == nil {
+                if (section[key] as? [String: Any])?.isEmpty == true || (section[key] as? [Any])?.isEmpty == true {
+                    section[key] = nil
+                }
+            }
+            if section.isEmpty { json["nativeTextOverrides"] = base["nativeTextOverrides"] == nil ? nil : section }
         }
         if !section.isEmpty { json["nativeTextOverrides"] = section }
         return try JSONSerialization.data(withJSONObject: json, options: [.sortedKeys, .prettyPrinted, .withoutEscapingSlashes])

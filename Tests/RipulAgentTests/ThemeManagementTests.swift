@@ -63,5 +63,40 @@ final class ThemeManagementTests: XCTestCase {
         XCTAssertNil(overrides["removed"]); XCTAssertEqual(overrides["welcome"]?["text"], "Updated")
         XCTAssertNil(json["copyStyles"], "Opening the editor must not add absent empty maps")
     }
+    func testResetLastTextChangeLeavesNoDraftChangesAndPreservesExistingEmptyGroups() throws {
+        let exporter = RipulThemeEngine.exportThemeDocument, native = NativeTextRuntime.current
+        defer { RipulThemeEngine.exportThemeDocument = exporter; NativeTextRuntime.adopt(native) }
+        for original in [self.original, Data(#"{"title":"Old","nativeTextOverrides":{}}"#.utf8),
+                         Data(#"{"title":"Old","nativeTextOverrides":{"tokens":{},"future":{}}}"#.utf8)] {
+            RipulThemeEngine.exportThemeDocument = { $0 ?? original }
+            NativeTextRuntime.adopt(try NativeTextTheme.decode(document: original))
+            let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            defer { try? FileManager.default.removeItem(at: folder) }
+            var live = original
+            let remote = RipulRemoteThemeClient(url: base.appendingPathComponent("v1/app-themes/app"),
+                fallback: original, cacheDirectory: folder.appendingPathComponent("cache"),
+                validateAndApply: { live = $0 }, fetch: { _ in throw URLError(.notConnectedToInternet) })
+            try remote.start(); defer { remote.stop() }
+            RipulElementText.configure(defaults: ["action.save": .text("Save")])
+            let path = folder.appendingPathComponent("draft.json")
+            func make() -> ThemeManagementModel {
+                ThemeManagementModel(baseURL: base, tokenProvider: { nil }, remote: remote,
+                    draftURL: path, capture: { _ in live })
+            }
+            let first = make(); first.start(); first.close()
+            try ThemeManagementModel.saveTextMutation({ document in
+                document.tokens["action.save"] = .text("Keep")
+                document.elements["save"] = ["text": .token("action.save")]
+            }, remote: remote, draftURL: path)
+            try ThemeManagementModel.saveTextMutation({ document in
+                document.tokens.removeAll(); document.elements.removeAll()
+            }, remote: remote, draftURL: path)
+            let reopened = make(); reopened.start()
+            XCTAssertEqual(ThemeManagementModel.canonical(reopened.data), ThemeManagementModel.canonical(original))
+            XCTAssertFalse(reopened.hasChanges)
+            XCTAssertTrue(ThemeDocumentChanges.compare(original, reopened.data).isEmpty)
+            reopened.close()
+        }
+    }
 }
 #endif
