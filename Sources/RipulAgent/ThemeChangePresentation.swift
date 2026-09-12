@@ -35,6 +35,17 @@ struct ThemeChangePresentation: Identifiable {
             defaultText = NativeTabTitleTheme.elements.first { $0.id == keys[2] }?.appTitle
             return
         }
+        if keys.first == "nativeTextOverrides", keys.count >= 3,
+           ["tokens", "elements", "tabBarItemTokens"].contains(keys[1]) {
+            category = .text; title = Self.readable(keys[2]); unset = "Author default"
+            context = keys[1] == "tokens" ? "Shared text tokens" : "Text assignments"
+            property = keys.last == "token" || keys[1] == "tabBarItemTokens" ? "Assigned token" : "Text"
+            if keys[1] == "elements", keys.count >= 4 {
+                let assignment = RipulElementText.assignments.first { $0.element == keys[2] && $0.property == keys[3] }
+                property = assignment?.label ?? Self.readable(keys[3]); defaultText = assignment?.defaultText
+            }
+            return
+        }
         if keys.first == "elementColors", keys.count == 3 {
             category = .colors; isColor = true; title = Self.readable(keys[1])
             context = "Individual colour overrides"; property = Self.readable(keys[2]); unset = "Author default"

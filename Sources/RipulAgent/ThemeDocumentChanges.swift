@@ -20,7 +20,11 @@ enum ThemeDocumentChanges {
             if let number = raw as? NSNumber, CFGetTypeID(number) == CFBooleanGetTypeID() { return number.boolValue ? "True" : "False" }
             if let number = raw as? NSNumber { return number.stringValue }
             if let array = raw as? [Any] { return array.isEmpty ? "Empty list" : "\(array.count) \(array.count == 1 ? "item" : "items")" }
-            if let object = raw as? [String: Any] { return object.isEmpty ? "Empty group" : "\(object.count) \(object.count == 1 ? "property" : "properties")" }
+            if let object = raw as? [String: Any] {
+                if object.count == 1, let token = object["token"] as? String { return "Token: " + token }
+                if object.count == 1, let text = object["text"] as? String { return text.isEmpty ? "Empty text" : text }
+                return object.isEmpty ? "Empty group" : "\(object.count) \(object.count == 1 ? "property" : "properties")"
+            }
             return "No value"
         }
     }
@@ -45,7 +49,7 @@ enum ThemeDocumentChanges {
         guard let value else { return [:] }
         guard let array = value as? [[String: Any]], array.count <= 256 else { return nil }
         for item in array {
-            guard Set(item.keys).isSubset(of: ["selector", "text"]),
+            guard Set(item.keys).isSubset(of: ["selector", "text", "token"]),
                   let selector = item["selector"] as? [String: Any],
                   Set(selector.keys).isSubset(of: ["screen", "identifier", "ownerType", "property", "row"]) else { return nil }
             if let row = selector["row"] as? [String: Any] {
@@ -66,10 +70,17 @@ enum ThemeDocumentChanges {
         func walk(_ a: Any?, _ b: Any?, keys: [String]) {
             guard !equal(a, b) else { return }
             if keys == labelPath, let x = labels(a), let y = labels(b), !x.isEmpty || !y.isEmpty {
-                for id in Set(x.keys).union(y.keys).sorted() where x[id]?.text != y[id]?.text {
-                    changes.append(Change(keys: keys, old: x[id].map { Value(raw: $0.text) }, new: y[id].map { Value(raw: $0.text) }, selector: (y[id] ?? x[id])!.selector))
+                for id in Set(x.keys).union(y.keys).sorted() where x[id] != y[id] {
+                    func shown(_ rule: NativeLabelOverride) -> Value { Value(raw: rule.token.map { ["token": $0] } as Any? ?? rule.text) }
+                    changes.append(Change(keys: keys, old: x[id].map(shown), new: y[id].map(shown), selector: (y[id] ?? x[id])!.selector))
                 }
                 return
+            }
+            // A reference is one setting. Splitting token/text keys would let discard
+            // leave an invalid object containing both alternatives.
+            if keys.first == "nativeTextOverrides",
+               (keys.count == 3 && keys[1] == "tokens") || (keys.count == 4 && keys[1] == "elements") {
+                changes.append(Change(keys: keys, old: a.map(Value.init), new: b.map(Value.init), selector: nil)); return
             }
             let x = a as? [String: Any], y = b as? [String: Any]
             if (x != nil || a == nil), (y != nil || b == nil), x != nil || y != nil {

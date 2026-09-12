@@ -74,7 +74,7 @@ enum NativeTabTitleTheme {
 
     static func setOverride(_ title: String?, identifier: String) {
         previews.removeValue(forKey: identifier)
-        NativeTextRuntime.mutate { $0.tabBarItemTitles[identifier] = title }
+        NativeTextRuntime.mutate { $0.tabBarItemTitles[identifier] = title; $0.tabBarItemTokens[identifier] = nil }
     }
 
     static func preview(_ title: String?, identifier: String) {
@@ -93,7 +93,8 @@ enum NativeTabTitleTheme {
             guard !record.applying else { continue }
             var title = record.appTitle
             if let id = item.accessibilityIdentifier, counts[id] == 1 {
-                title = previews[id] ?? NativeTextRuntime.current.tabBarItemTitles[id] ?? record.appTitle
+                title = previews[id] ?? NativeTextRuntime.current.tabBarItemTokens[id].flatMap(RipulElementText.tokenText)
+                    ?? NativeTextRuntime.current.tabBarItemTitles[id] ?? record.appTitle
             }
             guard item.title != title else { continue }
             record.applying = true
@@ -111,10 +112,10 @@ enum NativeTabTitleTheme {
     }
     static var elements: [Element] {
         let grouped = Dictionary(grouping: items.allObjects.filter { isLive($0) && !($0.accessibilityIdentifier ?? "").isEmpty }, by: { $0.accessibilityIdentifier! })
-        return Set(grouped.keys).union(NativeTextRuntime.current.tabBarItemTitles.keys).sorted().map { id in
+        return Set(grouped.keys).union(NativeTextRuntime.current.tabBarItemTitles.keys).union(NativeTextRuntime.current.tabBarItemTokens.keys).sorted().map { id in
             let matching = grouped[id] ?? []
             let item = matching.first
-            return Element(id: id, title: item?.title ?? NativeTextRuntime.current.tabBarItemTitles[id] ?? "",
+            return Element(id: id, title: item?.title ?? NativeTextRuntime.current.tabBarItemTokens[id].flatMap(RipulElementText.tokenText) ?? NativeTextRuntime.current.tabBarItemTitles[id] ?? "",
                            appTitle: item.flatMap { state($0).appTitle }, mounted: item != nil,
                            ambiguous: matching.count > 1)
         }

@@ -80,6 +80,7 @@ enum NativeLabelTheme {
     }
 
     static func assigned(_ value: Value, to label: UILabel, forward: () -> Void) {
+        if RipulElementText.binding(label) != nil { forward(); RipulElementText.reapply(label); return }
         if existing(label)?.writing == true { forward(); return }
         guard existing(label) != nil || potentiallyMatches(label, selectors: rules.map(\.selector)) else { forward(); return }
         let record = state(label)
@@ -90,6 +91,7 @@ enum NativeLabelTheme {
         scheduleRefresh() // catches text-before-model configuration in the same run loop
     }
     static func movedOrIdentified(_ label: UILabel) {
+        if RipulElementText.binding(label) != nil { RipulElementText.reapply(label); return }
         guard existing(label)?.writing != true,
               existing(label) != nil || potentiallyMatches(label, selectors: rules.map(\.selector)) else { return }
         _ = state(label)
@@ -144,13 +146,16 @@ enum NativeLabelTheme {
             for rule in matching { counts[ObjectIdentifier(controller), default: [:]][rule.id, default: 0] += 1 }
         }
         for label in live {
+            if RipulElementText.binding(label) != nil { continue }
             let record = state(label)
             guard !record.writing else { continue }
             let matching = matches[ObjectIdentifier(label)] ?? []
             let controller = NativeLabelIdentity.screen(of: label).map(ObjectIdentifier.init)
             let rule = matching.count == 1 ? matching.first : nil
             let replacement: String?
-            if let rule, let controller, counts[controller]?[rule.id] == 1, record.appValue.isUniform { replacement = rule.text }
+            if let rule, let controller, counts[controller]?[rule.id] == 1, record.appValue.isUniform {
+                replacement = rule.token.flatMap(RipulElementText.tokenText) ?? rule.text
+            }
             else { replacement = nil }
             if replacement != nil || record.applied {
                 record.writing = true
@@ -202,7 +207,7 @@ enum NativeLabelTheme {
             let matching = labels.allObjects.filter { $0.window != nil && NativeLabelIdentity.matches(selector, label: $0) }
             let grouped = Dictionary(grouping: matching, by: { NativeLabelIdentity.screen(of: $0).map(ObjectIdentifier.init) })
             return Element(selector: selector,
-                           text: NativeTextRuntime.current.labels.first { $0.id == selector.id }?.text ?? matching.first?.text ?? "",
+                           text: NativeTextRuntime.current.labels.first { $0.id == selector.id }.flatMap { $0.token.flatMap(RipulElementText.tokenText) ?? $0.text } ?? matching.first?.text ?? "",
                            mounted: !matching.isEmpty, ambiguous: grouped.values.contains { $0.count > 1 })
         }.sorted { $0.selector.summary < $1.selector.summary }
     }

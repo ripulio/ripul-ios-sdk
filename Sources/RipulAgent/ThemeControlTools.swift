@@ -33,6 +33,17 @@ private func colourAssignments(prefix: String? = nil) -> [[String: Any]] {
     }
 }
 
+@MainActor
+private func textAssignments(prefix: String? = nil) -> [[String: Any]] {
+    RipulElementText.assignments.filter { prefix == nil || $0.element == prefix || $0.element.hasPrefix(prefix! + ".") }.map { value in
+        var result: [String: Any] = ["element": value.element, "property": value.property, "label": value.label,
+            "text": value.text, "defaultToken": value.defaultToken as Any? ?? NSNull(),
+            "dataSource": value.dataSource as Any? ?? NSNull()]
+        result["override"] = value.override.flatMap { try? JSONSerialization.jsonObject(with: JSONEncoder().encode($0)) } ?? NSNull()
+        return result
+    }
+}
+
 // MARK: - list_theme_scopes
 
 /// Discovery: which scopes exist and what is currently overridden on each.
@@ -58,7 +69,12 @@ public struct RipulListThemeScopesTool: NativeTool {
                      "hasOverrides": doc.styleOverrides[kind.name]?[scope.id] != nil]
                 }
             }
-            return ["scopes": scopes, "colourAssignments": colourAssignments()]
+            return ["scopes": scopes, "colourAssignments": colourAssignments(), "textAssignments": textAssignments(),
+                    "textTokens": RipulElementText.tokenNames.map { name -> [String: Any] in
+                        ["name": name, "text": RipulElementText.tokenText(name) ?? "",
+                         "definition": RipulElementText.definition(name).flatMap { try? JSONSerialization.jsonObject(with: JSONEncoder().encode($0)) } ?? NSNull(),
+                         "override": NativeTextRuntime.current.tokens[name].flatMap { try? JSONSerialization.jsonObject(with: JSONEncoder().encode($0)) } ?? NSNull()]
+                    }] as [String: Any]
         }
     }
 }
@@ -90,8 +106,9 @@ public struct RipulGetThemeStyleTool: NativeTool {
         }
         return try await MainActor.run {
             let colours = colourAssignments(prefix: id)
-            if RipulThemeEngine.kind(containingScope: id) == nil, !colours.isEmpty {
-                return ["scope": id, "kind": "elementColours", "colourAssignments": colours]
+            let texts = textAssignments(prefix: id)
+            if RipulThemeEngine.kind(containingScope: id) == nil, !colours.isEmpty || !texts.isEmpty {
+                return ["scope": id, "kind": "elementProperties", "colourAssignments": colours, "textAssignments": texts]
             }
             guard let kind = RipulThemeEngine.kind(containingScope: id) else {
                 throw NSError(domain: "theme", code: 2, userInfo: [NSLocalizedDescriptionKey:
@@ -103,6 +120,7 @@ public struct RipulGetThemeStyleTool: NativeTool {
                                           "overrides": overrides.mapValues { $0.jsonValue },
                                           "resolved": resolved.knobs.mapValues { $0.jsonValue }]
             payload["colourAssignments"] = colours
+            payload["textAssignments"] = texts
             // Composite kinds: each part's own resolution, addressable as "<scope>.<part>"
             // (those child ids are themselves scopes — set_theme_knob works on them).
             if !resolved.slots.isEmpty {
@@ -126,7 +144,7 @@ public struct RipulSetThemeKnobTool: NativeTool {
         + "(a scope id from list_theme_scopes, a knob that scope declares, and a value). "
         + "Writes a per-scope override, which beats any assigned named style. "
         + "Knob names are declared by each scope's kind — read them from get_theme_style's "
-        + "resolved output. Element colours use colour.<property>, a token or hex value, and inherit to reset just that property. Use reset_theme_scope for style overrides."
+        + "resolved output. Element colours use colour.<property>, a token or hex value, and inherit to reset just that property. Use reset_theme_scope for style overrides. Text uses text.<property> for literal wording, textToken.<property> for assignment, textDefault.<property>=true to reset. Shared text uses scope textTokens.<name> with text, source, or reset=true."
     }
     public var inputSchema: [String: Any] {
         ["type": "object",
@@ -146,6 +164,32 @@ public struct RipulSetThemeKnobTool: NativeTool {
               let raw = args["value"] else {
             throw NSError(domain: "theme", code: 1,
                           userInfo: [NSLocalizedDescriptionKey: "scope, knob and value are required"])
+        }
+        if id.hasPrefix("textTokens.") {
+            return try await MainActor.run {
+                let token = String(id.dropFirst("textTokens.".count))
+                let reference: RipulTextReference?
+                if knobName == "text", let text = raw as? String { reference = .text(text) }
+                else if knobName == "source", let name = raw as? String { reference = .token(name) }
+                else if knobName == "reset", raw as? Bool == true { reference = nil }
+                else { throw TextReferenceError.name }
+                try RipulElementText.setToken(token, reference: reference)
+                return ["ok": true, "token": token, "text": RipulElementText.tokenText(token) ?? ""] as [String: Any]
+            }
+        }
+        if ["text.", "textToken.", "textDefault."].contains(where: knobName.hasPrefix) {
+            return try await MainActor.run {
+                let property = String(knobName.drop(while: { $0 != "." }).dropFirst())
+                guard let binding = RipulElementText.assignments.first(where: { $0.element == id && $0.property == property }) else { throw TextReferenceError.name }
+                let reference: RipulTextReference?
+                if knobName.hasPrefix("text."), let text = raw as? String { reference = .text(text) }
+                else if knobName.hasPrefix("textToken."), let token = raw as? String { reference = .token(token) }
+                else if knobName.hasPrefix("textDefault."), raw as? Bool == true { reference = nil }
+                else { throw TextReferenceError.name }
+                let before = binding.override.flatMap { try? JSONSerialization.jsonObject(with: JSONEncoder().encode($0)) } ?? NSNull()
+                try binding.setReference(reference)
+                return ["ok": true, "previousOverride": before, "textAssignments": textAssignments(prefix: id)] as [String: Any]
+            }
         }
         if knobName.hasPrefix("colour.") {
             return try await MainActor.run {

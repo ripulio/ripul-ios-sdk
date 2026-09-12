@@ -73,5 +73,6 @@ struct NativeLabelSelector: Codable, Hashable {
 struct NativeLabelOverride: Codable, Equatable, Identifiable {
     var selector: NativeLabelSelector
     var text: String
+    var token: String? = nil
     var id: String { selector.id }
 }

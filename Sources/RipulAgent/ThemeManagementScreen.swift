@@ -51,6 +51,11 @@ final class ThemeManagementModel: ObservableObject {
     static func saveNativeTextDraft(target: NativeTextTarget, text: String?,
                                   remote: RipulRemoteThemeClient? = nil,
                                   draftURL: URL? = nil) throws {
+        try saveTextMutation({ target.update(&$0, text: text) }, remote: remote, draftURL: draftURL)
+    }
+
+    static func saveTextMutation(_ edit: (inout NativeTextTheme) throws -> Void,
+                                remote: RipulRemoteThemeClient? = nil, draftURL: URL? = nil) throws {
         guard let remote = remote ?? RipulThemeEngine.remoteTheme else { throw NativeTextDraftError.noRemoteTheme }
         let destination = draftURL ?? draftLocation(for: remote.url)
         let existing: Draft?
@@ -59,7 +64,8 @@ final class ThemeManagementModel: ObservableObject {
         } else { existing = nil }
         let document = try existing.map { Data($0.text.utf8) } ?? RipulThemeEngine.themeDocumentForPublishing()
         var native = try NativeTextTheme.decode(document: document)
-        target.update(&native, text: text)
+        try edit(&native)
+        try RipulElementText.validate(native)
         let changed = try native.merging(into: document)
         _ = try RipulThemeManifest(data: changed, etag: nil)
         let draft = Draft(text: String(decoding: changed, as: UTF8.self),
@@ -67,7 +73,8 @@ final class ThemeManagementModel: ObservableObject {
                           etag: existing.map { $0.etag } ?? remote.authoritativeETag)
         try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
         try JSONEncoder().encode(draft).write(to: destination, options: .atomic)
-        target.apply(text)
+        NativeTextRuntime.adopt(native)
+        NotificationCenter.default.post(name: .ripulThemeDidChange, object: nil)
     }
 
     var data: Data { Data(text.utf8) }
@@ -275,6 +282,8 @@ public struct RipulThemeManagementScreen: View {
                 if model.sourceDirty { Text("Apply the edits in Theme document before editing elements or publishing.").font(.footnote) }
             }
             Section {
+                NavigationLink("Text tokens and individual overrides") { RipulTextLibraryScreen() }
+                    .disabled(model.busy || model.sourceDirty)
                 Toggle("Text elements only", isOn: $textOnly).accessibilityIdentifier("ThemeManagement.textOnly")
                 ForEach(elements) { item in
                     NavigationLink {

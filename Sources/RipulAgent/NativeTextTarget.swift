@@ -10,6 +10,33 @@ enum NativeTextTarget {
     var heading: String { switch self { case .tabTitle: return "Tab title"; case .label: return "Label text" } }
     var summary: String { switch self { case .tabTitle(let id): return id; case .label(let selector): return selector.summary } }
     var strategy: String { switch self { case .tabTitle: return "Accessibility identifier"; case .label(let selector): return selector.strategy } }
+    var reference: RipulTextReference? {
+        switch self {
+        case .tabTitle(let id):
+            if let token = NativeTextRuntime.current.tabBarItemTokens[id] { return .token(token) }
+            return NativeTextRuntime.current.tabBarItemTitles[id].map(RipulTextReference.text)
+        case .label(let selector):
+            guard let rule = NativeTextRuntime.current.labels.first(where: { $0.id == selector.id }) else { return nil }
+            return rule.token.map(RipulTextReference.token) ?? .text(rule.text)
+        }
+    }
+    func update(_ document: inout NativeTextTheme, reference: RipulTextReference?) {
+        switch self {
+        case .tabTitle(let id):
+            document.tabBarItemTokens[id] = nil; document.tabBarItemTitles[id] = nil
+            switch reference {
+            case .token(let token): document.tabBarItemTokens[id] = token; document.tabBarItemTitles[id] = appText ?? text
+            case .text(let value): document.tabBarItemTitles[id] = value
+            case nil: break
+            }
+        case .label(let selector):
+            switch reference {
+            case .token(let token): document.setLabel(selector, text: appText ?? text, token: token)
+            case .text(let value): document.setLabel(selector, text: value)
+            case nil: document.setLabel(selector, text: nil)
+            }
+        }
+    }
     var text: String {
         switch self {
         case .tabTitle(let id): return NativeTabTitleTheme.title(for: id) ?? ""
@@ -35,10 +62,7 @@ enum NativeTextTarget {
         }
     }
     func update(_ document: inout NativeTextTheme, text: String?) {
-        switch self {
-        case .tabTitle(let id): document.tabBarItemTitles[id] = text
-        case .label(let selector): document.setLabel(selector, text: text)
-        }
+        update(&document, reference: text.map(RipulTextReference.text))
     }
 }
 #endif

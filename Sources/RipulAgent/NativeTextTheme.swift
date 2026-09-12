@@ -5,15 +5,21 @@ import Foundation
 struct NativeTextTheme: Codable, Equatable {
     var tabBarItemTitles: [String: String] = [:]
     var labels: [NativeLabelOverride] = []
+    var tokens: [String: RipulTextReference] = [:]
+    var elements: [String: [String: RipulTextReference]] = [:]
+    var tabBarItemTokens: [String: String] = [:]
 
     init(tabBarItemTitles: [String: String] = [:], labels: [NativeLabelOverride] = []) {
         self.tabBarItemTitles = tabBarItemTitles; self.labels = labels
     }
-    private enum CodingKeys: String, CodingKey { case tabBarItemTitles, labels }
+    private enum CodingKeys: String, CodingKey { case tabBarItemTitles, labels, tokens, elements, tabBarItemTokens }
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         tabBarItemTitles = try container.decodeIfPresent([String: String].self, forKey: .tabBarItemTitles) ?? [:]
         labels = try container.decodeIfPresent([NativeLabelOverride].self, forKey: .labels) ?? []
+        tokens = try container.decodeIfPresent([String: RipulTextReference].self, forKey: .tokens) ?? [:]
+        elements = try container.decodeIfPresent([String: [String: RipulTextReference]].self, forKey: .elements) ?? [:]
+        tabBarItemTokens = try container.decodeIfPresent([String: String].self, forKey: .tabBarItemTokens) ?? [:]
         guard labels.count <= 256, Set(labels.map(\.id)).count == labels.count else { throw RipulThemePublishError.invalidDocument }
         for rule in labels { try rule.selector.validate() }
         guard tabBarItemTitles.keys.allSatisfy({ !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else {
@@ -39,13 +45,17 @@ struct NativeTextTheme: Codable, Equatable {
         if !labels.isEmpty || section["labels"] != nil {
             section["labels"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(labels))
         }
+        let extra = try JSONSerialization.jsonObject(with: JSONEncoder().encode(self)) as! [String: Any]
+        for key in ["tokens", "elements", "tabBarItemTokens"] {
+            if let map = extra[key] as? [String: Any], !map.isEmpty || section[key] != nil { section[key] = map }
+        }
         if !section.isEmpty { json["nativeTextOverrides"] = section }
         return try JSONSerialization.data(withJSONObject: json, options: [.sortedKeys, .prettyPrinted, .withoutEscapingSlashes])
     }
 
-    mutating func setLabel(_ selector: NativeLabelSelector, text: String?) {
+    mutating func setLabel(_ selector: NativeLabelSelector, text: String?, token: String? = nil) {
         labels.removeAll { $0.id == selector.id }
-        if let text { labels.append(NativeLabelOverride(selector: selector, text: text)) }
+        if let text { labels.append(NativeLabelOverride(selector: selector, text: text, token: token)) }
         labels.sort { $0.id < $1.id }
     }
 }

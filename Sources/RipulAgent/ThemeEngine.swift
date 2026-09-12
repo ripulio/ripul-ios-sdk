@@ -492,6 +492,7 @@ public enum RipulThemeEngine {
         // Validate both schemas before changing SDK state. A host can discard unknown
         // fields during decoding without losing the SDK's automatic bindings.
         let text = try NativeTextTheme.decode(document: data)
+        try RipulElementText.validate(text)
         try applyingHost(data)
         NativeTextRuntime.adopt(text)
         NotificationCenter.default.post(name: .ripulThemeDidChange, object: nil)

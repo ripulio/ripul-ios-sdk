@@ -10,7 +10,7 @@ let ripulViewExplorerOverlayTag = 0x5249_5055   // "RIPU"
 
 /// Marketing version of the RipulAgent SDK, surfaced in the inspector's copy output as `sdk: …`
 /// so we can always tell which build is actually running on the device. Bump on every release.
-let ripulSDKVersion = "0.7.108"
+let ripulSDKVersion = "0.7.109"
 
 // MARK: - View Inspector Overlay
 //
@@ -1848,10 +1848,16 @@ struct InspectorAppearanceTab: View {
         VStack(alignment: .leading, spacing: 12) {
             InspectorTokenSection(view: info.tokenAnchorView)
 
-            if let identifier = NativeTabTitleTheme.identifier(for: info.view, resolvedIdentifier: info.accessibilityId) {
-                NativeTextFields(target: .tabTitle(identifier), savesExplicitly: true)
-            } else if let selector = info.nativeLabelCapture?.selector {
-                NativeTextFields(target: .label(selector), savesExplicitly: true)
+            let textProperties = RipulElementText.properties(for: info.tokenAnchorView, identifier: info.accessibilityId)
+            ForEach(textProperties) { assignment in
+                TextPropertyRow(target: .element(assignment))
+            }
+            if textProperties.isEmpty {
+                if let identifier = NativeTabTitleTheme.identifier(for: info.view, resolvedIdentifier: info.accessibilityId) {
+                    NativeTextFields(target: .tabTitle(identifier), savesExplicitly: true)
+                } else if let selector = info.nativeLabelCapture?.selector {
+                    NativeTextFields(target: .label(selector), savesExplicitly: true)
+                }
             }
         }
     }
