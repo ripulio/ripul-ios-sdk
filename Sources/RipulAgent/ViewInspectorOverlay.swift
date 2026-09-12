@@ -10,7 +10,7 @@ let ripulViewExplorerOverlayTag = 0x5249_5055   // "RIPU"
 
 /// Marketing version of the RipulAgent SDK, surfaced in the inspector's copy output as `sdk: …`
 /// so we can always tell which build is actually running on the device. Bump on every release.
-let ripulSDKVersion = "0.7.110"
+let ripulSDKVersion = "0.7.111"
 
 // MARK: - View Inspector Overlay
 //
@@ -2778,6 +2778,9 @@ struct InspectorHUD: View {
         )
         .shadow(color: .black.opacity(0.4), radius: 10, y: 4)
         .fixedSize()
+        // The HUD always has a dark surface, even when its host app is light.
+        // Resolve all adaptive labels and controls against that surface.
+        .environment(\.colorScheme, .dark)
         .sheet(item: $contextPreview) { item in
             ComposerContextPreview(item: item) { attachment in
                 destinationBridge?.composerContexts.attach(attachment, to: destinationSession)

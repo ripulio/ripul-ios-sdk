@@ -73,6 +73,10 @@ routes Inspector launch requests to native and suppresses its HTML overlay.
 Standalone browser use retains the web presentation. Public host launch APIs
 remain `RipulViewExplorer.present(in:recording:bridge:)` and `toggle`.
 
+The floating HUD uses a dark surface and sets the dark colour scheme at its root.
+Adaptive text rows therefore remain readable when the host app uses light mode;
+the scheme is scoped to inspector content. See `Sources/RipulAgent/ViewInspectorOverlay.swift:2772`.
+
 DOM inspection traverses open shadow roots. Frame elements can be selected;
 their nested documents are not traversed by this provider. Native macOS view
 inspection remains unavailable. Native macro recording applies to native
@@ -85,5 +89,8 @@ selections; web selections provide DOM activation and evaluation.
   Inspector's explicit activation and touch pass-through, and single/double taps
   on the production chat title overlay and session-list title. It also verifies
   all twelve box-model edges and live edits through the native value editor.
+  `testTextAssignmentsSharedSourcesResetAndDataSource` also checks rendered text-row
+  contrast and keeps a full inspector screenshot. Run with the simulator in light
+  appearance to reproduce the host/inspector scheme mismatch fixed in SDK 0.7.111.
 - `node --test tests/unified-inspector.browser.test.mjs` in `chrome-extension`
   exercises the actual React overlay and DOM provider in WebKit and Chromium.
