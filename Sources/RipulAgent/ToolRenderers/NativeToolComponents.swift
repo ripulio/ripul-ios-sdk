@@ -23,30 +23,31 @@ struct NativeToolCodeBlock: View {
     var numbered = false
     var firstLine = 1
     var syntax: NativeToolCodeSyntax?
+    var readLineNumbers = false
+    var commandBreakLines: [Int] = []
+    var commandPipeLines: [Int] = []
     var identifier = "NativeTool.code"
     @State private var visibleLines = 80
-    @State private var wrapsJSON = false
+    @State private var wraps = false
+    @State private var highlighted: AttributedString?
+    @State private var highlightedRequest: NativeHighlightRequest?
     @Environment(\.colorScheme) private var colorScheme
 
-    private func sourceText(_ text: String) -> Text {
-        switch syntax {
-        case .json: return Text(NativeJSONHighlighting.attributed(text, colorScheme: colorScheme))
-        case nil: return Text(text)
-        }
-    }
-
     var body: some View {
-        let clean = syntax == .json ? text : ToolValue.cleanTerminal(text)
+        let clean = syntax == nil || syntax == .automatic ? ToolValue.cleanTerminal(text) : text
         let lines = clean.components(separatedBy: "\n")
+        let visible = lines.prefix(visibleLines).joined(separator: "\n")
+        let request = NativeHighlightRequest(source: visible, language: syntax?.language ?? "plaintext", dark: colorScheme == .dark, readLineNumbers: readLineNumbers)
+        let attributed = highlightedRequest == request ? (highlighted ?? AttributedString(visible)) : AttributedString(visible)
+        let colouredLines = NativeSourceHighlighting.lines(attributed)
+        let sectionStarts = [0] + Set(commandBreakLines.filter { $0 > 0 && $0 < colouredLines.count }).sorted()
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Text("\(lines.count) \(lines.count == 1 ? "line" : "lines")").font(.caption).foregroundStyle(.secondary)
                 Spacer()
-                if syntax == .json {
-                    Toggle("Wrap", isOn: $wrapsJSON)
-                        .toggleStyle(.switch).fixedSize().font(.caption)
-                        .accessibilityIdentifier("\(identifier).wrap")
-                }
+                Toggle("Wrap", isOn: $wraps)
+                    .toggleStyle(.switch).fixedSize().font(.caption)
+                    .accessibilityIdentifier("\(identifier).wrap")
                 Button {
                     #if os(iOS)
                     UIPasteboard.general.string = clean
@@ -58,32 +59,86 @@ struct NativeToolCodeBlock: View {
                     .font(.caption).accessibilityIdentifier("\(identifier).copy")
             }
             if numbered {
-                LazyVStack(alignment: .leading, spacing: 2) {
-                    ForEach(Array(lines.prefix(visibleLines).enumerated()), id: \.offset) { index, line in
-                        HStack(alignment: .top, spacing: 10) {
-                            Text("\(firstLine + index)").foregroundStyle(.secondary).frame(minWidth: 28, alignment: .trailing)
-                            sourceText(line.isEmpty ? " " : line).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
-                        }.font(.system(.caption, design: .monospaced))
+                wrapping {
+                    LazyVStack(alignment: .leading, spacing: 2) {
+                        ForEach(Array(lines.prefix(visibleLines).enumerated()), id: \.offset) { index, line in
+                            HStack(alignment: .top, spacing: 10) {
+                                Text("\(firstLine + index)").foregroundStyle(.secondary).frame(minWidth: 28, alignment: .trailing)
+                                Text(line.isEmpty ? AttributedString(" ") : index < colouredLines.count ? colouredLines[index] : AttributedString(line))
+                                    .textSelection(.enabled).fixedSize(horizontal: !wraps, vertical: true)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }.font(.system(.caption, design: .monospaced))
+                        }
                     }
-                }.accessibilityIdentifier(identifier)
-            } else if syntax == .json && !wrapsJSON {
-                ScrollView(.horizontal) {
-                    sourceText(lines.prefix(visibleLines).joined(separator: "\n"))
+                    .accessibilityIdentifier(identifier)
+                }
+            } else if sectionStarts.count > 1 {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(sectionStarts.indices, id: \.self) { index in
+                        let start = sectionStarts[index]
+                        if index > 0 {
+                            Group {
+                                if commandPipeLines.contains(start) {
+                                    HStack(spacing: 8) {
+                                        VStack { Divider() }
+                                        Label("Piped input", systemImage: "arrow.down")
+                                            .font(.caption2.weight(.medium))
+                                            .foregroundStyle(.secondary)
+                                            .fixedSize()
+                                            .accessibilityElement(children: .combine)
+                                            .accessibilityLabel("Piped input from previous command")
+                                            .accessibilityIdentifier("\(identifier).pipe.\(index)")
+                                        VStack { Divider() }
+                                    }
+                                } else {
+                                    Divider()
+                                }
+                            }
+                            .padding(.vertical, 10)
+                            .accessibilityElement(children: .contain)
+                            .accessibilityIdentifier("\(identifier).divider.\(index)")
+                        }
+                        let end = index + 1 < sectionStarts.count ? sectionStarts[index + 1] : colouredLines.count
+                        wrapping {
+                            Text(colouredLines[(start + 1)..<end].reduce(colouredLines[start]) { $0 + AttributedString("\n") + $1 })
+                                .font(.system(.callout, design: .monospaced)).textSelection(.enabled)
+                                .fixedSize(horizontal: !wraps, vertical: true)
+                                .accessibilityIdentifier("\(identifier).part.\(index)")
+                        }
+                    }
+                }
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier(identifier)
+            } else {
+                wrapping {
+                    Text(attributed)
                         .font(.system(.callout, design: .monospaced)).textSelection(.enabled)
-                        .fixedSize(horizontal: true, vertical: true)
+                        .fixedSize(horizontal: !wraps, vertical: true)
                         .accessibilityIdentifier(identifier)
                 }
-            } else {
-                sourceText(lines.prefix(visibleLines).joined(separator: "\n"))
-                    .font(.system(.callout, design: .monospaced)).textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .accessibilityIdentifier(identifier)
             }
             if lines.count > visibleLines {
                 Button("Show more (\(lines.count - visibleLines) lines remaining)") { visibleLines += 200 }.font(.callout)
             }
         }
         .padding(12).background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 10))
+        .task(id: request) {
+            let result = await NativeSourceHighlighting.shared.attributed(request)
+            guard !Task.isCancelled else { return }
+            highlighted = result
+            highlightedRequest = request
+        }
+    }
+
+    /// Scroll the text only, keeping its toolbar and command dividers in view.
+    @ViewBuilder private func wrapping<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        if wraps {
+            content().frame(maxWidth: .infinity, alignment: .leading)
+        } else {
+            ScrollView(.horizontal) {
+                content().fixedSize(horizontal: true, vertical: true)
+            }
+        }
     }
 }
 
@@ -92,6 +147,7 @@ struct NativeToolCodeBlock: View {
 struct NativeToolValueView: View {
     let value: CmsJSON
     var identifier = "NativeTool.value"
+    var textSyntax: NativeToolCodeSyntax?
     @State private var visibleItems = 40
 
     var body: some View { content(value) }
@@ -99,7 +155,9 @@ struct NativeToolValueView: View {
     private func content(_ value: CmsJSON) -> AnyView {
         switch value {
         case .string(let text):
-            if text.contains("\n") { return AnyView(NativeToolCodeBlock(text: text, identifier: identifier)) }
+            if text.contains("\n") || (textSyntax != nil && !text.isEmpty) {
+                return AnyView(NativeToolCodeBlock(text: text, syntax: textSyntax, identifier: identifier))
+            }
             return AnyView(Text(ToolValue.cleanTerminal(text.isEmpty ? "Empty text" : text)).textSelection(.enabled).accessibilityIdentifier(identifier))
         case .number(let number): return AnyView(Text(CmsJSON.number(number).displayString).monospacedDigit().textSelection(.enabled))
         case .bool(let yes): return AnyView(Label(yes ? "Yes" : "No", systemImage: yes ? "checkmark.circle" : "minus.circle"))
@@ -110,7 +168,7 @@ struct NativeToolValueView: View {
                 ForEach(Array(items.prefix(visibleItems).enumerated()), id: \.offset) { index, item in
                     HStack(alignment: .top, spacing: 10) {
                         Text("\(index + 1)").font(.caption).foregroundStyle(.secondary)
-                        NativeToolValueView(value: item)
+                        NativeToolValueView(value: item, textSyntax: textSyntax)
                     }
                     if index < items.count - 1 { Divider() }
                 }
@@ -123,13 +181,15 @@ struct NativeToolValueView: View {
                 ForEach(object.keys.sorted(), id: \.self) { key in
                     if let item = object[key] {
                         if item.objectValue != nil || item.toolArray != nil {
-                            DisclosureGroup(ToolValue.title(key)) { NativeToolValueView(value: item).padding(.top, 8) }
+                            DisclosureGroup(ToolValue.title(key)) { NativeToolValueView(value: item, textSyntax: textSyntax).padding(.top, 8) }
                         } else {
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(ToolValue.title(key)).font(.caption).foregroundStyle(.secondary)
                                 if let raw = item.stringValue, let url = URL(string: raw), ["https", "http"].contains(url.scheme) {
                                     Link(raw, destination: url).textSelection(.enabled)
-                                } else { NativeToolValueView(value: item) }
+                                } else {
+                                    NativeToolValueView(value: item, textSyntax: ["stdout", "stderr", "output", "text", "content"].contains(key) ? textSyntax : nil)
+                                }
                             }
                         }
                     }
@@ -154,9 +214,10 @@ struct NativeToolParameters: View {
 struct NativeToolResultView: View {
     let content: NativeToolContent
     var title = "Result"
+    var textSyntax: NativeToolCodeSyntax?
     var body: some View {
         NativeToolSection(title: title) {
-            if let output = content.output { NativeToolValueView(value: output, identifier: "ToolCallDetails.result") }
+            if let output = content.output { NativeToolValueView(value: output, identifier: "ToolCallDetails.result", textSyntax: textSyntax) }
             else if content.running { ProgressView("Waiting for result…") }
             else { Text("No output was recorded.").foregroundStyle(.secondary) }
         }

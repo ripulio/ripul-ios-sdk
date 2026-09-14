@@ -32,6 +32,125 @@ enum NativeToolRendererKind: String {
     }
 }
 
+/// Compact input summaries can render for closed disclosures without decoding
+/// their results or constructing the expensive source/output views.
+struct NativeToolSummary {
+    let title: String
+    let subtitle: String?
+    let symbol: String
+    let isCode: Bool
+
+    init(_ call: ToolCallDetail) {
+        let args = call.renderArguments?.objectValue ?? ToolValue.parse(call.arguments).objectValue ?? [:]
+        func first(_ keys: String...) -> String? {
+            keys.compactMap { args[$0]?.stringValue.flatMap(Self.compact) }.first
+        }
+        let kind = NativeToolRendererKind.resolve(call.rendererName ?? call.toolName)
+        let description = first("description", "Description", "reason", "title")
+        let path = first("file_path", "path", "TargetFile", "AbsolutePath")
+        let name = path.map { ($0 as NSString).lastPathComponent }
+        var heading: String
+        var detail: String?
+        switch kind {
+        case .terminal:
+            if let presentation = call.commandPresentation {
+                heading = presentation.label
+                detail = description ?? presentation.summary
+                symbol = presentation.symbol
+            } else {
+                let command = first("command", "cmd", "CommandLine", "chars")
+                heading = description ?? command ?? "Read command output"
+                detail = description != nil ? command : first("workdir", "cwd", "working_directory")
+                symbol = "terminal"
+            }
+        case .read, .write, .edit:
+            let action = kind == .read ? "Read" : kind == .write ? "Write" : "Edit"
+            heading = "\(action) \(name ?? "file")"
+            detail = path
+            symbol = kind == .read ? "doc.text" : "square.and.pencil"
+        case .patch:
+            let paths: [String]
+            if let changes = args["changes"]?.objectValue { paths = changes.keys.sorted() }
+            else if let changes = args["changes"]?.toolArray { paths = changes.compactMap { $0.objectValue?.string("path") } }
+            else {
+                // Inspect only the start of a raw patch; never build its diffs
+                // just to label a closed panel.
+                let patch = args.string("input") ?? args.string("patch") ?? ""
+                paths = patch.prefix(8_000).split(separator: "\n").compactMap { line in
+                    for prefix in ["*** Update File: ", "*** Add File: ", "*** Delete File: "] where line.hasPrefix(prefix) {
+                        return String(line.dropFirst(prefix.count))
+                    }
+                    return nil
+                }
+            }
+            heading = paths.count == 1 ? "Update \((paths[0] as NSString).lastPathComponent)" : "Update files"
+            detail = paths.isEmpty ? description : paths.prefix(3).map { ($0 as NSString).lastPathComponent }.joined(separator: ", ") + (paths.count > 3 ? " +\(paths.count - 3) more" : "")
+            symbol = "doc.badge.gearshape"
+        case .grep, .glob:
+            heading = kind == .grep ? "Search file contents" : "Find files"
+            detail = [first("pattern", "query", "SearchPattern"), path].compactMap { $0 }.joined(separator: " · ")
+            symbol = "doc.text.magnifyingglass"
+        case .web, .http:
+            let url = first("url", "URL")
+            let host = url.flatMap { URL(string: $0)?.host }
+            heading = first("query") != nil ? "Search the web" : "\(first("method") ?? "Fetch") \(host ?? "page")"
+            detail = first("query") ?? url
+            symbol = "globe"
+        case .evaluate:
+            heading = description ?? "Evaluate code"
+            detail = first("expression", "code", "script")
+            symbol = "chevron.left.forwardslash.chevron.right"
+        case .agent:
+            heading = description ?? "Run agent"
+            detail = first("prompt", "message", "task")
+            symbol = "person.crop.circle"
+        case .todos:
+            let tasks = args["todos"]?.toolArray ?? args["plan"]?.toolArray ?? []
+            let active = tasks.first { $0.objectValue?.string("status") == "in_progress" }?.objectValue
+            heading = active?.string("content") ?? active?.string("step") ?? description ?? "Update task plan"
+            let completed = tasks.filter { $0.objectValue?.string("status") == "completed" }.count
+            detail = tasks.isEmpty ? nil : "\(completed) of \(tasks.count) tasks complete"
+            symbol = "checklist"
+        case .logs:
+            heading = "Read console logs"
+            detail = first("query", "filter") ?? args["limit"].map { "Latest \($0.displayString) entries" }
+            symbol = "text.alignleft"
+        case .tools:
+            heading = description ?? "Discover available tools"
+            detail = first("query", "category")
+            symbol = "wrench.and.screwdriver"
+        case .host:
+            heading = "Check host status"
+            detail = first("machineName", "machineId")
+            symbol = "desktopcomputer"
+        case .image:
+            heading = description ?? "Capture screenshot"
+            detail = path
+            symbol = "camera"
+        case .fields:
+            let bare = call.toolName.replacingOccurrences(of: "^mcp__ripul_tools_+", with: "", options: .regularExpression)
+            heading = description ?? ToolValue.title(bare)
+            detail = args.keys.sorted().lazy.compactMap { key -> String? in
+                guard !["description", "Description", "reason", "title"].contains(key),
+                      let text = args[key]?.displayString, let value = Self.compact(text) else { return nil }
+                return "\(ToolValue.title(key)): \(value)"
+            }.prefix(2).joined(separator: " · ")
+            symbol = ToolIconMap.symbol(for: call.toolName)
+        }
+        title = Self.compact(heading) ?? "Tool call"
+        let secondary = detail.flatMap(Self.compact)
+        subtitle = secondary == title ? nil : secondary
+        isCode = (kind == .terminal && call.commandPresentation == nil) || kind == .evaluate
+    }
+
+    private static func compact(_ value: String) -> String? {
+        let prefix = String(value.prefix(241))
+        let text = prefix.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        guard !text.isEmpty else { return nil }
+        return String(text.prefix(240)) + (prefix.count > 240 ? "…" : "")
+    }
+}
+
 struct NativeToolContent {
     let call: ToolCallDetail
     let kind: NativeToolRendererKind
@@ -114,8 +233,8 @@ extension CmsJSON {
     var toolArray: [CmsJSON]? { if case .array(let values) = self { return values }; return nil }
 }
 
-struct NativeToolDiffLine: Equatable {
-    enum Kind { case context, removed, added }
+struct NativeToolDiffLine: Hashable, Sendable {
+    enum Kind: Hashable, Sendable { case context, removed, added }
     let kind: Kind
     let text: String
 

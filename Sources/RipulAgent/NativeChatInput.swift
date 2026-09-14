@@ -225,6 +225,10 @@ public struct NativeChatInput: View {
     var contextOptions: [RipulComposerContext]
     /// Send a human note (not sent to agent, for human-to-human communication).
     var onSubmitNote: (() -> Void)?
+    var runningSendLabel: String
+    var composerActions: [RipulComposerAction]
+    var composerActionPending: Bool
+    var onComposerAction: ((String) -> Void)?
     let onPause: (() -> Void)?
     let onNewChat: (() -> Void)?
     let onQuickCommands: (() -> Void)?
@@ -320,6 +324,10 @@ public struct NativeChatInput: View {
         isAgentPaused: Bool = false,
         onSubmit: @escaping () -> Void,
         onSubmitNote: (() -> Void)? = nil,
+        runningSendLabel: String = "Send",
+        composerActions: [RipulComposerAction] = [],
+        composerActionPending: Bool = false,
+        onComposerAction: ((String) -> Void)? = nil,
         onPause: (() -> Void)? = nil,
         onNewChat: (() -> Void)? = nil,
         onQuickCommands: (() -> Void)? = nil,
@@ -350,6 +358,10 @@ public struct NativeChatInput: View {
         self.isAgentPaused = isAgentPaused
         self.onSubmit = onSubmit
         self.onSubmitNote = onSubmitNote
+        self.runningSendLabel = runningSendLabel
+        self.composerActions = composerActions
+        self.composerActionPending = composerActionPending
+        self.onComposerAction = onComposerAction
         self.onPause = onPause
         self.onNewChat = onNewChat
         self.onQuickCommands = onQuickCommands
@@ -753,6 +765,7 @@ public struct NativeChatInput: View {
     /// then hand off. `text` is a binding straight into the caller's state, so
     /// the submit handler reads the expanded string.
     private func submitMessage() {
+        guard !composerActionPending else { return }
         let expanded = ContextMentionAliasing.expand(text, using: contextAliases)
         if expanded != text { text = expanded }
         contextAliases = [:]
@@ -1215,7 +1228,7 @@ public struct NativeChatInput: View {
     private var singleRowBody: some View {
         ChatInputGlassGroup {
             HStack(alignment: .bottom, spacing: 8) {
-                plusMenuButton
+                if !BundledAgentRuntime.isEnabled { plusMenuButton }
 
                 // Group adjacent glass surfaces so they share the same sampling region.
                 VStack(spacing: 0) {
@@ -1226,7 +1239,7 @@ public struct NativeChatInput: View {
                     HStack(spacing: 4) {
 
                         textInputView
-                        ComposerContextButton(store: contextStore, session: contextSessionID, options: contextOptions, size: 36)
+                        if !BundledAgentRuntime.isEnabled { ComposerContextButton(store: contextStore, session: contextSessionID, options: contextOptions, size: 36) }
                         if dictationAvailable {
                             micButton(size: 36)
                         }
@@ -1269,7 +1282,7 @@ public struct NativeChatInput: View {
 
                 // Buttons row below (inside the shared glass bounding box)
                 HStack(spacing: 8) {
-                    plusMenuButton
+                    if !BundledAgentRuntime.isEnabled { plusMenuButton }
                     historyMenuButton
 
                     ComposerContextButton(store: contextStore, session: contextSessionID, options: contextOptions, size: 40)
@@ -1425,6 +1438,9 @@ public struct NativeChatInput: View {
         let hasContent = !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !imageAttachments.isEmpty || !contextStore.attachments(for: contextSessionID).isEmpty
         if isAgentRunning && !isAgentPaused {
             HStack(spacing: 4) {
+                if hasContent {
+                    ComposerActionButtons(actions: composerActions, pending: composerActionPending, onAction: onComposerAction)
+                }
                 if hasContent, let onSubmitNote {
                     noteButton(size: 36, onTap: onSubmitNote, glassStyle: "clear")
                 }
@@ -1472,6 +1488,7 @@ public struct NativeChatInput: View {
                     submitMessage()
                 } label: {
                     Image(systemName: "arrow.up")
+                        .accessibilityLabel("Send message")
                         .font(.system(size: 16, weight: .bold))
                         .foregroundStyle(Color.accentColor)
                         .frame(width: 36, height: 36)
@@ -1507,12 +1524,15 @@ public struct NativeChatInput: View {
             submitMessage()
         } label: {
             Image(systemName: "arrow.up")
+                        .accessibilityLabel(runningSendLabel)
                 .font(.system(size: size == 40 ? 18 : 16, weight: .bold))
                 .foregroundStyle(Color.accentColor)
                 .frame(width: size, height: size)
                 .contentShape(Circle())
                 .modifier(GlassCircleModifier(glassStyle: glassStyle))
         }
+        .help(runningSendLabel)
+        .disabled(composerActionPending)
     }
 
     @ViewBuilder
@@ -1520,6 +1540,9 @@ public struct NativeChatInput: View {
         let hasContent = !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !imageAttachments.isEmpty || !contextStore.attachments(for: contextSessionID).isEmpty
         if isAgentRunning && !isAgentPaused {
             HStack(spacing: 4) {
+                if hasContent {
+                    ComposerActionButtons(actions: composerActions, pending: composerActionPending, onAction: onComposerAction)
+                }
                 if hasContent, let onSubmitNote {
                     noteButton(size: 40, onTap: onSubmitNote, glassStyle: nil)
                         .transition(.scale.combined(with: .opacity))
@@ -1571,6 +1594,7 @@ public struct NativeChatInput: View {
                     submitMessage()
                 } label: {
                     Image(systemName: "arrow.up")
+                        .accessibilityLabel("Send message")
                         .font(.system(size: 18, weight: .bold))
                         .foregroundStyle(Color.accentColor)
                         .frame(width: 40, height: 40)
@@ -1650,6 +1674,10 @@ public struct NativeChatInput: View {
     var contextOptions: [RipulComposerContext]
     /// Send a human note (not sent to agent, for human-to-human communication).
     var onSubmitNote: (() -> Void)?
+    var runningSendLabel: String
+    var composerActions: [RipulComposerAction]
+    var composerActionPending: Bool
+    var onComposerAction: ((String) -> Void)?
     let onPause: (() -> Void)?
     let onNewChat: (() -> Void)?
     let onQuickCommands: (() -> Void)?
@@ -1722,6 +1750,10 @@ public struct NativeChatInput: View {
         isAgentPaused: Bool = false,
         onSubmit: @escaping () -> Void,
         onSubmitNote: (() -> Void)? = nil,
+        runningSendLabel: String = "Send",
+        composerActions: [RipulComposerAction] = [],
+        composerActionPending: Bool = false,
+        onComposerAction: ((String) -> Void)? = nil,
         onPause: (() -> Void)? = nil,
         onNewChat: (() -> Void)? = nil,
         onQuickCommands: (() -> Void)? = nil,
@@ -1749,6 +1781,10 @@ public struct NativeChatInput: View {
         self.isAgentPaused = isAgentPaused
         self.onSubmit = onSubmit
         self.onSubmitNote = onSubmitNote
+        self.runningSendLabel = runningSendLabel
+        self.composerActions = composerActions
+        self.composerActionPending = composerActionPending
+        self.onComposerAction = onComposerAction
         self.onPause = onPause
         self.onNewChat = onNewChat
         self.onQuickCommands = onQuickCommands
@@ -1947,6 +1983,7 @@ public struct NativeChatInput: View {
     /// then hand off. `text` is a binding straight into the caller's state, so
     /// the submit handler reads the expanded string.
     private func submitMessage() {
+        guard !composerActionPending else { return }
         let expanded = ContextMentionAliasing.expand(text, using: contextAliases)
         if expanded != text { text = expanded }
         contextAliases = [:]
@@ -2372,7 +2409,7 @@ public struct NativeChatInput: View {
     private var singleRowBody: some View {
         ChatInputGlassGroup {
             HStack(alignment: .bottom, spacing: 8) {
-                plusMenuButton
+                if !BundledAgentRuntime.isEnabled { plusMenuButton }
 
                 VStack(spacing: 0) {
                     ComposerContextChips(store: contextStore, session: contextSessionID)
@@ -2382,7 +2419,7 @@ public struct NativeChatInput: View {
                     HStack(spacing: 4) {
 
                         textInputView
-                        ComposerContextButton(store: contextStore, session: contextSessionID, options: contextOptions, size: 36)
+                        if !BundledAgentRuntime.isEnabled { ComposerContextButton(store: contextStore, session: contextSessionID, options: contextOptions, size: 36) }
                         if dictationAvailable {
                             micButton(size: 36)
                         }
@@ -2426,7 +2463,7 @@ public struct NativeChatInput: View {
 
                 // Buttons row below (inside the shared glass bounding box)
                 HStack(spacing: 8) {
-                    plusMenuButton
+                    if !BundledAgentRuntime.isEnabled { plusMenuButton }
                     historyMenuButton
 
                     ComposerContextButton(store: contextStore, session: contextSessionID, options: contextOptions, size: 40)
@@ -2551,6 +2588,9 @@ public struct NativeChatInput: View {
         let hasContent = !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !imageAttachments.isEmpty || !contextStore.attachments(for: contextSessionID).isEmpty
         if isAgentRunning && !isAgentPaused {
             HStack(spacing: 4) {
+                if hasContent {
+                    ComposerActionButtons(actions: composerActions, pending: composerActionPending, onAction: onComposerAction)
+                }
                 if hasContent, let onSubmitNote {
                     macNoteButton(onTap: onSubmitNote)
                 }
@@ -2559,6 +2599,7 @@ public struct NativeChatInput: View {
                         submitMessage()
                     } label: {
                         Image(systemName: "arrow.up")
+                        .accessibilityLabel(runningSendLabel)
                             .font(.system(size: 14, weight: .bold))
                             .foregroundStyle(.white)
                             .frame(width: 34, height: 28)
@@ -2606,6 +2647,7 @@ public struct NativeChatInput: View {
                     submitMessage()
                 } label: {
                     Image(systemName: "arrow.up")
+                        .accessibilityLabel("Send message")
                         .font(.system(size: 14, weight: .bold))
                         .foregroundStyle(.white)
                         .frame(width: 34, height: 28)
@@ -2623,6 +2665,9 @@ public struct NativeChatInput: View {
         let hasContent = !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !imageAttachments.isEmpty || !contextStore.attachments(for: contextSessionID).isEmpty
         if isAgentRunning && !isAgentPaused {
             HStack(spacing: 4) {
+                if hasContent {
+                    ComposerActionButtons(actions: composerActions, pending: composerActionPending, onAction: onComposerAction)
+                }
                 if hasContent, let onSubmitNote {
                     Button { onSubmitNote() } label: {
                         Image(systemName: "bubble.left.fill")
@@ -2638,6 +2683,7 @@ public struct NativeChatInput: View {
                 if hasContent {
                     Button { submitMessage() } label: {
                         Image(systemName: "arrow.up")
+                        .accessibilityLabel(runningSendLabel)
                             .font(.system(size: 18, weight: .bold))
                             .foregroundStyle(Color.accentColor)
                             .frame(width: 40, height: 40)
@@ -2705,6 +2751,7 @@ public struct NativeChatInput: View {
                     submitMessage()
                 } label: {
                     Image(systemName: "arrow.up")
+                        .accessibilityLabel("Send message")
                         .font(.system(size: 18, weight: .bold))
                         .foregroundStyle(Color.accentColor)
                         .frame(width: 40, height: 40)
@@ -3140,6 +3187,7 @@ struct NoAutofillTextView: UIViewRepresentable {
 
     func makeUIView(context: Context) -> ChatTextView {
         let textView = ChatTextView()
+        textView.accessibilityIdentifier = "NativeChatInput.editor"
         textView.delegate = context.coordinator
         let bodySize = UIFont.preferredFont(forTextStyle: .body).pointSize
         textView.font = .systemFont(ofSize: bodySize + 1, weight: .semibold)

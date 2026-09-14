@@ -1,5 +1,17 @@
 import SwiftUI
 
+/// Scoped to the session list. The host owns a single creation sheet.
+private struct NewChatActionKey: EnvironmentKey {
+    static let defaultValue: ((String?) -> Void)? = nil
+}
+
+extension EnvironmentValues {
+    var createNewChat: ((String?) -> Void)? {
+        get { self[NewChatActionKey.self] }
+        set { self[NewChatActionKey.self] = newValue }
+    }
+}
+
 // MARK: - Quick-Launch Picker
 
 /// The full-catalog launch affordance of `QuickLaunchStrip`.
@@ -51,6 +63,7 @@ struct QuickLaunchPickerButton: View {
     var onSwitchAccount: (() -> Void)? = nil
 
     @State private var isPresented = false
+    @Environment(\.createNewChat) private var createNewChat
 
     /// The pill's in-progress state: a model pick on this button
     /// (`loadingId`) or the machine-level connect the row reports
@@ -59,10 +72,11 @@ struct QuickLaunchPickerButton: View {
 
     var body: some View {
         Button {
+            if let createNewChat { createNewChat(machine?.machineId); return }
             isPresented = true
         } label: {
             if labelled {
-                Label(launching ? "Starting…" : "New Session", systemImage: "plus")
+                Label(launching ? "Starting…" : (createNewChat == nil ? "New Session" : "New Chat"), systemImage: "plus")
                     .font(.subheadline.weight(.semibold))
                     // Never wrap, never compress: the machine-row header used
                     // to place a spinner beside this pill that shrank it until

@@ -114,6 +114,13 @@ public enum SpeechPreferences {
 
     public static let dictationProviderKey = "chatDictationProvider"
 
+    /// Personal turn-taking preference, independent of the site's voice or
+    /// provider configuration. Saved in this app on this device.
+    public static let voiceSendModeKey = "voiceSendMode"
+    public static var voiceSendMode: VoiceSendMode {
+        VoiceSendMode(rawValue: store.string(forKey: voiceSendModeKey) ?? "") ?? .automatic
+    }
+
     /// "apple" (default) or "elevenlabs". Profile ids use the web spelling
     /// ("apple-native"), normalized here.
     public static var dictationProviderId: String {

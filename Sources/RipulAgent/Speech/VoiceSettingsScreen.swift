@@ -15,6 +15,7 @@ public struct VoiceSettingsScreen: View {
     // Must match SpeechPreferences.voiceModeStyle's fallback, or the picker
     // shows a selection the app is not actually using.
     @AppStorage(SpeechPreferences.voiceModeStyleKey, store: SpeechPreferences.store) private var voiceModeStyle = "compact"
+    @AppStorage(SpeechPreferences.voiceSendModeKey, store: SpeechPreferences.store) private var voiceSendMode = VoiceSendMode.automatic.rawValue
     @AppStorage(SpeechPreferences.speechLanguageKey, store: SpeechPreferences.store) private var speechLanguage = "en"
     @AppStorage(SpeechPreferences.speechKeytermsKey, store: SpeechPreferences.store) private var speechKeyterms = "Ripul"
     @AppStorage(SpeechPreferences.speechPaceKey, store: SpeechPreferences.store) private var speechPace = 1.0
@@ -32,7 +33,7 @@ public struct VoiceSettingsScreen: View {
                     Label {
                         VStack(alignment: .leading, spacing: 2) {
                             Text("Managed by \(SpeechPreferences.managingProfileName ?? "this site key")")
-                            Text("Voice settings are set by the site key and can't be changed here.")
+                            Text("Voice and recognition settings are managed here. You can still choose when to send your messages.")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
@@ -84,6 +85,20 @@ public struct VoiceSettingsScreen: View {
                 Text("Tap the mic in chat to start a hands-free conversation; double-tap for dictation into the text box.")
             }
             .disabled(isManaged)
+
+            Section {
+                Picker("Send messages", selection: $voiceSendMode) {
+                    Text("Detect pauses automatically").tag(VoiceSendMode.automatic.rawValue)
+                    Text("Say \"Send command\"").tag(VoiceSendMode.sendCommand.rawValue)
+                }
+                .uiKitIdentifier("VoiceSettingsScreen.voiceSendMode")
+            } header: {
+                Text("Sending in conversation mode")
+            } footer: {
+                Text(voiceSendMode == VoiceSendMode.sendCommand.rawValue
+                     ? "Finish with \"Send command\" and pause briefly. The closing phrase is removed before sending. Other pauses let you keep thinking; you can also tap Send. Saved in this app on this device."
+                     : "Messages send automatically when you pause speaking. You can also tap Send. Saved in this app on this device.")
+            }
 
             Section {
                 VStack(alignment: .leading, spacing: 2) {

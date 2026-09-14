@@ -1735,6 +1735,9 @@ public final class AgentBridge: NSObject, ObservableObject {
     /// Authoritative lifecycle phase for the active chat turn. Derived — see
     /// `refreshActiveAgentFlags()`, the only writer.
     @Published public var agentTurnPhase: AgentTurnPhase = .idle
+    /// Provider actions projected from the shared composer policy.
+    public let composerActions = RipulComposerActionStore()
+
     /// Whether the agent is currently running (processing) for the active session.
     /// Derived from `chatTurnPhases[activeSourceChatId]` — never set directly.
     @Published public var isAgentRunning = false
@@ -2519,6 +2522,7 @@ public final class AgentBridge: NSObject, ObservableObject {
         isConnected = false
         isThemeReady = false
         initialStatusSyncComplete = false
+        composerActions.clear()
         resetLifecycleState()
         jsErrorMessages = []
         jsErrorDebounce?.cancel()
@@ -3733,6 +3737,12 @@ public final class AgentBridge: NSObject, ObservableObject {
             handleMastheadConfig(dict)
         case "voice:config":
             handleVoiceConfig(dict)
+        case "composer:actions":
+            if let chatId = dict["chatId"] as? String,
+               let data = try? JSONSerialization.data(withJSONObject: dict),
+               let state = try? JSONDecoder().decode(RipulComposerState.self, from: data) {
+                composerActions.update(chatId: chatId, state: state)
+            }
         case "chatInput:config":
             chatInputGlassStyle = dict["glassStyle"] as? String
             chatInputLayout = dict["layout"] as? String
@@ -4391,6 +4401,41 @@ public final class AgentBridge: NSObject, ObservableObject {
             NSLog("[AgentBridge] submitMessage error: %@", error.localizedDescription)
             return false
         }
+    }
+
+    public func refreshComposerActions(chatId: String) async {
+        guard let webView else { return }
+        do {
+            let raw = try await webView.callAsyncJavaScript(
+                "return await window.__ripulGetComposerState?.(chatId) ?? {actions:[],runningSendLabel:'Send'}",
+                arguments: ["chatId": chatId], contentWorld: .page)
+            if let raw, let data = try? JSONSerialization.data(withJSONObject: raw),
+               let state = try? JSONDecoder().decode(RipulComposerState.self, from: data) {
+                composerActions.update(chatId: chatId, state: state)
+            }
+        } catch { handleConsoleLog("[ComposerActions] Refresh failed: \(error.localizedDescription)") }
+    }
+
+    /// Returns an error on unconfirmed delivery; the native draft stays owned
+    /// by the composer until this operation has been acknowledged.
+    public func submitComposerAction(chatId: String, action: String, text: String,
+                                     imageAttachments: [[String: String]]?) async -> String? {
+        guard let webView, currentSourceChatId == chatId else { return "The active chat changed." }
+        let contextAttachments = composerContexts.attachments(for: chatId)
+        let input: [String: Any] = [
+            "text": RipulContextAttachment.message(text, attachments: contextAttachments),
+            "imageAttachments": RipulContextAttachment.images(imageAttachments, attachments: contextAttachments),
+        ]
+        do {
+            let raw = try await webView.callAsyncJavaScript(
+                "return await window.__ripulSubmitComposerAction?.(chatId, action, input) ?? {success:false, error:'Composer actions are unavailable.'}",
+                arguments: ["chatId": chatId, "action": action, "input": input], contentWorld: .page)
+            guard let result = raw as? [String: Any], result["success"] as? Bool == true else {
+                return (raw as? [String: Any])?["error"] as? String ?? "Message delivery was not confirmed."
+            }
+            composerContexts.didSend(contextAttachments, session: chatId)
+            return nil
+        } catch { return error.localizedDescription }
     }
 
     /// Send a human note to the chat stream. Notes appear as first-class panels
@@ -6132,7 +6177,7 @@ public final class AgentBridge: NSObject, ObservableObject {
     ///   "claude-cli-raw-opus"). This is what makes a quick-start shortcut mean
     ///   a MODEL rather than a harness. Pass nil for "a session on this
     ///   harness" and the provider's declared default is used.
-    public func connectToMachineWithProvider(machineId: String, providerKey: String, modelId: String? = nil) async -> (tabId: String?, error: String?) {
+    public func connectToMachineWithProvider(machineId: String, providerKey: String, modelId: String? = nil, workingDirectory: String? = nil) async -> (tabId: String?, error: String?) {
         logSessionStartMarker("ios.connect_with_provider_enter", extra: "machineId=\(machineId) provider=\(providerKey) model=\(modelId ?? "default")")
         guard let webView else {
             return (nil, "webView is nil")
@@ -6143,12 +6188,12 @@ public final class AgentBridge: NSObject, ObservableObject {
                 try await webView.callAsyncJavaScript(
                     """
                     if (!window.__ripulConnectToMachineWithProvider) return {success:false, error:'not ready'};
-                    var r = await window.__ripulConnectToMachineWithProvider(machineId, providerKey, modelId || undefined);
+                    var r = await window.__ripulConnectToMachineWithProvider(machineId, providerKey, modelId || undefined, workingDirectory || undefined);
                     return JSON.parse(JSON.stringify(r));
                     """,
                     // A nil argument bridges as NSNull, not `undefined` — hence
                     // the `|| undefined` above.
-                    arguments: ["machineId": machineId, "providerKey": providerKey, "modelId": modelId.map { $0 as Any } ?? NSNull()],
+                    arguments: ["machineId": machineId, "providerKey": providerKey, "modelId": modelId.map { $0 as Any } ?? NSNull(), "workingDirectory": workingDirectory.map { $0 as Any } ?? NSNull()],
                     contentWorld: .page
                 )
             }
@@ -7494,7 +7539,7 @@ public final class AgentBridge: NSObject, ObservableObject {
     /// regular web chat that runs through the LLM proxy instead of a CLI
     /// session.
     @available(iOS 15.0, macOS 13.0, *)
-    public func createNewChat(modelOverride: String? = nil) async -> String? {
+    public func createNewChat(modelOverride: String? = nil, machineId: String? = nil, workingDirectory: String? = nil) async -> String? {
         logSessionStartMarker("ios.bridge_createNewChat_enter", extra: "isConnected=\(isConnected)")
         guard let webView else {
             NSLog("[AgentBridge] createNewChat: webView is nil")
@@ -7507,7 +7552,7 @@ public final class AgentBridge: NSObject, ObservableObject {
         // session, this returns a real CLI session rather than an API chat;
         // if the machine is unreachable it returns nil and we fall through to
         // the API path below, which is what "no model specified" meant before.
-        if modelOverride == nil, let cliTabId = await resumeStickyCliSession() {
+        if modelOverride == nil, machineId == nil, let cliTabId = await resumeStickyCliSession() {
             return cliTabId
         }
         let effectiveModel = modelOverride ?? stickyApiModelForNewChat()
@@ -7521,9 +7566,9 @@ public final class AgentBridge: NSObject, ObservableObject {
             let result = try await webView.callAsyncJavaScript(
                 """
                 if (!window.__ripulCreateChat) return {success:false, error:'not ready'};
-                return await window.__ripulCreateChat(null, modelOverride ? { modelOverride } : null);
+                return await window.__ripulCreateChat(workingDirectory, { modelOverride: modelOverride || undefined, machineId: machineId || undefined });
                 """,
-                arguments: ["modelOverride": modelArgument],
+                arguments: ["modelOverride": modelArgument, "machineId": machineId.map { $0 as Any } ?? NSNull(), "workingDirectory": workingDirectory.map { $0 as Any } ?? NSNull()],
                 contentWorld: .page
             )
 
@@ -8579,7 +8624,19 @@ public final class AgentBridge: NSObject, ObservableObject {
     /// session's working directory. Returns the entries and an optional error
     /// string if the listing failed (path missing, not a directory, etc.).
     @available(iOS 15.0, macOS 13.0, *)
-    public func listRemoteDirectory(path: String) async -> (entries: [(path: String, isDirectory: Bool)], error: String?) {
+    public func listRemoteDirectory(path: String, machineId: String? = nil) async -> (entries: [(path: String, isDirectory: Bool)], error: String?) {
+        if let machineId {
+            do {
+                let value = try await callPageFunction(
+                    "return await window.__ripulFilesDirectory?.(machineId, path) ?? {error:'Files is still connecting. Try again.'};",
+                    arguments: ["machineId": machineId, "path": path]) as? [String: Any]
+                let entries = (value?["entries"] as? [[String: Any]] ?? []).compactMap { item -> (path: String, isDirectory: Bool)? in
+                    guard let path = item["path"] as? String else { return nil }
+                    return (path, item["isDirectory"] as? Bool ?? false)
+                }
+                return (entries, value?["error"] as? String ?? (value == nil ? "Files is still connecting. Try again." : nil))
+            } catch { return ([], error.localizedDescription) }
+        }
         guard let data = try? JSONEncoder().encode(path),
               let jsonStr = String(data: data, encoding: .utf8) else {
             return (entries: [], error: "Unable to encode path")
@@ -8632,7 +8689,13 @@ public final class AgentBridge: NSObject, ObservableObject {
     /// read targets the paired machine for that chat (matches the reliable in-chat
     /// viewer path); without it the web falls back to the active chat id.
     @available(iOS 15.0, macOS 13.0, *)
-    public func readRemoteFile(path: String, chatId: String? = nil) async -> String? {
+    public func readRemoteFile(path: String, chatId: String? = nil, machineId: String? = nil) async -> String? {
+        if let machineId {
+            let result = try? await callPageFunction(
+                "return await window.__ripulFilesRead?.(machineId, path);",
+                arguments: ["machineId": machineId, "path": path]) as? [String: Any]
+            return result?["content"] as? String
+        }
         func jsonString(_ value: String) -> String? {
             guard let data = try? JSONEncoder().encode(value) else { return nil }
             return String(data: data, encoding: .utf8)

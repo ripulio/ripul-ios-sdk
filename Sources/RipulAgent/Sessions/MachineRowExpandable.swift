@@ -15,6 +15,7 @@ import SwiftUI
 /// `RipulSessionCache` — and passed in, with `onSetDefault` / `onSetIcon`
 /// callbacks writing back through the same cache.
 public struct MachineRowExpandable: View {
+    @Environment(\.createNewChat) private var createNewChat
     let machine: RemoteMachine
     let activeSessions: [ChatSession]
     let isConnecting: Bool
@@ -628,7 +629,7 @@ public struct MachineRowExpandable: View {
         var tiles: [MachineTileSpec] = []
 
         // New Ripul Agent
-        if allowRipulAgents {
+        if createNewChat == nil && allowRipulAgents {
             tiles.append(MachineTileSpec(
                 id: "newAgent",
                 icon: "plus.message.fill",
@@ -642,7 +643,7 @@ public struct MachineRowExpandable: View {
         }
 
         // CLI provider tiles (driven by providers.json)
-        if let newCliAction = onNewCliSession {
+        if createNewChat == nil, let newCliAction = onNewCliSession {
             for provider in ProviderConstants.cliProviders {
                 guard let providerKey = provider.providerKey else { continue }
                 tiles.append(MachineTileSpec(

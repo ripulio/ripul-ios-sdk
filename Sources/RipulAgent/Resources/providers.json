@@ -59,7 +59,10 @@
       "modelPrefixes": [
         "codex-shared-cli"
       ],
-      "defaultModelId": "codex-shared-cli-raw-default"
+      "defaultModelId": "codex-shared-cli-raw-default",
+      "composerActions": [
+        "steer"
+      ]
     },
     {
       "id": "antigravity",

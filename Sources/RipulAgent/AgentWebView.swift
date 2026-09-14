@@ -45,7 +45,7 @@ public struct AgentWebView: NSViewRepresentable {
     }
 
     public func makeCoordinator() -> Coordinator {
-        Coordinator(bridge: bridge, baseHost: configuration.baseURL.host)
+        Coordinator(bridge: bridge, baseHost: configuration.baseURL.host, standalone: configuration.standalone)
     }
 
     public func makeNSView(context: Context) -> WKWebView {
@@ -146,11 +146,13 @@ public struct AgentWebView: NSViewRepresentable {
     public final class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate, WKUIDelegate {
         let bridge: AgentBridge
         let baseHost: String?
+        let standalone: Bool
         private weak var observedWebView: WKWebView?
 
-        init(bridge: AgentBridge, baseHost: String?) {
+        init(bridge: AgentBridge, baseHost: String?, standalone: Bool = false) {
             self.bridge = bridge
             self.baseHost = baseHost
+            self.standalone = standalone
             super.init()
         }
 
@@ -171,6 +173,19 @@ public struct AgentWebView: NSViewRepresentable {
             _ userContentController: WKUserContentController,
             didReceive message: WKScriptMessage
         ) {
+            // Direct Mac access is a privileged native capability. Third-party
+            // frames can address WebKit handlers even without our injected JS.
+            if standalone {
+                guard BundledAgentRuntime.shared.trusts(message) else { return }
+                if let body = message.body as? [String: Any], body["capability"] as? String == "fetch" {
+                    bridge.send(["type": "agent-framework:capability:response", "version": "1.0.0", "timestamp": Date().timeIntervalSince1970 * 1000, "id": body["id"] ?? "", "success": false, "error": "Network fetch is unavailable in standalone mode"])
+                    return
+                }
+            } else if let body = message.body as? [String: Any], body["capability"] as? String == "directMac" {
+                let origin = message.frameInfo.securityOrigin
+                guard message.frameInfo.isMainFrame, origin.protocol == "https", origin.host == baseHost,
+                      origin.port == 0 || origin.port == 443 else { return }
+            }
             Task { @MainActor in
                 if message.name == "agentLog" {
                     bridge.handleConsoleLog(message.body as? String ?? "")
@@ -190,6 +205,10 @@ public struct AgentWebView: NSViewRepresentable {
             _ webView: WKWebView,
             decidePolicyFor navigationAction: WKNavigationAction
         ) async -> WKNavigationActionPolicy {
+            if standalone {
+                guard let url = navigationAction.request.url, let local = BundledAgentRuntime.shared.baseURL,
+                      url.scheme == local.scheme, url.host == local.host, url.port == local.port else { return .cancel }
+            }
             if let url = navigationAction.request.url {
                 NSLog("[AgentWebView] Navigation: %@", url.absoluteString)
                 if navigationAction.navigationType == .linkActivated && isExternalURL(url) {
@@ -208,6 +227,7 @@ public struct AgentWebView: NSViewRepresentable {
             for navigationAction: WKNavigationAction,
             windowFeatures: WKWindowFeatures
         ) -> WKWebView? {
+            if standalone { return nil }
             if let url = navigationAction.request.url {
                 NSLog("[AgentWebView] Popup request: %@", url.absoluteString)
                 if isExternalURL(url) {
@@ -400,7 +420,7 @@ private struct AgentWebViewRepresentable: UIViewRepresentable {
     let bridge: AgentBridge
 
     func makeCoordinator() -> AgentWebView.Coordinator {
-        AgentWebView.Coordinator(bridge: bridge, baseHost: configuration.baseURL.host)
+        AgentWebView.Coordinator(bridge: bridge, baseHost: configuration.baseURL.host, standalone: configuration.standalone)
     }
 
     func makeUIView(context: Context) -> WKWebView {
@@ -590,11 +610,13 @@ extension AgentWebView {
     public final class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate, WKUIDelegate {
         let bridge: AgentBridge
         let baseHost: String?
+        let standalone: Bool
         private weak var observedWebView: WKWebView?
 
-        init(bridge: AgentBridge, baseHost: String?) {
+        init(bridge: AgentBridge, baseHost: String?, standalone: Bool = false) {
             self.bridge = bridge
             self.baseHost = baseHost
+            self.standalone = standalone
             super.init()
             // iOS re-adds input assistant bar button groups each time the
             // keyboard appears, so we must clear them on every show.
@@ -692,6 +714,19 @@ extension AgentWebView {
             _ userContentController: WKUserContentController,
             didReceive message: WKScriptMessage
         ) {
+            // Direct Mac access is a privileged native capability. Third-party
+            // frames can address WebKit handlers even without our injected JS.
+            if standalone {
+                guard BundledAgentRuntime.shared.trusts(message) else { return }
+                if let body = message.body as? [String: Any], body["capability"] as? String == "fetch" {
+                    bridge.send(["type": "agent-framework:capability:response", "version": "1.0.0", "timestamp": Date().timeIntervalSince1970 * 1000, "id": body["id"] ?? "", "success": false, "error": "Network fetch is unavailable in standalone mode"])
+                    return
+                }
+            } else if let body = message.body as? [String: Any], body["capability"] as? String == "directMac" {
+                let origin = message.frameInfo.securityOrigin
+                guard message.frameInfo.isMainFrame, origin.protocol == "https", origin.host == baseHost,
+                      origin.port == 0 || origin.port == 443 else { return }
+            }
             Task { @MainActor in
                 if message.name == "agentLog" {
                     bridge.handleConsoleLog(message.body as? String ?? "")
@@ -711,6 +746,10 @@ extension AgentWebView {
             _ webView: WKWebView,
             decidePolicyFor navigationAction: WKNavigationAction
         ) async -> WKNavigationActionPolicy {
+            if standalone {
+                guard let url = navigationAction.request.url, let local = BundledAgentRuntime.shared.baseURL,
+                      url.scheme == local.scheme, url.host == local.host, url.port == local.port else { return .cancel }
+            }
             if let url = navigationAction.request.url {
                 NSLog("[AgentWebView] Navigation: %@", url.absoluteString)
                 if navigationAction.navigationType == .linkActivated && isExternalURL(url) {
@@ -729,6 +768,7 @@ extension AgentWebView {
             for navigationAction: WKNavigationAction,
             windowFeatures: WKWindowFeatures
         ) -> WKWebView? {
+            if standalone { return nil }
             if let url = navigationAction.request.url {
                 NSLog("[AgentWebView] Popup request: %@", url.absoluteString)
                 if isExternalURL(url) {

@@ -19,6 +19,7 @@ import SwiftUI
 public struct StandaloneFileViewer: View {
     let filePath: String
     let chatId: String?
+    let machineId: String?
     /// Optional 1-based line to scroll to on open (e.g. from a grep hit).
     var line: Int? = nil
     /// Main bridge with an authenticated relay — used to pre-fetch file
@@ -44,11 +45,13 @@ public struct StandaloneFileViewer: View {
         chatId: String?,
         line: Int? = nil,
         readBridge: AgentBridge? = nil,
+        machineId: String? = nil,
         siteKey: String? = nil,
         baseURL: URL = AgentConfiguration.defaultBaseURL
     ) {
         self.filePath = filePath
         self.chatId = chatId
+        self.machineId = machineId
         self.line = line
         self.readBridge = readBridge
         self.siteKey = siteKey
@@ -120,7 +123,8 @@ public struct StandaloneFileViewer: View {
                 viewerBridge.injectFileError("No bridge available")
                 return
             }
-            let content = await readBridge.readRemoteFile(path: filePath, chatId: chatId)
+            let content = await readBridge.readRemoteFile(path: filePath, chatId: chatId, machineId: machineId)
+            guard !Task.isCancelled else { return }
             // Diagnostic on the MAIN web view (captured by device_console_logs): proves
             // whether the read result actually returned to native.
             readBridge.logToWebConsole("[FVNATIVE] readRemoteFile -> " + (content.map { "len=\($0.count)" } ?? "nil"))

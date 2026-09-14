@@ -13,7 +13,7 @@ import AppKit
 /// listening → sending → thinking → speaking → listening.
 ///
 /// - Listening: live transcription (provider follows the dictation
-///   preference). A silence window after the last speech event auto-sends.
+///   preference). Sends after a pause or a closing command, per user setting.
 /// - Thinking: the agent turn runs (minutes are normal in Ripul); reply text
 ///   arrives over native chat forwarding, which the controller enables
 ///   independently of the debug scroller.
@@ -70,21 +70,12 @@ public final class VoiceModeController: ObservableObject {
 
     public var isActive: Bool { phase != .inactive }
 
-    /// Silence before the utterance auto-sends. 1.8 s: forgiving of
-    /// thinking-out-loud pauses (1.4 s chopped hesitant speech mid-thought in
-    /// testing).
-    ///
-    /// Measured from the last evidence the user is still speaking — a
-    /// transcript event OR mic energy above the room's noise floor. It used to
-    /// be measured from the last transcript event alone, which conflated "the
-    /// user went quiet" with "the recognizer went quiet": a stalled socket, a
-    /// restarting engine or an audio session stolen by playback all read as
-    /// silence and sent mid-sentence.
-    private static let silenceWindow: TimeInterval = 1.8
+    /// Read on each decision so changing the setting applies to a live call.
+    public var sendMode: VoiceSendMode { SpeechPreferences.voiceSendMode }
 
-    /// Ceiling on how long mic energy alone may hold the send open past the
-    /// last transcript. Without it, a noisy room never sends.
-    private static let maxEnergyHold: TimeInterval = 6.0
+    public var listeningHint: String {
+        sendMode == .sendCommand ? "Listening — say \"Send command\"" : "Listening — pause to send"
+    }
 
     /// Absolute noise gate — below this, a frame is silence regardless of what
     /// the adaptive floor has drifted to.
@@ -114,6 +105,7 @@ public final class VoiceModeController: ObservableObject {
     private var lastVoiceActivityAt: TimeInterval = 0
     /// Last actual transcript event, so energy can't hold the send open forever.
     private var lastTranscriptAt: TimeInterval = 0
+    private var lastAudioFrameAt: TimeInterval = 0
     /// True only while the engine is genuinely capturing. The window cannot
     /// expire while the mic is down (dropped socket, engine restart) — that gap
     /// is not the user being silent, and sending into it truncated the
@@ -546,6 +538,7 @@ public final class VoiceModeController: ObservableObject {
         // and the clock restarts from capture, so a slow engine start doesn't
         // eat into the user's window.
         setCaptureLive(false)
+        lastAudioFrameAt = 0
         noteTranscript()
         Task { @MainActor [weak self] in
             do {
@@ -585,6 +578,7 @@ public final class VoiceModeController: ObservableObject {
             partialText = ""
             noteTranscript()
         case .audioLevel(let rms):
+            lastAudioFrameAt = Self.now
             // Audio is flowing, so the engine is genuinely up — this is the
             // most reliable proof of that we get.
             setCaptureLive(true)
@@ -720,24 +714,30 @@ public final class VoiceModeController: ObservableObject {
         let text = (committedText + " " + partialText).trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         let stamp = Self.now
-        // Normal case: genuine silence. Escape hatch: energy keeps insisting
-        // someone is talking but nothing has been transcribed for a long time
-        // (noisy room, someone else speaking) — send what we have.
-        guard stamp - lastVoiceActivityAt >= Self.silenceWindow
-            || stamp - lastTranscriptAt >= Self.maxEnergyHold else { return }
-        sendUtterance()
+        guard let message = VoiceSendPolicy.messageToSend(
+            mode: sendMode, text: text,
+            quietFor: stamp - lastVoiceActivityAt,
+            transcriptIdleFor: stamp - lastTranscriptAt,
+            audioIsFresh: stamp - lastAudioFrameAt < 0.5
+        ) else { return }
+        sendUtterance(message: message)
     }
 
     // MARK: - Sending + thinking
 
-    private func sendUtterance() {
-        let text = (committedText + " " + partialText).trimmingCharacters(in: .whitespacesAndNewlines)
+    private func sendUtterance(message: String? = nil) {
+        let raw = (committedText + " " + partialText).trimmingCharacters(in: .whitespacesAndNewlines)
+        // Explicit taps still work without the command. Only an automatic
+        // command send removes its closing phrase; manual sends preserve text.
+        let text = message ?? raw
         guard !text.isEmpty, let bridge else { return }
         setCaptureLive(false)
+        // Invalidate capture callbacks before stopping the provider, which may
+        // synchronously deliver a final result or .ended during shutdown.
+        phase = .sending
         if #available(iOS 26.0, macOS 26.0, *) {
             (sttProvider as? any NativeSpeechProviding)?.stopTranscription()
         }
-        phase = .sending
         baselineIds = Set(bridge.nativeChat.messages.map(\.id))
         Task { @MainActor [weak self] in
             guard let self, let bridge = self.bridge else { return }

@@ -6,11 +6,12 @@ import MarkdownUI
 /// remain owned by the surrounding sheet, never by a content renderer.
 struct NativeToolCallRenderer: View {
     let call: ToolCallDetail
+    var summaryTitle: String? = nil
     var body: some View {
         let content = NativeToolContent(call)
         VStack(alignment: .leading, spacing: 20) {
             switch content.kind {
-            case .terminal: NativeTerminalToolView(content: content)
+            case .terminal: NativeTerminalToolView(content: content, summaryTitle: summaryTitle)
             case .read, .write: NativeFileToolView(content: content)
             case .edit, .patch: NativeEditToolView(content: content)
             case .grep, .glob: NativeSearchToolView(content: content)
@@ -20,7 +21,7 @@ struct NativeToolCallRenderer: View {
                 let reason = content.string("reason", "description")
                 if !reason.isEmpty { Label(reason, systemImage: "text.magnifyingglass") }
                 NativeToolSection(title: "JavaScript") {
-                    NativeToolCodeBlock(text: content.string("expression", "code", "script"), numbered: true, identifier: "NativeTool.expression")
+                    NativeToolCodeBlock(text: content.string("expression", "code", "script"), numbered: true, syntax: .javascript, identifier: "NativeTool.expression")
                 }
                 NativeToolParameters(args: content.args, excluding: ["reason", "description", "expression", "code", "script"])
                 NativeToolResultView(content: content)
@@ -54,18 +55,23 @@ struct NativeToolCallRenderer: View {
 
 private struct NativeTerminalToolView: View {
     let content: NativeToolContent
+    let summaryTitle: String?
     var body: some View {
-        let command = content.string("command", "cmd", "CommandLine", "chars")
+        let presentation = content.call.commandPresentation
+        let command = presentation?.command ?? content.string("command", "cmd", "CommandLine", "chars")
         let description = content.string("description", "Description")
-        if !description.isEmpty { Text(description).font(.subheadline) }
-        NativeToolSection(title: command.isEmpty ? "Running command" : "Command") {
+        if !description.isEmpty, description != summaryTitle { Text(description).font(.subheadline) }
+        NativeToolSection(title: presentation?.source != nil ? "Script" : command.isEmpty ? "Running command" : "Command") {
             if command.isEmpty { Text("Read output from the running command").foregroundStyle(.secondary) }
-            else { NativeToolCodeBlock(text: command, identifier: "NativeTool.command") }
+            else if let source = presentation?.source, let language = presentation?.language {
+                NativeToolCodeBlock(text: source, numbered: true, syntax: .language(language), identifier: "NativeTool.command")
+            }
+            else { NativeToolCodeBlock(text: command, syntax: .shell, commandBreakLines: presentation?.commandBreakLines ?? [], commandPipeLines: presentation?.commandPipeLines ?? [], identifier: "NativeTool.command") }
         }
         let directory = content.string("workdir", "cwd", "working_directory")
         if !directory.isEmpty { Label(directory, systemImage: "folder").font(.caption).textSelection(.enabled) }
         NativeToolParameters(args: content.args, excluding: ["command", "cmd", "CommandLine", "chars", "description", "Description", "workdir", "cwd", "working_directory"])
-        NativeToolResultView(content: content, title: "Output")
+        NativeToolResultView(content: content, title: "Output", textSyntax: .automatic)
     }
 }
 
@@ -80,7 +86,7 @@ private struct NativeFileToolView: View {
             let first = offset.isFinite && offset > 0 && offset < 1_000_000_000 ? Int(offset) : 1
             let alreadyNumbered = source.range(of: "^\\s*\\d+[→\\t]", options: .regularExpression) != nil
             NativeToolSection(title: write ? "File contents" : "Contents") {
-                NativeToolCodeBlock(text: source, numbered: !alreadyNumbered, firstLine: first, identifier: "NativeTool.fileContents")
+                NativeToolCodeBlock(text: source, numbered: !alreadyNumbered, firstLine: first, syntax: .file(content.filePath), readLineNumbers: alreadyNumbered, identifier: "NativeTool.fileContents")
             }
             if write { NativeToolResultView(content: content) }
         } else { NativeToolResultView(content: content, title: "Contents") }
@@ -95,12 +101,12 @@ private struct NativeEditToolView: View {
         if content.kind == .patch {
             let patch = content.string("patch", "input", "patch_text")
             let files = NativeToolFileChange.collect(content.args["changes"])
-            if !patch.isEmpty { NativeToolDiffView(lines: NativeToolDiffLine.unified(patch), includesPrefix: true) }
+            if !patch.isEmpty { NativeToolDiffView(lines: NativeToolDiffLine.unified(patch), path: content.filePath, includesPrefix: true) }
             else if !files.isEmpty {
                 ForEach(Array(files.enumerated()), id: \.offset) { _, file in
                     NativeToolPath(path: file.path)
                     Text(file.kind).font(.caption).foregroundStyle(.secondary)
-                    if let lines = file.lines { NativeToolDiffView(lines: lines, includesPrefix: true) }
+                    if let lines = file.lines { NativeToolDiffView(lines: lines, path: file.path, includesPrefix: true) }
                     else { Text("No diff was recorded for this file.").foregroundStyle(.secondary) }
                     NativeToolParameters(args: file.fields)
                 }
@@ -111,12 +117,12 @@ private struct NativeEditToolView: View {
                 NativeToolSection(title: "Change \(index + 1)") {
                     NativeToolDiffView(lines: NativeToolDiffLine.compare(
                         old: fields.string("old_string") ?? fields.string("TargetContent") ?? "",
-                        new: fields.string("new_string") ?? fields.string("ReplacementContent") ?? ""))
+                        new: fields.string("new_string") ?? fields.string("ReplacementContent") ?? ""), path: content.filePath)
                 }
             }
         } else {
             NativeToolDiffView(lines: NativeToolDiffLine.compare(
-                old: content.string("old_string", "TargetContent"), new: content.string("new_string", "ReplacementContent")))
+                old: content.string("old_string", "TargetContent"), new: content.string("new_string", "ReplacementContent")), path: content.filePath)
         }
         if content.args.bool("replace_all") == true { Label("Replace all occurrences", systemImage: "arrow.triangle.2.circlepath").font(.caption) }
         NativeToolParameters(args: content.args, excluding: ["file_path", "path", "TargetFile", "old_string", "new_string", "TargetContent", "ReplacementContent", "replace_all", "_chunks", "ReplacementChunks", "edits", "patch", "input", "patch_text", "changes"])
@@ -127,25 +133,36 @@ private struct NativeEditToolView: View {
 
 private struct NativeToolDiffView: View {
     let lines: [NativeToolDiffLine]
+    var path: String
     var includesPrefix = false
     @State private var visibleLines = 100
+    @State private var highlighted: [AttributedString] = []
+    @State private var highlightedRequest: NativeDiffHighlightRequest?
+    @Environment(\.colorScheme) private var colorScheme
     var body: some View {
+        let request = NativeDiffHighlightRequest(lines: Array(lines.prefix(visibleLines)), path: path, includesPrefix: includesPrefix, dark: colorScheme == .dark)
         let added = lines.filter { $0.kind == .added }.count
         let removed = lines.filter { $0.kind == .removed }.count
         NativeToolSection(title: "Changes") {
             Text(added == 0 && removed == 0 ? "No changes" : "\(added) added · \(removed) removed").font(.caption).foregroundStyle(.secondary)
             LazyVStack(alignment: .leading, spacing: 0) {
-                ForEach(Array(lines.prefix(visibleLines).enumerated()), id: \.offset) { _, line in
+                ForEach(Array(lines.prefix(visibleLines).enumerated()), id: \.offset) { index, line in
                     let color: Color = line.kind == .added ? .green : line.kind == .removed ? .red : .secondary
                     HStack(alignment: .top, spacing: 8) {
                         if !includesPrefix { Text(line.kind == .added ? "+" : line.kind == .removed ? "−" : " ").foregroundStyle(color) }
-                        Text(line.text.isEmpty ? " " : line.text).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+                        Text(highlightedRequest == request && index < highlighted.count && !line.text.isEmpty ? highlighted[index] : AttributedString(line.text.isEmpty ? " " : line.text)).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
                     }
                     .font(.system(.caption, design: .monospaced)).padding(.horizontal, 8).padding(.vertical, 3)
                     .background(line.kind == .context ? Color.clear : color.opacity(0.12))
                 }
                 if lines.count > visibleLines { Button("Show more changes") { visibleLines += 200 }.padding(8) }
             }.accessibilityIdentifier("NativeTool.diff")
+        }
+        .task(id: request) {
+            let result = await NativeSourceHighlighting.shared.diff(request)
+            guard !Task.isCancelled else { return }
+            highlighted = result
+            highlightedRequest = request
         }
     }
 }

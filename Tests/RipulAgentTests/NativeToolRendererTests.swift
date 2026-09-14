@@ -11,9 +11,10 @@ final class NativeToolRendererTests: XCTestCase {
                 if let value = value as? String { return value }
                 return String(decoding: try JSONSerialization.data(withJSONObject: value, options: [.fragmentsAllowed]), as: UTF8.self)
             }
-            let wire: [String: Any] = ["id": name, "toolName": fixture["toolName"]!, "status": "success", "timestamp": 1,
+            var wire: [String: Any] = ["id": name, "toolName": fixture["toolName"]!, "status": "success", "timestamp": 1,
                 "arguments": try text(fixture["args"]!), "result": try text(fixture["result"]!), "diagnostics": "{}",
                 "rendererName": fixture["rendererName"]!, "renderArguments": fixture["renderArguments"]!]
+            wire["commandPresentation"] = fixture["commandPresentation"]
             let call = try JSONDecoder().decode(ToolCallDetail.self, from: JSONSerialization.data(withJSONObject: wire))
             let content = NativeToolContent(call)
             XCTAssertEqual(content.kind.rawValue, fixture["expectedKind"] as? String, name)
@@ -21,6 +22,28 @@ final class NativeToolRendererTests: XCTestCase {
             if name == "provider-read" { XCTAssertEqual(content.args.double("offset"), 4); XCTAssertEqual(content.args.double("limit"), 3) }
             if name == "grep" { XCTAssertEqual(content.args.string("output_mode"), "content") }
             if name == "logs" { XCTAssertEqual(content.output?.objectValue?["logs"]?.toolArray?.count, 4) }
+            if name == "wrapped-python" {
+                let summary = NativeToolSummary(call)
+                XCTAssertEqual(summary.title, "Python")
+                XCTAssertEqual(summary.subtitle, "Verify iPhone installation")
+                XCTAssertFalse(summary.isCode)
+                XCTAssertEqual(call.commandPresentation?.language, "python")
+                XCTAssertTrue(call.commandPresentation!.source!.contains("assert a['bundleVersion']==v"))
+                XCTAssertTrue(call.recordedCommand!.hasPrefix("'/bin/zsh'"))
+                XCTAssertEqual(NativeToolCodeSyntax.language("python").language, "python")
+            }
+            if name == "compound-command" {
+                XCTAssertEqual(NativeToolSummary(call).title, "Python + Status")
+                XCTAssertNil(call.commandPresentation?.source)
+                XCTAssertTrue(call.commandPresentation!.command.contains("&&"))
+                XCTAssertEqual(call.commandPresentation?.commandBreakLines, [1])
+                XCTAssertEqual(call.commandPresentation?.command, "python3 check.py &&\ngit status --short")
+            }
+            if name == "pipeline-command" {
+                XCTAssertEqual(call.commandPresentation?.commandBreakLines, [1, 2])
+                XCTAssertEqual(call.commandPresentation?.commandPipeLines, [1])
+                XCTAssertEqual(NativeToolSummary(call).title, "Grep + Head + Sed")
+            }
         }
     }
 

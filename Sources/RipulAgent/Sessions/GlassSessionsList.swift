@@ -48,6 +48,13 @@ public struct SessionsListCallbacks {
 
 // MARK: - Glass Sessions List (iOS 26+)
 
+/// The first rows in the rendered list, including its active filters and sort.
+/// Host voice controls can reuse these identities without duplicating list logic.
+public struct RipulListedSession: Equatable {
+    public let id: String
+    public let title: String
+}
+
 @available(iOS 26.0, macOS 26.0, *)
 public struct GlassSessionsList: View {
     @ObservedObject var bridge: AgentBridge
@@ -120,6 +127,7 @@ public struct GlassSessionsList: View {
     var emptyStateOverride: (() -> AnyView)? = nil
     /// Optional universal-link opener (was DeepLinkHandler.shared).
     var onOpenUniversalLink: ((URL) -> Void)? = nil
+    var onListedSessionsChanged: (([RipulListedSession]) -> Void)? = nil
 
     @Binding var searchText: String
     @Binding var renamingSession: ChatSession?
@@ -191,6 +199,7 @@ public struct GlassSessionsList: View {
         foldersSection: (() -> AnyView)? = nil,
         solutionManagement: RipulSolutionManagement? = nil,
         emptyStateOverride: (() -> AnyView)? = nil,
+        onListedSessionsChanged: (([RipulListedSession]) -> Void)? = nil,
         onOpenUniversalLink: ((URL) -> Void)? = nil,
         searchText: Binding<String>,
         renamingSession: Binding<ChatSession?>,
@@ -236,6 +245,7 @@ public struct GlassSessionsList: View {
         self._searchText = searchText
         self._renamingSession = renamingSession
         self._renameText = renameText
+        self.onListedSessionsChanged = onListedSessionsChanged
         // Bind the @AppStorage stores to the injected cache so persisted keys
         // live in the host-chosen suite. Defaults + key strings preserved.
         _storedMachinesExpanded = AppStorage(wrappedValue: true, "ripulMachinesPanelExpanded", store: cache.userDefaults)
@@ -393,7 +403,7 @@ public struct GlassSessionsList: View {
     }
 
     @ViewBuilder
-    private var sessionsPanelSection: some View {
+    private func sessionsPanelSection(sessions: [UnifiedSession]) -> some View {
         GlassSectionPanel(
             title: "Sessions",
             isExpanded: $sessionsExpanded,
@@ -417,10 +427,6 @@ public struct GlassSessionsList: View {
             }
         ) {
             VStack(spacing: 8) {
-                // Computed once per body evaluation — the filter + O(n log n)
-                // sort was previously re-run three times per re-render (the
-                // isEmpty check, the ForEach, and .animation(value:)). Audit #6.
-                let sessions = filteredSessions
                 if unifiedSessions.count > 12 {
                     GlassSearchField("Search sessions", text: $searchText)
                         .uiKitIdentifier("GlassSessionsList.sessions.searchField")
@@ -925,6 +931,10 @@ public struct GlassSessionsList: View {
     }
 
     public var body: some View {
+        // Share one filter/sort between rendering and host context. Publish at
+        // this root, including when the list is empty or its panel is collapsed.
+        let sessions = filteredSessions
+        let listedSessions = sessions.prefix(3).map { RipulListedSession(id: $0.id, title: $0.title) }
         ZStack(alignment: .bottom) {
             if showOnboarding {
                 if let emptyStateOverride {
@@ -965,7 +975,7 @@ public struct GlassSessionsList: View {
                             dismissList: { onDismissSheet?() }
                         ))
                     }
-                    sessionsPanelSection
+                    sessionsPanelSection(sessions: sessions)
                         // Only greedy-fill while expanded (so a long session list
                         // gets the remaining space to grow into) — collapsed, this
                         // must NOT hold an infinite frame, or the panel's outer
@@ -1026,6 +1036,10 @@ public struct GlassSessionsList: View {
         .animation(.easeInOut(duration: 0.25), value: selectedSessionIds.count)
         .onAppear {
             machinesExpanded = storedMachinesExpanded
+            onListedSessionsChanged?(listedSessions)
+        }
+        .onChange(of: listedSessions) { _, rows in
+            onListedSessionsChanged?(rows)
         }
         .onChange(of: machinesExpanded) { _, new in storedMachinesExpanded = new }
         // Drop a stale query when the list shrinks below the search threshold.

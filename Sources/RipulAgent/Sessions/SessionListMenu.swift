@@ -31,19 +31,22 @@ public struct SessionListMenu: View {
     /// sheet of its own, so the host owns the presentation and this only asks
     /// for it. Nil ⇒ the entry is omitted.
     let onShowModelPicker: (() -> Void)?
+    let usesUnifiedCreation: Bool
 
     public init(
         bridge: AgentBridge,
         model: RipulSessionListModel,
         cache: RipulSessionCache,
         showingSessionList: Binding<Bool>,
-        onShowModelPicker: (() -> Void)? = nil
+        onShowModelPicker: (() -> Void)? = nil,
+        usesUnifiedCreation: Bool = false
     ) {
         self.bridge = bridge
         self.model = model
         self.cache = cache
         self.showingSessionList = showingSessionList
         self.onShowModelPicker = onShowModelPicker
+        self.usesUnifiedCreation = usesUnifiedCreation
     }
 
     private var defaultMachine: RemoteMachine? {
@@ -52,7 +55,7 @@ public struct SessionListMenu: View {
     }
 
     public var body: some View {
-        if let machine = defaultMachine {
+        if !usesUnifiedCreation, let machine = defaultMachine {
             ForEach(ProviderConstants.cliProviders, id: \.id) { provider in
                 Button {
                     Task {
@@ -86,7 +89,7 @@ public struct SessionListMenu: View {
         // it is the same picker the chat's model menu and the strip's "…" open.
         if let onShowModelPicker {
             Button(action: onShowModelPicker) {
-                Label("New session from model…", systemImage: "square.stack.3d.up")
+                Label("New Chat…", systemImage: "square.stack.3d.up")
             }
             .uiKitIdentifier("AgentScreen.listMenu.newFromModelButton")
 

@@ -3,6 +3,28 @@ import SwiftUI
 import WebKit
 import Combine
 
+/// The SDK's draggable, edge-snapping chat FAB for a host that already owns
+/// its chat view. Restoring calls the host without creating another console,
+/// bridge or web view. Dismiss it when leaving the surface it belongs to.
+@available(iOS 26.0, *)
+@MainActor
+public final class RipulChatLauncher {
+    private let overlay: RipulDevAssistantOverlay
+
+    public init(cache: RipulSessionCache, onRestore: @escaping () -> Void) {
+        overlay = RipulDevAssistantOverlay()
+        overlay.configuration = RipulSessionsConfiguration(cache: cache)
+        overlay.restoreHostedChat = onRestore
+    }
+
+    public func show() {
+        overlay.present()
+        overlay.collapse()
+    }
+
+    public func dismiss() { overlay.dismiss() }
+}
+
 /// Floating dev-assistant overlay: a draggable, edge-snapping bubble that
 /// expands into a full `RipulAgentConsole`, minimizes back, and stays warm in
 /// between (the console's web view / relay / auth are kept alive while hidden).
@@ -27,10 +49,11 @@ import Combine
 @available(iOS 26.0, *)
 public final class RipulDevAssistantOverlay {
     public static let shared = RipulDevAssistantOverlay()
-    private init() {}
+    fileprivate init() {}
 
     private var window: RipulDevOverlayWindow?
-    private var configuration: RipulSessionsConfiguration?
+    fileprivate var configuration: RipulSessionsConfiguration?
+    fileprivate var restoreHostedChat: (() -> Void)?
     private var isEnabled: (() -> Bool)?
 
     /// True while the overlay window exists (bubble, compact, or expanded) —
@@ -129,7 +152,7 @@ public final class RipulDevAssistantOverlay {
         collapse()
     }
 
-    private func present() {
+    fileprivate func present() {
         guard window == nil, let configuration, let scene = Self.activeWindowScene() else { return }
         let win = RipulDevOverlayWindow(windowScene: scene)
         // Keep the agent usable while View Explorer (alert + 2) is active.
@@ -264,6 +287,9 @@ final class RipulDevOverlayRootVC: UIViewController {
         super.viewDidLoad()
         view.backgroundColor = .clear
         setupBubble()
+        // A host-owned chat only borrows the launcher; the SDK console's
+        // replay HUD and compact bar still belong to its own overlay.
+        guard overlay?.restoreHostedChat == nil else { return }
         MacroReplayHUDController.shared.$phase
             .removeDuplicates()
             .receive(on: RunLoop.main)
@@ -319,12 +345,17 @@ final class RipulDevOverlayRootVC: UIViewController {
         glass.layer.cornerRadius = size / 2
         glass.layer.masksToBounds = true
         b.addSubview(glass)
-        let icon = UIImageView(image: UIImage(systemName: "terminal.fill"))
+        let isHostedChat = overlay?.restoreHostedChat != nil
+        let icon = UIImageView(image: UIImage(systemName: isHostedChat ? "bubble.left.and.bubble.right.fill" : "terminal.fill"))
         icon.tintColor = .white
         icon.contentMode = .center
         icon.frame = b.bounds
         icon.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         glass.contentView.addSubview(icon)
+        b.isAccessibilityElement = true
+        b.accessibilityTraits = .button
+        b.accessibilityLabel = isHostedChat ? "Restore current chat" : "Open assistant"
+        b.accessibilityIdentifier = isHostedChat ? "RipulChatLauncher.restore" : "RipulDevConsole.bubble"
         b.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(bubbleTapped)))
         b.addGestureRecognizer(UIPanGestureRecognizer(target: self, action: #selector(bubblePanned(_:))))
         view.addSubview(b)
@@ -362,7 +393,14 @@ final class RipulDevOverlayRootVC: UIViewController {
     }
 
     /// bubble tap → compact bar (the two-state model: circle ⇄ bar ⇄ panel).
-    @objc private func bubbleTapped() { showCompact() }
+    @objc private func bubbleTapped() {
+        if let restore = overlay?.restoreHostedChat {
+            overlay?.dismiss()
+            restore()
+        } else {
+            showCompact()
+        }
+    }
 
     @objc private func bubblePanned(_ g: UIPanGestureRecognizer) {
         let t = g.translation(in: view)
@@ -780,6 +818,7 @@ final class RipulDevOverlayRootVC: UIViewController {
     }
 
     func hideHostPreview() {
+        guard hostPreview != nil else { return }
         hostPreviewState.setAgentExpanded(false)
         hostPreview?.view.isHidden = true
     }

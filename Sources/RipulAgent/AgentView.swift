@@ -280,6 +280,7 @@ public struct AgentView<TopBar: View>: View {
                 // WKWebView, the top bar, and reads many bridge.* properties).
                 ChatComposer(
                     bridge: bridge,
+                    composerActionStore: bridge.composerActions,
                     contextOptions: configuration.composerContexts,
                     tokenProvider: tokenProvider,
                     onEnterVoiceMode: { [weak bridge] utterance in
@@ -453,6 +454,16 @@ public struct AgentView<TopBar: View>: View {
             }
 
             var config = configuration
+            if config.standalone {
+                do {
+                    config.baseURL = try await BundledAgentRuntime.shared.start()
+                    config.siteKey = nil; config.sessionToken = nil; config.siteKeyConfig = nil
+                    config.clerkContextId = nil
+                } catch {
+                    bridge.loadError = error.localizedDescription
+                    return
+                }
+            }
             if let siteKey = config.siteKey, config.siteKeyConfig == nil {
                 let baseURL = config.baseURL
                 if let cached = SiteKeyValidator.cachedResult(siteKey: siteKey, baseURL: baseURL) {
@@ -597,6 +608,7 @@ public extension AgentView where TopBar == EmptyView {
 @available(iOS 16.0, macOS 14.0, *)
 private struct ChatComposer: View {
     @ObservedObject var bridge: AgentBridge
+    @ObservedObject var composerActionStore: RipulComposerActionStore
     var contextOptions: [RipulComposerContext]
     var tokenProvider: (() -> String?)?
     /// Mic long-press. Receives the composer's current text (empty when the
@@ -613,6 +625,8 @@ private struct ChatComposer: View {
     let onShowConsoleLogs: () -> Void
     let onHeightChange: (CGFloat) -> Void
 
+    @State private var composerActionPending = false
+    @State private var composerActionError: String?
     @State private var chatMessage = ""
     @State private var selectedPhotos: [PhotosPickerItem] = []
     @State private var imageAttachments: [NativeImageAttachment] = []
@@ -632,6 +646,13 @@ private struct ChatComposer: View {
             }
 
             chatInput
+                .task(id: bridge.currentSourceChatId) {
+                    if let chatId = bridge.currentSourceChatId { await bridge.refreshComposerActions(chatId: chatId) }
+                }
+                .alert("Message not confirmed", isPresented: Binding(
+                    get: { composerActionError != nil }, set: { if !$0 { composerActionError = nil } }
+                )) { Button("OK", role: .cancel) { composerActionError = nil } }
+                message: { Text(composerActionError ?? "") }
                 .background(
                     GeometryReader { geo in
                         Color.clear.preference(key: ChatInputHeightKey.self, value: geo.size.height)
@@ -713,7 +734,11 @@ private struct ChatComposer: View {
             isAgentRunning: bridge.isAgentRunning && bridge.pendingUserInteraction == nil && bridge.pendingTextQuestion == nil && bridge.pendingDateQuestion == nil,
             isAgentPaused: bridge.isAgentPaused,
             onSubmit: handleSubmit,
-            onSubmitNote: handleNoteSubmit,
+            onSubmitNote: BundledAgentRuntime.isEnabled ? nil : handleNoteSubmit,
+            runningSendLabel: composerActionStore.runningSendLabel(for: bridge.currentSourceChatId),
+            composerActions: composerActionStore.actions(for: bridge.currentSourceChatId),
+            composerActionPending: composerActionPending,
+            onComposerAction: handleComposerAction,
             onPause: { Task { await bridge.interruptAgent() } },
             onNewChat: handleNewChat,
             onQuickCommands: bridge.chatInputShowQuickCommands ? onQuickCommands : nil,
@@ -796,7 +821,11 @@ private struct ChatComposer: View {
             isAgentRunning: bridge.isAgentRunning && bridge.pendingUserInteraction == nil && bridge.pendingTextQuestion == nil && bridge.pendingDateQuestion == nil,
             isAgentPaused: bridge.isAgentPaused,
             onSubmit: handleSubmit,
-            onSubmitNote: handleNoteSubmit,
+            onSubmitNote: BundledAgentRuntime.isEnabled ? nil : handleNoteSubmit,
+            runningSendLabel: composerActionStore.runningSendLabel(for: bridge.currentSourceChatId),
+            composerActions: composerActionStore.actions(for: bridge.currentSourceChatId),
+            composerActionPending: composerActionPending,
+            onComposerAction: handleComposerAction,
             onPause: { Task { await bridge.interruptAgent() } },
             onNewChat: handleNewChat,
             onQuickCommands: bridge.chatInputShowQuickCommands ? onQuickCommands : nil,
@@ -878,6 +907,7 @@ private struct ChatComposer: View {
     /// Returned as Any? because the speech layer is @available(26+) while
     /// the SDK floor is lower; the composer unwraps it behind #available.
     private func makeSpeechProvider() -> Any? {
+        guard !BundledAgentRuntime.isEnabled else { return nil }
         if #available(iOS 26.0, macOS 26.0, *) {
             switch SpeechPreferences.dictationProviderId {
             case "elevenlabs":
@@ -935,6 +965,29 @@ private struct ChatComposer: View {
         #if os(iOS)
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
         #endif
+    }
+
+    private func handleComposerAction(_ action: String) {
+        guard !composerActionPending, let chatId = bridge.currentSourceChatId else { return }
+        let message = chatMessage
+        let images = imageAttachments
+        guard !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !images.isEmpty || !bridge.composerContexts.attachments(for: chatId).isEmpty else { return }
+        guard addressedParticipants.isEmpty else {
+            composerActionError = "Steering updates the current agent. Remove the participant selection or send a follow-up."
+            return
+        }
+        composerActionPending = true
+        Task {
+            let error = await bridge.submitComposerAction(chatId: chatId, action: action, text: message,
+                imageAttachments: images.isEmpty ? nil : images.map { $0.toDictionary() })
+            composerActionPending = false
+            guard bridge.currentSourceChatId == chatId else { return }
+            if let error { composerActionError = error; return }
+            recordHistory(message)
+            if chatMessage == message { chatMessage = "" }
+            imageAttachments.removeAll { image in images.contains { $0.id == image.id } }
+            if imageAttachments.isEmpty { selectedPhotos = [] }
+        }
     }
 
     private func handleNoteSubmit() {

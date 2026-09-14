@@ -31,6 +31,7 @@ struct QuickLaunchStrip: View {
     /// Resolved shortcuts, in user order. Resolution happens in the parent —
     /// the view that owns the `RipulSessionCache` — matching how every other
     /// cache-derived value reaches `MachineRowExpandable`.
+    @Environment(\.createNewChat) private var createNewChat
     let targets: [QuickLaunchTarget]
     /// Destination for CLI launches. Nil ⇒ CLI circles are omitted.
     let machine: RemoteMachine?
@@ -88,7 +89,7 @@ struct QuickLaunchStrip: View {
     /// "New Session" button when the picker exists to replace them — otherwise
     /// the gate would erase the strip's every launch affordance.
     private var effectiveShowCircles: Bool {
-        showCircles || pickerCache == nil
+        createNewChat == nil && (showCircles || pickerCache == nil)
     }
 
     var body: some View {

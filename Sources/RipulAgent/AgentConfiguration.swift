@@ -7,6 +7,8 @@ public enum AgentTheme: String {
 
 public struct AgentConfiguration {
     public var baseURL: URL
+    /// Load the installed runtime and use device pairing without cloud startup.
+    public var standalone: Bool = false
     public var path: String = "/app"
     public var siteKey: String? = nil
     public var sessionToken: String? = nil

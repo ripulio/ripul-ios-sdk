@@ -30,6 +30,7 @@ public struct InvitesSectionActions {
 public struct RipulSessionsConfiguration {
     /// Backend + web-app origin. Drives the relay API and the embedded web view.
     public var baseURL: URL
+    public var standalone: Bool = false
     /// Public site key for embedded/site-key mode. Leave `nil` for the developer
     /// console (the developer signs into their own Ripul account via Clerk).
     public var siteKey: String?

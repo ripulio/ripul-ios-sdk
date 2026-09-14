@@ -96,6 +96,7 @@ public extension Notification.Name {
 /// all of these; a developer-console host (e.g. WAC) injects none. Every slot
 /// defaults to "feature absent", never "feature broken".
 public struct RipulAgentScreenSlots {
+    public var onNewChat: ((String?) -> Void)?
     /// Compact leading action in list mode opens the host's sidebar, and a
     /// right-drag on the list does the same. nil = no sidebar chrome.
     public var showingSidebar: Binding<Bool>?
@@ -127,6 +128,8 @@ public struct RipulAgentScreenSlots {
     /// bar always on.
     public var hidesListModeBar: Bool
     public var sessionColumnVisibility: Binding<NavigationSplitViewVisibility>?
+    /// First three rows in the displayed session list, after filtering/sorting.
+    public var onListedSessionsChanged: (([RipulListedSession]) -> Void)?
 
     public init(
         showingSidebar: Binding<Bool>? = nil,
@@ -136,9 +139,11 @@ public struct RipulAgentScreenSlots {
         screenTip: ((String) -> AnyView)? = nil,
         chooseMode: RipulChooseMode? = nil,
         topBarTrailingAccessory: (() -> AnyView)? = nil,
+        onListedSessionsChanged: (([RipulListedSession]) -> Void)? = nil,
         hostMenuItems: (() -> AnyView)? = nil,
         hidesListModeBar: Bool = false,
-        sessionColumnVisibility: Binding<NavigationSplitViewVisibility>? = nil
+        sessionColumnVisibility: Binding<NavigationSplitViewVisibility>? = nil,
+        onNewChat: ((String?) -> Void)? = nil
     ) {
         self.showingSidebar = showingSidebar
         self.onNavigateToFiles = onNavigateToFiles
@@ -150,6 +155,8 @@ public struct RipulAgentScreenSlots {
         self.hostMenuItems = hostMenuItems
         self.hidesListModeBar = hidesListModeBar
         self.sessionColumnVisibility = sessionColumnVisibility
+        self.onListedSessionsChanged = onListedSessionsChanged
+        self.onNewChat = onNewChat
     }
 }
 
@@ -314,6 +321,7 @@ public struct RipulAgentScreen: View {
             nativeChatInputHeight: 140
         )
         config.websiteDataStore = configuration.websiteDataStore
+        config.standalone = configuration.standalone
         config.composerContexts = configuration.composerContexts
         // Console auto-entry (native-tool-registry phase 3): a cached seeded
         // Developer-context id — written by RipulAgentConsole after its
@@ -434,8 +442,10 @@ public struct RipulAgentScreen: View {
             // Regular width pins the list beside the chat, whose floating
             // header stays outside this column. Reserving 52pt here would
             // leave an empty strip above Machines.
-            reservesTopBarSpace: horizontalSizeClass != .regular
+            reservesTopBarSpace: horizontalSizeClass != .regular,
+            onListedSessionsChanged: slots.onListedSessionsChanged
         )
+        .environment(\.createNewChat, slots.onNewChat)
     }
 
     #if targetEnvironment(macCatalyst)
@@ -991,6 +1001,15 @@ public struct RipulAgentScreen: View {
         if let machine = unified?.machineName ?? session?.remoteMachineName, !machine.isEmpty {
             rows.append(.init(icon: "desktopcomputer", text: machine))
         }
+        // Describe this chat's fixed origin, independently of the app startup
+        // preference. Keep it in the expanded title, off the conversation canvas.
+        if let session {
+            if session.sourceChatId.hasPrefix("mac_") || session.hostChatId?.hasPrefix("mac_") == true {
+                rows.append(.init(icon: "externaldrive", text: "Direct · History on the Mac"))
+            } else if session.remoteMachineName != nil {
+                rows.append(.init(icon: "cloud", text: "Relay · History in Ripul cloud"))
+            }
+        }
         let projectPathName = unified?.projectPath.map { URL(fileURLWithPath: $0).lastPathComponent }
         if let project = unified?.projectName ?? projectPathName, !project.isEmpty {
             let branch = unified?.gitBranch.flatMap { $0.isEmpty ? nil : $0 }
@@ -1300,7 +1319,9 @@ public struct RipulAgentScreen: View {
         GlassTopBar(
             title: title,
             subtitle: "Viewing File",
-            onBack: { bridge.requestFileViewerClose() }
+            onLeading: { bridge.requestFileViewerClose() },
+            trailingOuter: agentHostAccessory,
+            centerInset: centerLozengeInset
         ) {
             let isFav = bridge.fileViewerFilePath.map { favoriteFiles.contains($0) } ?? false
             Button {
@@ -1381,7 +1402,11 @@ public struct RipulAgentScreen: View {
             model: model,
             cache: cache,
             showingSessionList: showingSessionList,
-            onShowModelPicker: { modelPickerTarget = .newSession }
+            onShowModelPicker: {
+                if let newChat = slots.onNewChat { newChat(nil) }
+                else { modelPickerTarget = .newSession }
+            },
+            usesUnifiedCreation: slots.onNewChat != nil
         )
     }
 
@@ -1434,6 +1459,7 @@ public struct RipulAgentScreen: View {
     @ViewBuilder
     private func agentMenuItems(session: ChatSession?) -> some View {
         Button {
+            if let newChat = slots.onNewChat { newChat(nil); return }
             Task {
                 bridge.logSessionStartMarker("ios.tap", extra: "source=AgentScreen.menu.newChat")
                 _ = await bridge.createNewChat()
@@ -1516,15 +1542,18 @@ public struct RipulAgentScreen: View {
 
         Divider()
 
-        // Was a nested menu over the hardcoded "Anthropic API" group; now the
-        // shared picker, so every catalog model can start a session and each one
-        // says who pays for it.
-        Button {
-            modelPickerTarget = .newSession
-        } label: {
-            Label("New session from model…", systemImage: "square.stack.3d.up")
+        if slots.onNewChat == nil {
+            // Was a nested menu over the hardcoded "Anthropic API" group; now the
+            // shared picker, so every catalog model can start a session and each one
+            // says who pays for it.
+            Button {
+                if let newChat = slots.onNewChat { newChat(nil) }
+                else { modelPickerTarget = .newSession }
+            } label: {
+                Label("New session from model…", systemImage: "square.stack.3d.up")
+            }
+            .uiKitIdentifier("AgentScreen.contextMenu.newFromModelButton")
         }
-        .uiKitIdentifier("AgentScreen.contextMenu.newFromModelButton")
 
         Toggle(isOn: Binding(
             get: { showNativeChatScroller },

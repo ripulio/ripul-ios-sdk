@@ -47,6 +47,7 @@ public struct RipulSessionsView: View {
     /// change. This is the sessions list as a picker (the link-to-plan sheet).
     /// `ripul://choose` keeps the open path: it needs an openable tab back.
     private let onPickUnifiedSession: ((UnifiedSession) -> Void)?
+    private let onListedSessionsChanged: (([RipulListedSession]) -> Void)?
 
     @State private var searchText = ""
     @State private var renamingSession: ChatSession?
@@ -73,6 +74,7 @@ public struct RipulSessionsView: View {
         showingSidebar: Binding<Bool>? = nil,
         quickActionsEnabled: Bool = false,
         reservesTopBarSpace: Bool = true,
+        onListedSessionsChanged: (([RipulListedSession]) -> Void)? = nil,
         onPickUnifiedSession: ((UnifiedSession) -> Void)? = nil
     ) {
         self.bridge = bridge
@@ -90,6 +92,7 @@ public struct RipulSessionsView: View {
         self.quickActionsEnabled = quickActionsEnabled
         self.reservesTopBarSpace = reservesTopBarSpace
         self.onPickUnifiedSession = onPickUnifiedSession
+        self.onListedSessionsChanged = onListedSessionsChanged
         _model = StateObject(wrappedValue: model ?? RipulSessionListModel(
             bridge: bridge,
             tokenProvider: tokenProvider,
@@ -200,6 +203,7 @@ public struct RipulSessionsView: View {
             foldersSection: foldersSection,
             solutionManagement: solutionManagement,
             emptyStateOverride: emptyStateOverride,
+            onListedSessionsChanged: onListedSessionsChanged,
             searchText: $searchText,
             renamingSession: $renamingSession,
             renameText: $renameText

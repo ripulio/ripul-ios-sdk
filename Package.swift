@@ -14,6 +14,7 @@ let package = Package(
     dependencies: [
         .package(url: "https://github.com/gonzalezreal/swift-markdown-ui.git", from: "2.4.1"),
         .package(url: "https://github.com/ripulio/thinking-orbs-swift.git", from: "0.1.0"),
+        .package(url: "https://github.com/appstefan/HighlightSwift.git", from: "1.1.0"),
     ],
     targets: [
         .target(
@@ -21,6 +22,7 @@ let package = Package(
             dependencies: [
                 .product(name: "MarkdownUI", package: "swift-markdown-ui"),
                 .product(name: "ThinkingOrbs", package: "thinking-orbs-swift"),
+                .product(name: "HighlightSwift", package: "HighlightSwift"),
             ],
             resources: [
                 .process("Resources/providers.json"),
