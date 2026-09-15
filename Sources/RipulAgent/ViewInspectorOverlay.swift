@@ -10,7 +10,7 @@ let ripulViewExplorerOverlayTag = 0x5249_5055   // "RIPU"
 
 /// Marketing version of the RipulAgent SDK, surfaced in the inspector's copy output as `sdk: …`
 /// so we can always tell which build is actually running on the device. Bump on every release.
-let ripulSDKVersion = "0.7.112"
+let ripulSDKVersion = "0.7.113"
 
 // MARK: - View Inspector Overlay
 //
@@ -358,6 +358,15 @@ struct InspectedView {
 
     /// Visible text of the common text-bearing controls.
     @MainActor static func textContent(of v: UIView) -> String? {
+        // SecureField's UIKit value is plaintext even though its pixels are masked.
+        // Never expose it (or text in its internal subviews) through inspection.
+        var ancestor: UIView? = v
+        while let current = ancestor {
+            if let field = current as? UITextField, field.isSecureTextEntry {
+                return current === v ? nonEmpty(field.placeholder) : nil
+            }
+            ancestor = current.superview
+        }
         if let id = NativeTabTitleTheme.identifier(for: v) { return NativeTabTitleTheme.title(for: id) }
         if let l = v as? UILabel { return nonEmpty(l.text) }
         if let f = v as? UITextField { return nonEmpty(f.text) ?? nonEmpty(f.placeholder) }

@@ -40,6 +40,22 @@ public struct ConnectionDiagnosis {
         // unclassified errors reach the keyword sniffs further down.
         func code(_ prefix: String) -> Bool { lower.hasPrefix(prefix + ":") }
 
+        if code("session-restore-timeout") {
+            return d("This chat didn't finish restoring",
+                     "Try opening it again. If it keeps failing, restart Ripul and try again.")
+        }
+        if code("session-open-incomplete") {
+            return d("This chat couldn't be loaded",
+                     "Try opening it again. Make sure Ripul is open and awake on the host machine.")
+        }
+        if code("session-not-found") {
+            return d("This chat is no longer on its host",
+                     "It may have been deleted or archived. Refresh the list to see the available chats.")
+        }
+        if code("machine-unavailable") {
+            return d("This chat's machine isn't connected",
+                     "Make sure Ripul is open and awake on that machine, then try again.")
+        }
         if code("web-context-dead") {
             return d("The app stopped responding and reloaded itself",
                      "Wait a few seconds for it to come back, then try again. If this keeps happening, copy the details below and send them to us.")

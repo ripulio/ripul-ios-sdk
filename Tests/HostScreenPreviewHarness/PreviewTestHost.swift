@@ -5,7 +5,17 @@ import SwiftUI
 struct PreviewTestHost: App {
     var body: some Scene {
         WindowGroup {
-            if ProcessInfo.processInfo.arguments.contains("--tool-details-ui-tests") {
+            if ProcessInfo.processInfo.arguments.contains("--simulator-preview-ui-tests") {
+                SimulatorPreviewHarness().preferredColorScheme(.dark)
+            } else if ProcessInfo.processInfo.arguments.contains("--anchored-tool-strip-ui-tests") || ProcessInfo.processInfo.arguments.contains("--all-tool-rows-ui-tests") {
+                AnchoredToolStripHarness().ignoresSafeArea(edges: .bottom)
+                    .preferredColorScheme(ProcessInfo.processInfo.arguments.contains("--light-appearance") ? .light : .dark)
+            } else if ProcessInfo.processInfo.arguments.contains("--tool-strip-ui-tests") {
+                NativeToolStripHarnessSurface()
+                    .preferredColorScheme(ProcessInfo.processInfo.arguments.contains("--light-appearance") ? .light : .dark)
+            } else if ProcessInfo.processInfo.arguments.contains("--code-width-ui-tests") {
+                ToolCodeWidthHarnessSurface()
+            } else if ProcessInfo.processInfo.arguments.contains("--tool-details-ui-tests") {
                 ToolDetailsHarnessSurface()
                     .preferredColorScheme(ProcessInfo.processInfo.arguments.contains("--light-appearance") ? .light : .dark)
             } else if ProcessInfo.processInfo.arguments.contains("--preview-ui-tests") {
@@ -13,6 +23,21 @@ struct PreviewTestHost: App {
             } else {
                 Text("Host preview rendering tests")
             }
+        }
+    }
+}
+
+private struct ToolCodeWidthHarnessSurface: View {
+    @State private var width: CGFloat = 360
+    @State private var text = "printf 'a medium length line'"
+
+    var body: some View {
+        VStack(spacing: 20) {
+            NativeToolCodeBlock(text: text, title: "Output", syntax: .shell).frame(width: width)
+            Button("Narrow panel") { width = 260 }
+            Button("Wide panel") { width = 360 }
+            Button("Short text") { text = "done" }
+            Button("Long text") { text = "printf 'a medium length line'" }
         }
     }
 }
@@ -164,5 +189,49 @@ private final class PreviewHarnessController: UIViewController {
         preview.didMove(toParent: root)
         state.setAgentExpanded(true)
         overlay = window
+    }
+}
+
+private struct NativeToolStripHarnessSurface: View {
+    @StateObject private var strip = NativeToolStripStore()
+    @StateObject private var details = ToolCallDetailsStore()
+    @State private var count = 2
+    @State private var group = "row-a"
+    @State private var events = ""
+    @State private var draft = ""
+
+    private func update(idle: Bool = false) {
+        strip.receive(["ownerId": "fixture", "chatId": "chat", "groupId": group,
+                       "updatedAt": Date().timeIntervalSince1970 * 1000 - (idle ? 20_001 : 0),
+                       "tools": (1...count).reversed().map { n in
+                           ["id": "call-\(n)", "label": ["Python", "Grep", "Read", "Xcode", "Diff"][(n - 1) % 5], "count": n == 1 ? 2 : 1]
+                       }])
+    }
+
+    var body: some View {
+        VStack {
+            Button("Start tools") { count = 2; update() }
+            Button("Burst tools") {
+                Task { for n in 3...10 { count = n; update(); try? await Task.sleep(nanoseconds: 40_000_000) } }
+            }
+            Button("Idle tools") { update(idle: true) }
+            Button("Switch row") { group = "row-b"; count = 1; update() }
+            Text(events).accessibilityIdentifier("StripHarness.event")
+            ScrollView { ForEach(0..<20) { n in Text("Chat message \(n)").frame(maxWidth: .infinity).padding() } }
+            VStack(spacing: 8) {
+                NativeToolStrip(store: strip) { event in
+                    events = event["type"] as? String ?? ""
+                    if event["type"] as? String == "agent-framework:toolStrip:select" {
+                        details.receive(["requestId": "fixture-details", "title": "Tool calls", "initialCallId": event["toolId"]!,
+                                         "calls": (1...count).map { n in
+                                             ["id": "call-\(n)", "toolName": "Bash", "status": "success", "timestamp": 1,
+                                              "arguments": "{\"command\":\"pwd\"}", "result": "/repo", "diagnostics": "{}"] as [String: Any]
+                                         }], opening: true)
+                    }
+                }
+                TextField("Message", text: $draft).textFieldStyle(.roundedBorder).accessibilityIdentifier("StripHarness.composer")
+            }.padding(.horizontal, 12)
+        }
+        .modifier(ToolCallDetailsPresenter(store: details, onDismiss: { _ in }))
     }
 }

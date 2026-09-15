@@ -368,7 +368,26 @@ public struct AgentWebView: NSViewRepresentable {
 /// WKWebView subclass that zeroes-out bottom safe area insets so web content
 /// (100vh, 100%) fills the entire frame including the home indicator region.
 /// The native chat input overlay handles bottom spacing instead.
-private class FullBleedWebView: WKWebView {
+class FullBleedWebView: WKWebView {
+    var toolStripAccessibilityElements: (() -> [Any])?
+    override var accessibilityElements: [Any]? {
+        get {
+            guard let native = toolStripAccessibilityElements?(), !native.isEmpty else { return super.accessibilityElements }
+            if let webElements = super.accessibilityElements { return webElements + native }
+            // Direct children of the root scroll view are already exposed.
+            // WebKit's overflow scrollers expose a separate web accessibility
+            // tree, so native children attached there need an explicit entry.
+            return [scrollView] + native.filter { element in
+                guard let view = element as? UIView else { return true }
+                return view.superview !== scrollView
+            }
+        }
+        set { super.accessibilityElements = newValue }
+    }
+    var toolStripHitTest: ((CGPoint, UIEvent?) -> UIView?)?
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        toolStripHitTest?(point, event) ?? super.hitTest(point, with: event)
+    }
     override var safeAreaInsets: UIEdgeInsets {
         var insets = super.safeAreaInsets
         insets.bottom = 0
@@ -524,6 +543,8 @@ private struct AgentWebViewRepresentable: UIViewRepresentable {
         config.userContentController.addUserScript(viewportFixScript)
 
         let webView = FullBleedWebView(frame: .zero, configuration: config)
+        webView.toolStripAccessibilityElements = { [weak bridge] in bridge?.toolStripAccessibilityElements ?? [] }
+        webView.toolStripHitTest = { [weak bridge] point, event in bridge?.hitTestToolStrip(point, event: event) }
         // Thermal A/B (AgentBridge.opaqueWebView): a transparent web view must blend
         // every repaint against the layers behind it; opaque is a cheap copy. Default
         // false keeps the current transparent behaviour so glass shows through.
@@ -595,6 +616,7 @@ private struct AgentWebViewRepresentable: UIViewRepresentable {
     }
 
     static func dismantleUIView(_ webView: WKWebView, coordinator: AgentWebView.Coordinator) {
+        coordinator.bridge.detachToolStripAnchor()
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "agentBridge")
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "agentLog")
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "agentNetwork")

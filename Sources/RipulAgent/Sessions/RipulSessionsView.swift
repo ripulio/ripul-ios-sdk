@@ -49,10 +49,12 @@ public struct RipulSessionsView: View {
     private let onPickUnifiedSession: ((UnifiedSession) -> Void)?
     private let onListedSessionsChanged: (([RipulListedSession]) -> Void)?
 
+    @Environment(\.createNewChat) private var createNewChat
     @State private var searchText = ""
     @State private var renamingSession: ChatSession?
     @State private var renameText = ""
     @State private var machineIcons: [String: String] = [:]
+    @State private var errorDetails: String?
     /// Host-defined quick actions per machine — owned here (the app's deleted
     /// twin kept them in the list). Seeded from cache, refreshed on row expand.
     @State private var remoteActionsByMachine: [String: [RemoteActionDescriptor]] = [:]
@@ -104,12 +106,15 @@ public struct RipulSessionsView: View {
         SessionsListCallbacks(
             onFocusSession: { session in onSelectSession(session) },
             onConnect: { machine in
+                if model.usesDirectConnections { createNewChat?(machine.machineId); return }
                 Task { await model.connect(to: machine, onSelect: onSelectSession, onDismiss: onDismiss) }
             },
             onNewCliSession: { machine, providerKey, modelId in
+                if model.usesDirectConnections { createNewChat?(machine.machineId); return }
                 Task { await model.connectWithProvider(providerKey, modelId: modelId, to: machine, onSelect: onSelectSession, onDismiss: onDismiss) }
             },
             onNewApiSession: { modelId in
+                if model.usesDirectConnections { createNewChat?(nil); return }
                 Task {
                     bridge.logSessionStartMarker("ios.tap", extra: "source=GlassSessionsList.quickApi")
                     if let chatId = await bridge.createNewChat(modelOverride: modelId) {
@@ -119,7 +124,7 @@ public struct RipulSessionsView: View {
                     onDismiss()
                 }
             },
-            onRestart: { machine in
+            onRestart: model.usesDirectConnections ? nil : { machine in
                 Task { await model.restartMachine(machine) }
             },
             onToggleMachineDisabled: { machine in
@@ -276,17 +281,42 @@ public struct RipulSessionsView: View {
                 }
         )
         .renameSessionAlert(renamingSession: $renamingSession, renameText: $renameText, bridge: bridge)
-        // Open/connect failures get the classified diagnosis sheet (friendly
-        // summary + hint + copyable technical details), mirroring the native
-        // app's SessionListScreen.
-        .connectionDiagnosis(
-            Binding(get: { model.connectError }, set: { model.connectError = $0 }),
-            bridge: bridge
-        )
-        .connectionDiagnosis(
-            Binding(get: { model.openSessionError }, set: { model.openSessionError = $0 }),
-            bridge: bridge
-        )
+        // Keep feedback on the list itself: a competing sheet/presentation
+        // must not turn a failed open into a spinner that simply disappears.
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if let error = model.openSessionError ?? model.connectError {
+                sessionErrorNotice(error)
+            }
+        }
+        .connectionDiagnosis($errorDetails, bridge: bridge)
+    }
+
+    private func sessionErrorNotice(_ error: String) -> some View {
+        let diagnosis = ConnectionDiagnosis.classify(rawError: error, phase: nil)
+        return VStack(alignment: .leading, spacing: 8) {
+            Label(diagnosis.summary, systemImage: "exclamationmark.triangle.fill")
+                .font(.subheadline.weight(.semibold))
+            if let hint = diagnosis.hint {
+                Text(hint)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            HStack {
+                Button("Details") { errorDetails = error }
+                    .uiKitIdentifier("RipulSessions.error.details")
+                Spacer()
+                Button("Dismiss") {
+                    if model.openSessionError != nil { model.openSessionError = nil }
+                    else { model.connectError = nil }
+                }
+                .uiKitIdentifier("RipulSessions.error.dismiss")
+            }
+            .font(.subheadline)
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.regularMaterial)
+        .uiKitIdentifier("RipulSessions.error.notice")
     }
 }
 

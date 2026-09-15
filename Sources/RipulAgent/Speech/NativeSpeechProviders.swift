@@ -151,6 +151,8 @@ public final class ElevenLabsNativeSpeechProvider: NSObject, NativeSpeechProvidi
     }
 
     private let tokenProvider: () -> String?
+    private let directAPI: ElevenLabsDirectAPI?
+    private var credentialObserver: NSObjectProtocol?
     /// Forces the host to mint a NEW token, rather than handing back the
     /// cached one `tokenProvider` returns. Optional: surfaces that some
     /// construction sites (the sandbox, settings screens) have no bridge to
@@ -226,6 +228,12 @@ public final class ElevenLabsNativeSpeechProvider: NSObject, NativeSpeechProvidi
     private let baseURL = AgentConfiguration.defaultBaseURL
     private var player: AVAudioPlayer?
     private var wsTask: URLSessionWebSocketTask?
+    private lazy var directSocketSession: URLSession = {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.httpShouldSetCookies = false
+        configuration.urlCache = nil
+        return URLSession(configuration: configuration)
+    }()
     private var audioEngine: AVAudioEngine?
     private var audioSink: PendingAudioSink?
     private var onEvent: (@MainActor (SpeechService.TranscriptionEvent) -> Void)?
@@ -233,15 +241,25 @@ public final class ElevenLabsNativeSpeechProvider: NSObject, NativeSpeechProvidi
     private var transcribing: Bool { transcriptionID != nil }
     private var onPlaybackEnd: (@MainActor () -> Void)?
     private var cachedDefaultVoiceId: String?
+    private var playbackGeneration = 0
 
     public init(
         tokenProvider: @escaping () -> String?,
-        tokenRefresher: (() async -> String?)? = nil
+        tokenRefresher: (() async -> String?)? = nil,
+        deviceKeyProvider: (() throws -> String?)? = nil
     ) {
         self.tokenProvider = tokenProvider
         self.tokenRefresher = tokenRefresher
+        self.directAPI = deviceKeyProvider.map { ElevenLabsDirectAPI(apiKey: $0) }
         super.init()
+        if directAPI != nil {
+            credentialObserver = NotificationCenter.default.addObserver(forName: DeviceSpeechCredentials.changed, object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor in self?.stopSpeaking(); self?.stopTranscription(); self?.cachedDefaultVoiceId = nil }
+            }
+        }
     }
+
+    deinit { if let credentialObserver { NotificationCenter.default.removeObserver(credentialObserver) } }
 
     /// The token to send. Prefers whatever the host currently holds, and only
     /// falls back to one we minted ourselves while the host is still serving a
@@ -300,6 +318,8 @@ public final class ElevenLabsNativeSpeechProvider: NSObject, NativeSpeechProvidi
     /// host to MINT one (`getToken({ skipCache: true })` via the bridge) rather
     /// than hoping a newer one has already landed.
     private func send(path: String, method: String, jsonBody: [String: Any]? = nil) async throws -> Data {
+        if let directAPI { return try await directAPI.send(path: path, method: method, jsonBody: jsonBody) }
+        guard !BundledAgentRuntime.isEnabled else { throw ElevenLabsDirectAPI.Failure.missingKey }
         let (first, usedToken) = try request(path: path, method: method, jsonBody: jsonBody)
         do {
             let payload = try await data(for: first)
@@ -363,10 +383,12 @@ public final class ElevenLabsNativeSpeechProvider: NSObject, NativeSpeechProvidi
 
     /// UserDefaults key prefix for the persisted region-default voice id.
     public func speak(text: String, voiceId: String?, onPlaybackEnd: (@MainActor () -> Void)?) async throws {
+        playbackGeneration += 1
+        let generation = playbackGeneration
         let resolvedVoiceId: String
         if let voiceId {
             resolvedVoiceId = voiceId
-        } else if let pinned = SpeechPreferences.pinnedVoiceId {
+        } else if let pinned = directAPI != nil ? SpeechPreferences.deviceVoiceId : SpeechPreferences.pinnedVoiceId {
             // The site key's voice profile chose a voice — honour it over the
             // catalog default.
             resolvedVoiceId = pinned
@@ -378,11 +400,12 @@ public final class ElevenLabsNativeSpeechProvider: NSObject, NativeSpeechProvidi
             // persisted id (with a deterministic name sort underneath) keeps
             // one stable voice per region.
             if cachedDefaultVoiceId == nil {
-                let key = SpeechPreferences.elevenDefaultVoiceKeyPrefix + SpeechPreferences.preferredAccent()
+                let key = (directAPI != nil ? "elevenLabsDeviceDefaultVoiceId." : SpeechPreferences.elevenDefaultVoiceKeyPrefix) + SpeechPreferences.preferredAccent()
                 if let saved = SpeechPreferences.store.string(forKey: key) {
                     cachedDefaultVoiceId = saved
                 } else {
                     let voices = try await catalog()
+                    guard generation == playbackGeneration else { throw CancellationError() }
                     let accent = SpeechPreferences.preferredAccent()
                     let matches = voices.filter {
                         ($0.labels?["accent"] ?? "").lowercased().contains(accent)
@@ -397,6 +420,7 @@ public final class ElevenLabsNativeSpeechProvider: NSObject, NativeSpeechProvidi
             guard let cached = cachedDefaultVoiceId else { throw ProviderError.voiceRequired }
             resolvedVoiceId = cached
         }
+        guard generation == playbackGeneration else { throw CancellationError() }
         let expressiveness = SpeechPreferences.speechExpressiveness
         let audio: Data
         do {
@@ -427,10 +451,11 @@ public final class ElevenLabsNativeSpeechProvider: NSObject, NativeSpeechProvidi
                [400, 404, 422].contains(code) {
                 cachedDefaultVoiceId = nil
                 SpeechPreferences.store.removeObject(
-                    forKey: SpeechPreferences.elevenDefaultVoiceKeyPrefix + SpeechPreferences.preferredAccent())
+                    forKey: (directAPI != nil ? "elevenLabsDeviceDefaultVoiceId." : SpeechPreferences.elevenDefaultVoiceKeyPrefix) + SpeechPreferences.preferredAccent())
             }
             throw error
         }
+        guard generation == playbackGeneration else { throw CancellationError() }
         VoiceAudioSession.configureForPlayback()
         self.onPlaybackEnd = onPlaybackEnd
         player = try AVAudioPlayer(data: audio)
@@ -442,6 +467,7 @@ public final class ElevenLabsNativeSpeechProvider: NSObject, NativeSpeechProvidi
     public func resumeSpeaking() { player?.play() }
 
     public func stopSpeaking() {
+        playbackGeneration += 1
         onPlaybackEnd = nil
         player?.stop()
         player = nil
@@ -555,7 +581,7 @@ public final class ElevenLabsNativeSpeechProvider: NSObject, NativeSpeechProvidi
                 queryItems.append(URLQueryItem(name: "keyterms", value: keyterm))
             }
             components.queryItems = queryItems
-            let ws = URLSession.shared.webSocketTask(with: components.url!)
+            let ws = (directAPI == nil ? URLSession.shared : directSocketSession).webSocketTask(with: components.url!)
             wsTask = ws
             ws.resume()
             listen(on: ws, captureID: captureID)
@@ -595,8 +621,8 @@ public final class ElevenLabsNativeSpeechProvider: NSObject, NativeSpeechProvidi
                 guard let self, self.transcriptionID == captureID, self.wsTask === socket else { return }
                 switch result {
                 case .failure(let error):
-                    var detail = error.localizedDescription
-                    if socket.closeCode != .invalid {
+                    var detail = self.directAPI == nil ? error.localizedDescription : "ElevenLabs transcription disconnected. Check your network and ElevenLabs account."
+                    if self.directAPI == nil, socket.closeCode != .invalid {
                         let reason = socket.closeReason.flatMap { String(data: $0, encoding: .utf8) } ?? ""
                         detail += " [ws close \(socket.closeCode.rawValue)\(reason.isEmpty ? "" : ": " + reason)]"
                     }
@@ -639,7 +665,7 @@ public final class ElevenLabsNativeSpeechProvider: NSObject, NativeSpeechProvidi
                 let detail = (json["error"] as? String)
                     ?? (json["message"] as? String)
                     ?? kind
-                finish(error: "ElevenLabs: \(detail)")
+                finish(error: directAPI == nil ? "ElevenLabs: \(detail)" : (kind == "quota_exceeded" ? "ElevenLabs quota reached. Check your account." : "ElevenLabs transcription failed. Check your key permissions and account."))
             }
         }
     }

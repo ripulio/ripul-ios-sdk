@@ -31,6 +31,8 @@ public struct RipulSessionsConfiguration {
     /// Backend + web-app origin. Drives the relay API and the embedded web view.
     public var baseURL: URL
     public var standalone: Bool = false
+    /// Bundled chat appearance, independent of the connection/account mode.
+    public var chatPresentation: String? = nil
     /// Public site key for embedded/site-key mode. Leave `nil` for the developer
     /// console (the developer signs into their own Ripul account via Clerk).
     public var siteKey: String?
@@ -107,6 +109,7 @@ public struct RipulSessionsConfiguration {
         cache: RipulSessionCache,
         baseURL: URL = AgentConfiguration.defaultBaseURL,
         siteKey: String? = nil,
+        chatPresentation: String? = nil,
         websiteDataStore: WKWebsiteDataStore = .default(),
         theme: AgentTheme = .system,
         allowRipulAgents: Bool = false,
@@ -122,6 +125,7 @@ public struct RipulSessionsConfiguration {
         self.cache = cache
         self.baseURL = baseURL
         self.siteKey = siteKey
+        self.chatPresentation = chatPresentation
         self.websiteDataStore = websiteDataStore
         self.theme = theme
         self.allowRipulAgents = allowRipulAgents

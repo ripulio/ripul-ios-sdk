@@ -9,6 +9,9 @@ public struct AgentConfiguration {
     public var baseURL: URL
     /// Load the installed runtime and use device pairing without cloud startup.
     public var standalone: Bool = false
+    /// Optional bundled appearance profile. This is separate from site-key
+    /// permissions and survives Standalone's removal of cloud credentials.
+    public var chatPresentation: String? = nil
     public var path: String = "/app"
     public var siteKey: String? = nil
     public var sessionToken: String? = nil
@@ -155,6 +158,10 @@ public struct AgentConfiguration {
         var components = URLComponents(url: baseURL.appendingPathComponent(path), resolvingAgainstBaseURL: false)!
 
         var hashParams: [String] = [nativeApp ? "native=true" : "embedded=true"]
+
+        if let chatPresentation, let encoded = Self.hashParamValue(chatPresentation) {
+            hashParams.append("chatPresentation=\(encoded)")
+        }
 
         if let siteKey {
             hashParams.append("siteKey=\(siteKey)")

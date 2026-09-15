@@ -20,6 +20,8 @@ struct NativeToolSection<Content: View>: View {
 /// Large output is progressively revealed; the full text remains copyable.
 struct NativeToolCodeBlock: View {
     let text: String
+    var title: String?
+    var titleFont: Font = .headline
     var numbered = false
     var firstLine = 1
     var syntax: NativeToolCodeSyntax?
@@ -29,6 +31,8 @@ struct NativeToolCodeBlock: View {
     var identifier = "NativeTool.code"
     @State private var visibleLines = 80
     @State private var wraps = false
+    @State private var textWidth: CGFloat = 0
+    @State private var panelWidth: CGFloat = 0
     @State private var highlighted: AttributedString?
     @State private var highlightedRequest: NativeHighlightRequest?
     @Environment(\.colorScheme) private var colorScheme
@@ -41,93 +45,122 @@ struct NativeToolCodeBlock: View {
         let attributed = highlightedRequest == request ? (highlighted ?? AttributedString(visible)) : AttributedString(visible)
         let colouredLines = NativeSourceHighlighting.lines(attributed)
         let sectionStarts = [0] + Set(commandBreakLines.filter { $0 > 0 && $0 < colouredLines.count }).sorted()
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text("\(lines.count) \(lines.count == 1 ? "line" : "lines")").font(.caption).foregroundStyle(.secondary)
-                Spacer()
-                Toggle("Wrap", isOn: $wraps)
-                    .toggleStyle(.switch).fixedSize().font(.caption)
-                    .accessibilityIdentifier("\(identifier).wrap")
-                Button {
-                    #if os(iOS)
-                    UIPasteboard.general.string = clean
-                    #else
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(clean, forType: .string)
-                    #endif
-                } label: { Label("Copy", systemImage: "doc.on.doc") }
-                    .font(.caption).accessibilityIdentifier("\(identifier).copy")
-            }
-            if numbered {
-                wrapping {
-                    LazyVStack(alignment: .leading, spacing: 2) {
-                        ForEach(Array(lines.prefix(visibleLines).enumerated()), id: \.offset) { index, line in
-                            HStack(alignment: .top, spacing: 10) {
-                                Text("\(firstLine + index)").foregroundStyle(.secondary).frame(minWidth: 28, alignment: .trailing)
-                                Text(line.isEmpty ? AttributedString(" ") : index < colouredLines.count ? colouredLines[index] : AttributedString(line))
-                                    .textSelection(.enabled).fixedSize(horizontal: !wraps, vertical: true)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                            }.font(.system(.caption, design: .monospaced))
-                        }
-                    }
-                    .accessibilityIdentifier(identifier)
-                }
-            } else if sectionStarts.count > 1 {
-                VStack(alignment: .leading, spacing: 0) {
-                    ForEach(sectionStarts.indices, id: \.self) { index in
-                        let start = sectionStarts[index]
-                        if index > 0 {
-                            Group {
-                                if commandPipeLines.contains(start) {
-                                    HStack(spacing: 8) {
-                                        VStack { Divider() }
-                                        Label("Piped input", systemImage: "arrow.down")
-                                            .font(.caption2.weight(.medium))
-                                            .foregroundStyle(.secondary)
-                                            .fixedSize()
-                                            .accessibilityElement(children: .combine)
-                                            .accessibilityLabel("Piped input from previous command")
-                                            .accessibilityIdentifier("\(identifier).pipe.\(index)")
-                                        VStack { Divider() }
-                                    }
-                                } else {
-                                    Divider()
-                                }
+        let lineCount = "\(lines.count) \(lines.count == 1 ? "line" : "lines")"
+        VStack(alignment: .leading, spacing: 10) {
+            if let title { toolbar(title: title, font: titleFont, clean: clean) }
+            VStack(alignment: .leading, spacing: 8) {
+                if title == nil { toolbar(title: lineCount, font: .caption, clean: clean) }
+                else { Text(lineCount).font(.caption).foregroundStyle(.secondary) }
+                if numbered {
+                    wrapping {
+                        LazyVStack(alignment: .leading, spacing: 2) {
+                            ForEach(Array(lines.prefix(visibleLines).enumerated()), id: \.offset) { index, line in
+                                HStack(alignment: .top, spacing: 10) {
+                                    Text("\(firstLine + index)").foregroundStyle(.secondary).frame(minWidth: 28, alignment: .trailing)
+                                    Text(line.isEmpty ? AttributedString(" ") : index < colouredLines.count ? colouredLines[index] : AttributedString(line))
+                                        .textSelection(.enabled).fixedSize(horizontal: !wraps, vertical: true)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                }.font(.system(.caption, design: .monospaced))
                             }
-                            .padding(.vertical, 10)
-                            .accessibilityElement(children: .contain)
-                            .accessibilityIdentifier("\(identifier).divider.\(index)")
                         }
-                        let end = index + 1 < sectionStarts.count ? sectionStarts[index + 1] : colouredLines.count
-                        wrapping {
-                            Text(colouredLines[(start + 1)..<end].reduce(colouredLines[start]) { $0 + AttributedString("\n") + $1 })
-                                .font(.system(.callout, design: .monospaced)).textSelection(.enabled)
-                                .fixedSize(horizontal: !wraps, vertical: true)
-                                .accessibilityIdentifier("\(identifier).part.\(index)")
+                        .accessibilityIdentifier(identifier)
+                    }
+                } else if sectionStarts.count > 1 {
+                    VStack(alignment: .leading, spacing: 0) {
+                        ForEach(sectionStarts.indices, id: \.self) { index in
+                            let start = sectionStarts[index]
+                            if index > 0 {
+                                Group {
+                                    if commandPipeLines.contains(start) {
+                                        HStack(spacing: 8) {
+                                            VStack { Divider() }
+                                            Label("Piped input", systemImage: "arrow.down")
+                                                .font(.caption2.weight(.medium))
+                                                .foregroundStyle(.secondary)
+                                                .fixedSize()
+                                                .accessibilityElement(children: .combine)
+                                                .accessibilityLabel("Piped input from previous command")
+                                                .accessibilityIdentifier("\(identifier).pipe.\(index)")
+                                            VStack { Divider() }
+                                        }
+                                    } else {
+                                        Divider()
+                                    }
+                                }
+                                .padding(.vertical, 10)
+                                .accessibilityElement(children: .contain)
+                                .accessibilityIdentifier("\(identifier).divider.\(index)")
+                            }
+                            let end = index + 1 < sectionStarts.count ? sectionStarts[index + 1] : colouredLines.count
+                            wrapping {
+                                Text(colouredLines[(start + 1)..<end].reduce(colouredLines[start]) { $0 + AttributedString("\n") + $1 })
+                                    .font(.system(.callout, design: .monospaced)).textSelection(.enabled)
+                                    .fixedSize(horizontal: !wraps, vertical: true)
+                                    .accessibilityIdentifier("\(identifier).part.\(index)")
+                            }
                         }
                     }
+                    .accessibilityElement(children: .contain)
+                    .accessibilityIdentifier(identifier)
+                } else {
+                    wrapping {
+                        Text(attributed)
+                            .font(.system(.callout, design: .monospaced)).textSelection(.enabled)
+                            .fixedSize(horizontal: !wraps, vertical: true)
+                            .accessibilityIdentifier(identifier)
+                    }
                 }
-                .accessibilityElement(children: .contain)
-                .accessibilityIdentifier(identifier)
-            } else {
-                wrapping {
-                    Text(attributed)
-                        .font(.system(.callout, design: .monospaced)).textSelection(.enabled)
-                        .fixedSize(horizontal: !wraps, vertical: true)
-                        .accessibilityIdentifier(identifier)
+                if lines.count > visibleLines {
+                    Button("Show more (\(lines.count - visibleLines) lines remaining)") { visibleLines += 200 }.font(.callout)
                 }
             }
-            if lines.count > visibleLines {
-                Button("Show more (\(lines.count - visibleLines) lines remaining)") { visibleLines += 200 }.font(.callout)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { panelWidth = $0 }
+            .overlay(alignment: .topLeading) {
+                // Measure the unwrapped text independently of the toggle, so Wrap
+                // remains available while wrapping and responds to resizing/text updates.
+                HStack(alignment: .top, spacing: numbered ? 10 : 0) {
+                    if numbered {
+                        Text("\(firstLine + min(lines.count, visibleLines) - 1)").frame(minWidth: 28)
+                    }
+                    Text(visible)
+                }
+                .font(.system(numbered ? .caption : .callout, design: .monospaced))
+                .fixedSize()
+                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { textWidth = $0 }
+                .hidden().accessibilityHidden(true).allowsHitTesting(false)
             }
+            .padding(12).background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 10))
         }
-        .padding(12).background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 10))
+        .frame(maxWidth: .infinity, alignment: .leading)
         .task(id: request) {
             let result = await NativeSourceHighlighting.shared.attributed(request)
             guard !Task.isCancelled else { return }
             highlighted = result
             highlightedRequest = request
         }
+    }
+
+    private func toolbar(title: String, font: Font, clean: String) -> some View {
+        HStack(spacing: 12) {
+            Text(title).font(font).accessibilityIdentifier("\(identifier).title")
+            Spacer(minLength: 8)
+            if panelWidth > 0 && textWidth > panelWidth + 0.5 {
+                Toggle("Wrap", isOn: $wraps)
+                    .toggleStyle(.switch).fixedSize().font(.caption)
+                    .accessibilityIdentifier("\(identifier).wrap")
+            }
+            Button {
+                #if os(iOS)
+                UIPasteboard.general.string = clean
+                #else
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(clean, forType: .string)
+                #endif
+            } label: { Label("Copy", systemImage: "doc.on.doc") }
+                .font(.caption).fixedSize().accessibilityIdentifier("\(identifier).copy")
+        }
+        .frame(minHeight: 32)
     }
 
     /// Scroll the text only, keeping its toolbar and command dividers in view.
@@ -146,11 +179,19 @@ struct NativeToolCodeBlock: View {
 /// result containing structured data is never dumped back as a JSON document.
 struct NativeToolValueView: View {
     let value: CmsJSON
+    var title: String?
+    var titleFont: Font = .headline
     var identifier = "NativeTool.value"
     var textSyntax: NativeToolCodeSyntax?
     @State private var visibleItems = 40
 
-    var body: some View { content(value) }
+    var body: some View {
+        if let title, case .string(let text) = value, text.contains("\n") || (textSyntax != nil && !text.isEmpty) {
+            NativeToolCodeBlock(text: text, title: title, titleFont: titleFont, syntax: textSyntax, identifier: identifier)
+        } else if let title {
+            NativeToolSection(title: title) { content(value) }
+        } else { content(value) }
+    }
 
     private func content(_ value: CmsJSON) -> AnyView {
         switch value {
@@ -183,12 +224,17 @@ struct NativeToolValueView: View {
                         if item.objectValue != nil || item.toolArray != nil {
                             DisclosureGroup(ToolValue.title(key)) { NativeToolValueView(value: item, textSyntax: textSyntax).padding(.top, 8) }
                         } else {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(ToolValue.title(key)).font(.caption).foregroundStyle(.secondary)
-                                if let raw = item.stringValue, let url = URL(string: raw), ["https", "http"].contains(url.scheme) {
-                                    Link(raw, destination: url).textSelection(.enabled)
-                                } else {
-                                    NativeToolValueView(value: item, textSyntax: ["stdout", "stderr", "output", "text", "content"].contains(key) ? textSyntax : nil)
+                            let syntax = ["stdout", "stderr", "output", "text", "content"].contains(key) ? textSyntax : nil
+                            if let text = item.stringValue, text.contains("\n") || (syntax != nil && !text.isEmpty) {
+                                NativeToolCodeBlock(text: text, title: ToolValue.title(key), titleFont: .caption, syntax: syntax, identifier: "NativeTool.value")
+                            } else {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(ToolValue.title(key)).font(.caption).foregroundStyle(.secondary)
+                                    if let raw = item.stringValue, let url = URL(string: raw), ["https", "http"].contains(url.scheme) {
+                                        Link(raw, destination: url).textSelection(.enabled)
+                                    } else {
+                                        NativeToolValueView(value: item, textSyntax: syntax)
+                                    }
                                 }
                             }
                         }
@@ -216,10 +262,13 @@ struct NativeToolResultView: View {
     var title = "Result"
     var textSyntax: NativeToolCodeSyntax?
     var body: some View {
-        NativeToolSection(title: title) {
-            if let output = content.output { NativeToolValueView(value: output, identifier: "ToolCallDetails.result", textSyntax: textSyntax) }
-            else if content.running { ProgressView("Waiting for result…") }
-            else { Text("No output was recorded.").foregroundStyle(.secondary) }
+        if let output = content.output {
+            NativeToolValueView(value: output, title: title, identifier: "ToolCallDetails.result", textSyntax: textSyntax)
+        } else {
+            NativeToolSection(title: title) {
+                if content.running { ProgressView("Waiting for result…") }
+                else { Text("No output was recorded.").foregroundStyle(.secondary) }
+            }
         }
     }
 }

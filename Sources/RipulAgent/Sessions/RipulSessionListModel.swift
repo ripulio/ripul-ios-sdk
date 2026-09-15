@@ -103,9 +103,12 @@ public final class RipulSessionListModel: ObservableObject {
     private let bridge: AgentBridge
     private let tokenProvider: () -> String?
     private let cache: RipulSessionCache
+    private let dataSource: (any RipulSessionDataSource)?
+    public var usesDirectConnections: Bool { dataSource != nil }
     private var sessionsCancellable: AnyCancellable?
     private var sessionsReadyCancellable: AnyCancellable?
     private var lastActiveTimeCancellable: AnyCancellable?
+    private var savedLastActiveTimes: [String: Date]?
     private var machineRefreshTimer: Timer?
     private var lifecycleObservers: [NSObjectProtocol] = []
 
@@ -126,10 +129,12 @@ public final class RipulSessionListModel: ObservableObject {
 
     private let startupTime = CFAbsoluteTimeGetCurrent()
 
-    public init(bridge: AgentBridge, tokenProvider: @escaping () -> String?, cache: RipulSessionCache) {
+    public init(bridge: AgentBridge, tokenProvider: @escaping () -> String?, cache: RipulSessionCache,
+                dataSource: (any RipulSessionDataSource)? = nil) {
         self.bridge = bridge
         self.tokenProvider = tokenProvider
         self.cache = cache
+        self.dataSource = dataSource
 
         self.machines = RemoteMachine.loadCached(cache: cache)
         self.hasSuccessfulMachinesResponse =
@@ -154,6 +159,7 @@ public final class RipulSessionListModel: ObservableObject {
         if let data = cache.data(forKey: Self.lastActiveTimeCacheKey),
            let dict = try? JSONDecoder().decode([String: Date].self, from: data) {
             bridge.sessionList.lastActiveTimeByChatId = dict
+            savedLastActiveTimes = dict
             log("debug_timeline \(elapsed()) restored \(dict.count) lastActiveTime entries (chatId-keyed)")
         }
         if let data = cache.data(forKey: Self.lastActiveBySessionIdCacheKey),
@@ -199,6 +205,7 @@ public final class RipulSessionListModel: ObservableObject {
         // Persist last-active timestamps whenever they change.
         // Throttled to avoid excessive writes during rapid tool calls.
         lastActiveTimeCancellable = bridge.sessionList.lastActiveTimeSubject
+            .removeDuplicates()
             .throttle(for: .seconds(2), scheduler: DispatchQueue.main, latest: true)
             .sink { [weak self] dict in
                 self?.saveLastActiveTimes(dict)
@@ -207,20 +214,21 @@ public final class RipulSessionListModel: ObservableObject {
         // Also save when app goes to background — the throttle might not
         // have flushed yet when the system kills the process.
         #if os(iOS)
-        NotificationCenter.default.addObserver(
+        lifecycleObservers.append(NotificationCenter.default.addObserver(
             forName: UIApplication.willResignActiveNotification,
             object: nil, queue: .main
         ) { [weak self] _ in
             guard let self else { return }
             self.saveLastActiveTimes(bridge.sessionList.lastActiveTimeByChatId)
-        }
+        })
         #endif
     }
 
     private func saveLastActiveTimes(_ dict: [String: Date]) {
         // Save the raw chatId-keyed dict for bridge restore.
-        if let data = try? JSONEncoder().encode(dict) {
+        if savedLastActiveTimes != dict, let data = try? JSONEncoder().encode(dict) {
             cache.set(data, forKey: Self.lastActiveTimeCacheKey)
+            savedLastActiveTimes = dict
         }
         // Also resolve to sessionId-keyed cache for cold start (when
         // ripulSession is nil and matchKeys may not overlap with chatIds).
@@ -246,6 +254,7 @@ public final class RipulSessionListModel: ObservableObject {
                 updated[session.id] = best
             }
         }
+        guard updated != lastActiveBySessionId else { return }
         lastActiveBySessionId = updated
         if let data = try? JSONEncoder().encode(updated) {
             cache.set(data, forKey: Self.lastActiveBySessionIdCacheKey)
@@ -346,6 +355,7 @@ public final class RipulSessionListModel: ObservableObject {
     /// ContentView's scenePhase handler already covers foreground, and the
     /// invite UI fetches on open.
     public func refresh() async {
+        if dataSource != nil { await loadDirectSessions(); return }
         await loadMachinesFromAPI()
         await loadRemoteSessions(force: true)
     }
@@ -353,6 +363,7 @@ public final class RipulSessionListModel: ObservableObject {
     // MARK: - Remote sessions
 
     public func loadRemoteSessions(force: Bool = false) async {
+        if dataSource != nil { await loadDirectSessions(); return }
         bridge.logSessionStartMarker("ios.sessions_load_enter", extra: "force=\(force) machines=\(machines.count) isLoading=\(isLoadingRemoteSessions)")
         guard !machines.isEmpty else {
             log("loadRemoteSessions: no machines")
@@ -507,6 +518,7 @@ public final class RipulSessionListModel: ObservableObject {
     // MARK: - Machines
 
     public func loadMachinesFromAPI() async {
+        if dataSource != nil { await loadDirectSessions(); return }
         guard let token = tokenProvider() else {
             log("loadMachinesFromAPI: no auth token — skipped")
             return
@@ -542,12 +554,46 @@ public final class RipulSessionListModel: ObservableObject {
 
     // MARK: - Open session
 
+    private func loadDirectSessions() async {
+        guard let dataSource, !isLoadingRemoteSessions else { return }
+        isLoadingRemoteSessions = true
+        defer { isLoadingRemoteSessions = false }
+        do {
+            let snapshot = try await dataSource.load()
+            let retained = Set(snapshot.machines.map(\.machineId))
+            remoteSessionsByMachineId = remoteSessionsByMachineId.filter { retained.contains($0.key) }
+            for (machine, sessions) in snapshot.sessionsByMachineID where retained.contains(machine) {
+                remoteSessionsByMachineId[machine] = sessions
+            }
+            machines = snapshot.machines
+            hasSuccessfulMachinesResponse = true
+            hasLoadedRemoteSessions = true
+            remoteSessions = remoteSessionsByMachineId.values.flatMap { $0 }
+            RemoteMachine.saveToCache(machines, cache: cache)
+            cache.set(true, forKey: "ripul.hasSuccessfulMachinesFetch")
+            rebuildUnifiedSessions()
+        } catch {
+            connectError = error.localizedDescription
+        }
+    }
+
     func openSession(
         _ session: UnifiedSession,
         onSelect: @escaping (ChatSession) -> Void,
         onDismiss: @escaping () -> Void
     ) {
+        guard openingUnifiedSessionId == nil else { return }
         openingUnifiedSessionId = session.id
+        openSessionError = nil
+        bridge.logSessionStartMarker("ios.open_session_start", extra: "sessionId=\(session.id)")
+        if let dataSource {
+            Task { @MainActor in
+                defer { openingUnifiedSessionId = nil }
+                do { onSelect(try await dataSource.open(session, bridge: bridge)) }
+                catch { reportOpenSessionFailure(error.localizedDescription, session: session) }
+            }
+            return
+        }
         let isRemote = session.machineName != nil
         log("debug_timeline \(elapsed()) openSession: '\(session.title)' ripulSession=\(session.ripulSession != nil) cachedIsOpen=\(session.cachedIsOpen) isRemote=\(isRemote)")
 
@@ -580,7 +626,8 @@ public final class RipulSessionListModel: ObservableObject {
 
         // Cached-open path: session was open before app restart.
         // Don't try relay-open — the web view will restore it.
-        // Dismiss now, focus when the session appears in bridge.sessions.
+        // Keep the list visible until there is a real tab to select, so a
+        // failed restore can show its error beside the row the user tapped.
         if !isRemote, session.cachedIsOpen {
             log("debug_timeline \(elapsed()) openSession: cachedIsOpen — looking for '\(session.title)' (matchKeys=\(session.matchKeys)), bridge.sessions=\(bridge.sessions.count)")
 
@@ -602,8 +649,7 @@ public final class RipulSessionListModel: ObservableObject {
                 return
             }
 
-            // Not found yet — dismiss and poll
-            onDismiss()
+            // Not found yet — keep the spinner and poll.
             Task { [weak self] in
                 guard let self else { return }
                 for tick in 0..<150 {  // 30s timeout (150 × 200ms)
@@ -619,6 +665,7 @@ public final class RipulSessionListModel: ObservableObject {
                     }
                 }
                 log("debug_timeline \(elapsed()) openSession: TIMED OUT waiting for '\(session.title)'")
+                reportOpenSessionFailure("session-restore-timeout: \"\(session.title)\" didn't finish restoring. Try opening it again.", session: session)
                 openingUnifiedSessionId = nil
             }
             return
@@ -642,8 +689,9 @@ public final class RipulSessionListModel: ObservableObject {
                 }
                 return
             }
-            openSessionError = session.machineName.map { "\"\($0)\" isn't connected — this chat lives there." }
-                ?? "This chat's machine isn't connected."
+            reportOpenSessionFailure(
+                "machine-unavailable: " + (session.machineName.map { "\"\($0)\" isn't connected — this chat lives there." }
+                    ?? "This chat's machine isn't connected."), session: session)
             openingUnifiedSessionId = nil
             return
         }
@@ -651,7 +699,6 @@ public final class RipulSessionListModel: ObservableObject {
         Task {
             let (tabId, provider, providerLabel, error) =
                 await bridge.openRemoteSession(machineId: ownerMachineId, sessionId: session.id, displayName: session.title)
-            openingUnifiedSessionId = nil
 
             if let tabId {
                 let isCliSession = ProviderConstants.isCliProvider(provider)
@@ -664,13 +711,14 @@ public final class RipulSessionListModel: ObservableObject {
                 // immediately and we navigate with no list rebuild — the fix for
                 // the ~20s re-entry. A fresh open (tab just created) misses here
                 // because openRemoteSession no longer blocks on fetchSessions, so
-                // pull the list once and retry before falling back to dismiss.
+                // pull the list once and retry before reporting a failed open.
                 var newSession = bridge.sessions.first(where: { $0.id == tabId })
                 if newSession == nil {
                     await bridge.fetchSessions()
                     newSession = bridge.sessions.first(where: { $0.id == tabId })
                 }
                 if let newSession {
+                    openingUnifiedSessionId = nil
                     onSelect(newSession)
                     // Restore the user's explicit model choice for this session.
                     // The open/import path re-derives the override from the
@@ -684,7 +732,11 @@ public final class RipulSessionListModel: ObservableObject {
                         _ = await bridge.setChatModel(chatId: newSession.sourceChatId, modelId: modelId)
                     }
                 } else {
-                    onDismiss()
+                    reportOpenSessionFailure(
+                        "session-open-incomplete: \"\(session.title)\" couldn't be loaded after the host opened it. Try again.",
+                        session: session)
+                    openingUnifiedSessionId = nil
+                    return
                 }
                 await loadRemoteSessions()
             } else {
@@ -705,19 +757,27 @@ public final class RipulSessionListModel: ObservableObject {
                     rebuildUnifiedSessions()
                     let message = String(error.dropFirst(Self.sessionNotFoundPrefix.count))
                         .trimmingCharacters(in: .whitespacesAndNewlines)
-                    openSessionError = message.isEmpty
+                    reportOpenSessionFailure(Self.sessionNotFoundPrefix + " " + (message.isEmpty
                         ? "This session was deleted on its host machine. The entry has been removed."
-                        : message
+                        : message), session: session)
                 } else {
-                    openSessionError = error ?? "Failed to open session."
+                    reportOpenSessionFailure(error ?? "Failed to open session.", session: session)
                 }
+                openingUnifiedSessionId = nil
             }
         }
+    }
+
+    private func reportOpenSessionFailure(_ error: String, session: UnifiedSession) {
+        openSessionError = error
+        bridge.handleConsoleLog("ERROR: [SESSION-OPEN] sessionId=\(session.id) machineId=\(session.machineId ?? "unknown") error=\(error)")
+        bridge.logSessionStartMarker("ios.open_session_failed", extra: "sessionId=\(session.id) error=\(error)")
     }
 
     // MARK: - Archive session
 
     func archiveSession(_ session: UnifiedSession) {
+        guard dataSource == nil else { return }
         archivingUnifiedSessionId = session.id
 
         Task {
@@ -753,6 +813,7 @@ public final class RipulSessionListModel: ObservableObject {
     // MARK: - Move session to another machine
 
     func moveSession(_ session: UnifiedSession, to target: RemoteMachine) {
+        guard dataSource == nil else { return }
         // Use the ripul tab's id as the paired chatId if we have one; otherwise
         // fall back to the unified session id (which may be the sourceChatId).
         let sourceChatId = session.ripulSession?.id ?? session.id
@@ -784,6 +845,7 @@ public final class RipulSessionListModel: ObservableObject {
     /// Codex). Pass `keepRemote: true` to leave the remote session intact so
     /// it still appears in the CLI's own session list.
     func deleteSession(_ session: UnifiedSession, keepRemote: Bool = false) {
+        guard dataSource == nil else { return }
         deletingUnifiedSessionId = session.id
 
         // Find the OWNING machine for any session with a remote presence.
@@ -893,6 +955,7 @@ public final class RipulSessionListModel: ObservableObject {
     // MARK: - Batch archive sessions (selection path)
 
     func batchArchiveSessions(_ sessions: [UnifiedSession]) {
+        guard dataSource == nil else { return }
         guard !sessions.isEmpty else { return }
 
         Task {
@@ -908,6 +971,7 @@ public final class RipulSessionListModel: ObservableObject {
     // MARK: - Archive All sessions (with progress)
 
     public func startArchiveAll() {
+        guard dataSource == nil else { return }
         guard archiveAllState == nil || archiveAllState?.isComplete == true else { return }
 
         let sessions = unifiedSessions
@@ -955,6 +1019,7 @@ public final class RipulSessionListModel: ObservableObject {
     // MARK: - Batch delete sessions
 
     func batchDeleteSessions(_ sessions: [UnifiedSession]) {
+        guard dataSource == nil else { return }
         guard !sessions.isEmpty else { return }
 
         Task {
@@ -984,6 +1049,7 @@ public final class RipulSessionListModel: ObservableObject {
     // MARK: - Archived sessions
 
     public func loadArchivedSessions() {
+        guard dataSource == nil else { return }
         guard !isLoadingArchivedSessions else { return }
         isLoadingArchivedSessions = true
 
@@ -1004,6 +1070,7 @@ public final class RipulSessionListModel: ObservableObject {
     }
 
     public func restoreArchivedSession(_ session: AgentBridge.ArchivedSessionInfo) {
+        guard dataSource == nil else { return }
         restoringArchivedSessionId = session.id
 
         Task {
@@ -1032,6 +1099,7 @@ public final class RipulSessionListModel: ObservableObject {
     }
 
     public func deleteArchivedSession(_ session: AgentBridge.ArchivedSessionInfo) {
+        guard dataSource == nil else { return }
         Task {
             guard let sourceMachineId = session.machineId else {
                 openSessionError = "Archive is missing its source machine — please refresh the archived sessions list."
@@ -1055,6 +1123,7 @@ public final class RipulSessionListModel: ObservableObject {
     }
 
     public func batchDeleteArchivedSessions(_ sessions: [AgentBridge.ArchivedSessionInfo]) {
+        guard dataSource == nil else { return }
         guard !sessions.isEmpty else { return }
         Task {
             var failures: [String] = []
@@ -1139,6 +1208,7 @@ public final class RipulSessionListModel: ObservableObject {
     }
 
     func restartMachine(_ machine: RemoteMachine) async {
+        guard dataSource == nil else { return }
         restartingMachineId = machine.machineId
 
         async let webKill = bridge.killMachine(machineId: machine.machineId, reason: "remote_restart")
@@ -1273,7 +1343,9 @@ public final class RipulSessionListModel: ObservableObject {
 
         let built = UnifiedSession.build(
             from: remoteSessions,
-            localSessions: bridge.sessions,
+            localSessions: dataSource == nil ? bridge.sessions : bridge.sessions.filter { tab in
+                remoteSessions.contains { $0.sourceChatId == tab.sourceChatId || $0.hostChatId == tab.id }
+            },
             machineNames: derivedMachineNames(),
             recentlyClosedLocalIds: recentlyClosedLocalIds,
             tagsByKey: sessionTagsByKey

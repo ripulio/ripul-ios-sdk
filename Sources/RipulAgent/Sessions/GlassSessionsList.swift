@@ -1,4 +1,15 @@
 import SwiftUI
+
+private struct CloudSessionFeaturesKey: EnvironmentKey {
+    static let defaultValue = true
+}
+extension EnvironmentValues {
+    var cloudSessionFeaturesEnabled: Bool {
+        get { self[CloudSessionFeaturesKey.self] }
+        set { self[CloudSessionFeaturesKey.self] = newValue }
+    }
+}
+
 import Foundation
 #if os(iOS)
 import UIKit
@@ -57,6 +68,7 @@ public struct RipulListedSession: Equatable {
 
 @available(iOS 26.0, macOS 26.0, *)
 public struct GlassSessionsList: View {
+    @Environment(\.cloudSessionFeaturesEnabled) private var cloudFeatures
     @ObservedObject var bridge: AgentBridge
     /// Per-chat activity/phase/action maps, observed so the list re-sorts and
     /// updates live without re-rendering the WKWebView host.
@@ -413,6 +425,7 @@ public struct GlassSessionsList: View {
                 }
             },
             trailing: {
+                if cloudFeatures {
                 GlassSelectButton(isSelecting: isSelecting) {
                     if isSelecting {
                         isSelecting = false
@@ -424,6 +437,7 @@ public struct GlassSessionsList: View {
                 .uiKitIdentifier("GlassSessionsList.sessions.selectButton")
                 .opacity(unifiedSessions.isEmpty ? 0 : 1)
                 .disabled(unifiedSessions.isEmpty)
+                }
             }
         ) {
             VStack(spacing: 8) {
@@ -486,6 +500,7 @@ public struct GlassSessionsList: View {
                         )
                     },
                     swipe: { session in
+                        if cloudFeatures {
                         Button {
                             onArchiveUnifiedSession(session)
                         } label: {
@@ -493,6 +508,7 @@ public struct GlassSessionsList: View {
                         }
                         .uiKitIdentifier("GlassSessionsList.sessions.swipeArchiveButton")
                         .tint(.orange)
+                        }
                     },
                     rowMenu: { session in
                         sessionContextMenu(session)
@@ -529,12 +545,14 @@ public struct GlassSessionsList: View {
     /// nothing to a plan.
     @ViewBuilder
     private func sessionContextMenu(_ session: UnifiedSession) -> some View {
+        if cloudFeatures {
         Button {
             onArchiveUnifiedSession(session)
         } label: {
             Label("Archive", systemImage: "archivebox")
         }
         .uiKitIdentifier("GlassSessionsList.contextMenu.archiveButton")
+        }
         if let ripulTab = session.ripulSession {
             Button {
                 renameText = ""
@@ -544,6 +562,7 @@ public struct GlassSessionsList: View {
             }
             .uiKitIdentifier("GlassSessionsList.contextMenu.renameButton")
         }
+        if cloudFeatures {
         Button {
             taggingSession = session
         } label: {
@@ -568,6 +587,7 @@ public struct GlassSessionsList: View {
             }
             .uiKitIdentifier("GlassSessionsList.contextMenu.moveMenu")
         }
+        }
         Divider()
         Picker(selection: Binding(
             get: { navigationStore.showThinkingMode },
@@ -580,12 +600,14 @@ public struct GlassSessionsList: View {
         .pickerStyle(.palette)
         .uiKitIdentifier("GlassSessionsList.contextMenu.thinkingPicker")
         Divider()
+        if cloudFeatures {
         Button {
             onRemoveFromRipulUnifiedSession(session)
         } label: {
             Label("Remove from Ripul", systemImage: "minus.circle")
         }
         .uiKitIdentifier("GlassSessionsList.contextMenu.removeFromRipulButton")
+        }
     }
 
     /// The user's configured quick-start shortcuts, resolved against the live

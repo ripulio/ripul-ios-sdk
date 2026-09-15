@@ -38,7 +38,7 @@ public struct NewChatSheet: View {
     @FocusState private var editingFolder: Bool
 
     public init(machines: [NewChatMachine], relayModels: [ModelInfo], directModels: [ModelInfo],
-                cache: RipulSessionCache, allowsRelay: Bool = true, preferredRelayID: String? = nil,
+                cache: RipulSessionCache, allowsRelay: Bool = true, preferredRelayID: String? = nil, preferredDirectID: String? = nil,
                 directCatalogs: [String: NewChatModelCatalog]? = nil,
                 loadDirectModels: ((String) async -> Void)? = nil,
                 modelsLoading: Bool = false, modelsError: String? = nil,
@@ -51,6 +51,10 @@ public struct NewChatSheet: View {
         self.onManageAccess = onManageAccess; self.onDismiss = onDismiss; self.onLaunch = onLaunch
         var initial = NewChatDraft(data: cache.object(forKey: Self.preferencesKey) as? Data,
                                    forcedConnection: allowsRelay ? nil : .direct)
+        if let preferredDirectID {
+            initial.select(machines.first(where: { $0.connection == .direct && $0.id == preferredDirectID })
+                ?? NewChatMachine(id: preferredDirectID, name: "The selected Mac", connection: .direct))
+        }
         initial.selectInitial(from: machines, preferredRelayID: preferredRelayID)
         _draft = State(initialValue: initial)
     }
@@ -110,14 +114,14 @@ public struct NewChatSheet: View {
                     Text(usingCustomFolder
                          ? (draft.connection == .direct ? "Work uses your chosen folder. History stays on the Mac." : "Work uses your chosen folder. History stays in Ripul cloud.")
                          : (draft.connection == .direct
-                            ? "Ripul creates Documents/Ripul on this Mac for your work. History stays on the Mac."
-                            : "History stays in Ripul cloud. Coding chats use Documents/Ripul on the selected Mac; Ripul creates it for you."))
+                            ? "Work uses the selected Mac's configured working directory. History stays on the Mac."
+                            : "History stays in Ripul cloud. Coding chats use the selected Mac's configured working directory."))
                 }
                 .disabled(loadingID != nil)
                 if let error { Section { Text(error).foregroundStyle(.red).textSelection(.enabled).accessibilityIdentifier("NewChat.error") } }
                 if let validationError { Section { Text(validationError).foregroundStyle(.secondary) } }
                 if draft.connection == .direct {
-                    Section { Button("Pair or manage Direct Macs", action: onManageAccess).accessibilityIdentifier("NewChat.manageAccess") }
+                    Section { Button("Pair or manage Macs", action: onManageAccess).accessibilityIdentifier("NewChat.manageAccess") }
                         .disabled(loadingID != nil)
                 }
                 ModelPickerSections(models: models, pinCatalog: pinCatalog,

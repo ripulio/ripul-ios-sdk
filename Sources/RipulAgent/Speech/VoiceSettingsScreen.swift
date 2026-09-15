@@ -24,10 +24,12 @@ public struct VoiceSettingsScreen: View {
     /// A site key's voice profile can lock speech config. When it does, these
     /// controls still show the effective values but stop accepting edits —
     /// silently ignoring them would read as a broken settings screen.
-    private var isManaged: Bool { SpeechPreferences.isManagedByProfile }
+    private var isManaged: Bool { !BundledAgentRuntime.isEnabled && SpeechPreferences.isManagedByProfile }
+    @State private var hasDeviceKey = DeviceSpeechCredentials.isConfigured
 
     public var body: some View {
         Form {
+            DeviceSpeechKeySection()
             if isManaged {
                 Section {
                     Label {
@@ -48,6 +50,7 @@ public struct VoiceSettingsScreen: View {
                 Picker(selection: $chatDictationProvider) {
                     Text("Apple (on-device)").tag("apple")
                     Text("ElevenLabs").tag("elevenlabs")
+                        .disabled(BundledAgentRuntime.isEnabled && !hasDeviceKey)
                 } label: {
                     Label("Dictation provider", systemImage: "mic.badge.plus")
                 }
@@ -157,6 +160,7 @@ public struct VoiceSettingsScreen: View {
             }
         }
         .navigationTitle("Voice")
+        .onReceive(NotificationCenter.default.publisher(for: DeviceSpeechCredentials.changed)) { _ in hasDeviceKey = DeviceSpeechCredentials.isConfigured }
         #if os(macOS)
         .formStyle(.grouped)
         #endif

@@ -64,6 +64,7 @@ public struct ScreenSwitcherPullModifier: ViewModifier {
     /// built. Distinct from `tracking`, which waits for the drag to be
     /// recognised — by then the useful head start is gone.
     @GestureState private var touching = false
+    @State private var warmed = false
 
     /// Travel before the axis is chosen. Separate from the recogniser's own
     /// minimum, which is now small enough that the drag is live almost at once —
@@ -102,12 +103,17 @@ public struct ScreenSwitcherPullModifier: ViewModifier {
     private var screenHeight: CGFloat { max(UIScreen.main.bounds.height, 1) }
 
     public func body(content: Content) -> some View {
-        guard enabled, let switcher else { return AnyView(content) }
+        // Keep the same content tree when editing disables this gesture.
+        // Returning plain content here replaced the composer's UITextView
+        // immediately after it became first responder, dropping the keyboard.
+        let gesturesEnabled = enabled && switcher != nil
+        let mask: GestureMask = gesturesEnabled ? .all : .subviews
         // 3, not 8: this is only where SwiftUI starts reporting the drag. The
         // axis has its own threshold below, so waiting here bought nothing but
         // delay before anything could happen at all.
         let drag = DragGesture(minimumDistance: 3)
             .updating($tracking) { _, state, _ in
+                guard gesturesEnabled else { return }
                 if !state {
                     axis = .undecided
                     origin = .zero
@@ -116,6 +122,7 @@ public struct ScreenSwitcherPullModifier: ViewModifier {
                 state = true
             }
             .onChanged { value in
+                guard gesturesEnabled, let switcher else { return }
                 if axis == .undecided {
                     let dx = value.translation.width
                     let dy = value.translation.height
@@ -135,7 +142,7 @@ public struct ScreenSwitcherPullModifier: ViewModifier {
                     } else if allowsHorizontal, abs(dx) > abs(dy) {
                         axis = .horizontal
                         origin = value.translation
-                        switcher.cancelPrepareToOpen()
+                        cancelWarmup()
                         switcher.beginSlide(snapshot: prepared)
                     } else {
                         return
@@ -161,6 +168,8 @@ public struct ScreenSwitcherPullModifier: ViewModifier {
                 let start = origin
                 axis = .undecided
                 origin = .zero
+                cancelWarmup()
+                guard gesturesEnabled, let switcher else { return }
 
                 // Origin-relative like the live updates. Velocity is a
                 // difference of the two, so the shift cancels there and the
@@ -189,16 +198,38 @@ public struct ScreenSwitcherPullModifier: ViewModifier {
         // behaves as a tap.
         let warm = DragGesture(minimumDistance: 0)
             .updating($touching) { _, state, _ in
-                if !state { switcher.prepareToOpen() }
+                guard gesturesEnabled, let switcher else { return }
+                if !state {
+                    warmed = true
+                    switcher.prepareToOpen()
+                }
                 state = true
             }
             .onEnded { _ in
-                if axis == .undecided { switcher.cancelPrepareToOpen() }
+                if axis == .undecided { cancelWarmup() }
             }
 
-        return highPriority
-            ? AnyView(content.highPriorityGesture(drag).simultaneousGesture(warm))
-            : AnyView(content.simultaneousGesture(drag).simultaneousGesture(warm))
+        let wrapped = highPriority
+            ? AnyView(content.highPriorityGesture(drag, including: mask).simultaneousGesture(warm, including: mask))
+            : AnyView(content.simultaneousGesture(drag, including: mask).simultaneousGesture(warm, including: mask))
+        return wrapped
+            .onChange(of: gesturesEnabled) { active in
+                guard !active else { return }
+                // Focus can cancel a touch without delivering onEnded.
+                cancelWarmup()
+                axis = .undecided
+                origin = .zero
+                prepared = nil
+            }
+            .onChange(of: touching) { active in
+                if !active, axis == .undecided { cancelWarmup() }
+            }
+    }
+
+    private func cancelWarmup() {
+        guard warmed else { return }
+        warmed = false
+        switcher?.cancelPrepareToOpen()
     }
 }
 

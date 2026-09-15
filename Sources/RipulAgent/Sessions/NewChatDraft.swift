@@ -60,7 +60,7 @@ public struct NewChatDraft: Codable, Equatable {
         }
         if let reason = machine.unavailableReason { return reason }
         let path = folder.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard path.isEmpty || (path.hasPrefix("/") && !path.contains("\0")) else { return "Enter an absolute project folder, or use the automatic Ripul workspace." }
+        guard path.isEmpty || (path.hasPrefix("/") && !path.contains("\0")) else { return "Enter an absolute project folder, or use the Mac's configured working directory." }
         return nil
     }
 }

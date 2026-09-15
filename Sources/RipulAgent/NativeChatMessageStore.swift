@@ -106,7 +106,25 @@ public final class NativeChatMessageStore: ObservableObject {
 
     /// Handle an `add` wire message (`message` dict from the bridge).
     public func applyAdd(_ msg: [String: Any]) {
-        guard let id = msg["messageId"] as? String, !id.isEmpty else { return }
+        guard let incoming = Self.parseMessage(msg) else { return }
+        upsert(incoming)
+    }
+
+    /// One publication for history, rather than one per historical action.
+    public func applyBackfill(_ entries: [[String: Any]]) {
+        let incoming = entries.compactMap(Self.parseMessage)
+        guard incoming != messages else { return }
+        indexById = [:]
+        var unique: [NativeChatMessage] = []
+        for message in incoming {
+            if let index = indexById[message.id] { unique[index] = message }
+            else { indexById[message.id] = unique.count; unique.append(message) }
+        }
+        messages = unique
+    }
+
+    private static func parseMessage(_ msg: [String: Any]) -> NativeChatMessage? {
+        guard let id = msg["messageId"] as? String, !id.isEmpty else { return nil }
         let role = NativeChatMessage.Role(rawValue: msg["role"] as? String ?? "") ?? .assistant
         let incoming = NativeChatMessage(
             id: id,
@@ -119,9 +137,11 @@ public final class NativeChatMessageStore: ObservableObject {
             askUser: Self.parseAskUser(msg["askUser"]),
             taskNotification: Self.parseTaskNotification(msg["taskNotification"]),
             senderLabel: msg["senderLabel"] as? String,
+            thinking: (msg["thinking"] as? [String: Any])?["content"] as? String,
+            isThinkingStreaming: (msg["thinking"] as? [String: Any])?["isStreaming"] as? Bool ?? false,
             timestamp: (msg["timestamp"] as? NSNumber)?.doubleValue ?? Date().timeIntervalSince1970 * 1000
         )
-        upsert(incoming)
+        return incoming
     }
 
     /// Handle an `update` wire message — currently streaming `thinking` deltas.
@@ -132,8 +152,10 @@ public final class NativeChatMessageStore: ObservableObject {
         let streaming = thinking?["isStreaming"] as? Bool ?? false
 
         if let idx = indexById[id] {
-            if let content { messages[idx].thinking = content }
-            messages[idx].isThinkingStreaming = streaming
+            var updated = messages[idx]
+            if let content { updated.thinking = content }
+            updated.isThinkingStreaming = streaming
+            if updated != messages[idx] { messages[idx] = updated }
         } else {
             // Update before add — materialise a placeholder so streaming is visible.
             let placeholder = NativeChatMessage(
@@ -149,6 +171,7 @@ public final class NativeChatMessageStore: ObservableObject {
     }
 
     public func clear() {
+        guard !messages.isEmpty else { return }
         messages.removeAll()
         indexById.removeAll()
     }
@@ -186,8 +209,9 @@ public final class NativeChatMessageStore: ObservableObject {
             // Merge — never clobber accumulated streaming state with an empty add.
             var merged = msg
             merged.thinking = msg.thinking ?? messages[idx].thinking
+            if msg.thinking == nil { merged.isThinkingStreaming = messages[idx].isThinkingStreaming }
             if msg.content.isEmpty { merged.content = messages[idx].content }
-            messages[idx] = merged
+            if merged != messages[idx] { messages[idx] = merged }
         } else {
             indexById[msg.id] = messages.count
             messages.append(msg)

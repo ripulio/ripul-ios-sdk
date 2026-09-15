@@ -11,9 +11,6 @@ public struct RipulProfileScreen<PlanContent: View>: View {
     let baseURL: URL
     let onSignOut: () async -> Void
     let planContent: PlanContent
-    #if os(iOS)
-    @State private var webTheme: String = "darkGradient"
-    #endif
 
     public init(
         bridge: AgentBridge,
@@ -141,40 +138,7 @@ public struct RipulProfileScreen<PlanContent: View>: View {
     // MARK: Preferences
 
     private var preferencesSection: some View {
-        Section("Preferences") {
-            NavigationLink {
-                VoiceSettingsScreen(tokenProvider: tokenProvider)
-            } label: {
-                Label("Voice", systemImage: "waveform")
-            }
-            .uiKitIdentifier("ProfileScreen.preferences.voice")
-
-            #if os(iOS)
-            Picker(selection: $webTheme) {
-                Text("Auto (System)").tag("auto")
-                Text("Dark Gradient").tag("darkGradient")
-                Text("Dark Flat").tag("darkFlat")
-                Text("Dark Minimal").tag("darkMinimal")
-                Text("Dark Glass").tag("darkGlass")
-                Text("Dark Neon").tag("darkNeon")
-                Text("Dark Aurora").tag("darkAurora")
-                Text("Light").tag("light")
-            } label: {
-                Label("Theme", systemImage: "paintpalette")
-            }
-            .uiKitIdentifier("ProfileScreen.preferences.theme")
-            .task {
-                if let theme = try? await bridge.callAsyncJavaScript(
-                    "return window.__ripulGetTheme?.()"
-                ) as? String {
-                    webTheme = theme
-                }
-            }
-            .onChange(of: webTheme) { newValue in
-                bridge.evaluateJavaScript("window.__ripulSetTheme?.('\(newValue)')")
-            }
-            #endif
-        }
+        RipulLocalPreferencesSection(bridge: bridge, tokenProvider: tokenProvider)
     }
 
     // MARK: Sign out

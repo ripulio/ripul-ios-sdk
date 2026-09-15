@@ -112,7 +112,7 @@ public struct SpeechSandboxScreen: View {
         .task {
             providers = [
                 AppleSpeechProvider(),
-                ElevenLabsNativeSpeechProvider(tokenProvider: tokenProvider),
+                NativeSpeechProviderFactory.elevenLabs(tokenProvider: tokenProvider),
             ]
             await loadVoices()
         }

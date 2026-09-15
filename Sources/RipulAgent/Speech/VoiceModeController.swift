@@ -237,20 +237,14 @@ public final class VoiceModeController: ObservableObject {
             let minted = (result as? String) ?? ""
             return minted.isEmpty ? nil : minted
         }
-        switch SpeechPreferences.dictationProviderId {
-        case "elevenlabs":
-            sttProvider = ElevenLabsNativeSpeechProvider(tokenProvider: tokens, tokenRefresher: mintToken)
-        default:
-            sttProvider = AppleSpeechProvider()
-        }
+        sttProvider = NativeSpeechProviderFactory.dictation(tokenProvider: tokens, tokenRefresher: mintToken)
         sttFallback = AppleSpeechProvider()
-        // Speaking is quality-first regardless of the dictation preference.
-        ttsProvider = ElevenLabsNativeSpeechProvider(tokenProvider: tokens, tokenRefresher: mintToken)
+        ttsProvider = NativeSpeechProviderFactory.speaking(tokenProvider: tokens, tokenRefresher: mintToken)
         ttsFallback = AppleSpeechProvider()
 
         // Reply text rides native chat forwarding — enabled here explicitly;
         // the debug scroller has its own toggle for the same channel.
-        bridge.evaluateJavaScript("window.__ripulSetNativeChatForwarding?.(true)")
+        bridge.evaluateJavaScript("window.__ripulSetNativeChatForwarding?.(true, 'voice')")
 
         sttFellBack = false
         micFailureCount = 0
@@ -296,8 +290,8 @@ public final class VoiceModeController: ObservableObject {
         runningSink = nil
         stopAllSpeech()
         // Forwarding stays on only if the debug scroller wants the channel.
-        if let bridge, !bridge.nativeChatScrollerEnabled {
-            bridge.evaluateJavaScript("window.__ripulSetNativeChatForwarding?.(false)")
+        if let bridge {
+            bridge.evaluateJavaScript("window.__ripulSetNativeChatForwarding?.(false, 'voice')")
         }
         deactivateRemoteCommands()
         VoiceModeCoordinator.shared.endSession()
@@ -615,7 +609,7 @@ public final class VoiceModeController: ObservableObject {
             setCaptureLive(false)
             let endedID = listeningID
             Task { @MainActor [weak self] in
-                try? await Task.sleep(nanoseconds: 300_000_000)
+                do { try await Task.sleep(nanoseconds: 300_000_000) } catch { return }
                 guard let self, self.phase == .listening, self.listeningID == endedID else { return }
                 self.beginListening(keepText: true)
             }
@@ -700,7 +694,7 @@ public final class VoiceModeController: ObservableObject {
         silenceTicker?.cancel()
         silenceTicker = Task { @MainActor [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 100_000_000)
+                do { try await Task.sleep(nanoseconds: 100_000_000) } catch { return }
                 guard let self, !Task.isCancelled else { return }
                 self.evaluateSilence()
             }
@@ -752,6 +746,7 @@ public final class VoiceModeController: ObservableObject {
     }
 
     private func enterThinking() {
+        replyWaitTask?.cancel(); replyWaitTask = nil
         phase = .thinking
         VoiceModeCoordinator.shared.markTurnStarted()
         thinkingSeconds = 0
@@ -771,8 +766,8 @@ public final class VoiceModeController: ObservableObject {
         thinkingTicker?.cancel()
         thinkingTicker = Task { @MainActor [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 1_000_000_000)
-                guard let self, self.phase == .thinking else { return }
+                do { try await Task.sleep(nanoseconds: 1_000_000_000) } catch { return }
+                guard !Task.isCancelled, let self, self.phase == .thinking else { return }
                 self.thinkingSeconds += 1
                 self.pumpNarration()
                 self.maybeSpeakRoundup()
@@ -936,12 +931,12 @@ public final class VoiceModeController: ObservableObject {
             replyWaitTask?.cancel()
             replyWaitTask = Task { @MainActor [weak self] in
                 for _ in 0..<10 {
-                    guard let self, self.phase == .paused else { return }
+                    guard !Task.isCancelled, let self, self.phase == .paused else { return }
                     if let reply = self.findNewReply() {
                         self.pendingReply = reply
                         return
                     }
-                    try? await Task.sleep(nanoseconds: 300_000_000)
+                    do { try await Task.sleep(nanoseconds: 300_000_000) } catch { return }
                 }
             }
             return
@@ -955,10 +950,14 @@ public final class VoiceModeController: ObservableObject {
             replyWaitTask = Task { @MainActor [weak self] in
                 // Let the agent's closing utterance finish before reopening
                 // the mic, or we'd transcribe our own speaker.
-                while let self, self.ambientBusy, self.isActive {
-                    try? await Task.sleep(nanoseconds: 200_000_000)
-                }
-                guard let self, self.phase == .thinking else { return }
+                do {
+                    let finished = try await VoiceReplyWait.untilPlaybackEnds { [weak self] in
+                        guard let self, self.isActive, self.phase == .thinking else { return false }
+                        return self.ambientBusy
+                    }
+                    if !finished { self?.stopAmbientSpeech() }
+                } catch { return }
+                guard !Task.isCancelled, let self, self.phase == .thinking else { return }
                 self.beginListening(keepText: false)
             }
             return
@@ -970,14 +969,14 @@ public final class VoiceModeController: ObservableObject {
         replyWaitTask = Task { @MainActor [weak self] in
             // Forwarding may deliver the reply moments after the flag flips.
             for _ in 0..<10 {
-                guard let self, self.phase == .thinking else { return }
+                guard !Task.isCancelled, let self, self.phase == .thinking else { return }
                 if let reply = self.findNewReply() {
                     self.speak(reply)
                     return
                 }
-                try? await Task.sleep(nanoseconds: 300_000_000)
+                do { try await Task.sleep(nanoseconds: 300_000_000) } catch { return }
             }
-            guard let self, self.phase == .thinking else { return }
+            guard !Task.isCancelled, let self, self.phase == .thinking else { return }
             guard self.narratedThisTurn else {
                 self.showNotice("Turn finished (no reply text)")
                 return
@@ -987,14 +986,16 @@ public final class VoiceModeController: ObservableObject {
             // before reopening the mic, or we'd transcribe our own speaker.
             // Bounded: a lost TTS completion callback would otherwise leave
             // `ambientBusy` stuck true and strand the loop with a dead mic.
-            var ticks = 0
-            while self.ambientBusy || !self.narrationQueue.isEmpty {
-                guard self.isActive, ticks < 1800 else { break }
-                ticks += 1
-                self.pumpNarration()
-                try? await Task.sleep(nanoseconds: 200_000_000)
-            }
-            guard self.phase == .thinking else { return }
+            do {
+                let finished = try await VoiceReplyWait.untilPlaybackEnds { [weak self] in
+                    guard let self, self.isActive, self.phase == .thinking else { return false }
+                    let pending = self.ambientBusy || !self.narrationQueue.isEmpty
+                    if pending { self.pumpNarration() }
+                    return pending
+                }
+                if !finished { self.narrationQueue.removeAll(); self.stopAmbientSpeech() }
+            } catch { return }
+            guard !Task.isCancelled, self.phase == .thinking else { return }
             self.beginListening(keepText: false)
         }
     }

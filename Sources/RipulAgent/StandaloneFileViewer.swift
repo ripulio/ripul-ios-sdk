@@ -29,6 +29,7 @@ public struct StandaloneFileViewer: View {
     /// Site key for the viewer's web boot config. The first-party Ripul app
     /// passes its own key; a developer console passes nil.
     var siteKey: String? = nil
+    var standalone = false
     var baseURL: URL = AgentConfiguration.defaultBaseURL
 
     @StateObject private var viewerBridge = AgentBridge()
@@ -47,7 +48,8 @@ public struct StandaloneFileViewer: View {
         readBridge: AgentBridge? = nil,
         machineId: String? = nil,
         siteKey: String? = nil,
-        baseURL: URL = AgentConfiguration.defaultBaseURL
+        baseURL: URL = AgentConfiguration.defaultBaseURL,
+        standalone: Bool = false
     ) {
         self.filePath = filePath
         self.chatId = chatId
@@ -56,6 +58,7 @@ public struct StandaloneFileViewer: View {
         self.readBridge = readBridge
         self.siteKey = siteKey
         self.baseURL = baseURL
+        self.standalone = standalone
     }
 
     private var configuration: AgentConfiguration {
@@ -69,6 +72,7 @@ public struct StandaloneFileViewer: View {
             hideTabSwitcher: true,
             hideChatInput: true
         )
+        config.standalone = standalone
         config.fileViewerPath = filePath
         config.fileViewerChatId = chatId
         config.fileViewerLine = line

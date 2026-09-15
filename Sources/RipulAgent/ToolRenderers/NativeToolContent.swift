@@ -128,8 +128,7 @@ struct NativeToolSummary {
             detail = path
             symbol = "camera"
         case .fields:
-            let bare = call.toolName.replacingOccurrences(of: "^mcp__ripul_tools_+", with: "", options: .regularExpression)
-            heading = description ?? ToolValue.title(bare)
+            heading = description ?? ToolDisplayName.format(call.toolName)
             detail = args.keys.sorted().lazy.compactMap { key -> String? in
                 guard !["description", "Description", "reason", "title"].contains(key),
                       let text = args[key]?.displayString, let value = Self.compact(text) else { return nil }

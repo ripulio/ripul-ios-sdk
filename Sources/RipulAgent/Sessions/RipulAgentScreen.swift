@@ -213,6 +213,7 @@ public struct RipulAgentScreen: View {
     }
     @State private var rawModeSessions: Set<String> = []
     @State private var sessionProviders: [String: String] = [:]
+    @StateObject private var codexFastMode = CodexFastModeSettings()
     @State private var sessionModelIds: [String: String] = [:]
     /// Expanded/contracted state of the chat title lozenge. A single tap
     /// toggles it and the choice is remembered across chats AND launches,
@@ -322,6 +323,7 @@ public struct RipulAgentScreen: View {
         )
         config.websiteDataStore = configuration.websiteDataStore
         config.standalone = configuration.standalone
+        config.chatPresentation = configuration.chatPresentation
         config.composerContexts = configuration.composerContexts
         // Console auto-entry (native-tool-registry phase 3): a cached seeded
         // Developer-context id — written by RipulAgentConsole after its
@@ -446,6 +448,7 @@ public struct RipulAgentScreen: View {
             onListedSessionsChanged: slots.onListedSessionsChanged
         )
         .environment(\.createNewChat, slots.onNewChat)
+        .environment(\.cloudSessionFeaturesEnabled, !configuration.standalone)
     }
 
     #if targetEnvironment(macCatalyst)
@@ -590,7 +593,7 @@ public struct RipulAgentScreen: View {
         )
     }
 
-    public var body: some View {
+    private var decoratedLayout: some View {
         layout
         .ignoresSafeArea(.keyboard)
         .background {
@@ -672,6 +675,10 @@ public struct RipulAgentScreen: View {
         }
         .animation(.spring(response: 0.3, dampingFraction: 0.86), value: commitViewInfo != nil)
         .uiKitIdentifier("AgentScreen")
+    }
+
+    public var body: some View {
+        decoratedLayout
         .renameSessionAlert(renamingSession: $renamingSession, renameText: $renameText, bridge: bridge)
         .alert("CLI Error", isPresented: $showRawModeError) {
             Button("OK", role: .cancel) {}
@@ -728,6 +735,7 @@ public struct RipulAgentScreen: View {
             elementDebuggerActive = cache.bool(forKey: "elementDebuggerActive")
             showNativeChatScroller = cache.bool(forKey: "showNativeChatScroller")
 
+            if !configuration.standalone {
             Task { await bridge.fetchEffort() }
             // Cached models make the picker immediate; always refresh in the background.
             Task { await bridge.fetchModels() }
@@ -735,6 +743,15 @@ public struct RipulAgentScreen: View {
             if let activeSession = bridge.sessions.first(where: { $0.id == bridge.activeSessionId }) {
                 await refreshCodexModelsIfNeeded(for: activeSession)
             }
+            }
+        }
+        .background {
+            Color.clear.frame(width: 0, height: 0)
+                .task(id: codexFastModeContext) {
+                    let session = bridge.sessions.first { $0.id == bridge.activeSessionId }
+                    await codexFastMode.refresh(bridge: bridge, chatId: session?.sourceChatId,
+                        modelId: session.flatMap { sessionModelIds[$0.id] })
+                }
         }
         .onChange(of: tokenProvider()) { newToken in
             if newToken != nil {
@@ -743,7 +760,7 @@ public struct RipulAgentScreen: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
             Task { await model.refresh() }
-            Task { await refreshFavoriteDirectories() }
+            if !configuration.standalone { Task { await refreshFavoriteDirectories() } }
         }
         .onReceive(NotificationCenter.default.publisher(for: .ripulDiscussFile)) { notification in
             if let path = notification.userInfo?["path"] as? String {
@@ -812,7 +829,7 @@ public struct RipulAgentScreen: View {
     /// `safeAreaTop` state. Catalyst has no status bar, so its inset reports 0
     /// and the bar sits flush as before.
     @ViewBuilder private var topBarOverlay: some View {
-        if bridge.currentPageContext.showNativeHeader {
+        if configuration.standalone || bridge.currentPageContext.showNativeHeader {
             // Hidden (not removed) while the host's root bar covers list
             // mode, so the glass containers stay mounted and the reappear on
             // chat entry is a fade on the same value the bar's own content
@@ -1418,6 +1435,12 @@ public struct RipulAgentScreen: View {
     /// re-resolve when `agentMenuContent` switches branches. MAINTENANCE: a
     /// new state-dependent menu item must add its inputs here, or it renders
     /// stale until an existing input changes.
+    private var codexFastModeContext: String {
+        let session = bridge.sessions.first { $0.id == bridge.activeSessionId }
+        return [session?.sourceChatId ?? "", session.map { currentRawModelId(for: $0) } ?? "",
+                String(bridge.availableModels.count), String(bridge.isConnected), String(bridge.isSessionsReady)].joined(separator: "|")
+    }
+
     private func agentMenuKey(session: ChatSession?) -> String {
         if showingMetadata { return "meta" }
         if showingSessionList.wrappedValue {
@@ -1445,6 +1468,7 @@ public struct RipulAgentScreen: View {
             cache.bool(forKey: "showElementDebuggerMenu") ? (elementDebuggerActive ? "dbg1" : "dbg0") : "-",
             cache.bool(forKey: "enableNoteInjection") ? "notes" : "-",
             bridge.selectedEffort ?? "-",
+            codexFastMode.menuKey,
         ]
         if let session, rawModeSessions.contains(session.id) || ProviderConstants.isCliProvider(session.provider) {
             let rawModels = rawModelsForSession(session)
@@ -1474,7 +1498,7 @@ public struct RipulAgentScreen: View {
         // menu — everything below is a session action or a debug switch. Effort
         // travels with the model on purpose: the level is global but the range
         // is per-model, and split apart they read as unrelated controls.
-        if let session, session.remoteMachineName != nil {
+        if !configuration.standalone, let session, session.remoteMachineName != nil {
             // Opens a sheet rather than a submenu: every favourite shares the
             // same long parent path, so as flat menu rows they read as one
             // repeated string truncated before the part that differs. A menu
@@ -1490,6 +1514,7 @@ public struct RipulAgentScreen: View {
             .uiKitIdentifier("AgentScreen.contextMenu.workingDirectoryMenu")
         }
 
+        if !configuration.standalone {
         // Both branches open the SAME picker — sections, pins, search, billing
         // subtitles — differing only in which models it lists. They used to be
         // two nested `Menu` trees, which meant the chat's model change was the
@@ -1540,6 +1565,12 @@ public struct RipulAgentScreen: View {
             .uiKitIdentifier("AgentScreen.contextMenu.effortMenu")
         }
 
+        }
+        if let session {
+            CodexFastModeMenu(settings: codexFastMode) { enabled in
+                Task { await codexFastMode.setEnabled(enabled, bridge: bridge, modelId: sessionModelIds[session.id]) }
+            }
+        }
         Divider()
 
         if slots.onNewChat == nil {
@@ -1575,6 +1606,7 @@ public struct RipulAgentScreen: View {
             }
             .uiKitIdentifier("AgentScreen.contextMenu.renameButton")
 
+            if !configuration.standalone {
             Button {
                 Task { await shareSession(session) }
             } label: {
@@ -1599,6 +1631,7 @@ public struct RipulAgentScreen: View {
                 }
                 .uiKitIdentifier("AgentScreen.contextMenu.forkButton")
             }
+            }
         }
 
         Button {
@@ -1615,7 +1648,7 @@ public struct RipulAgentScreen: View {
         }
         .uiKitIdentifier("AgentScreen.contextMenu.consoleLogsButton")
 
-        if let session, session.remoteMachineName != nil, !rawModeSessions.contains(session.id) {
+        if !configuration.standalone, let session, session.remoteMachineName != nil, !rawModeSessions.contains(session.id) {
             Button {
                 enableRawMode(session: session)
             } label: {
@@ -1642,7 +1675,7 @@ public struct RipulAgentScreen: View {
             .uiKitIdentifier("AgentScreen.contextMenu.insertNotesButton")
         }
 
-        if let session {
+        if !configuration.standalone, let session {
             Divider()
 
             Button {
@@ -2020,6 +2053,7 @@ public struct RipulAgentScreen: View {
     }
 
     private func refreshCodexModelsIfNeeded(for session: ChatSession) async {
+        guard !configuration.standalone else { return }
         // Allow discovery for sessions already in raw mode OR sessions whose
         // provider is Codex (e.g. opened via connectWithProvider before the
         // user has toggled raw mode on).
@@ -2099,6 +2133,7 @@ public struct RipulAgentScreen: View {
     /// Always read fresh from this conversation's host. No shared app cache:
     /// a cached list from another host must never become selectable here.
     private func refreshFavoriteDirectories(sessionId requestedSession: String? = nil) async {
+        guard !configuration.standalone else { return }
         guard !directoryWriting, let sessionId = requestedSession ?? bridge.activeSessionId else { return }
         if showingWorkingDirectoryPicker, let pickerSession = workingDirectoryPickerSession, sessionId != pickerSession { return }
         let request = UUID()

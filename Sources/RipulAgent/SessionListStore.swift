@@ -93,19 +93,19 @@ public final class SessionListStore: ObservableObject {
     }
 
     /// Per-chat latest activity event (session-list subtitle while running).
-    public var latestActivityByChatId: [String: AgentActivityEvent] = [:] { willSet { notify() } }
+    public var latestActivityByChatId: [String: AgentActivityEvent] = [:] { willSet { if newValue != latestActivityByChatId { notify() } } }
 
     /// Last time any activity was observed for a chat (list recency sort).
     /// Also mirrored to `lastActiveTimeSubject` (ungated) so persistence keeps
     /// working even while re-renders are suppressed.
     public var lastActiveTimeByChatId: [String: Date] = [:] {
-        willSet { notify() }
+        willSet { if newValue != lastActiveTimeByChatId { notify() } }
         // Gated by suppression too: SessionManager turns this into an @Published
         // `lastActiveBySessionId`, which re-renders the session list (sort + times)
         // for running sessions — a live update that bypasses the store freeze
         // otherwise. Persistence still happens on background via a direct save, so
         // nothing is lost while frozen.
-        didSet { if !updatesSuppressed { lastActiveTimeSubject.send(lastActiveTimeByChatId) } }
+        didSet { if !updatesSuppressed && oldValue != lastActiveTimeByChatId { lastActiveTimeSubject.send(lastActiveTimeByChatId) } }
     }
     /// Fires on `lastActiveTimeByChatId` changes (unless updates are suppressed).
     /// SessionManager subscribes to this to persist timestamps (replaces the old
@@ -179,14 +179,7 @@ public final class SessionListStore: ObservableObject {
     public func latestToolLabelForList(for chatId: String) -> String? {
         guard !updatesSuppressed else { return nil }
         guard let activity = latestActivityByChatId[chatId] else { return nil }
-        switch activity {
-        case .toolStart(let toolName, _, let toolLabel, _):
-            return toolLabel ?? toolName
-        case .toolEnd(let toolName, _, _, let toolLabel, _):
-            return toolLabel ?? toolName
-        default:
-            return nil
-        }
+        return activity.displayName
     }
 
     /// Full tool activity event (toolStart or toolEnd) for the session list. Gated.
@@ -222,6 +215,7 @@ public final class SessionListStore: ObservableObject {
         if list.count > Self.maxRecentlyEditedFiles {
             list = Array(list.prefix(Self.maxRecentlyEditedFiles))
         }
+        guard list != recentlyEditedFiles else { return }
         recentlyEditedFiles = list
         scheduleRecentlyEditedPersist()
     }

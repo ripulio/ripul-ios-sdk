@@ -672,13 +672,13 @@ public enum AgentActivityEvent: Equatable {
     case error(message: String)
     case complete
 
-    /// The human-readable display name for tool events. Prefers toolLabel, falls back to toolName.
+    /// The sentence-case display name shared by session rows, title lozenges and voice progress.
     public var displayName: String? {
         switch self {
         case .toolStart(let toolName, _, let toolLabel, _):
-            return toolLabel ?? toolName
+            return ToolDisplayName.activity(toolName: toolName, label: toolLabel)
         case .toolEnd(let toolName, _, _, let toolLabel, _):
-            return toolLabel ?? toolName
+            return ToolDisplayName.activity(toolName: toolName, label: toolLabel)
         default:
             return nil
         }
@@ -1691,7 +1691,7 @@ public final class AgentBridge: NSObject, ObservableObject {
     /// consumed via Combine (LiveActivityManager). Avoiding objectWillChange prevents
     /// every view observing AgentBridge from re-rendering on each activity event.
     public var latestActivity: AgentActivityEvent? {
-        didSet { latestActivitySubject.send(latestActivity) }
+        didSet { if oldValue != latestActivity { latestActivitySubject.send(latestActivity) } }
     }
     /// Dedicated publisher for latestActivity changes (replaces $latestActivity).
     public let latestActivitySubject = PassthroughSubject<AgentActivityEvent?, Never>()
@@ -1970,18 +1970,16 @@ public final class AgentBridge: NSObject, ObservableObject {
     }
 
     private func advanceLastActive(chatId: String, eventTimestamp: Any?) {
-        if let ms = eventTimestamp as? TimeInterval, ms > 0 {
-            sessionList.lastActiveTimeByChatId[chatId] = Date(timeIntervalSince1970: ms / 1000)
-        } else if let ms = eventTimestamp as? Int, ms > 0 {
-            sessionList.lastActiveTimeByChatId[chatId] = Date(timeIntervalSince1970: TimeInterval(ms) / 1000)
+        let timestamp: Date
+        if let parsed = Self.parseEpochMs(eventTimestamp) {
+            // Preserve authoritative corrections in either direction.
+            timestamp = parsed
         } else {
-            // No parseable timestamp — fall back to "now" but only advance.
-            let now = Date()
-            if let existing = sessionList.lastActiveTimeByChatId[chatId], existing >= now {
-                return
-            }
-            sessionList.lastActiveTimeByChatId[chatId] = now
+            timestamp = Date()
+            if let existing = sessionList.lastActiveTimeByChatId[chatId], existing >= timestamp { return }
         }
+        guard sessionList.lastActiveTimeByChatId[chatId] != timestamp else { return }
+        sessionList.lastActiveTimeByChatId[chatId] = timestamp
     }
 
     private func handleLifecycleSnapshot(_ dict: [String: Any]) {
@@ -2059,7 +2057,50 @@ public final class AgentBridge: NSObject, ObservableObject {
     /// A file view request awaiting native sheet presentation.
     @Published public var pendingFileView: FileViewRequest?
     /// Tool-call inspection updates stay off the bridge's own publisher.
+    private var nativeToolUIFeatures: [String] {
+        #if os(iOS)
+        return ["toolCallDetails", "nativeToolStrip"] + defaultToolActions.features + (toolStripAnchor == nil ? [] : ["nativeToolStripAnchor", "nativeToolStripRows"]) + (nativeEmbeds == nil ? [] : nativeEmbedRenderers.features)
+        #else
+        return ["toolCallDetails", "nativeToolStrip"]
+        #endif
+    }
     public let toolCallDetails = ToolCallDetailsStore()
+    private lazy var defaultToolActions: ToolDefaultActionRegistry = {
+        let actions = ToolDefaultActionRegistry()
+        #if os(iOS)
+        if #available(iOS 26.0, *) {
+            actions.register("simulator.preview") { [weak self] request in
+                guard let self, let chatId = request["chatId"] as? String, chatId == self.currentSourceChatId,
+                      let machineId = request["machineId"] as? String, !machineId.isEmpty,
+                      let payload = request["payload"] as? [String: Any], let target = payload["target"],
+                      let data = try? JSONSerialization.data(withJSONObject: target),
+                      let simulator = try? JSONDecoder().decode(SimulatorTarget.self, from: data),
+                      UUID(uuidString: simulator.udid) != nil else { return }
+                self.simulatorPreview.open(simulator, machineId: machineId, chatId: chatId)
+            }
+        }
+        #endif
+        return actions
+    }()
+    #if os(iOS)
+    let simulatorPreview = SimulatorPreviewState()
+    #endif
+    public let toolStrip = NativeToolStripStore()
+    #if os(iOS)
+    private var toolStripAnchor: NativeToolStripAnchorController?
+    private var toolStripRows: NativeToolStripRowsController?
+    public let nativeEmbedRenderers = NativeEmbedRegistry.standard()
+    private var nativeEmbeds: NativeEmbedController?
+    var toolStripAccessibilityElements: [Any] { (toolStripRows?.accessibilityElements ?? []) + (toolStripAnchor?.accessibilityElements ?? []) + (nativeEmbeds?.accessibilityElements ?? []) }
+    func hitTestToolStrip(_ point: CGPoint, event: UIEvent?) -> UIView? {
+        nativeEmbeds?.hitTest(point, event: event) ?? toolStripRows?.hitTest(point, event: event) ?? toolStripAnchor?.hitTest(point, event: event)
+    }
+    func detachToolStripAnchor() {
+        nativeEmbeds?.clear(); nativeEmbeds = nil
+        toolStripRows?.invalidate(); toolStripRows = nil
+        toolStripAnchor?.invalidate(); toolStripAnchor = nil
+    }
+    #endif
     /// True while the web file viewer is open — native chat input should be hidden.
     @Published public var fileViewerExpanded: Bool = false
     /// Filename shown in the native title bar while the file viewer is open; nil when closed.
@@ -2362,6 +2403,10 @@ public final class AgentBridge: NSObject, ObservableObject {
     public func attach(to webView: WKWebView) {
         self.webView = webView
         #if os(iOS)
+        detachToolStripAnchor()
+        toolStripAnchor = webView is FullBleedWebView ? NativeToolStripAnchorController(webView: webView, store: toolStrip) : nil
+        toolStripRows = webView is FullBleedWebView ? NativeToolStripRowsController(webView: webView, presenter: toolStrip, send: { [weak self] in self?.send($0) }) : nil
+        nativeEmbeds = webView is FullBleedWebView ? NativeEmbedController(webView: webView, registry: nativeEmbedRenderers, send: { [weak self] in self?.send($0) }) : nil
         let inspectorCapability = "window.__ripulNativeInspectorAvailable = true; window.dispatchEvent(new Event('ripul:native-inspector'));"
         webView.configuration.userContentController.addUserScript(WKUserScript(source: inspectorCapability, injectionTime: .atDocumentStart, forMainFrameOnly: true))
         webView.evaluateJavaScript(inspectorCapability, completionHandler: nil)
@@ -2418,6 +2463,11 @@ public final class AgentBridge: NSObject, ObservableObject {
     }
 
     public func pageDidStartLoading() {
+        toolStrip.clear()
+        #if os(iOS)
+        toolStripRows?.clear()
+        nativeEmbeds?.clear()
+        #endif
         isConnected = false
         // Preserve the overall budget across initial validation and navigation,
         // including redirects. Explicit Retry starts a new attempt in reload().
@@ -3703,6 +3753,7 @@ public final class AgentBridge: NSObject, ObservableObject {
         case "llm:generate":
             handleLLMGenerate(dict)
         case "theme:ready":
+            applyDeviceTheme()
             NSLog("[AgentBridge] Theme ready received")
             isThemeReady = true
         case "models:updated":
@@ -3849,7 +3900,7 @@ public final class AgentBridge: NSObject, ObservableObject {
                     // Session-row actions are stored separately — they persist
                     // across turns and are not part of the tool-activity subtitle.
                     if case .sessionAction(let actions) = event {
-                        sessionList.sessionActionsByChatId[chatId] = actions
+                        if sessionList.sessionActionsByChatId[chatId] != actions { sessionList.sessionActionsByChatId[chatId] = actions }
                     } else {
                         let toolName: String?
                         switch event {
@@ -3874,7 +3925,7 @@ public final class AgentBridge: NSObject, ObservableObject {
                             // in applySessionPhase. Replayed (old-timestamp) events
                             // are skipped so a finished-offline turn doesn't show a
                             // stale live subtitle that never clears.
-                            sessionList.latestActivityByChatId[chatId] = event
+                            if sessionList.latestActivityByChatId[chatId] != event { sessionList.latestActivityByChatId[chatId] = event }
                         }
                     }
                 }
@@ -3907,6 +3958,32 @@ public final class AgentBridge: NSObject, ObservableObject {
                 NSLog("[AgentBridge] Link open — url: %@", urlString)
                 linkOpenDelegate?.agentBridge(self, didRequestOpenLink: url)
             }
+        case "nativeEmbed:update", "nativeEmbed:anchor", "nativeEmbed:clear":
+            #if os(iOS)
+            nativeEmbeds?.receive(dict)
+            #endif
+        case "toolStrip:anchor":
+            #if os(iOS)
+            toolStripAnchor?.receive(dict)
+            #endif
+        case "toolStrip:update":
+            toolStrip.receive(dict)
+        case "toolStrip:clear":
+            if let ownerId = dict["ownerId"] as? String { toolStrip.clear(ownerId: ownerId) }
+        case "toolDefaultAction:perform":
+            defaultToolActions.perform(dict)
+        case "toolStripRow:update":
+            #if os(iOS)
+            toolStripRows?.receive(dict)
+            #endif
+        case "toolStripRow:anchor":
+            #if os(iOS)
+            toolStripRows?.receiveAnchor(dict)
+            #endif
+        case "toolStripRow:clear":
+            #if os(iOS)
+            if let ownerId = dict["ownerId"] as? String { toolStripRows?.clear(ownerId: ownerId, groupId: dict["groupId"] as? String) }
+            #endif
         case "toolCallDetails:open":
             toolCallDetails.receive(dict, opening: true)
         case "toolCallDetails:update":
@@ -5643,13 +5720,13 @@ public final class AgentBridge: NSObject, ObservableObject {
     /// allowlist and nothing else. The Mac holds that allowlist, because a gate
     /// the caller could edit would not be a gate.
     public func mirrorInvoke(
-        machineId: String, capability: String, method: String, args: [Any]
+        machineId: String, capability: String, method: String, args: [Any], chatId: String? = nil
     ) async -> [String: Any] {
         guard let webView else { return ["success": false, "error": "webView is nil"] }
         do {
             let result = try await webView.callAsyncJavaScript(
-                "return await window.__ripulMirrorInvoke?.(machineId, capability, method, args) ?? {success:false, error:'not ready'};",
-                arguments: ["machineId": machineId, "capability": capability, "method": method, "args": args],
+                "return await window.__ripulMirrorInvoke?.(machineId, capability, method, args, chatId) ?? {success:false, error:'not ready'};",
+                arguments: ["machineId": machineId, "capability": capability, "method": method, "args": args, "chatId": chatId as Any? ?? NSNull()],
                 contentWorld: .page
             )
             return result as? [String: Any] ?? ["success": false, "error": "Unexpected result type"]
@@ -7521,8 +7598,12 @@ public final class AgentBridge: NSObject, ObservableObject {
                 if let code = dict["errorCode"] as? String { error = "\(code): \(error)" }
                 NSLog("[AgentBridge] openRemoteSession failed: %@", error)
                 handleConsoleLog("ERROR: [CONN_DIAG] openRemoteSession(\(sessionId)) failed: \(error)")
-                if let diag = await fetchWebDiagnostics() {
-                    handleConsoleLog("WARN: [CONN_DIAG] diagnostics: \(diag)")
+                // A failed host/bridge may also stall diagnostics. Return the
+                // known failure immediately so the native list can show it.
+                Task { [weak self] in
+                    if let diag = await self?.fetchWebDiagnostics() {
+                        self?.handleConsoleLog("WARN: [CONN_DIAG] diagnostics: \(diag)")
+                    }
                 }
                 return (nil, nil, nil, error)
             }
@@ -8268,6 +8349,10 @@ public final class AgentBridge: NSObject, ObservableObject {
     /// Enable from the web side via `window.__ripulSetNativeChatForwarding(true)`.
     private func handleNativeChatMessage(_ message: [String: Any]) {
         let kind = message["kind"] as? String ?? "?"
+        if kind == "backfill", let messages = message["messages"] as? [[String: Any]] {
+            nativeChat.applyBackfill(messages)
+            return
+        }
         if kind == "reset" {
             nativeChat.clear()
             handleConsoleLog("LOG: [NativeChat] reset (backfill starting)")
@@ -9078,7 +9163,7 @@ public final class AgentBridge: NSObject, ObservableObject {
             "id": requestId,
             "success": true,
             "result": caps,
-            "uiFeatures": ["toolCallDetails"],
+            "uiFeatures": nativeToolUIFeatures,
         ])
 
         // Capability ping proves the bridge is alive — treat it like a handshake.

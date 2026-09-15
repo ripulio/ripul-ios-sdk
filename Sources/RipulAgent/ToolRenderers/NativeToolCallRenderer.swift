@@ -20,9 +20,7 @@ struct NativeToolCallRenderer: View {
             case .evaluate:
                 let reason = content.string("reason", "description")
                 if !reason.isEmpty { Label(reason, systemImage: "text.magnifyingglass") }
-                NativeToolSection(title: "JavaScript") {
-                    NativeToolCodeBlock(text: content.string("expression", "code", "script"), numbered: true, syntax: .javascript, identifier: "NativeTool.expression")
-                }
+                NativeToolCodeBlock(text: content.string("expression", "code", "script"), title: "JavaScript", numbered: true, syntax: .javascript, identifier: "NativeTool.expression")
                 NativeToolParameters(args: content.args, excluding: ["reason", "description", "expression", "code", "script"])
                 NativeToolResultView(content: content)
             case .web, .http: NativeWebToolView(content: content)
@@ -61,12 +59,14 @@ private struct NativeTerminalToolView: View {
         let command = presentation?.command ?? content.string("command", "cmd", "CommandLine", "chars")
         let description = content.string("description", "Description")
         if !description.isEmpty, description != summaryTitle { Text(description).font(.subheadline) }
-        NativeToolSection(title: presentation?.source != nil ? "Script" : command.isEmpty ? "Running command" : "Command") {
-            if command.isEmpty { Text("Read output from the running command").foregroundStyle(.secondary) }
-            else if let source = presentation?.source, let language = presentation?.language {
-                NativeToolCodeBlock(text: source, numbered: true, syntax: .language(language), identifier: "NativeTool.command")
+        if command.isEmpty {
+            NativeToolSection(title: "Running command") {
+                Text("Read output from the running command").foregroundStyle(.secondary)
             }
-            else { NativeToolCodeBlock(text: command, syntax: .shell, commandBreakLines: presentation?.commandBreakLines ?? [], commandPipeLines: presentation?.commandPipeLines ?? [], identifier: "NativeTool.command") }
+        } else if let source = presentation?.source, let language = presentation?.language {
+            NativeToolCodeBlock(text: source, title: "Script", numbered: true, syntax: .language(language), identifier: "NativeTool.command")
+        } else {
+            NativeToolCodeBlock(text: command, title: "Command", syntax: .shell, commandBreakLines: presentation?.commandBreakLines ?? [], commandPipeLines: presentation?.commandPipeLines ?? [], identifier: "NativeTool.command")
         }
         let directory = content.string("workdir", "cwd", "working_directory")
         if !directory.isEmpty { Label(directory, systemImage: "folder").font(.caption).textSelection(.enabled) }
@@ -85,9 +85,7 @@ private struct NativeFileToolView: View {
             let offset = content.args.double("offset") ?? 1
             let first = offset.isFinite && offset > 0 && offset < 1_000_000_000 ? Int(offset) : 1
             let alreadyNumbered = source.range(of: "^\\s*\\d+[→\\t]", options: .regularExpression) != nil
-            NativeToolSection(title: write ? "File contents" : "Contents") {
-                NativeToolCodeBlock(text: source, numbered: !alreadyNumbered, firstLine: first, syntax: .file(content.filePath), readLineNumbers: alreadyNumbered, identifier: "NativeTool.fileContents")
-            }
+            NativeToolCodeBlock(text: source, title: write ? "File contents" : "Contents", numbered: !alreadyNumbered, firstLine: first, syntax: .file(content.filePath), readLineNumbers: alreadyNumbered, identifier: "NativeTool.fileContents")
             if write { NativeToolResultView(content: content) }
         } else { NativeToolResultView(content: content, title: "Contents") }
         NativeToolParameters(args: content.args, excluding: ["file_path", "path", "TargetFile", "AbsolutePath", "content", "CodeContent"])

@@ -26,6 +26,20 @@ final class AgentConfigurationSurfaceTests: XCTestCase {
         let hash = fragment(makeConfig())
         XCTAssertFalse(hash.contains("solutionContext="))
         XCTAssertFalse(hash.contains("surface="))
+        XCTAssertFalse(hash.contains("chatPresentation="))
+    }
+
+    func testAppearanceSelectionDoesNotRequireAnAccountOrSiteKey() {
+        var config = AgentConfiguration(baseURL: URL(string: "http://127.0.0.1:1234")!, nativeApp: true)
+        config.standalone = true
+        config.chatPresentation = "ripul-iphone"
+        let hash = fragment(config)
+        XCTAssertTrue(hash.contains("chatPresentation=ripul-iphone"))
+        XCTAssertFalse(hash.contains("siteKey="))
+        XCTAssertFalse(hash.contains("sessionToken="))
+        config.chatPresentation = "appearance&siteKey=unexpected"
+        XCTAssertTrue(fragment(config).contains("chatPresentation=appearance%26siteKey%3Dunexpected"))
+        XCTAssertFalse(fragment(config).contains("&siteKey="))
     }
 
     func testEmitsSurface() {

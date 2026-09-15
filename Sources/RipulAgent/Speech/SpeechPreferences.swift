@@ -112,6 +112,12 @@ public enum SpeechPreferences {
         return stored ?? profile ?? fallback
     }
 
+    public static let deviceVoiceIdKey = "ripul.deviceSpeech.voiceId"
+    public static var deviceVoiceId: String? {
+        let value = store.string(forKey: deviceVoiceIdKey) ?? ""
+        return value.isEmpty ? nil : value
+    }
+
     public static let dictationProviderKey = "chatDictationProvider"
 
     /// Personal turn-taking preference, independent of the site's voice or

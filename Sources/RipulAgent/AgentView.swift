@@ -77,6 +77,17 @@ public struct AgentView<TopBar: View>: View {
 
     @StateObject private var bridge: AgentBridge
     private let skipBridgeSetup: Bool
+    private var simulatorPreviewAction: ((SimulatorTarget, String, String) -> Void)? {
+        #if os(iOS)
+        if #available(iOS 26.0, *) {
+            return { target, machineId, chatId in
+                guard bridge.currentSourceChatId == chatId else { return }
+                bridge.simulatorPreview.open(target, machineId: machineId, chatId: chatId)
+            }
+        }
+        #endif
+        return nil
+    }
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.dismiss) private var dismiss
 
@@ -258,9 +269,10 @@ public struct AgentView<TopBar: View>: View {
         }
         .animation(.easeInOut(duration: 0.25), value: voiceMode.isActive)
         .modifier(SpeechInputWarningModifier(message: $voiceMode.microphoneWarning))
+        .onReceive(NotificationCenter.default.publisher(for: DeviceSpeechCredentials.changed)) { _ in voiceMode.stop() }
         .onRipulVoiceModeRequest(isConnected: bridge.isConnected) { honorVoiceModeRequest() }
         .onChange(of: bridge.nativeChatScrollerEnabled) { on in
-            bridge.evaluateJavaScript("window.__ripulSetNativeChatForwarding?.(\(on))")
+            bridge.evaluateJavaScript("window.__ripulSetNativeChatForwarding?.(\(on), 'debug')")
             // Suspend/restore the web chat render tree so MessagePipeline + React
             // reconciliation stop when native is rendering. Comms (relay, eventBus,
             // ChatActionsManager) stay alive — only the DOM render is paused.
@@ -271,7 +283,7 @@ public struct AgentView<TopBar: View>: View {
             // Always sync render-suspension state on appear — clears crash-while-suspended
             // localStorage so the web never starts suspended when native chat is off.
             bridge.evaluateJavaScript("window.__ripulSetHostRenderSuspended?.(\(on))")
-            if on { bridge.evaluateJavaScript("window.__ripulSetNativeChatForwarding?.(true)") }
+            if on { bridge.evaluateJavaScript("window.__ripulSetNativeChatForwarding?.(true, 'debug')") }
         }
         .overlay(alignment: .bottom) {
             if !bridge.fileViewerExpanded && bridge.currentPageContext.showNativeChatInput && !bridge.suppressNativeChatInput {
@@ -446,7 +458,8 @@ public struct AgentView<TopBar: View>: View {
                 "type": "agent-framework:toolCallDetails:dismissed",
                 "requestId": requestId,
             ])
-        }))
+        }, onViewSimulator: simulatorPreviewAction))
+        .modifier(SimulatorPreviewPresenter(bridge: bridge))
         .task {
             if !skipBridgeSetup {
                 bridge.searchClickDelegate = searchClickDelegate
@@ -636,6 +649,7 @@ private struct ChatComposer: View {
     /// appear so a changed dictation-provider preference takes effect when
     /// the user returns to the chat.
     @State private var speechProvider: Any? = nil
+    @AppStorage(SpeechPreferences.dictationProviderKey, store: SpeechPreferences.store) private var dictationProviderPreference = "apple"
 
     var body: some View {
         VStack(spacing: 0) {
@@ -645,7 +659,10 @@ private struct ChatComposer: View {
                 bridge.scrollToBottom()
             }
 
-            chatInput
+            VStack(spacing: 8) {
+                NativeToolStrip(store: bridge.toolStrip) { [weak bridge] event in bridge?.send(event) }
+                chatInput
+            }
                 .task(id: bridge.currentSourceChatId) {
                     if let chatId = bridge.currentSourceChatId { await bridge.refreshComposerActions(chatId: chatId) }
                 }
@@ -799,6 +816,8 @@ private struct ChatComposer: View {
             contextOptions: contextOptions
         )
         .onAppear { speechProvider = makeSpeechProvider() }
+        .onReceive(NotificationCenter.default.publisher(for: DeviceSpeechCredentials.changed)) { _ in refreshSpeechProvider() }
+        .onChange(of: dictationProviderPreference) { _ in refreshSpeechProvider() }
         // The composer is the bottom counterpart to the title bar: pull DOWN
         // from the top or UP from the bottom, both toward the middle, where the
         // grid appears. Same gesture, mirrored — see ScreenSwitcherPullModifier.
@@ -880,6 +899,8 @@ private struct ChatComposer: View {
             contextOptions: contextOptions
         )
         .onAppear { speechProvider = makeSpeechProvider() }
+        .onReceive(NotificationCenter.default.publisher(for: DeviceSpeechCredentials.changed)) { _ in refreshSpeechProvider() }
+        .onChange(of: dictationProviderPreference) { _ in refreshSpeechProvider() }
     }
     #endif
 
@@ -906,18 +927,18 @@ private struct ChatComposer: View {
     /// SpeechPreferences ("apple" default, "elevenlabs" via worker routes).
     /// Returned as Any? because the speech layer is @available(26+) while
     /// the SDK floor is lower; the composer unwraps it behind #available.
-    private func makeSpeechProvider() -> Any? {
-        guard !BundledAgentRuntime.isEnabled else { return nil }
+    private func refreshSpeechProvider() {
         if #available(iOS 26.0, macOS 26.0, *) {
-            switch SpeechPreferences.dictationProviderId {
-            case "elevenlabs":
-                let tokenProvider = self.tokenProvider
-                return ElevenLabsNativeSpeechProvider(tokenProvider: {
-                    tokenProvider?() ?? MachineTokenStore.token
-                })
-            default:
-                return AppleSpeechProvider()
-            }
+            (speechProvider as? any NativeSpeechProviding)?.stopTranscription()
+        }
+        speechProvider = makeSpeechProvider()
+    }
+
+    private func makeSpeechProvider() -> Any? {
+        if #available(iOS 26.0, macOS 26.0, *) {
+            return NativeSpeechProviderFactory.dictation(tokenProvider: {
+                self.tokenProvider?() ?? (BundledAgentRuntime.isEnabled ? nil : MachineTokenStore.token)
+            })
         }
         return nil
     }

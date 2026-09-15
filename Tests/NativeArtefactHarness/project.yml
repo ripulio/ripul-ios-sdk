@@ -1,0 +1,49 @@
+name: NativeArtefactHarness
+options:
+  deploymentTarget:
+    iOS: '26.0'
+packages:
+  RipulAgent:
+    path: ../..
+settings:
+  base:
+    CODE_SIGNING_ALLOWED: NO
+    GENERATE_INFOPLIST_FILE: YES
+targets:
+  NativeArtefactHarness:
+    type: application
+    platform: iOS
+    sources: [NativeArtefactHarness.swift]
+    dependencies:
+      - package: RipulAgent
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.ripul.tests.native-artefacts
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_NSAppTransportSecurity_NSAllowsArbitraryLoads: YES
+  NativeEmbedTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources: [NativeEmbedTests.swift]
+    dependencies:
+      - target: NativeArtefactHarness
+      - package: RipulAgent
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.ripul.tests.native-embeds
+  NativeArtefactUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources: [NativeArtefactUITests.swift]
+    dependencies:
+      - target: NativeArtefactHarness
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.ripul.tests.native-artefacts-ui
+schemes:
+  NativeArtefactHarness:
+    build:
+      targets:
+        NativeArtefactHarness: all
+    test:
+      targets: [NativeEmbedTests, NativeArtefactUITests]

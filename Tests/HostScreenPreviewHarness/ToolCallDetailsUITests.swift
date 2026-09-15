@@ -1,6 +1,310 @@
 import XCTest
 
 final class ToolCallDetailsUITests: XCTestCase {
+    func testPackageScriptOperationKeepsRunnerShellAndFullCommand() {
+        continueAfterFailure = false
+        for light in [true, false] {
+            let app = XCUIApplication()
+            app.launchArguments = ["--tool-details-ui-tests", "--renderer=package-script"] + (light ? ["--light-appearance"] : [])
+            app.launch()
+            app.buttons["Open tool details"].tap()
+            let title = app.staticTexts["ToolCallDetails.summary.call-1"]
+            XCTAssertTrue(title.waitForExistence(timeout: 5))
+            XCTAssertEqual(title.label, "Build: typecheck")
+            let context = app.staticTexts["ToolCallDetails.executionContext.call-1"]
+            XCTAssertEqual(context.label, "npm · zsh")
+            XCTAssertGreaterThan(context.frame.minY, title.frame.minY)
+            XCTAssertFalse(app.staticTexts["ToolCallDetails.subtitle.call-1"].exists)
+            let command = app.staticTexts["NativeTool.command"]
+            XCTAssertEqual(command.label, "npm run build:typecheck")
+            app.buttons["NativeTool.command.copy"].tap()
+            let shot = XCTAttachment(screenshot: app.screenshot())
+            shot.name = "Package script operation \(light ? "light" : "dark")"
+            shot.lifetime = .keepAlways; add(shot)
+            app.buttons["ToolCallDetails.done"].tap()
+            app.buttons["Read copied command"].tap()
+            XCTAssertEqual(app.staticTexts["Copied command"].label, "npm run build:typecheck")
+            app.terminate()
+        }
+    }
+
+    func testNativeToolDefaultActionHoldAndTap() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--anchored-tool-strip-ui-tests", "--tool-default-actions-ui-tests"]
+        app.launch()
+        let status = app.staticTexts["AnchorHarness.status"]
+        XCTAssertTrue(status.waitForExistence(timeout: 10))
+        let ready = NSPredicate(format: "label == 'Ready'")
+        expectation(for: ready, evaluatedWith: status)
+        waitForExpectations(timeout: 10)
+        app.buttons["Simulator"].tap()
+        let tool = app.buttons["NativeToolStrip.tool.call-2"]
+        XCTAssertTrue(tool.waitForExistence(timeout: 10))
+        tool.press(forDuration: 0.7)
+        expectation(for: NSPredicate(format: "label == 'Default actions: 1'"), evaluatedWith: status)
+        waitForExpectations(timeout: 5)
+        XCTAssertFalse(app.buttons["ToolCallDetails.done"].exists, "Releasing a hold must not open details")
+        tool.tap()
+        let done = app.buttons["ToolCallDetails.done"]
+        XCTAssertTrue(done.waitForExistence(timeout: 5), "A normal tap after a hold still opens details")
+        done.tap()
+        XCTAssertTrue(tool.waitForExistence(timeout: 5))
+        tool.press(forDuration: 0.7)
+        expectation(for: NSPredicate(format: "label == 'Default actions: 2'"), evaluatedWith: status)
+        waitForExpectations(timeout: 5)
+        XCTAssertFalse(done.exists)
+        let beforeDrag = tool.frame.midY
+        let point = tool.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        point.press(forDuration: 0.1, thenDragTo: point.withOffset(CGVector(dx: 0, dy: 55)))
+        XCTAssertEqual(status.label, "Default actions: 2", "Scrolling from a lozenge must cancel its pending default")
+        XCTAssertFalse(done.exists)
+        XCTAssertGreaterThan(abs(tool.frame.midY - beforeDrag), 20, "The native row still follows the scroll gesture")
+        let attachment = XCTAttachment(screenshot: app.screenshot()); attachment.lifetime = .keepAlways; add(attachment)
+    }
+    func testAllNativeToolRowsScrollSelectAndRecycleIndependently() {
+        continueAfterFailure = false
+        for appearance in ["--light-appearance", "--dark-appearance"] {
+            let app = XCUIApplication()
+            app.launchArguments = ["--all-tool-rows-ui-tests", appearance]
+            app.launch()
+            let status = app.staticTexts["AnchorHarness.status"]
+            XCTAssertTrue(status.waitForExistence(timeout: 5))
+            XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == 'Ready'"), object: status)], timeout: 10), .completed)
+            func tool(_ row: Int) -> XCUIElement { app.buttons["NativeToolStrip.tool.multi-\(row)-1"] }
+            func summary(_ row: Int) -> XCUIElement { app.buttons["NativeToolStrip.summary.multi-\(row)-0"] }
+            func metric(_ name: String) -> Double {
+                Double(status.label.split(separator: " ").first(where: { $0.hasPrefix(name + "=") })?.split(separator: "=").last ?? "-1") ?? -1
+            }
+            func measure() {
+                app.buttons["Measure"].tap()
+                XCTAssertLessThanOrEqual(metric("error"), 1.5, status.label)
+                XCTAssertEqual(metric("fallback"), 0, status.label)
+            }
+            func open(_ row: Int) {
+                if summary(row).exists { summary(row).tap() }
+                XCTAssertTrue(tool(row).waitForExistence(timeout: 5), status.label)
+                tool(row).tap()
+                let detail = app.buttons["ToolCallDetails.toggle.multi-\(row)-1"]
+                XCTAssertTrue(detail.waitForExistence(timeout: 5))
+                XCTAssertEqual(detail.value as? String, "Expanded")
+                XCTAssertTrue(app.buttons["ToolCallDetails.toggle.multi-\(row)-0"].exists)
+                XCTAssertEqual(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'ToolCallDetails.toggle.'")).count, 2)
+                app.buttons["ToolCallDetails.done"].tap()
+            }
+            app.buttons["Rows"].tap()
+            for row in 0..<3 { XCTAssertTrue(tool(row).waitForExistence(timeout: 5)) }
+            measure()
+            XCTAssertEqual(metric("native"), 3, status.label)
+            let before = (0..<3).map { tool($0).frame.minY }
+            app.buttons["Scroll"].tap()
+            measure()
+            for row in 0..<3 { XCTAssertEqual(tool(row).frame.minY - before[row], 69, accuracy: 1.5) }
+            for row in 0..<3 { open(row) }
+
+            XCTAssertTrue(summary(0).waitForExistence(timeout: 25))
+            XCTAssertTrue(summary(1).exists)
+            XCTAssertTrue(summary(2).exists)
+            summary(0).tap()
+            XCTAssertTrue(tool(0).exists)
+            XCTAssertTrue(summary(1).exists, "Expanding one row must leave its neighbours collapsed")
+            XCTAssertTrue(summary(2).exists)
+            app.buttons["Append"].tap()
+            XCTAssertTrue(tool(3).waitForExistence(timeout: 5))
+            XCTAssertTrue(tool(0).exists, "New activity in another row preserves manual reveal")
+            XCTAssertTrue(summary(1).exists)
+            open(3)
+            app.buttons["Hide"].tap()
+            measure()
+            XCTAssertEqual(metric("native"), 0, "Off-screen rows must release their native views")
+            app.buttons["Show"].tap()
+            app.buttons["End"].tap()
+            XCTAssertTrue(tool(0).waitForExistence(timeout: 5), "Recycling must retain that row's manual reveal")
+            XCTAssertTrue(summary(1).exists)
+            measure()
+            // The scroller briefly prewarms after a complete DOM remount.
+            // Accessibility can find native views before that curtain is lifted.
+            let curtainDeadline = Date().addingTimeInterval(8)
+            while metric("opacity") < 1 && Date() < curtainDeadline {
+                Thread.sleep(forTimeInterval: 0.25)
+                measure()
+            }
+            XCTAssertEqual(metric("opacity"), 1, status.label)
+            let shot = XCTAttachment(screenshot: app.screenshot())
+            shot.name = "Multiple native tool rows " + appearance; shot.lifetime = .keepAlways; add(shot)
+
+            app.buttons["History"].tap()
+            app.buttons["End"].tap()
+            XCTAssertTrue(tool(119).waitForExistence(timeout: 5))
+            measure()
+            XCTAssertEqual(metric("states"), 120, status.label)
+            XCTAssertLessThan(metric("native"), 20, "Native views should cover the viewport, not the entire web overscan")
+            XCTAssertLessThan(metric("native"), metric("dom"), status.label)
+            open(119)
+            app.buttons["Top"].tap()
+            XCTAssertTrue(tool(0).waitForExistence(timeout: 5))
+            XCTAssertFalse(tool(119).exists)
+            measure()
+            XCTAssertLessThan(metric("native"), 20, status.label)
+            open(0)
+            app.buttons["Rows"].tap()
+            app.buttons["End"].tap()
+            measure()
+            XCTAssertEqual(metric("states"), 3, "Deleted history releases its retained row state")
+            XCTAssertLessThanOrEqual(metric("native"), 3)
+            app.terminate()
+        }
+    }
+
+    func testDOMAnchoredNativeStripScrollAndTapAtIPhoneScale() {
+        continueAfterFailure = false
+        // Older WebKit rounds scrollTop to whole CSS pixels. Allow that one
+        // pixel at 115% plus the half-point bridge's rounding, never drift.
+        let alignmentTolerance = 1.5
+        for appearance in ["--light-appearance", "--dark-appearance"] {
+            let app = XCUIApplication()
+            app.launchArguments = ["--anchored-tool-strip-ui-tests", appearance]
+            app.launch()
+            let status = app.staticTexts["AnchorHarness.status"]
+            XCTAssertTrue(status.waitForExistence(timeout: 5))
+            XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == 'Ready'"), object: status)], timeout: 10), .completed)
+            let tool = app.buttons["NativeToolStrip.tool.call-2"]
+            let detail = app.buttons["ToolCallDetails.toggle.call-2"]
+            func revealTool() {
+                let summary = app.buttons["NativeToolStrip.summary"]
+                let available = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in tool.exists || summary.exists }, object: nil)
+                XCTAssertEqual(XCTWaiter.wait(for: [available], timeout: 5), .completed)
+                if summary.exists { summary.tap() }
+                XCTAssertTrue(tool.exists)
+            }
+            // Reproduce a fresh chat whose first content is two tool calls.
+            app.buttons["Short"].tap()
+            let firstAttached = tool.waitForExistence(timeout: 5)
+            app.buttons["Measure"].tap()
+            XCTAssertTrue(firstAttached, status.label)
+            revealTool()
+            tool.tap()
+            XCTAssertTrue(detail.waitForExistence(timeout: 5))
+            XCTAssertTrue(app.buttons["ToolCallDetails.toggle.call-1"].exists)
+            app.buttons["ToolCallDetails.done"].tap()
+            app.buttons["Load"].tap()
+            let attached = tool.waitForExistence(timeout: 5)
+            app.buttons["Measure"].tap()
+            XCTAssertTrue(attached, status.label)
+            // Measure the adjacent virtual rows first: at fractional zoom their
+            // estimated heights can change on first mount. Then isolate a
+            // scroll with settled layout from a legitimate layout update.
+            app.buttons["Scroll"].tap()
+            app.buttons["End"].tap()
+            app.buttons["Measure"].tap()
+            let before = tool.frame.minY
+            let beforeStatus = status.label
+            let reports = status.label.components(separatedBy: "\n").last!
+            app.buttons["Scroll"].tap()
+            app.buttons["Measure"].tap()
+            XCTAssertEqual(tool.frame.minY - before, 69, accuracy: 1, beforeStatus + " -> " + status.label)
+            XCTAssertLessThanOrEqual(abs(Double(status.label.components(separatedBy: " ")[0].replacingOccurrences(of: "error=", with: "")) ?? 999), alignmentTolerance, status.label)
+            XCTAssertEqual(status.label.components(separatedBy: " scroll=").first!.components(separatedBy: "\n").last!, reports.components(separatedBy: " scroll=").first!, "No native placement or layout report during scrolling: " + beforeStatus + " -> " + status.label)
+            revealTool()
+            tool.tap()
+            XCTAssertTrue(detail.waitForExistence(timeout: 5))
+            XCTAssertEqual(detail.value as? String, "Expanded")
+            XCTAssertTrue(app.buttons["ToolCallDetails.toggle.call-1"].exists)
+            app.buttons["ToolCallDetails.done"].tap()
+
+            // Starting a vertical drag on a native button must scroll its ancestor
+            // rather than activate the tool or leave the strip behind.
+            let dragStart = tool.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            let dragEnd = dragStart.withOffset(CGVector(dx: 0, dy: -110))
+            let dragY = tool.frame.minY
+            dragStart.press(forDuration: 0.05, thenDragTo: dragEnd)
+            app.buttons["Measure"].tap()
+            XCTAssertLessThan(tool.frame.minY, dragY - 40)
+            XCTAssertLessThanOrEqual(abs(Double(status.label.components(separatedBy: " ")[0].replacingOccurrences(of: "error=", with: "")) ?? 999), alignmentTolerance, status.label)
+            XCTAssertFalse(detail.exists, "A vertical pan must not open the disclosure")
+
+            app.buttons["Grow"].tap()
+            app.buttons["End"].tap()
+            if app.buttons["NativeToolStrip.summary"].exists { app.buttons["NativeToolStrip.summary"].tap() }
+            revealTool()
+            app.buttons["Measure"].tap()
+            XCTAssertLessThanOrEqual(abs(Double(status.label.components(separatedBy: " ")[0].replacingOccurrences(of: "error=", with: "")) ?? 999), alignmentTolerance, status.label)
+            app.buttons["Hide"].tap()
+            XCTAssertFalse(tool.exists)
+            app.buttons["Show"].tap()
+            app.buttons["End"].tap()
+            if app.buttons["NativeToolStrip.summary"].exists { app.buttons["NativeToolStrip.summary"].tap() }
+            revealTool()
+            app.buttons["Measure"].tap()
+            XCTAssertLessThanOrEqual(abs(Double(status.label.components(separatedBy: " ")[0].replacingOccurrences(of: "error=", with: "")) ?? 999), alignmentTolerance, status.label)
+            revealTool()
+            tool.tap()
+            XCTAssertTrue(detail.waitForExistence(timeout: 5))
+            app.buttons["ToolCallDetails.done"].tap()
+            let shot = XCTAttachment(screenshot: app.screenshot())
+            shot.name = "DOM anchored strip " + appearance; shot.lifetime = .keepAlways; add(shot)
+            app.buttons["Short"].tap()
+            app.buttons["Measure"].tap()
+            if app.buttons["NativeToolStrip.summary"].exists { app.buttons["NativeToolStrip.summary"].tap() }
+            XCTAssertTrue(tool.waitForExistence(timeout: 5), status.label)
+            revealTool()
+            tool.tap()
+            XCTAssertTrue(detail.waitForExistence(timeout: 5))
+            app.buttons["ToolCallDetails.done"].tap()
+            app.buttons["Load"].tap()
+            app.buttons["End"].tap()
+            revealTool()
+            app.buttons["Measure"].tap()
+            XCTAssertLessThanOrEqual(abs(Double(status.label.components(separatedBy: " ")[0].replacingOccurrences(of: "error=", with: "")) ?? 999), alignmentTolerance, status.label)
+            let longY = tool.frame.minY
+            app.buttons["Scroll"].tap()
+            XCTAssertEqual(tool.frame.minY - longY, 69, accuracy: 1)
+            app.terminate()
+        }
+    }
+
+    func testNativeToolStripBurstIdleTapAndComposer() {
+        for appearance in ["--light-appearance", "--dark-appearance"] {
+            let app = XCUIApplication()
+            app.launchArguments = ["--tool-strip-ui-tests", appearance]
+            app.launch()
+            app.buttons["Start tools"].tap()
+            let composer = app.textFields["StripHarness.composer"]
+            let originalY = composer.frame.minY
+            let first = app.buttons["NativeToolStrip.tool.call-2"]
+            XCTAssertTrue(first.waitForExistence(timeout: 5))
+            first.tap()
+            let target = app.buttons["ToolCallDetails.toggle.call-2"]
+            XCTAssertTrue(target.waitForExistence(timeout: 5))
+            XCTAssertEqual(target.value as? String, "Expanded")
+            XCTAssertTrue(app.buttons["ToolCallDetails.toggle.call-1"].exists)
+            app.buttons["ToolCallDetails.done"].tap()
+            app.buttons["Burst tools"].tap()
+            let newest = app.buttons["NativeToolStrip.tool.call-10"]
+            XCTAssertTrue(newest.waitForExistence(timeout: 5))
+            XCTAssertEqual(composer.frame.minY, originalY, accuracy: 1)
+            app.buttons["Idle tools"].tap()
+            let summary = app.buttons["NativeToolStrip.summary"]
+            XCTAssertTrue(summary.waitForExistence(timeout: 3))
+            XCTAssertTrue(summary.label.contains("11 tool calls"))
+            XCTAssertEqual(composer.frame.minY, originalY, accuracy: 1)
+            summary.tap()
+            XCTAssertTrue(newest.waitForExistence(timeout: 3))
+            let shot = XCTAttachment(screenshot: app.screenshot())
+            shot.name = "Native tool strip " + appearance
+            shot.lifetime = .keepAlways
+            add(shot)
+            app.buttons["Switch row"].tap()
+            XCTAssertTrue(app.buttons["NativeToolStrip.tool.call-1"].waitForExistence(timeout: 3))
+            XCTAssertFalse(newest.exists)
+            composer.tap()
+            composer.typeText("hello")
+            XCTAssertEqual(composer.value as? String, "hello")
+            XCTAssertTrue(app.buttons["NativeToolStrip.tool.call-1"].isHittable)
+            app.terminate()
+        }
+    }
+
     func testInputAndOutputWrappingIsIndependent() {
         continueAfterFailure = false
         let output = String(repeating: "Long output remains copyable and horizontally scrollable. ", count: 6) + "END"
@@ -14,6 +318,13 @@ final class ToolCallDetailsUITests: XCTestCase {
             let inputWrap = app.switches["NativeTool.command.wrap"]
             let outputWrap = app.switches["ToolCallDetails.result.wrap"]
             let result = app.staticTexts["ToolCallDetails.result"]
+            XCTAssertTrue(inputWrap.waitForExistence(timeout: 5))
+            XCTAssertTrue(outputWrap.waitForExistence(timeout: 5))
+            for identifier in ["NativeTool.command", "ToolCallDetails.result"] {
+                let title = app.staticTexts["\(identifier).title"]
+                XCTAssertEqual(title.frame.midY, app.buttons["\(identifier).copy"].frame.midY, accuracy: 2)
+                XCTAssertEqual(title.frame.midY, app.switches["\(identifier).wrap"].frame.midY, accuracy: 2)
+            }
             XCTAssertEqual(inputWrap.value as? String, "0")
             XCTAssertEqual(outputWrap.value as? String, "0")
             let inputSize = command.frame.size
@@ -130,6 +441,8 @@ final class ToolCallDetailsUITests: XCTestCase {
         XCTAssertTrue(app.descendants(matching: .any)["NativeTool.command.divider.1"].exists)
         XCTAssertGreaterThan(second.frame.minY - first.frame.maxY, 15)
         XCTAssertEqual(app.buttons.matching(identifier: "NativeTool.command.copy").count, 1)
+        XCTAssertFalse(app.switches["NativeTool.command.wrap"].exists, "Separate short commands do not need wrapping")
+        XCTAssertEqual(app.staticTexts["NativeTool.command.title"].frame.midY, app.buttons["NativeTool.command.copy"].frame.midY, accuracy: 2)
         app.buttons["NativeTool.command.copy"].tap()
         let screenshot = XCTAttachment(screenshot: app.screenshot())
         screenshot.name = "Native command dividers with one Copy button"
@@ -138,6 +451,32 @@ final class ToolCallDetailsUITests: XCTestCase {
         app.buttons["ToolCallDetails.done"].tap()
         app.buttons["Read copied command"].tap()
         XCTAssertEqual(app.staticTexts["Copied command"].label, "python3 check.py &&\ngit status --short")
+    }
+
+    func testWrapAvailabilityFollowsPanelWidthAndUpdatedText() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--code-width-ui-tests"]
+        app.launch()
+        let wrap = app.switches["NativeTool.code.wrap"]
+        let code = app.staticTexts["NativeTool.code"]
+        XCTAssertTrue(code.waitForExistence(timeout: 5))
+        XCTAssertFalse(wrap.exists, "The line fits in the wide panel")
+        app.buttons["Narrow panel"].tap()
+        XCTAssertTrue(wrap.waitForExistence(timeout: 5))
+        XCTAssertEqual(wrap.value as? String, "0")
+        wrap.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        XCTAssertEqual(wrap.value as? String, "1", "The toggle remains available when wrapping is enabled")
+        app.buttons["Wide panel"].tap()
+        XCTAssertTrue(wrap.waitForNonExistence(timeout: 5), "A wider panel no longer needs Wrap")
+        app.buttons["Narrow panel"].tap()
+        XCTAssertTrue(wrap.waitForExistence(timeout: 5))
+        XCTAssertEqual(wrap.value as? String, "1", "Resizing preserves the user's choice")
+        app.buttons["Short text"].tap()
+        XCTAssertTrue(wrap.waitForNonExistence(timeout: 5))
+        app.buttons["Long text"].tap()
+        XCTAssertTrue(wrap.waitForExistence(timeout: 5), "Updated text is measured without reopening the panel")
+        XCTAssertEqual(wrap.value as? String, "1")
     }
 
     func testTappedCallIsExpandedAndScrolledIntoViewWithinWholeRow() {

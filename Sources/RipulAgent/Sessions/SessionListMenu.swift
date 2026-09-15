@@ -96,7 +96,7 @@ public struct SessionListMenu: View {
             Divider()
         }
 
-        if bridge.audience == .developer {
+        if bridge.audience == .developer && !model.usesDirectConnections {
             Button {
                 NotificationCenter.default.post(name: .ripulShowProfile, object: bridge)
             } label: {
@@ -107,12 +107,14 @@ public struct SessionListMenu: View {
             Divider()
         }
 
+        if !model.usesDirectConnections {
         Button {
             NotificationCenter.default.post(name: .ripulShowAppWorkingDirectory, object: bridge)
         } label: {
             Label("App Working Directory…", systemImage: "folder.badge.gearshape")
         }
         .uiKitIdentifier("AgentScreen.listMenu.appWorkingDirectory")
+        }
 
         Divider()
 

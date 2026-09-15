@@ -76,8 +76,7 @@ private struct TextEditorSheet: View {
     @Environment(\.dismiss) private var dismiss
     var body: some View {
         NavigationStack {
-            ElementTextEditor(target: target)
-                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() }.uiKitIdentifier("theme.text.done") } }
+            ElementTextEditor(target: target, onDone: { dismiss() })
         }
     }
 }
@@ -85,8 +84,11 @@ private struct TextEditorSheet: View {
 @MainActor
 struct ElementTextEditor: View {
     let target: TextEditingTarget
+    var onDone: (() -> Void)? = nil
     @State private var version = 0
     @State private var wording = ""
+    @State private var savedWording = ""
+    @State private var initialized = false
     @State private var naming = false
     @State private var name = ""
     @State private var error: String?
@@ -95,63 +97,90 @@ struct ElementTextEditor: View {
     var body: some View {
         let _ = version
         Form {
-            Section("Property") {
-                LabeledContent("Property", value: target.label)
-                Text(target.text.isEmpty ? "Empty text" : target.text).textSelection(.enabled)
-                    .uiKitIdentifier("theme.text.result")
-                DisclosureGroup("Element details") { Text(target.address).font(.caption).textSelection(.enabled) }
-            }
             if let source = target.source {
-                Section("Value source") {
+                Section("App text") {
+                    Text(target.text.isEmpty ? "Empty text" : target.text).textSelection(.enabled)
+                        .uiKitIdentifier("theme.text.result")
                     LabeledContent("Source", value: source)
                     Text("This value updates from app data. Use the app’s controls to change it.")
                 }
             } else {
                 Section {
-                    LabeledContent("Assigned token", value: target.token ?? (target.reference == nil ? "App default" : "Custom text"))
-                    Text(target.reference == nil ? "Author default" : "Individual override").foregroundStyle(.secondary)
-                    NavigationLink("Choose another text token") {
-                        TextTokenPicker { token in perform { try target.set(.token(token)) } }
-                    }.uiKitIdentifier("theme.text.chooseToken")
                     TextField("Text for this element", text: $wording, axis: .vertical)
+                        .lineLimit(3...12)
                         .uiKitIdentifier("theme.text.wording")
-                    Button("Apply text to this element") { perform { try target.set(.text(wording)) } }
-                        .uiKitIdentifier("theme.text.apply")
-                    Button(target.defaultToken.map { "Use default: " + $0 } ?? "Use app text") {
-                        perform { try target.set(nil); wording = target.text }
-                    }.disabled(target.reference == nil).uiKitIdentifier("theme.text.reset")
-                } header: { Text("Assignment") } footer: {
-                    Text("Changes are saved in the unpublished theme draft and preview immediately.")
+                } header: { Text("Text for this element") } footer: {
+                    Text(hasChanges
+                         ? "Save updates this element in the unpublished theme draft."
+                         : "Saved text previews immediately. Publish your theme when you’re ready to share it.")
                 }
                 Section {
+                    LabeledContent("Currently uses", value: target.token ?? (target.reference == nil ? "App text" : "Custom text"))
+                    NavigationLink("Choose a text token") {
+                        TextTokenPicker { token in perform { try target.set(.token(token)); loadWording() } }
+                    }.uiKitIdentifier("theme.text.chooseToken")
+                    Button("Restore default text") {
+                        perform { try target.set(nil); loadWording() }
+                    }.disabled(target.reference == nil).uiKitIdentifier("theme.text.reset")
                     if let token = target.token {
-                        NavigationLink("Open " + token) { TextTokenDefinitionScreen(name: token) }
+                        NavigationLink("Edit shared token") { TextTokenDefinitionScreen(name: token) }
                             .uiKitIdentifier("theme.text.openToken")
                     }
                     Button("Create a shared token from this text") { naming = true }
                         .uiKitIdentifier("theme.text.createToken")
-                } header: { Text("Shared definition") } footer: {
-                    Text("Editing a shared definition updates every element that uses it.")
+                } header: { Text("Text tokens & defaults") } footer: {
+                    Text("Token and default changes preview immediately. Editing a shared token updates every element using it.")
                 }
+            }
+            Section {
+                DisclosureGroup("Element details") {
+                    LabeledContent("Property", value: target.label)
+                    Text(target.address).font(.caption).textSelection(.enabled)
+                }.uiKitIdentifier("theme.text.details")
             }
             if let error { Section { Text(error).foregroundStyle(.red) } }
         }
         .navigationTitle(target.label).navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                if target.source == nil {
+                    Button("Save") { perform { try target.set(.text(wording)); loadWording() } }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(!hasChanges)
+                        .uiKitIdentifier("theme.text.save")
+                }
+                if let onDone {
+                    Button("Done", action: onDone).uiKitIdentifier("theme.text.done")
+                }
+            }
+        }
         .alert("New shared text token", isPresented: $naming) {
             TextField("Token name", text: $name)
             Button("Create") {
                 perform {
                     let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
                     guard !trimmed.isEmpty, !RipulElementText.tokenNames.contains(trimmed) else { throw TextReferenceError.name }
-                    try RipulElementText.setToken(trimmed, reference: .text(target.text))
-                    try target.set(.token(trimmed)); name = ""
+                    try RipulElementText.setToken(trimmed, reference: .text(wording))
+                    try target.set(.token(trimmed)); loadWording(); name = ""
                 }
             }
             Button("Cancel", role: .cancel) { }
         }
-        .onAppear { wording = target.text; lease = RipulThemeEngine.remoteTheme?.beginEditing() }
+        .onAppear {
+            if !initialized || !hasChanges { loadWording() }
+            lease = RipulThemeEngine.remoteTheme?.beginEditing()
+        }
         .onDisappear { if let lease { RipulThemeEngine.remoteTheme?.endEditing(lease) }; lease = nil }
-        .onReceive(NotificationCenter.default.publisher(for: .ripulThemeDidChange)) { _ in version += 1 }
+        .onReceive(NotificationCenter.default.publisher(for: .ripulThemeDidChange)) { _ in
+            if !hasChanges { loadWording() }
+            version += 1
+        }
+    }
+    private var hasChanges: Bool { wording != savedWording }
+    private func loadWording() {
+        wording = target.text
+        savedWording = wording
+        initialized = true
     }
     private func perform(_ action: () throws -> Void) { do { try action(); error = nil; version += 1 } catch { self.error = error.localizedDescription } }
 }

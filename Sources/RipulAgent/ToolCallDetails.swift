@@ -14,6 +14,7 @@ struct ToolCallDetail: Decodable, Identifiable, Equatable {
     let rendererName: String?
     let renderArguments: CmsJSON?
     let commandPresentation: ShellToolPresentation?
+    var simulatorTargets: [SimulatorTarget]? = nil
 
     var statusTitle: String {
         switch status {
@@ -37,6 +38,7 @@ struct ToolCallDetail: Decodable, Identifiable, Equatable {
 /// Executable identity and readable source supplied by the shared web parser.
 struct ShellToolPresentation: Decodable, Equatable {
     let label: String
+    var executionContext: String? = nil
     let symbol: String
     let color: String?
     let command: String
@@ -52,6 +54,8 @@ struct ToolCallDetailsRequest: Decodable, Equatable {
     let title: String
     let calls: [ToolCallDetail]
     let initialCallId: String?
+    var chatId: String? = nil
+    var machineId: String? = nil
 
     var initialExpandedCallId: String? {
         calls.first(where: { $0.id == initialCallId })?.id ?? calls.last?.id
@@ -101,6 +105,7 @@ public final class ToolCallDetailsStore: ObservableObject {
 struct ToolCallDetailsPresenter: ViewModifier {
     @ObservedObject var store: ToolCallDetailsStore
     let onDismiss: (String) -> Void
+    var onViewSimulator: ((SimulatorTarget, String, String) -> Void)? = nil
 
     private func close() {
         if let id = store.close() { onDismiss(id) }
@@ -108,7 +113,7 @@ struct ToolCallDetailsPresenter: ViewModifier {
 
     func body(content: Content) -> some View {
         content.sheet(isPresented: Binding(get: { store.request != nil }, set: { if !$0 { close() } })) {
-            ToolCallDetailsSheet(store: store, onClose: close)
+            ToolCallDetailsSheet(store: store, onClose: close, onViewSimulator: onViewSimulator)
         }
     }
 }
@@ -117,6 +122,7 @@ struct ToolCallDetailsSheet: View {
     @ObservedObject var store: ToolCallDetailsStore
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let onClose: () -> Void
+    var onViewSimulator: ((SimulatorTarget, String, String) -> Void)? = nil
 
     var body: some View {
         NavigationStack {
@@ -129,7 +135,13 @@ struct ToolCallDetailsSheet: View {
                                 isExpanded: Binding(
                                     get: { store.expandedCallIds.contains(call.id) },
                                     set: { store.setExpanded($0, callId: call.id) }
-                                ))
+                                ), onViewSimulator: request.machineId.flatMap { machineId in
+                                    guard let chatId = request.chatId, !machineId.isEmpty, let onViewSimulator else { return nil }
+                                    return { target in
+                                        onClose()
+                                        onViewSimulator(target, machineId, chatId)
+                                    }
+                                })
                                 .id(call.id)
                                 .transition(reduceMotion ? .identity : .asymmetric(
                                     insertion: .move(edge: .top).combined(with: .opacity),
@@ -181,6 +193,7 @@ private struct ToolCallDisclosure: View {
     let number: Int
     let count: Int
     @Binding var isExpanded: Bool
+    var onViewSimulator: ((SimulatorTarget) -> Void)? = nil
 
     var body: some View {
         let summary = NativeToolSummary(call)
@@ -188,6 +201,17 @@ private struct ToolCallDisclosure: View {
             // Do not build renderers or highlight output for closed calls.
             if isExpanded {
                 VStack(alignment: .leading, spacing: 16) {
+                    if let onViewSimulator, let targets = call.simulatorTargets {
+                        ForEach(Array(targets.enumerated()), id: \.offset) { index, target in
+                            Button {
+                                onViewSimulator(target)
+                            } label: {
+                                Label(targets.count == 1 ? "View Simulator" : "View Simulator \(index + 1)", systemImage: "pip")
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .accessibilityIdentifier("ToolCallDetails.viewSimulator.\(call.id).\(index)")
+                        }
+                    }
                     NativeToolCallRenderer(call: call, summaryTitle: call.commandPresentation == nil ? summary.title : summary.subtitle)
                     if let error = call.error { detailSection("Error", text: error) }
                     DisclosureGroup("Call information") {
@@ -232,6 +256,13 @@ private struct ToolCallDisclosure: View {
                             .foregroundStyle(.primary)
                             .lineLimit(2)
                             .accessibilityIdentifier("ToolCallDetails.summary.\(call.id)")
+                        if let context = call.commandPresentation?.executionContext {
+                            Text(context)
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(2)
+                                .accessibilityIdentifier("ToolCallDetails.executionContext.\(call.id)")
+                        }
                         if let subtitle = summary.subtitle {
                             Text(subtitle)
                                 .font(.system(.caption, design: summary.isCode ? .monospaced : .default))

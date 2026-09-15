@@ -28,9 +28,18 @@ final class NativeToolRendererTests: XCTestCase {
                 XCTAssertEqual(summary.subtitle, "Verify iPhone installation")
                 XCTAssertFalse(summary.isCode)
                 XCTAssertEqual(call.commandPresentation?.language, "python")
+                XCTAssertEqual(call.commandPresentation?.executionContext, "zsh")
                 XCTAssertTrue(call.commandPresentation!.source!.contains("assert a['bundleVersion']==v"))
                 XCTAssertTrue(call.recordedCommand!.hasPrefix("'/bin/zsh'"))
                 XCTAssertEqual(NativeToolCodeSyntax.language("python").language, "python")
+            }
+            if name == "package-script" {
+                let summary = NativeToolSummary(call)
+                XCTAssertEqual(summary.title, "Build: typecheck")
+                XCTAssertNil(summary.subtitle, "The command belongs in the expanded body")
+                XCTAssertEqual(call.commandPresentation?.executionContext, "npm · zsh")
+                XCTAssertEqual(call.commandPresentation?.command, "npm run build:typecheck")
+                XCTAssertEqual(call.recordedCommand, "npm run build:typecheck")
             }
             if name == "compound-command" {
                 XCTAssertEqual(NativeToolSummary(call).title, "Python + Status")
