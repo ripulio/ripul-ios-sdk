@@ -10,7 +10,7 @@ let ripulViewExplorerOverlayTag = 0x5249_5055   // "RIPU"
 
 /// Marketing version of the RipulAgent SDK, surfaced in the inspector's copy output as `sdk: …`
 /// so we can always tell which build is actually running on the device. Bump on every release.
-let ripulSDKVersion = "0.7.114"
+let ripulSDKVersion = "0.7.115"
 
 // MARK: - View Inspector Overlay
 //
@@ -887,6 +887,20 @@ class ViewInspectorController: UIView {
     /// of silently doing nothing.
     var onFireOutcome: ((String) -> Void)?
 
+    /// Appearance uses the finger position directly and never confirms a macro
+    /// action or schedules a pin. Clear gesture state when switching modes.
+    var selectsAppearance = false {
+        didSet {
+            guard selectsAppearance != oldValue else { return }
+            pendingPinToggle?.cancel()
+            pendingPinToggle = nil
+            lastTapTime = nil
+            lastTapPosition = nil
+            lastTouch = nil
+            suppressNextPinToggle = false
+        }
+    }
+
     private let cursorAccel: CGFloat = 1.4
     private var cursorPos: CGPoint
     private var lastTouch: CGPoint?
@@ -984,6 +998,15 @@ class ViewInspectorController: UIView {
         let loc = t.location(in: self)
         NSLog("[RipulViewExplorer] touchesBegan loc=(%.1f, %.1f) lastTapTime=%.3f timestamp=%.3f", loc.x, loc.y, lastTapTime ?? -1, t.timestamp)
 
+        if selectsAppearance {
+            session?.pinned = false
+            lastTouch = loc
+            cursorPos = loc
+            onCursorMoved?(cursorPos)
+            pickAt(cursorPos)
+            return
+        }
+
         // Detect a double-tap on the currently highlighted element and hand it to
         // the host app as an abstract element tap. The payload's `view` is the
         // token-anchor (the .uiKitIdentifier stamp) when one resolved, so the host
@@ -1048,6 +1071,13 @@ class ViewInspectorController: UIView {
         guard let t = touches.first, let last = lastTouch else { return }
         touchMoved = true
         let loc = t.location(in: self)
+        if selectsAppearance {
+            lastTouch = loc
+            cursorPos = loc
+            onCursorMoved?(cursorPos)
+            pickAt(cursorPos)
+            return
+        }
         let dx = (loc.x - last.x) * cursorAccel
         let dy = (loc.y - last.y) * cursorAccel
         lastTouch = loc
@@ -1060,7 +1090,7 @@ class ViewInspectorController: UIView {
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
         lastTouch = nil
-        guard let t = touches.first else { return }
+        guard !selectsAppearance, let t = touches.first else { return }
 
         // A tap that completed a double-tap shouldn't ALSO fire the element.
         if suppressNextPinToggle {
@@ -1697,6 +1727,7 @@ class ViewInspectorController: UIView {
 struct ViewInspectorTouchLayer: UIViewRepresentable {
     let session: InspectorSession
     let capturesTouches: Bool
+    let selectsAppearance: Bool
     var hostWindow: UIWindow? = nil
     let onInspect: (InspectedView) -> Void
     let onCursorMoved: (CGPoint) -> Void
@@ -1708,6 +1739,7 @@ struct ViewInspectorTouchLayer: UIViewRepresentable {
         v.session = session
         session.controller = v
         v.capturesTouches = capturesTouches
+        v.selectsAppearance = selectsAppearance
         v.hostWindow = hostWindow
         v.onInspect = onInspect
         v.onCursorMoved = onCursorMoved
@@ -1719,6 +1751,7 @@ struct ViewInspectorTouchLayer: UIViewRepresentable {
 
     func updateUIView(_ uiView: ViewInspectorController, context: Context) {
         uiView.capturesTouches = capturesTouches
+        uiView.selectsAppearance = selectsAppearance
         uiView.onInspect = onInspect
         uiView.onCursorMoved = onCursorMoved
         uiView.onElementTap = onElementTap
@@ -2705,18 +2738,15 @@ struct InspectorHUD: View {
     let recordedSteps: [MacroStep]
     let onDeleteStep: (IndexSet) -> Void
     let onStopAndSave: () -> Void
-    /// The tab shown on first render — `.macro` when launched straight into
-    /// record mode from the library's "Record new" entry point.
-    let initialTab: InspectorTab
-
-    @State private var tab: InspectorTab
+    /// Shared with the touch layer so tab selection also selects the input mode.
+    @Binding var tab: InspectorTab
 
     init(session: InspectorSession, inspected: InspectedView?, history: [UIView], folded: Binding<Bool>, showRulers: Binding<Bool>,
          consoleAction: (() -> Void)?, onUp: @escaping () -> Void, onBack: @escaping () -> Void,
          onExit: @escaping () -> Void, onSelectView: @escaping (UIView) -> Void, size: CGSize,
          isRecording: Binding<Bool>, autoPauseSeconds: Binding<Double>, recordedSteps: [MacroStep],
          onDeleteStep: @escaping (IndexSet) -> Void, onStopAndSave: @escaping () -> Void,
-         initialTab: InspectorTab = .properties) {
+         tab: Binding<InspectorTab>) {
         self.session = session
         self.inspected = inspected
         self.history = history
@@ -2733,8 +2763,7 @@ struct InspectorHUD: View {
         self.recordedSteps = recordedSteps
         self.onDeleteStep = onDeleteStep
         self.onStopAndSave = onStopAndSave
-        self.initialTab = initialTab
-        self._tab = State(initialValue: initialTab)
+        self._tab = tab
     }
 
     /// Declaration order is tab order.
@@ -2806,13 +2835,17 @@ struct InspectorHUD: View {
         VStack(alignment: .leading, spacing: 6) {
             InspectorIdentityLozenge(session: session)
             HStack(spacing: 7) {
-                hudIconButton(session.pinned ? "pin.fill" : "pin", label: "Pin selection", disabled: !session.hasSelection,
-                    tone: .pink, active: session.pinned) { session.pinned.toggle() }
-                    .uiKitIdentifier("Inspector.pin")
+                if tab != .edit {
+                    hudIconButton(session.pinned ? "pin.fill" : "pin", label: "Pin selection", disabled: !session.hasSelection,
+                        tone: .pink, active: session.pinned) { session.pinned.toggle() }
+                        .uiKitIdentifier("Inspector.pin")
+                }
                 hudIconButton("doc.on.doc", label: "Copy reference", disabled: !session.hasSelection) { session.copy() }
                     .uiKitIdentifier("Inspector.copy")
-                hudButton("Activate", disabled: !session.hasSelection) { session.activate() }
-                    .uiKitIdentifier("Inspector.activate")
+                if tab != .edit {
+                    hudButton("Activate", disabled: !session.hasSelection) { session.activate() }
+                        .uiKitIdentifier("Inspector.activate")
+                }
                 hudButton(capturingContext ? "Capturing…" : "Add to chat", disabled: !session.hasSelection || capturingContext) {
                     guard let bridge = RipulViewExplorer.contextBridge, let id = bridge.activeSessionId else {
                         session.error = "Open a chat, then choose Add to chat. You can also copy this reference."; return
@@ -2867,11 +2900,13 @@ struct InspectorHUD: View {
                 hudIconButton("terminal", label: "Console", tone: .cyan, action: consoleAction)
                     .uiKitIdentifier("InspectorHUD.consoleButton")
             }
-            hudIconButton("record.circle", label: isRecording ? "Stop Recording" : "Record Macro", disabled: session.web != nil,
-                          tone: .red, active: isRecording) {
-                if isRecording { onStopAndSave() } else { isRecording = true; tab = .macro; folded = false }
+            if tab != .edit {
+                hudIconButton("record.circle", label: isRecording ? "Stop Recording" : "Record Macro", disabled: session.web != nil,
+                              tone: .red, active: isRecording) {
+                    if isRecording { onStopAndSave() } else { isRecording = true; tab = .macro; folded = false }
+                }
+                .uiKitIdentifier("InspectorHUD.recordButton")
             }
-            .uiKitIdentifier("InspectorHUD.recordButton")
             hudIconButton("ruler", label: "Ruler", tone: .cyan, active: showRulers) { showRulers.toggle() }
                 .uiKitIdentifier("InspectorHUD.rulersButton")
             hudIconButton("arrow.uturn.backward", label: "Back", disabled: session.historyCount == 0, action: onBack)
@@ -2915,6 +2950,7 @@ struct InspectorHUD: View {
                     }
                 }
                 .buttonStyle(.plain)
+                .uiKitIdentifier("Inspector.tab.\(t.rawValue.lowercased())")
             }
             Spacer()
         }
@@ -2952,7 +2988,9 @@ struct InspectorHUD: View {
                 EmptyView()   // handled above
             }
         } else {
-            Text("Drag to inspect native or web elements. Tap to pin; use Activate to press. Fold the panel to interact with the app.")
+            Text(tab == .edit
+                 ? "Tap an element in the app to edit its appearance. Fold the panel to interact with the app."
+                 : "Drag to inspect native or web elements. Tap to pin; use Activate to press. Fold the panel to interact with the app.")
                 .font(.system(size: 11, design: .monospaced))
                 .foregroundStyle(.gray)
                 .italic()
@@ -3058,8 +3096,9 @@ public struct ViewInspectorOverlay: View {
     // MARK: Macro recording state (docs/plans/automation-macros/phase-2-recording-ui.md)
     //
     // Additive to the existing state above — recording never moves ownership
-    // of `inspected`/`history`/`currentView`; it only reacts to the same
-    // double-tap confirm the Edit-tab flow already uses.
+    // of `inspected`/`history`/`currentView`. Appearance is a separate selection
+    // mode; double-tap recording is available only outside Appearance.
+    @State private var selectedTab: InspectorHUD.InspectorTab
     @State private var isRecording = false
     @State private var recordedSteps: [MacroStep] = []
     /// The just-confirmed double-tap while recording — drives the action
@@ -3094,6 +3133,7 @@ public struct ViewInspectorOverlay: View {
         self.startRecording = startRecording
         self.hostWindow = hostWindow
         self._isRecording = State(initialValue: startRecording)
+        self._selectedTab = State(initialValue: startRecording ? .macro : .edit)
     }
 
     public var body: some View {
@@ -3103,12 +3143,14 @@ public struct ViewInspectorOverlay: View {
                 // Folding only collapses the HUD; the reticule stays movable/inspectable.
                 ViewInspectorTouchLayer(
                     session: session, capturesTouches: !session.interacting && !folded,
+                    selectsAppearance: selectedTab == .edit,
                     hostWindow: hostWindow,
                     onInspect: { _ in },
                     onCursorMoved: { pos in
                         cursorPosition = pos
                     },
                     onElementTap: { tap in
+                        guard selectedTab != .edit else { return }
                         if isRecording {
                             pendingRecordTap = tap
                         } else {
@@ -3180,10 +3222,6 @@ public struct ViewInspectorOverlay: View {
                     showsResizeGrip: !folded,
                     avoidsKeyboard: true
                 ) { size in
-                    // Broken out of the call below: the 16-argument HUD
-                    // construction plus the enum ternary tipped the type
-                    // checker past its limit once.
-                    let hudInitialTab: InspectorHUD.InspectorTab = startRecording ? .macro : .properties
                     InspectorHUD(
                         session: session,
                         inspected: inspected,
@@ -3201,14 +3239,22 @@ public struct ViewInspectorOverlay: View {
                         recordedSteps: recordedSteps,
                         onDeleteStep: { offsets in recordedSteps.remove(atOffsets: offsets) },
                         onStopAndSave: { isRecording = false; showSaveSheet = true },
-                        initialTab: hudInitialTab
+                        tab: $selectedTab
                     )
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 .ignoresSafeArea()
             }
             .transition(.opacity)
+            .onAppear {
+                selectedTab = startRecording ? .macro : .edit
+                folded = false
+                if selectedTab == .edit { enterAppearanceMode() }
+            }
             .onDisappear { session.close() }
+            .onChange(of: selectedTab) { tab in
+                if tab == .edit { enterAppearanceMode() }
+            }
             .onChange(of: folded) { value in
                 if value { session.clearWebHighlight() } else { session.refresh() }
             }
@@ -3230,6 +3276,21 @@ public struct ViewInspectorOverlay: View {
                 onDiscardRecording: { recordedSteps = [] }
             ))
         }
+    }
+
+    private func enterAppearanceMode() {
+        // Keep the draft steps so recording can be resumed explicitly in Macro.
+        isRecording = false
+        pendingRecordTap = nil
+        showTypeTextAlert = false
+        showSetValueAlert = false
+        showSaveSheet = false
+        typeTextTarget = nil
+        typeTextInput = ""
+        recordingError = nil
+        fireOutcome = nil
+        session.pinned = false
+        session.interacting = false
     }
 
     /// The macro-recording presentation stack (action chooser dialog, type
@@ -3308,6 +3369,7 @@ public struct ViewInspectorOverlay: View {
     /// app actually responds) and appends the resulting step, or surfaces why
     /// it couldn't be recorded instead of silently dropping it.
     private func chooseRecordingAction(_ action: MacroRecordingAction, for tap: RipulElementTap) {
+        guard selectedTab != .edit, isRecording else { return }
         pendingRecordTap = nil
         if action == .setValue {
             // Same deferral as `.type`: the value alert can only present after
@@ -3352,7 +3414,7 @@ public struct ViewInspectorOverlay: View {
     }
 
     private func commitSetValueStep() {
-        guard let view = typeTextTarget else { return }
+        guard selectedTab != .edit, isRecording, let view = typeTextTarget else { return }
         defer { typeTextTarget = nil; typeTextInput = "" }
         guard let result = MacroRecorder.record(.setValue, on: view, typedText: typeTextInput) else { return }
         if let error = result.error {
@@ -3364,7 +3426,7 @@ public struct ViewInspectorOverlay: View {
     }
 
     private func commitTypeStep() {
-        guard let view = typeTextTarget else { return }
+        guard selectedTab != .edit, isRecording, let view = typeTextTarget else { return }
         defer { typeTextTarget = nil; typeTextInput = "" }
         guard let result = MacroRecorder.record(.type, on: view, typedText: typeTextInput) else { return }
         if let error = result.error {
