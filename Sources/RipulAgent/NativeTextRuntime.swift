@@ -1,5 +1,6 @@
 #if os(iOS)
 import UIKit
+import Combine
 
 enum NativeTextHooks {
     static func intercept(_ type: AnyClass, _ original: Selector, _ replacement: Selector) {
@@ -12,12 +13,22 @@ enum NativeTextHooks {
     }
 }
 
+/// Shared invalidation for SwiftUI text, including views hosted inside List rows
+/// or sheets that may not inherit a host screen's theme-version environment.
+@MainActor
+final class NativeTextUpdates: ObservableObject {
+    @Published private(set) var version = 0
+    func invalidate() { version &+= 1 }
+}
+
 @MainActor
 enum NativeTextRuntime {
+    static let updates = NativeTextUpdates()
     private(set) static var current = NativeTextTheme()
 
     static func adopt(_ theme: NativeTextTheme) {
         current = theme
+        updates.invalidate()
         NativeTabTitleTheme.clearPreviews()
         NativeLabelTheme.clearPreviews()
         NativeTabTitleTheme.reapply()
@@ -27,6 +38,7 @@ enum NativeTextRuntime {
     static func mutate(_ edit: (inout NativeTextTheme) -> Void) {
         let before = Set(current.labels.map(\.id))
         edit(&current)
+        updates.invalidate()
         NativeTabTitleTheme.reapply()
         NativeLabelTheme.refresh(discover: before != Set(current.labels.map(\.id)))
         NotificationCenter.default.post(name: .ripulThemeDidChange, object: nil)

@@ -161,12 +161,12 @@ final class NativeElementTextBinding {
 public struct RipulThemedText: View {
     public let assignment: RipulTextAssignment
     public let stampsIdentity: Bool
-    @Environment(\.ripulThemeVersion) private var version
+    @ObservedObject private var updates = NativeTextRuntime.updates
     public init(_ assignment: RipulTextAssignment, stampsIdentity: Bool = true) {
         self.assignment = assignment; self.stampsIdentity = stampsIdentity
     }
     public var body: some View {
-        let _ = version
+        let _ = updates.version
         if stampsIdentity { Text(verbatim: assignment.text).uiKitIdentifier(assignment.element) }
         else { Text(verbatim: assignment.text) }
     }
