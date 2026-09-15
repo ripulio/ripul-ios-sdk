@@ -12,6 +12,46 @@ final class NativeArtefactUITests: XCTestCase {
     app.launch()
     check(app)
   }
+  func testNativeMapUsesTheSameChatHost() { checkMap(dark: false) }
+  func testNativeMapDarkAppearance() { checkMap(dark: true) }
+  private func checkMap(dark: Bool) {
+    continueAfterFailure = false
+    let app = XCUIApplication()
+    if dark { app.launchArguments = ["--dark"] }
+    app.launch()
+    XCTAssertTrue(app.buttons["NativeArtefact.run"].waitForExistence(timeout: 30))
+    app.buttons["Map"].tap()
+    let explore = app.buttons["NativeMap.explore"]
+    XCTAssertTrue(explore.waitForExistence(timeout: 20), app.debugDescription)
+    XCTAssertEqual(explore.label, "Explore map")
+    XCTAssertTrue(app.otherElements["NativeMap.map"].maps.firstMatch.exists, app.debugDescription)
+    explore.tap()
+    XCTAssertEqual(explore.label, "Done")
+    explore.tap()
+    XCTAssertEqual(explore.label, "Explore map")
+    let place = app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH 'London Eye'")).firstMatch
+    XCTAssertTrue(place.waitForExistence(timeout: 15), app.debugDescription)
+    place.tap()
+    XCTAssertEqual(app.staticTexts["NativeMap.selection"].label, "London Eye", app.debugDescription)
+    XCTAssertTrue(app.buttons["NativeMap.open"].isEnabled)
+    app.buttons["Probe"].tap()
+    XCTAssertTrue(app.staticTexts["NativeArtefactHarness.status"].label.contains("attached=1"))
+    let shot = XCTAttachment(screenshot: app.screenshot())
+    shot.name = "Native Apple Maps in chat"
+    shot.lifetime = .keepAlways
+    add(shot)
+    if !dark {
+      app.buttons["NativeMap.open"].tap()
+      XCTAssertTrue(XCUIApplication(bundleIdentifier: "com.apple.Maps").wait(for: .runningForeground, timeout: 15))
+      app.activate()
+      XCTAssertTrue(explore.waitForExistence(timeout: 15))
+    }
+    app.buttons["Hide"].tap()
+    XCTAssertTrue(explore.waitForNonExistence(timeout: 5))
+    app.buttons["Show"].tap()
+    XCTAssertTrue(explore.waitForExistence(timeout: 15))
+    XCTAssertEqual(app.staticTexts["NativeMap.selection"].label, "London Eye")
+  }
   private func check(_ app: XCUIApplication) {
     continueAfterFailure = false
     let run = app.buttons["NativeArtefact.run"]

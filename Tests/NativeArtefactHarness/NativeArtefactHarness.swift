@@ -32,7 +32,7 @@ private final class HarnessController: UIViewController, WKScriptMessageHandler 
     buttons.distribution = .fillEqually
     for (title, action) in [
       ("Calculator", #selector(calculator)), ("Checklist", #selector(checklist)),
-      ("Hide", #selector(hide)), ("Show", #selector(showContent)), ("Probe", #selector(probe)),
+      ("Map", #selector(map)), ("Hide", #selector(hide)), ("Show", #selector(showContent)), ("Probe", #selector(probe)),
     ] {
       let b = UIButton(type: .system)
       b.setTitle(title, for: .normal)
@@ -73,6 +73,7 @@ private final class HarnessController: UIViewController, WKScriptMessageHandler 
   }
   @objc func calculator() { web.evaluateJavaScript("fixtureSetCase('calculator')") }
   @objc func checklist() { web.evaluateJavaScript("fixtureSetCase('checklist')") }
+  @objc func map() { web.evaluateJavaScript("fixtureSetCase('map')") }
   @objc func hide() { web.evaluateJavaScript("fixtureSetMounted(false)") }
   @objc func showContent() { web.evaluateJavaScript("fixtureSetMounted(true)") }
   @objc func probe() {

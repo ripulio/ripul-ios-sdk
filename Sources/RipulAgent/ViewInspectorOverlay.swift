@@ -10,7 +10,7 @@ let ripulViewExplorerOverlayTag = 0x5249_5055   // "RIPU"
 
 /// Marketing version of the RipulAgent SDK, surfaced in the inspector's copy output as `sdk: …`
 /// so we can always tell which build is actually running on the device. Bump on every release.
-let ripulSDKVersion = "0.7.115"
+let ripulSDKVersion = "0.7.116"
 
 // MARK: - View Inspector Overlay
 //
@@ -887,8 +887,8 @@ class ViewInspectorController: UIView {
     /// of silently doing nothing.
     var onFireOutcome: ((String) -> Void)?
 
-    /// Appearance uses the finger position directly and never confirms a macro
-    /// action or schedules a pin. Clear gesture state when switching modes.
+    /// Appearance selects directly on tap release and moves the existing cursor
+    /// relatively on drag. Neither gesture confirms a macro action or pins.
     var selectsAppearance = false {
         didSet {
             guard selectsAppearance != oldValue else { return }
@@ -901,6 +901,7 @@ class ViewInspectorController: UIView {
         }
     }
 
+    private let appearanceDragThreshold: CGFloat = 6
     private let cursorAccel: CGFloat = 1.4
     private var cursorPos: CGPoint
     private var lastTouch: CGPoint?
@@ -999,11 +1000,11 @@ class ViewInspectorController: UIView {
         NSLog("[RipulViewExplorer] touchesBegan loc=(%.1f, %.1f) lastTapTime=%.3f timestamp=%.3f", loc.x, loc.y, lastTapTime ?? -1, t.timestamp)
 
         if selectsAppearance {
-            session?.pinned = false
+            // Wait to distinguish a tap from a drag. Moving the cursor now
+            // would put it under the finger before precision dragging starts.
             lastTouch = loc
-            cursorPos = loc
-            onCursorMoved?(cursorPos)
-            pickAt(cursorPos)
+            touchDownTime = t.timestamp
+            touchMoved = false
             return
         }
 
@@ -1069,15 +1070,26 @@ class ViewInspectorController: UIView {
 
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard let t = touches.first, let last = lastTouch else { return }
-        touchMoved = true
         let loc = t.location(in: self)
         if selectsAppearance {
-            lastTouch = loc
-            cursorPos = loc
-            onCursorMoved?(cursorPos)
-            pickAt(cursorPos)
+            updateAppearanceDrag(at: loc)
             return
         }
+        touchMoved = true
+        moveCursor(from: last, to: loc)
+    }
+
+    private func updateAppearanceDrag(at location: CGPoint) {
+        guard let last = lastTouch else { return }
+        // Until the threshold is crossed, lastTouch remains the touch-down
+        // point so tiny movements accumulate without turning tap jitter into a drag.
+        guard touchMoved || hypot(location.x - last.x, location.y - last.y) >= appearanceDragThreshold else { return }
+        touchMoved = true
+        session?.pinned = false
+        moveCursor(from: last, to: location)
+    }
+
+    private func moveCursor(from last: CGPoint, to loc: CGPoint) {
         let dx = (loc.x - last.x) * cursorAccel
         let dy = (loc.y - last.y) * cursorAccel
         lastTouch = loc
@@ -1089,8 +1101,20 @@ class ViewInspectorController: UIView {
     }
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
-        lastTouch = nil
-        guard !selectsAppearance, let t = touches.first else { return }
+        defer { lastTouch = nil }
+        guard let t = touches.first else { return }
+        if selectsAppearance {
+            guard lastTouch != nil else { return }
+            let loc = t.location(in: self)
+            updateAppearanceDrag(at: loc)
+            if !touchMoved && t.timestamp - touchDownTime < tapMaxDuration {
+                session?.pinned = false
+                cursorPos = loc
+                onCursorMoved?(cursorPos)
+                pickAt(cursorPos)
+            }
+            return
+        }
 
         // A tap that completed a double-tap shouldn't ALSO fire the element.
         if suppressNextPinToggle {
@@ -2989,7 +3013,7 @@ struct InspectorHUD: View {
             }
         } else {
             Text(tab == .edit
-                 ? "Tap an element in the app to edit its appearance. Fold the panel to interact with the app."
+                 ? "Tap an element to edit its appearance. Drag anywhere to move the reticule precisely. Fold the panel to interact with the app."
                  : "Drag to inspect native or web elements. Tap to pin; use Activate to press. Fold the panel to interact with the app.")
                 .font(.system(size: 11, design: .monospaced))
                 .foregroundStyle(.gray)

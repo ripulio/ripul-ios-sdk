@@ -26,6 +26,7 @@
     static func standard() -> NativeEmbedRegistry {
       let registry = NativeEmbedRegistry()
       registry.register("artefact.declarative/v1") { NativeDeclarativeArtefactRenderer() }
+      registry.register("map/v1") { NativeMapRenderer() }
       return registry
     }
   }
