@@ -94,6 +94,17 @@ public final class RipulDevAssistantOverlay {
         }
     }
 
+    /// Host theme hubs enter review directly through this console's existing
+    /// developer sign-in. A signed-out user resumes the request after signing in.
+    @MainActor
+    public func showThemePublishing() {
+        guard isEnabled?() ?? true, configuration != nil else { return }
+        present()
+        guard let root = window?.rootViewController as? RipulDevOverlayRootVC else { return }
+        root.navigation.themeReviewRequested = true
+        expand()
+    }
+
     /// Expand the bubble into the full console (creates the console on first
     /// expand — the only cold boot; later expands are instant).
     public func expand() {
@@ -236,6 +247,7 @@ final class RipulDevOverlayWindow: RipulChromeWindow {
 
 @available(iOS 26.0, *)
 final class RipulDevOverlayRootVC: UIViewController {
+    let navigation = RipulConsoleNavigation()
     weak var overlay: RipulDevAssistantOverlay?
     var configuration: RipulSessionsConfiguration!
     private var bubble: UIView!
@@ -723,6 +735,7 @@ final class RipulDevOverlayRootVC: UIViewController {
     private func mountPanel() {
         guard panelHost == nil else { return }
         if sharedBridge == nil { sharedBridge = makeSharedBridge() }
+        navigation.onThemeReviewDismiss = { [weak self] in self?.overlay?.collapse() }
         let console = AnyView(RipulAgentConsole(
             configuration: configuration,
             slots: RipulAgentScreenSlots(
@@ -744,7 +757,8 @@ final class RipulDevOverlayRootVC: UIViewController {
                     AnyView(HostScreenPreviewMenu(state: hostPreviewState))
                 }
             ),
-            bridge: sharedBridge
+            bridge: sharedBridge,
+            navigation: navigation
         ))
         let host = UIHostingController(rootView: console)
         host.view.backgroundColor = .systemBackground

@@ -8,6 +8,34 @@ final class ThemeManagementTests: XCTestCase {
     let original = Data(#"{"title":"Old","hostExtra":{"unknown":[1,true,null]}}"#.utf8)
     let edited = Data(#"{"title":"New","hostExtra":{"unknown":[1,true,null]}}"#.utf8)
 
+    func testHubSummaryReadsDraftWithoutApplyingAndTracksResetAndInvalidSource() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        var live = original
+        var applications = 0
+        let remote = RipulRemoteThemeClient(url: base.appendingPathComponent("v1/app-themes/app"),
+            fallback: original, cacheDirectory: folder.appendingPathComponent("cache"),
+            validateAndApply: { live = $0; applications += 1 }, fetch: { _ in throw URLError(.notConnectedToInternet) })
+        let path = folder.appendingPathComponent("draft.json")
+        func summary() -> RipulThemeDraftSummary {
+            ThemeManagementModel.draftSummary(remote: remote, draftURL: path, capture: { $0 ?? live })
+        }
+        XCTAssertEqual(summary(), .changes(0))
+        XCTAssertEqual(applications, 0, "Reading the hub must not apply or restore a theme")
+        let editor = ThemeManagementModel(baseURL: base, tokenProvider: { nil }, remote: remote,
+            draftURL: path, capture: { _ in live })
+        editor.start()
+        editor.sourceChanged(String(decoding: edited, as: UTF8.self)); editor.applySource(); editor.close(); remote.stop()
+        let before = applications
+        XCTAssertEqual(summary(), .changes(1))
+        XCTAssertEqual(applications, before)
+        editor.start(); editor.sourceChanged(String(decoding: original, as: UTF8.self)); editor.applySource(); editor.close(); remote.stop()
+        XCTAssertEqual(summary(), .changes(0))
+        editor.start(); editor.sourceChanged("{invalid"); editor.close(); remote.stop()
+        XCTAssertEqual(summary(), .needsAttention)
+        XCTAssertEqual(ThemeManagementModel.draftSummary(remote: nil, capture: { _ in self.original }), .unavailable)
+    }
+
     func testFailedPublishAndInvalidSourceSurviveClosingAndReopening() async throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: folder) }

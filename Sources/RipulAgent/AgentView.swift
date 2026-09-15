@@ -30,22 +30,22 @@ public final class ScrollButtonModel: ObservableObject {
 /// AgentView (and the WKWebView it hosts) is never invalidated mid-scroll, which
 /// was stalling the web view's scroll.
 @available(iOS 16.0, macOS 14.0, *)
-private struct ScrollToBottomOverlay: View {
+struct ScrollToBottomOverlay: View {
     @ObservedObject var model: ScrollButtonModel
     let onTap: () -> Void
     var body: some View {
-        // Float the button in a ZERO-HEIGHT overlay so showing/hiding it never
-        // changes the VStack layout. As a layout member it snapped OUT: AgentView
-        // (by design) doesn't animate its VStack on the model flip, so the button's
-        // space collapsed instantly and clipped the scale-out. With no layout change
-        // the fade plays fully in place in BOTH directions. The .animation is scoped
-        // here and the model is off AgentBridge, so this re-renders only this child —
-        // never AgentView / the WKWebView host.
+        // Reserve a constant transparent area so showing/hiding the button never
+        // changes layout. Its hit target must stay inside the composer's UIKit
+        // hosting bounds; drawing above a zero-height overlay puts it outside.
+        // The input remains bottom-aligned, and only this child observes the model.
         Color.clear
-            .frame(height: 0)
+            .frame(height: 64)
             .overlay(alignment: .bottom) {
                 if model.show {
                     ScrollToBottomButton(unreadCount: model.unreadCount, action: onTap)
+                        #if os(iOS)
+                        .background(KeyboardOverlayHitRegion())
+                        #endif
                         .padding(.horizontal, 12)
                         .padding(.bottom, 8) // gap above the chat input
                         .transition(.scale.combined(with: .opacity))
@@ -309,7 +309,7 @@ public struct AgentView<TopBar: View>: View {
                         return true
                     },
                     messageHistory: messageHistory,
-                    bottomInset: composerBottomInset,
+                    bottomInset: composerContentBottomInset,
                     onQuickCommands: { showingQuickCommands = true },
                     onDebugCommands: { showingDebugCommands = true },
                     onShowConsoleLogs: { showingConsoleLogs = true },
@@ -325,6 +325,7 @@ public struct AgentView<TopBar: View>: View {
                         updateWebBottomPadding()
                     }
                 )
+                .modifier(KeyboardAttachedOverlayModifier())
             }
         }
         // Hands-free voice mode — attached AFTER the composer overlay so it
@@ -515,12 +516,20 @@ public struct AgentView<TopBar: View>: View {
 
     // MARK: - Chat Input
 
-    /// Bottom inset for the composer. Reads keyboard.height (iOS) so it updates
-    /// on keyboard show/hide — NOT per keystroke — so it doesn't reintroduce the
-    /// whole-body re-render the composer isolation removes.
+    /// iOS spacing and movement belong to the UIKit keyboard attachment.
+    private var composerContentBottomInset: CGFloat {
+        #if os(iOS)
+        return 0
+        #else
+        return 8
+        #endif
+    }
+
+    /// The debug native scroller still needs the composer's occupied bottom area.
+    /// The composer itself is positioned independently by UIKit's keyboard guide.
     private var composerBottomInset: CGFloat {
         #if os(iOS)
-        return keyboard.height > 0 ? keyboard.height + 4 : 8
+        return keyboard.height + 8
         #else
         return 8
         #endif
@@ -629,9 +638,7 @@ private struct ChatComposer: View {
     /// composer can consume the text (history + clear) only on a real start.
     var onEnterVoiceMode: ((String) -> Bool)?
     @ObservedObject var messageHistory: MessageHistory
-    /// Resting/keyboard bottom inset. A plain value (not the KeyboardObserver)
-    /// so keyboard changes re-render only via the parent passing a new value —
-    /// keyboard events aren't per-keystroke, so this stays off the hot path.
+    /// Content spacing only; iOS keyboard movement belongs to the outer UIKit host.
     let bottomInset: CGFloat
     let onQuickCommands: () -> Void
     let onDebugCommands: () -> Void

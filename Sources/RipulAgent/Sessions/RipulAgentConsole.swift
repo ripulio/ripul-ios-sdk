@@ -1,6 +1,15 @@
 #if os(iOS)
 import SwiftUI
 
+/// Navigation requests belong to one console, so a host shortcut cannot open
+/// a sheet in another signed-in surface.
+@MainActor
+public final class RipulConsoleNavigation: ObservableObject {
+    @Published public var themeReviewRequested = false
+    public var onThemeReviewDismiss: (() -> Void)?
+    public init() {}
+}
+
 /// One-view drop-in developer console: sign-in gate + the whole Ripul agent
 /// screen (`RipulAgentScreen`), all sharing a single `AgentBridge`.
 ///
@@ -28,6 +37,7 @@ import SwiftUI
 /// screen is a separate layout (a future milestone can port it the same way).
 @available(iOS 26.0, *)
 public struct RipulAgentConsole: View {
+    @ObservedObject private var navigation: RipulConsoleNavigation
     private let configuration: RipulSessionsConfiguration
     @StateObject private var bridge: AgentBridge
     @StateObject private var authStore: RipulClerkAuthStore
@@ -59,8 +69,10 @@ public struct RipulAgentConsole: View {
     public init(
         configuration: RipulSessionsConfiguration,
         slots: RipulAgentScreenSlots = .init(),
-        bridge: AgentBridge? = nil
+        bridge: AgentBridge? = nil,
+        navigation: RipulConsoleNavigation? = nil
     ) {
+        self.navigation = navigation ?? RipulConsoleNavigation()
         self.configuration = configuration
         self.slots = slots
         let authStore = RipulClerkAuthStore(cache: configuration.cache)
@@ -197,6 +209,12 @@ public struct RipulAgentConsole: View {
         .onReceive(NotificationCenter.default.publisher(for: .ripulShowProfile)) { notification in
             guard notification.object as? AgentBridge === bridge, authStore.isSignedIn else { return }
             showProfile = true
+        }
+        .sheet(isPresented: Binding(
+            get: { navigation.themeReviewRequested && authStore.isSignedIn },
+            set: { navigation.themeReviewRequested = $0 }
+        ), onDismiss: { navigation.onThemeReviewDismiss?() }) {
+            ThemePublishEntryScreen(baseURL: configuration.baseURL, tokenProvider: { authStore.token })
         }
         .sheet(isPresented: $showProfile) {
             NavigationStack {

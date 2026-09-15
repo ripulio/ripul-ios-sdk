@@ -46,6 +46,22 @@ final class ThemeManagementModel: ObservableObject {
             .appendingPathComponent("Ripul/ThemeDrafts/" + key + ".json")
     }
 
+    /// Read the same durable draft used by both editors without opening an editor,
+    /// acquiring a refresh lease, or applying anything to the running app.
+    static func draftSummary(remote: RipulRemoteThemeClient?, draftURL: URL? = nil,
+                             capture: (Data?) throws -> Data) -> RipulThemeDraftSummary {
+        guard let remote else { return .unavailable }
+        do {
+            let location = draftURL ?? draftLocation(for: remote.url)
+            let saved = FileManager.default.fileExists(atPath: location.path)
+                ? try JSONDecoder().decode(Draft.self, from: Data(contentsOf: location)) : nil
+            if let saved, canonical(Data(saved.text.utf8)) == nil { return .needsAttention }
+            let baseline = saved?.baseline ?? remote.authoritativeDocument
+            let draft = try capture(saved.map { Data($0.text.utf8) })
+            return .changes(ThemeDocumentChanges.compare(baseline, draft).count)
+        } catch { return .needsAttention }
+    }
+
     /// The explorer saves into the SAME durable draft as Solution Management, even
     /// when that screen has never been opened. Keep its reviewed baseline and extras.
     static func saveNativeTextDraft(target: NativeTextTarget, text: String?,
@@ -202,6 +218,32 @@ final class ThemeManagementModel: ObservableObject {
             try FileManager.default.createDirectory(at: draftURL.deletingLastPathComponent(), withIntermediateDirectories: true)
             try JSONEncoder().encode(Draft(text: text, baseline: baseline, etag: etag)).write(to: draftURL, options: .atomic)
         } catch { self.error = "Could not save this draft on the phone: " + error.localizedDescription }
+    }
+}
+
+/// Read-only publication status for host-owned theme hubs.
+public enum RipulThemeDraftSummary: Equatable {
+    case unavailable, needsAttention, changes(Int)
+
+    @MainActor public static func current() -> Self {
+        ThemeManagementModel.draftSummary(remote: RipulThemeEngine.remoteTheme,
+            capture: { try RipulThemeEngine.themeDocumentForPublishing(over: $0) })
+    }
+}
+
+/// Opens the existing review flow directly, with the same persisted draft and
+/// conflict checks as Solution Management. Authentication stays with the caller.
+@MainActor
+struct ThemePublishEntryScreen: View {
+    @StateObject private var model: ThemeManagementModel
+    init(baseURL: URL, tokenProvider: @escaping () -> String?) {
+        _model = StateObject(wrappedValue: ThemeManagementModel(baseURL: baseURL, tokenProvider: tokenProvider))
+    }
+    var body: some View {
+        ThemePublishReviewScreen(model: model)
+            .onAppear { model.start() }
+            .onDisappear { model.close() }
+            .onReceive(NotificationCenter.default.publisher(for: .ripulThemeDidChange)) { _ in model.captureChanges() }
     }
 }
 
