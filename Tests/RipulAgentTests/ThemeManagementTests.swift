@@ -1,5 +1,6 @@
 #if os(iOS)
 import XCTest
+import UIKit
 @testable import RipulAgent
 
 @MainActor
@@ -7,6 +8,48 @@ final class ThemeManagementTests: XCTestCase {
     let base = URL(string: "https://example.com")!
     let original = Data(#"{"title":"Old","hostExtra":{"unknown":[1,true,null]}}"#.utf8)
     let edited = Data(#"{"title":"New","hostExtra":{"unknown":[1,true,null]}}"#.utf8)
+
+    func testSavingTextAppliesToBoundHostLabelBeforePublishingAndSurvivesDone() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let exporter = RipulThemeEngine.exportThemeDocument, native = NativeTextRuntime.current
+        let defaults = RipulElementText.defaults
+        let label = UILabel()
+        defer {
+            RipulElementText.unbind(label)
+            RipulThemeEngine.exportThemeDocument = exporter
+            RipulElementText.configure(defaults: defaults)
+            NativeTextRuntime.adopt(native)
+            try? FileManager.default.removeItem(at: folder)
+        }
+        RipulElementText.configure(defaults: [:])
+        RipulThemeEngine.exportThemeDocument = { $0 ?? self.original }
+        let assignment = RipulTextAssignment(element: "preview.regression.title", fallback: "Original")
+        RipulElementText.bindLabel(label, assignment: assignment)
+        var hostApplications = 0
+        let remote = RipulRemoteThemeClient(url: base.appendingPathComponent("v1/app-themes/app"),
+            fallback: original, cacheDirectory: folder.appendingPathComponent("cache"),
+            validateAndApply: { data in
+                try RipulThemeEngine.applyRemoteDocument(data) { _ in hostApplications += 1 }
+            }, fetch: { _ in
+                (self.original, HTTPURLResponse(url: self.base, statusCode: 200, httpVersion: nil,
+                                               headerFields: ["ETag": "v1"])!)
+            })
+        try remote.start(); await remote.refresh()
+        defer { remote.stop() }
+        let lease = remote.beginEditing(), before = hostApplications
+        let draftURL = folder.appendingPathComponent("draft.json")
+        try ThemeManagementModel.saveTextMutation({ document in
+            document.elements[assignment.element] = ["text": .text("Saved locally")]
+        }, remote: remote, draftURL: draftURL)
+        XCTAssertEqual(hostApplications, before + 1)
+        XCTAssertEqual(label.text, "Saved locally")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: draftURL.path))
+        remote.endEditing(lease)
+        await remote.refresh()
+        XCTAssertEqual(label.text, "Saved locally")
+        XCTAssertEqual(remote.authoritativeDocument, original)
+        XCTAssertEqual(remote.authoritativeETag, "v1")
+    }
 
     func testHubSummaryReadsDraftWithoutApplyingAndTracksResetAndInvalidSource() throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

@@ -80,6 +80,37 @@ final class RemoteThemeClientTests: XCTestCase {
         XCTAssertNil(client.lastError)
     }
 
+    func testPreviewSurvivesEditorClosureAndRefreshUntilExplicitReset() async throws {
+        var current = Data()
+        var requests = 0
+        let server = Data(#"{"title":"server"}"#.utf8)
+        let preview = Data(#"{"title":"local wording"}"#.utf8)
+        let client = RipulRemoteThemeClient(url: url, fallback: fallback, cacheDirectory: directory(),
+            validateAndApply: { current = $0 }, fetch: { _ in
+                requests += 1
+                return requests == 1 ? (server, self.response(etag: "v1")) : (Data(), self.response(304))
+            })
+        try client.start(); await client.refresh()
+        let lease = client.beginEditing()
+        try client.preview(preview)
+        XCTAssertEqual(current, preview)
+        client.endEditing(lease)
+        await client.refresh()
+        XCTAssertEqual(current, preview)
+        XCTAssertEqual(requests, 1)
+        XCTAssertEqual(client.authoritativeDocument, server)
+        XCTAssertEqual(client.authoritativeETag, "v1")
+        try client.restoreAuthoritativeTheme()
+        await client.refresh()
+        XCTAssertEqual(current, server)
+        XCTAssertEqual(requests, 2)
+        // Resetting the final edit back to the baseline also releases the preview.
+        try client.preview(preview)
+        try client.preview(Data(#"{ "title": "server" }"#.utf8))
+        await client.refresh()
+        XCTAssertEqual(requests, 3)
+    }
+
     func testInvalidOrIncompatibleResponsesDoNotReplaceOrPoisonCache() async throws {
         let cache = directory()
         let remote = Data(#"{"title":"good"}"#.utf8)

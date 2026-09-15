@@ -30,6 +30,7 @@ public final class RipulRemoteThemeClient {
     private var refreshTask: Task<Void, Never>?
     private var generation = UUID()
     private var editors: Set<UUID> = []
+    private var hasLocalPreview = false
     private static let maximumBytes = 512 * 1024
 
     public var authoritativeDocument: Data { accepted?.data ?? fallback }
@@ -43,7 +44,17 @@ public final class RipulRemoteThemeClient {
         editors.remove(lease)
         if editors.isEmpty { refreshInBackground() }
     }
-    public func preview(_ data: Data) throws { try accept(data) }
+    /// Preview through the host's complete apply path without publishing or changing
+    /// the server baseline. Keep it visible after the editor closes.
+    public func preview(_ data: Data) throws {
+        try accept(data)
+        stop() // An already-running fetch must not overwrite this preview either.
+        hasLocalPreview = try canonical(data) != canonical(authoritativeDocument)
+    }
+
+    private func canonical(_ data: Data) throws -> Data {
+        try JSONSerialization.data(withJSONObject: JSONSerialization.jsonObject(with: data), options: [.sortedKeys])
+    }
 
     /// Called only after the server acknowledges a successful publication.
     public func acceptPublication(_ manifest: RipulThemeManifest) throws {
@@ -51,6 +62,7 @@ public final class RipulRemoteThemeClient {
         try accept(manifest.data)
         let value = CachedTheme(url: url, etag: manifest.etag, data: manifest.data)
         accepted = value; origin = .server; lastError = nil
+        hasLocalPreview = false
         do {
             try FileManager.default.createDirectory(at: cacheFile.deletingLastPathComponent(), withIntermediateDirectories: true)
             try JSONEncoder().encode(value).write(to: cacheFile, options: .atomic)
@@ -83,6 +95,7 @@ public final class RipulRemoteThemeClient {
     public func start() throws {
         stop()
         accepted = nil
+        hasLocalPreview = false
         lastError = nil
         if let bytes = try? Data(contentsOf: cacheFile),
            let cached = try? JSONDecoder().decode(CachedTheme.self, from: bytes),
@@ -100,6 +113,7 @@ public final class RipulRemoteThemeClient {
     /// Restores the server's last accepted document after a local editor preview.
     public func restoreAuthoritativeTheme() throws {
         try accept(accepted?.data ?? fallback)
+        hasLocalPreview = false
     }
 
     public func stop() {
@@ -109,7 +123,7 @@ public final class RipulRemoteThemeClient {
     }
 
     public func refreshInBackground() {
-        guard editors.isEmpty, refreshTask == nil else { return }
+        guard editors.isEmpty, !hasLocalPreview, refreshTask == nil else { return }
         let currentGeneration = generation
         refreshTask = Task { [weak self] in
             guard let self else { return }

@@ -89,8 +89,9 @@ final class ThemeManagementModel: ObservableObject {
                           etag: existing.map { $0.etag } ?? remote.authoritativeETag)
         try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
         try JSONEncoder().encode(draft).write(to: destination, options: .atomic)
-        NativeTextRuntime.adopt(native)
-        NotificationCenter.default.post(name: .ripulThemeDidChange, object: nil)
+        // Apply through the same complete host/SDK path as publishing, while
+        // retaining this as a local preview after the text sheet dismisses.
+        try remote.preview(changed)
     }
 
     var data: Data { Data(text.utf8) }
