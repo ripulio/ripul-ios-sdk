@@ -133,6 +133,10 @@ struct VoiceModeOverlay: View {
             VStack(spacing: 28) {
                 Spacer()
 
+                if #available(iOS 26.0, macOS 26.0, *) {
+                    VoiceConversationSettingsButton(controller: controller, tokenProvider: tokenProvider, compact: false)
+                }
+
                 ZStack {
                     if let orb = voiceOrbState(
                         for: controller.phase,
@@ -280,12 +284,6 @@ struct VoiceModeOverlay: View {
                     .uiKitIdentifier("VoiceModeOverlay.exit")
                 }
                 .padding(.bottom, bottomPadding)
-            }
-        }
-        .overlay(alignment: .topTrailing) {
-            if #available(iOS 26.0, macOS 26.0, *) {
-                VoiceConversationSettingsButton(controller: controller, tokenProvider: tokenProvider, compact: false)
-                    .padding(20)
             }
         }
         .onAppear { pulsing = true }
