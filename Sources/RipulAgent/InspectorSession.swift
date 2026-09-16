@@ -84,6 +84,7 @@ final class InspectorSession: ObservableObject {
 
     func readWebSelection() async {
         guard let view = webView, let id = web?.id else { return }
+        guard let window = view.window, RipulViewExplorer.canInspect(window) else { invalidate(); return }
         let ticket = generation
         do {
             let info = try Self.decode(try await Self.call(view, "read", [id]))
@@ -93,6 +94,10 @@ final class InspectorSession: ObservableObject {
 
     func activateWeb() async -> [String: Any] {
         guard let view = webView, let id = web?.id else { return ["success": false, "error": "No web element selected"] }
+        guard let window = view.window, RipulViewExplorer.canInspect(window) else {
+            invalidate()
+            return ["success": false, "error": "The selected window is no longer available for inspection"]
+        }
         do {
             _ = try await Self.call(view, "activate", [id])
             return ["success": true, "via": "DOM", "activatedId": web?.identifier ?? id]
@@ -163,6 +168,7 @@ final class InspectorSession: ObservableObject {
     }
 
     private func adoptWeb(_ info: InspectorWebElement, view: WKWebView, remembering: Bool = true) {
+        guard let window = view.window, RipulViewExplorer.canInspect(window) else { invalidate(); return }
         if webView !== view { clearWebHighlight() }
         remember(Target(webView: view, webID: info.id), remembering: remembering)
         native = nil; webView = view; web = info; error = nil
@@ -181,6 +187,7 @@ final class InspectorSession: ObservableObject {
 
     func selectWeb(id: String, remembering: Bool = true, in view: WKWebView? = nil) {
         guard let view = view ?? webView else { return }
+        guard let window = view.window, RipulViewExplorer.canInspect(window) else { invalidate(); return }
         generation += 1; let ticket = generation
         Task {
             do {
@@ -234,6 +241,7 @@ final class InspectorSession: ObservableObject {
 
     func activate() {
         if let view = webView, let id = web?.id {
+            guard let window = view.window, RipulViewExplorer.canInspect(window) else { invalidate(); return }
             Task {
                 do { _ = try await Self.call(view, "activate", [id]); refresh() }
                 catch { self.error = error.localizedDescription }

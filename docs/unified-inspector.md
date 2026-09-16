@@ -21,6 +21,11 @@ does not press it. **Back**, **Parent element** and the Tree tab navigate the sa
 selection. Folding the panel or choosing **Interact with app** returns touches
 to the app while retaining the selection. Unfolding/resuming refreshes it.
 
+In an SDK host app, the minimized assistant is isolated from selection: its
+bubble, compact bar and retained console are skipped, so the cursor selects the
+host underneath. Isolation starts when collapse begins. An expanded console can
+still be inspected; minimizing it invalidates access to its retained selections.
+
 Details, Layout, Appearance and Tree share the panel. Native selections retain
 theme token editing, audit and macro recording. Web selections expose CSS layout
 and appearance edits and an Eval tab, where `$0` is the selected DOM element.

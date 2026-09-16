@@ -10,7 +10,7 @@ let ripulViewExplorerOverlayTag = 0x5249_5055   // "RIPU"
 
 /// Marketing version of the RipulAgent SDK, surfaced in the inspector's copy output as `sdk: …`
 /// so we can always tell which build is actually running on the device. Bump on every release.
-let ripulSDKVersion = "0.7.120"
+let ripulSDKVersion = "0.7.121"
 
 // MARK: - View Inspector Overlay
 //
@@ -1186,7 +1186,8 @@ class ViewInspectorController: UIView {
             "reticule": ["x": Double(windowPoint.x), "y": Double(windowPoint.y)],
             "readout": "",
         ]
-        if let web = session?.web, let view = session?.webView, view.window != nil {
+        if let web = session?.web, let view = session?.webView,
+           let window = view.window, RipulViewExplorer.canInspect(window) {
             let sx = view.bounds.width / web.viewport.width, sy = sx
             let rect = CGRect(x: (web.rect.x - web.viewport.offsetLeft) * sx,
                 y: (web.rect.y - web.viewport.offsetTop) * sy, width: web.rect.width * sx, height: web.rect.height * sy)
@@ -1202,7 +1203,7 @@ class ViewInspectorController: UIView {
         // a live selection; never report their retained readout as current.
         guard let info = currentInfo, let target = currentTarget,
               currentResolution != nil, highlightLayer.path != nil,
-              let host, target.window === host else { return result }
+              let host, RipulViewExplorer.canInspect(host), target.window === host else { return result }
         var ancestor: UIView? = target
         while let view = ancestor {
             guard !view.isHidden, view.alpha > 0.01 else { return result }
@@ -1260,7 +1261,7 @@ class ViewInspectorController: UIView {
     /// a much smaller element than the hosting view that supplies its identity.
     func composerSelection() -> ComposerElementSelection? {
         guard let overlay = window, !overlay.isHidden, !isHidden,
-              let host = hostWindow ?? window, let target = currentTarget,
+              let host = hostWindow ?? window, RipulViewExplorer.canInspect(host), let target = currentTarget,
               let highlighted = currentHighlightView, let info = currentInfo,
               currentResolution != nil, highlightLayer.path != nil,
               target.window === host, highlighted.window === host else { return nil }
@@ -1301,7 +1302,8 @@ class ViewInspectorController: UIView {
         // by construction — there is no second resolution to drift from the
         // first, and no coordinate crosses this line: the reticule point was
         // consumed inside `resolveTap`, during the pick.
-        guard let resolution = currentResolution else { return nil }
+        guard let resolution = currentResolution, let host = resolution.target.window,
+              RipulViewExplorer.canInspect(host) else { return nil }
         let element = resolution.promisedView ?? resolution.target
         UISelectionFeedbackGenerator().selectionChanged()
         let frameInSelf = element.convert(element.bounds, to: self)
@@ -1341,6 +1343,21 @@ class ViewInspectorController: UIView {
 
     // MARK: Hit testing
 
+    /// Collapsing the assistant clears its current/pending selection immediately,
+    /// including a pin. The next cursor movement is free to inspect the host.
+    func discardSelection(in unavailableWindow: UIWindow) {
+        guard hostWindow === unavailableWindow || currentTarget?.window === unavailableWindow
+                || session?.webView?.window === unavailableWindow else { return }
+        pendingPinToggle?.cancel()
+        pendingPinToggle = nil
+        currentTarget = nil; currentHighlightView = nil; currentTokenAnchor = nil
+        currentInfo = nil; currentResolution = nil; currentActionable = nil
+        highlightLayer.path = nil; actionableLayer.path = nil
+        session?.pinned = false
+        session?.invalidate()
+        hostWindow = RipulChrome.appWindow(in: unavailableWindow.windowScene)
+    }
+
     func selectNativeView(_ view: UIView, remembering: Bool = true) {
         let info = InspectedView.inspect(view)
         restoreNativeSelection(InspectorNativeSelection(info: info, highlight: view,
@@ -1349,7 +1366,8 @@ class ViewInspectorController: UIView {
 
     func restoreNativeSelection(_ selection: InspectorNativeSelection, remembering: Bool) {
         let view = selection.info.view, highlight = selection.highlight
-        guard let host = view.window, highlight.window === host, !view.isHidden, !highlight.isHidden else { session?.invalidate(); return }
+        guard let host = view.window, RipulViewExplorer.canInspect(host),
+              highlight.window === host, !view.isHidden, !highlight.isHidden else { session?.invalidate(); return }
         hostWindow = host
         let info = InspectedView.inspect(view, resolvedIdentifier: selection.info.accessibilityId,
             registryMatchView: selection.info.tokenAnchorView)
@@ -1365,7 +1383,8 @@ class ViewInspectorController: UIView {
     }
 
     func activateSelection() {
-        guard let target = currentTarget, target.window != nil else { session?.invalidate(); return }
+        guard let target = currentTarget, let host = target.window,
+              RipulViewExplorer.canInspect(host) else { session?.invalidate(); return }
         // Explicit activation addresses the retained selection, including tree
         // navigation and pinned elements, rather than a fresh point hit.
         let resolution = ScreenActuationEngine.resolveTap(on: target,
@@ -1380,7 +1399,10 @@ class ViewInspectorController: UIView {
         // Pick against the HOST window when the explorer runs in its own
         // overlay window (self.window is the overlay, not the host); for
         // embedded mounts, self.window IS the host window.
-        guard var window = hostWindow ?? self.window else {
+        let previousWindow = hostWindow ?? self.window
+        let initialWindow = previousWindow.flatMap { RipulViewExplorer.canInspect($0) ? $0 : nil }
+            ?? RipulChrome.appWindow(in: previousWindow?.windowScene)
+        guard var window = initialWindow, RipulViewExplorer.canInspect(window) else {
             highlightLayer.path = nil
             currentResolution = nil
             currentActionable = nil
@@ -1402,10 +1424,11 @@ class ViewInspectorController: UIView {
         overlayRoot?.isUserInteractionEnabled = false
         var hit = window.hitTest(windowPoint, with: nil)
         // The host screen and the embedded agent may occupy different windows.
-        // Follow the visible content, including the agent, while skipping our HUD.
+        // Follow visible content, including the expanded agent. Its minimized
+        // window stays isolated even over the bubble/compact bar's touch region.
         if let scene = window.windowScene {
             let candidates = scene.windows.filter {
-                !$0.isHidden && !($0 is RipulExplorerOverlayWindow)
+                RipulViewExplorer.canInspect($0)
                     && ($0.windowLevel == .normal || $0 is RipulChromeWindow)
             }.sorted { $0.windowLevel.rawValue > $1.windowLevel.rawValue }
             for candidate in candidates {

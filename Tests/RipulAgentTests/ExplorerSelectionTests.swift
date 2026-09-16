@@ -127,5 +127,115 @@ final class ExplorerSelectionTests: XCTestCase {
         XCTAssertEqual(result["reticule"] as? [String: Double], ["x": 0, "y": 639])
         XCTAssertEqual(result["reticule"] as? [String: Double], selected["reticule"] as? [String: Double])
     }
+
+    @available(iOS 26.0, *)
+    private func overlayFixture() throws -> (UIWindow, UIButton, RipulDevOverlayWindow, UIButton, ViewInspectorController) {
+        guard let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first else {
+            throw XCTSkip("Cross-window selection needs the hosted test runner: scripts/test-host-screen-preview.sh.")
+        }
+        let visibleWindows = scene.windows.filter { !$0.isHidden }
+        visibleWindows.forEach { $0.isHidden = true }
+        addTeardownBlock { visibleWindows.forEach { $0.isHidden = false } }
+
+        let host = UIWindow(windowScene: scene)
+        host.frame = scene.screen.bounds
+        let root = UIViewController()
+        host.rootViewController = root
+        host.isHidden = false
+        let button = UIButton(frame: CGRect(x: 40, y: 120, width: 200, height: 44))
+        button.accessibilityIdentifier = "host.button"
+        root.view.addSubview(button)
+
+        let agent = RipulDevOverlayWindow(windowScene: scene)
+        agent.frame = host.frame
+        agent.windowLevel = UIWindow.Level(rawValue: UIWindow.Level.alert.rawValue + 3)
+        let agentRoot = UIViewController()
+        agent.installRoot(agentRoot)
+        agent.isHidden = false
+        let agentButton = UIButton(frame: button.frame)
+        agentButton.accessibilityIdentifier = "agent.button"
+        agentRoot.view.addSubview(agentButton)
+
+        let explorer = RipulExplorerOverlayWindow(windowScene: scene)
+        explorer.frame = host.frame
+        let explorerRoot = UIViewController()
+        explorerRoot.view.tag = ripulViewExplorerOverlayTag
+        explorer.installRoot(explorerRoot)
+        explorer.isHidden = false
+        let inspector = ViewInspectorController(frame: host.bounds)
+        inspector.hostWindow = host
+        explorerRoot.view.addSubview(inspector)
+        [host, agent, explorer].forEach { $0.layoutIfNeeded() }
+        addTeardownBlock {
+            [host, agent, explorer].forEach { $0.isHidden = true }
+        }
+        return (host, button, agent, agentButton, inspector)
+    }
+
+    @available(iOS 26.0, *)
+    func testMinimizedBubbleAndCompactBarSelectHostWithoutActivatingAgent() throws {
+        let (_, _, agent, agentButton, inspector) = try overlayFixture()
+        var agentPresses = 0
+        agentButton.addAction(UIAction { _ in agentPresses += 1 }, for: .touchUpInside)
+        // Both launcher shapes deliberately accept real touches here. Inspection
+        // must ignore the whole window, not merely rely on touch passthrough.
+        for frame in [CGRect(x: 72, y: 112, width: 56, height: 56),
+                      CGRect(x: 12, y: 110, width: 296, height: 64)] {
+            agent.interactiveFrame = frame
+            XCTAssertNotNil(agent.hitTest(CGPoint(x: 100, y: 140), with: nil))
+            let selected = inspector.probe(atWindowPoint: CGPoint(x: 100, y: 140), fire: false)
+            XCTAssertEqual((selected["element"] as? [String: Any])?["id"] as? String, "host.button")
+        }
+        XCTAssertEqual(agentPresses, 0)
+    }
+
+    @available(iOS 26.0, *)
+    func testExpandedAgentCollapseResetsSeedAndNeverFallsBackIntoRetainedConsole() throws {
+        let (host, _, agent, _, inspector) = try overlayFixture()
+        agent.isPassthrough = false
+        agent.isInspectorSelectionEnabled = true
+        let expanded = inspector.probe(atWindowPoint: CGPoint(x: 100, y: 140), fire: false)
+        XCTAssertEqual((expanded["element"] as? [String: Any])?["id"] as? String, "agent.button")
+        XCTAssertTrue(inspector.hostWindow === agent)
+
+        // Collapse disables inspection before the animation changes touch
+        // routing. Keep the console subtree visible to catch geometric fallback.
+        agent.isInspectorSelectionEnabled = false
+        XCTAssertEqual(inspector.selectionSnapshot()["hasSelection"] as? Bool, false)
+        XCTAssertNil(inspector.composerSelection())
+        host.isUserInteractionEnabled = false
+        let collapsed = inspector.probe(atWindowPoint: CGPoint(x: 100, y: 140), fire: false)
+        XCTAssertEqual((collapsed["element"] as? [String: Any])?["id"] as? String, "host.button")
+        XCTAssertTrue(inspector.hostWindow === host)
+
+        host.isUserInteractionEnabled = true
+        agent.isInspectorSelectionEnabled = true
+        let restored = inspector.probe(atWindowPoint: CGPoint(x: 100, y: 140), fire: false)
+        XCTAssertEqual((restored["element"] as? [String: Any])?["id"] as? String, "agent.button")
+    }
+
+    @available(iOS 26.0, *)
+    func testRetainedNativeSelectionCannotRestoreOrActivateMinimizedAgent() throws {
+        let (_, _, agent, agentButton, inspector) = try overlayFixture()
+        let session = InspectorSession()
+        inspector.session = session
+        session.controller = inspector
+        agent.isPassthrough = false
+        agent.isInspectorSelectionEnabled = true
+        _ = inspector.probe(atWindowPoint: CGPoint(x: 100, y: 140), fire: false)
+        let selection = try XCTUnwrap(inspector.nativeSelection)
+        var presses = 0
+        agentButton.addAction(UIAction { _ in presses += 1 }, for: .touchUpInside)
+        session.pinned = true
+        agent.isInspectorSelectionEnabled = false
+        XCTAssertFalse(session.pinned)
+        XCTAssertFalse(session.hasSelection)
+        XCTAssertNil(inspector.nativeSelection)
+        inspector.activateSelection()
+        XCTAssertEqual(presses, 0)
+        XCTAssertFalse(session.hasSelection)
+        inspector.restoreNativeSelection(selection, remembering: false)
+        XCTAssertFalse(session.hasSelection)
+    }
 }
 #endif

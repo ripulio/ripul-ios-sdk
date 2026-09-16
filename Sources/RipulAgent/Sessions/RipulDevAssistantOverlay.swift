@@ -233,6 +233,17 @@ final class RipulDevOverlayWindow: RipulChromeWindow {
     }
     var interactiveFrame: CGRect = .zero
 
+    /// Inspection follows the full console only. The bubble, compact bar and
+    /// retained console are isolated from host inspection, including while the
+    /// collapse animation still keeps this window interactive.
+    var isInspectorSelectionEnabled = false {
+        didSet {
+            if oldValue && !isInspectorSelectionEnabled {
+                ViewInspectorController.live?.discardSelection(in: self)
+            }
+        }
+    }
+
     /// A sheet presented into a pass-through window would render and then
     /// swallow nothing — every touch outside the bubble returns nil.
     override var acceptsPresentation: Bool { !isPassthrough }
@@ -582,6 +593,7 @@ final class RipulDevOverlayRootVC: UIViewController {
     }
 
     func showBubble() {
+        (view.window as? RipulDevOverlayWindow)?.isInspectorSelectionEnabled = false
         hideHostPreview()
         // While the replay HUD is active, the strip owns the bottom edge —
         // hide the console, reveal NOTHING (the HUD restores the minimized
@@ -777,6 +789,7 @@ final class RipulDevOverlayRootVC: UIViewController {
     func prewarmConsole() {
         mountPanel()
         panelHost?.view.isHidden = true
+        (view.window as? RipulDevOverlayWindow)?.isInspectorSelectionEnabled = false
         (view.window as? RipulDevOverlayWindow)?.isPassthrough = true
         updateInteractiveFrame()
     }
@@ -793,6 +806,7 @@ final class RipulDevOverlayRootVC: UIViewController {
         // corner radius + fade from the bubble's frame to fullscreen) while
         // the bubble zoom-fades away into it.
         guard let panel = panelHost?.view else { return }
+        (view.window as? RipulDevOverlayWindow)?.isInspectorSelectionEnabled = true
         let s = bubble.bounds.width / view.bounds.width
         let startRadius = (bubble.bounds.width / 2) / s
         panel.layer.masksToBounds = true

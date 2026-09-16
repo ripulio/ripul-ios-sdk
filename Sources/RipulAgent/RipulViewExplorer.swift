@@ -106,6 +106,17 @@ final class RipulExplorerOverlayWindow: RipulChromeWindow {
 public enum RipulViewExplorer {
     static weak var contextBridge: AgentBridge?
 
+    /// Shared by picking and retained-selection paths. A minimized assistant
+    /// must never become the seed for the inspector's geometric fallback walk.
+    static func canInspect(_ window: UIWindow) -> Bool {
+        guard !window.isHidden, window.alpha > 0.01,
+              !(window is RipulExplorerOverlayWindow) else { return false }
+        if #available(iOS 26.0, *), let agent = window as? RipulDevOverlayWindow {
+            return agent.isInspectorSelectionEnabled && !agent.isPassthrough
+        }
+        return true
+    }
+
     /// The overlay window hosting the live explorer, or `nil` when not shown.
     /// STRONG: a standalone UIWindow has no owner — the previous `weak`
     /// reference let it deallocate the moment present() returned, leaving
