@@ -26,6 +26,7 @@
     var onEvent: (([String: Any]) -> Void)?
     var onSizeChange: (() -> Void)?
     private(set) var isEditing = false
+    var ownsScrollGestures: Bool { isEditing }
     var accessibilityElements: [Any] { [viewController.view!] }
 
     final class Pin: NSObject, MKAnnotation {

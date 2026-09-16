@@ -232,6 +232,7 @@ public struct NativeChatInput: View {
     let onPause: (() -> Void)?
     let onNewChat: (() -> Void)?
     let onQuickCommands: (() -> Void)?
+    let onAddArtefact: (() -> Void)?
     let onAddTodoItem: (() -> Void)?
     /// Fetches the user's todo items (with current-chat id for grouping) when
     /// the "Pick to do" menu entry is tapped. A selected todo's text is appended
@@ -331,6 +332,7 @@ public struct NativeChatInput: View {
         onPause: (() -> Void)? = nil,
         onNewChat: (() -> Void)? = nil,
         onQuickCommands: (() -> Void)? = nil,
+        onAddArtefact: (() -> Void)? = nil,
         onAddTodoItem: (() -> Void)? = nil,
         onFetchTodoItems: (() async -> RipulTodoItemsResult)? = nil,
         messageHistory: MessageHistory? = nil,
@@ -365,6 +367,7 @@ public struct NativeChatInput: View {
         self.onPause = onPause
         self.onNewChat = onNewChat
         self.onQuickCommands = onQuickCommands
+        self.onAddArtefact = onAddArtefact
         self.onAddTodoItem = onAddTodoItem
         self.onFetchTodoItems = onFetchTodoItems
         self.messageHistory = messageHistory
@@ -1341,6 +1344,9 @@ public struct NativeChatInput: View {
                     Label("Pick to do", systemImage: "list.bullet.clipboard")
                 }
             }
+            if let onAddArtefact {
+                Button(action: onAddArtefact) { Label("Artefact", systemImage: "square.stack.3d.up") }
+            }
             if onAddTodoItem != nil {
                 Button {
                     dismissKeyboard()
@@ -1681,6 +1687,7 @@ public struct NativeChatInput: View {
     let onPause: (() -> Void)?
     let onNewChat: (() -> Void)?
     let onQuickCommands: (() -> Void)?
+    let onAddArtefact: (() -> Void)?
     let onAddTodoItem: (() -> Void)?
     /// Fetches the user's todo items (with current-chat id for grouping) when
     /// the "Pick to do" menu entry is tapped. A selected todo's text is appended
@@ -1757,6 +1764,7 @@ public struct NativeChatInput: View {
         onPause: (() -> Void)? = nil,
         onNewChat: (() -> Void)? = nil,
         onQuickCommands: (() -> Void)? = nil,
+        onAddArtefact: (() -> Void)? = nil,
         onAddTodoItem: (() -> Void)? = nil,
         onFetchTodoItems: (() async -> RipulTodoItemsResult)? = nil,
         messageHistory: MessageHistory? = nil,
@@ -1788,6 +1796,7 @@ public struct NativeChatInput: View {
         self.onPause = onPause
         self.onNewChat = onNewChat
         self.onQuickCommands = onQuickCommands
+        self.onAddArtefact = onAddArtefact
         self.onAddTodoItem = onAddTodoItem
         self.onFetchTodoItems = onFetchTodoItems
         self.messageHistory = messageHistory
@@ -2508,6 +2517,9 @@ public struct NativeChatInput: View {
                     Label("Pick to do", systemImage: "list.bullet.clipboard")
                 }
             }
+            if let onAddArtefact {
+                Button(action: onAddArtefact) { Label("Artefact", systemImage: "square.stack.3d.up") }
+            }
             if onAddTodoItem != nil {
                 Button {
                     onAddTodoItem?()
@@ -3102,6 +3114,19 @@ private struct ChatInputGlassGroup<Content: View>: View {
 #if os(iOS)
 /// UITextView subclass that suppresses the iOS autofill toolbar above the keyboard.
 class ChatTextView: UITextView {
+    override func resignFirstResponder() -> Bool {
+        NativeComposerFocusTrace.shared.record("editor.resign.request", view: self, stack: true)
+        let resigned = super.resignFirstResponder()
+        NativeComposerFocusTrace.shared.record("editor.resign.result", view: self, values: ["resigned": resigned])
+        return resigned
+    }
+
+    override func willMove(toWindow newWindow: UIWindow?) {
+        NativeComposerFocusTrace.shared.record("editor.window", view: self,
+            values: ["leaving": newWindow == nil], stack: isFirstResponder && newWindow == nil)
+        super.willMove(toWindow: newWindow)
+    }
+
     override var textContentType: UITextContentType! {
         get { nil }
         set { }
@@ -3293,6 +3318,7 @@ struct NoAutofillTextView: UIViewRepresentable {
         }
 
         func textViewDidBeginEditing(_ textView: UITextView) {
+            NativeComposerFocusTrace.shared.record("editor.begin", view: textView)
             // Tapping into a collapsed multi-line box must re-expand it the
             // same way typing does — remeasure now, not on the next keystroke.
             recalcHeight(textView)
@@ -3300,6 +3326,7 @@ struct NoAutofillTextView: UIViewRepresentable {
         }
 
         func textViewDidEndEditing(_ textView: UITextView) {
+            NativeComposerFocusTrace.shared.record("editor.end", view: textView)
             parent.onFocusChanged?(false)
         }
 

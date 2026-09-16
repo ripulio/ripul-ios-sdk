@@ -56,6 +56,12 @@ private struct ToolDetailsHarnessSurface: View {
                 let data = try! Data(contentsOf: Bundle.main.url(forResource: "tool-call-renderers", withExtension: "json")!)
                 let fixtures = try! JSONSerialization.jsonObject(with: data) as! [[String: Any]]
                 var fixture = fixtures.first { $0["name"] as? String == (chosen ?? "terminal") }!
+                if ProcessInfo.processInfo.arguments.contains("--console-large-capture") {
+                    fixture["result"] = ["total": 500, "logs": (0..<130).map { index in
+                        ["level": "INFO", "ts": 1_789_120_000_000 + index * 1000,
+                         "message": index == 129 ? (1...12).map { "Diagnostic line \($0)" }.joined(separator: "\n") + "\nEND OF MESSAGE" : "Captured entry \(index)"] as [String: Any]
+                    }] as [String: Any]
+                }
                 if ProcessInfo.processInfo.arguments.contains("--long-output") {
                     fixture["result"] = String(repeating: "Long output remains copyable and horizontally scrollable. ", count: 6) + "END"
                 }

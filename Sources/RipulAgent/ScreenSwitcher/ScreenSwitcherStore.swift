@@ -156,7 +156,7 @@ public final class ScreenSwitcherStore: ObservableObject {
     /// Set by the shell so the overlay knows which card is "the one you're on".
     @Published public var activeDestinationId: String = ""
 
-    /// The open documents, in the order they were OPENED.
+    /// The open documents, in the user's display order.
     ///
     /// Stable, not recency-ranked. Under an MDI metaphor the set is something
     /// you arrange and then navigate spatially — a card that moves every time
@@ -165,24 +165,42 @@ public final class ScreenSwitcherStore: ObservableObject {
     /// never moves it; only opening and closing change this list.
     @Published public private(set) var documents: [SwitcherDocument] = []
 
+    public static let documentCap = 8
+
+    /// Oldest admission first, independent of visits and drag-to-reorder.
+    /// Persisted by the shell alongside the display order.
+    public private(set) var openingOrder: [String] = []
+
     /// Convenience for the overlay and the strip, which both work in ids.
     public var order: [String] { documents.map(\.id) }
 
     /// Open a document, or focus it if it is already open.
     ///
-    /// New documents land at the END, so opening one never renumbers the cards
-    /// already on screen.
+    /// At capacity, a new document takes the oldest document's slot.
     public func open(_ document: SwitcherDocument) {
+        var evictedId: String?
         if let i = documents.firstIndex(where: { $0.id == document.id }) {
             // Already open — refresh its metadata (a chat gets renamed, a file
             // moves) but leave it exactly where it sits.
             documents[i].title = document.title
             documents[i].subtitle = document.subtitle
         } else {
-            documents.append(document)
+            if documents.count == Self.documentCap,
+               let oldest = openingOrder.first,
+               let i = documents.firstIndex(where: { $0.id == oldest }) {
+                documents[i] = document
+                forget(oldest)
+                evictedId = oldest
+            } else {
+                documents.append(document)
+            }
+            openingOrder.append(document.id)
         }
         activeDestinationId = document.id
         touch(document.id)
+        // Notify only after the replacement and selection are complete, so a
+        // persistence callback never saves a half-updated board.
+        if let evictedId { onEvict?(evictedId) }
     }
 
     /// Seed the set from a previous launch.
@@ -191,19 +209,24 @@ public final class ScreenSwitcherStore: ObservableObject {
     /// the destination in turn, and restoring is not navigating — the app has
     /// not gone anywhere yet. Anything the shell can no longer honour is culled
     /// by its own reconcile afterwards.
-    public func restore(documents restored: [SwitcherDocument], activeId: String) {
+    public func restore(documents restored: [SwitcherDocument], activeId: String, openingOrder: [String]? = nil) {
         guard self.documents.isEmpty else { return }
-        self.documents = restored
-        if restored.contains(where: { $0.id == activeId }) {
+        self.openingOrder = openingOrder ?? restored.map(\.id)
+        let evictedIds = Array(self.openingOrder.dropLast(Self.documentCap))
+        let evicted = Set(evictedIds)
+        self.openingOrder.removeAll { evicted.contains($0) }
+        self.documents = restored.filter { !evicted.contains($0.id) }
+        if documents.contains(where: { $0.id == activeId }) {
             activeDestinationId = activeId
         }
         // Seed the ranking so a restored board is already capped: the active
         // document first, then open-order. Without this the cap would not bite
         // until the user had navigated ten times, and a launch that restores
         // thirty cards would load thirty full-resolution images before then.
-        recency = ([activeId] + restored.map(\.id)).reduce(into: [String]()) { acc, id in
-            if !acc.contains(id), restored.contains(where: { $0.id == id }) { acc.append(id) }
+        recency = ([activeDestinationId] + documents.map(\.id)).reduce(into: [String]()) { acc, id in
+            if !acc.contains(id), documents.contains(where: { $0.id == id }) { acc.append(id) }
         }
+        for id in evictedIds { onEvict?(id) }
     }
 
     /// Update a document's labels without opening or moving it.
@@ -243,7 +266,7 @@ public final class ScreenSwitcherStore: ObservableObject {
         guard let i = documents.firstIndex(where: { $0.id == id }) else { return }
         let wasActive = (id == activeDestinationId)
         documents.remove(at: i)
-        snapshots[id] = nil
+        forget(id)
         onClose?(id)
 
         guard wasActive else { return }
@@ -321,6 +344,16 @@ public final class ScreenSwitcherStore: ObservableObject {
     /// reconciled. Same division as `onSelect`: the store reports, the shell acts.
     public var onClose: ((String) -> Void)?
 
+    /// Automatic capacity eviction removes only the card and its thumbnail.
+    /// Unlike a manual close, it must not close the underlying browser tab.
+    public var onEvict: ((String) -> Void)?
+
+    private func forget(_ id: String) {
+        openingOrder.removeAll { $0 == id }
+        recency.removeAll { $0 == id }
+        snapshots[id] = nil
+    }
+
     public init() {}
 
     // MARK: - Snapshots
@@ -334,7 +367,7 @@ public final class ScreenSwitcherStore: ObservableObject {
     /// that — the memory, and the flush that walks the whole set redrawing and
     /// JPEG-encoding each one on the main thread, which is what made resuming
     /// the app freeze for seconds.
-    public static let snapshotCap = 10
+    public static let snapshotCap = documentCap
 
     /// Document ids in most-recently-used order, newest first. Distinct from
     /// `documents`, which is deliberately open-order and must not be disturbed —
@@ -349,7 +382,7 @@ public final class ScreenSwitcherStore: ObservableObject {
     public var snapshotReloader: ((String) -> UIImage?)?
 
     public func store(snapshot: UIImage?, for id: String) {
-        guard let snapshot else { return }
+        guard let snapshot, document(for: id) != nil else { return }
         snapshots[id] = snapshot
         touch(id)
     }

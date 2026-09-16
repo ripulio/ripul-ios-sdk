@@ -49,6 +49,7 @@
     }
     private weak var webView: WKWebView?
     private let registry: NativeEmbedRegistry
+    private let gestures: NativeEmbedGestureBoundary
     private let send: ([String: Any]) -> Void
     private var entries: [Key: Entry] = [:]
     private var pending: Set<Key> = []
@@ -58,6 +59,7 @@
     init(webView: WKWebView, registry: NativeEmbedRegistry, send: @escaping ([String: Any]) -> Void)
     {
       self.webView = webView
+      self.gestures = NativeEmbedGestureBoundary(webView: webView)
       self.registry = registry
       self.send = send
     }
@@ -82,6 +84,7 @@
         return
       }
       if type.hasSuffix(":update") {
+        gestures.attach()
         guard let kind = message["renderer"] as? String, registry.contains(kind),
           let snapshot = message["snapshot"] as? [String: Any]
         else { return }
@@ -93,7 +96,7 @@
         entry.snapshot = snapshot
         if let renderer = entry.renderer {
           do { try renderer.update(snapshot: snapshot) } catch {
-            detach(key, entry: entry)
+            detach(key, entry: entry, resetSize: true)
             return
           }
         }
@@ -146,7 +149,7 @@
         }
       }
     }
-    private func placement(_ geometry: NativeEmbedGeometry) -> (UIScrollView, CGRect, CGFloat)? {
+    private func placement(_ geometry: NativeEmbedGeometry, existing: UIScrollView?) -> (UIScrollView, CGRect, CGFloat)? {
       guard let webView, let a = geometry.anchor, a.isValid,
         let v = geometry.viewport, v.isValid,
         let height = geometry.contentHeight, height.isFinite, height > 0,
@@ -167,8 +170,10 @@
             abs(actual.minX - expected.minX) + abs(actual.minY - expected.minY)
             + abs(actual.width - expected.width) + abs(actual.height - expected.height)
           let contentScale = scroll.bounds.width / v.width
+          // Once matched, streaming can advance native content size before
+          // the asynchronous DOM report. That does not change scroll ownership.
           if error < 8,
-            abs(scroll.contentSize.height - height * contentScale)
+            scroll === existing || abs(scroll.contentSize.height - height * contentScale)
               < max(8, height * contentScale * 0.01)
           {
             candidates.append((scroll, error))
@@ -194,11 +199,14 @@
     }
     private func place(_ key: Key, entry: Entry) -> Bool {
       guard let webView, let geometry = entry.geometry,
-        let (target, frame, scale) = placement(geometry)
+        let (target, frame, scale) = placement(geometry, existing: entry.scroller)
       else { return false }
       if entry.renderer == nil {
         guard let renderer = registry.make(entry.kind) else { return false }
-        do { try renderer.update(snapshot: entry.snapshot) } catch { return false }
+        do { try renderer.update(snapshot: entry.snapshot) } catch {
+          detach(key, entry: entry, resetSize: true)
+          return false
+        }
         renderer.onEvent = { [weak self, weak entry] event in
           guard let self, let entry, self.entries[key] === entry, entry.visible else { return }
           self.send([
@@ -263,8 +271,11 @@
       if let height = entry.lastHeight { message["height"] = height }
       send(message)
     }
-    private func detach(_ key: Key, entry: Entry) {
+    private func detach(_ key: Key, entry: Entry, resetSize: Bool = false) {
       let controller = entry.renderer?.viewController
+      if let view = controller?.view {
+        NativeComposerFocusTrace.shared.record("nativeEmbed.detach", view: view)
+      }
       controller?.view.endEditing(true)
       controller?.willMove(toParent: nil)
       controller?.view.removeFromSuperview()
@@ -273,7 +284,11 @@
       entry.renderer?.onSizeChange = nil
       entry.renderer = nil
       entry.scroller = nil
-      if entry.visible || entry.lastHeight != nil {
+      // Releasing an offscreen native view must not change document height.
+      // Only an invalid renderer snapshot invalidates the reserved size.
+      if !resetSize {
+        acknowledge(key, entry: entry, visible: false)
+      } else if entry.visible || entry.lastHeight != nil {
         entry.visible = false
         entry.lastHeight = nil
         send([
@@ -288,6 +303,7 @@
       pending.remove(key)
     }
     func clear() {
+      gestures.detach()
       timer?.invalidate()
       timer = nil
       for (key, entry) in entries { detach(key, entry: entry) }
@@ -301,7 +317,10 @@
           scroll.convert(scroll.bounds, to: webView).contains(point)
         else { continue }
         let local = view.convert(point, from: webView)
-        if view.bounds.contains(local), let hit = view.hitTest(local, with: event) { return hit }
+        if view.bounds.contains(local), let hit = view.hitTest(local, with: event) {
+          gestures.prepare(root: view, ownsScrollGestures: entry.renderer?.ownsScrollGestures == true, event: event)
+          return hit
+        }
       }
       return nil
     }

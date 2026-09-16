@@ -395,6 +395,27 @@ class FullBleedWebView: WKWebView {
     }
 }
 
+/// Owns the web surface and its embedded native controllers for the lifetime of
+/// this representable. Native rows/widgets find this controller through the
+/// responder chain, so their recycling never edits SwiftUI's controller list.
+/// Attaching them to SwiftUI's hosting controller can temporarily unmount the
+/// sibling composer when UIKit removes a child, dismissing its keyboard.
+@MainActor
+final class AgentWebViewController: UIViewController {
+    let webView: FullBleedWebView
+
+    init(webView: FullBleedWebView) {
+        self.webView = webView
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func loadView() {
+        view = webView
+    }
+}
+
 @available(iOS 15.0, *)
 @MainActor
 public struct AgentWebView: View {
@@ -434,7 +455,7 @@ public struct AgentWebView: View {
 
 @available(iOS 15.0, *)
 @MainActor
-private struct AgentWebViewRepresentable: UIViewRepresentable {
+private struct AgentWebViewRepresentable: UIViewControllerRepresentable {
     let configuration: AgentConfiguration
     let bridge: AgentBridge
 
@@ -442,7 +463,7 @@ private struct AgentWebViewRepresentable: UIViewRepresentable {
         AgentWebView.Coordinator(bridge: bridge, baseHost: configuration.baseURL.host, standalone: configuration.standalone)
     }
 
-    func makeUIView(context: Context) -> WKWebView {
+    func makeUIViewController(context: Context) -> AgentWebViewController {
         let config = WKWebViewConfiguration()
 
         // Inject the bridge script before any page JS runs
@@ -543,6 +564,8 @@ private struct AgentWebViewRepresentable: UIViewRepresentable {
         config.userContentController.addUserScript(viewportFixScript)
 
         let webView = FullBleedWebView(frame: .zero, configuration: config)
+        let controller = AgentWebViewController(webView: webView)
+        controller.loadViewIfNeeded()
         webView.toolStripAccessibilityElements = { [weak bridge] in bridge?.toolStripAccessibilityElements ?? [] }
         webView.toolStripHitTest = { [weak bridge] point, event in bridge?.hitTestToolStrip(point, event: event) }
         // Thermal A/B (AgentBridge.opaqueWebView): a transparent web view must blend
@@ -608,14 +631,15 @@ private struct AgentWebViewRepresentable: UIViewRepresentable {
         NSLog("[AgentWebView] Loading URL: %@", url.absoluteString)
         webView.load(URLRequest(url: url))
 
-        return webView
+        return controller
     }
 
-    func updateUIView(_ webView: WKWebView, context: Context) {
+    func updateUIViewController(_ controller: AgentWebViewController, context: Context) {
         // FullBleedWebView zeroes bottom safe area so web content fills the frame.
     }
 
-    static func dismantleUIView(_ webView: WKWebView, coordinator: AgentWebView.Coordinator) {
+    static func dismantleUIViewController(_ controller: AgentWebViewController, coordinator: AgentWebView.Coordinator) {
+        let webView = controller.webView
         coordinator.bridge.detachToolStripAnchor()
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "agentBridge")
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "agentLog")

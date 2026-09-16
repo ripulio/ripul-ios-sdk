@@ -13,7 +13,7 @@ targets:
   NativeArtefactHarness:
     type: application
     platform: iOS
-    sources: [NativeArtefactHarness.swift]
+    sources: [NativeArtefactHarness.swift, ArtefactChatPickerHarness.swift]
     dependencies:
       - package: RipulAgent
     settings:

@@ -80,12 +80,15 @@ final class VoiceSendPolicyTests: XCTestCase {
             defaults.removePersistentDomain(forName: suite)
         }
         SpeechPreferences.store = defaults
-        XCTAssertEqual(SpeechPreferences.voiceSendMode, .automatic)
-        defaults.set(VoiceSendMode.sendCommand.rawValue, forKey: SpeechPreferences.voiceSendModeKey)
+        XCTAssertEqual(SpeechPreferences.voiceSendMode, .sendCommand)
+        XCTAssertNil(VoiceSendPolicy.messageToSend(
+            mode: SpeechPreferences.voiceSendMode, text: "Still thinking", quietFor: 120,
+            transcriptIdleFor: 120, audioIsFresh: true))
+        defaults.set(VoiceSendMode.automatic.rawValue, forKey: SpeechPreferences.voiceSendModeKey)
         SpeechPreferences.store = UserDefaults(suiteName: suite)!
         SpeechPreferences.activeProfile = VoiceProfileConfig(allowUserOverride: false)
-        XCTAssertEqual(SpeechPreferences.voiceSendMode, .sendCommand)
-        defaults.set("invalid", forKey: SpeechPreferences.voiceSendModeKey)
         XCTAssertEqual(SpeechPreferences.voiceSendMode, .automatic)
+        defaults.set("invalid", forKey: SpeechPreferences.voiceSendModeKey)
+        XCTAssertEqual(SpeechPreferences.voiceSendMode, .sendCommand)
     }
 }

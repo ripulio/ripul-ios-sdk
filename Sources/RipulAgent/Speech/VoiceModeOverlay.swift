@@ -59,6 +59,7 @@ struct VoiceModeOverlay: View {
     /// progress row. Optional so the overlay renders without a bridge
     /// (previews, hosts that don't pass one).
     var bridge: AgentBridge? = nil
+    var tokenProvider: (() -> String?)? = nil
     @State private var pulsing = false
     /// Typed-command entry: whether the field is up, its text, and whether
     /// we auto-paused the mic when the keyboard opened (resumed on dismiss).
@@ -281,6 +282,12 @@ struct VoiceModeOverlay: View {
                 .padding(.bottom, bottomPadding)
             }
         }
+        .overlay(alignment: .topTrailing) {
+            if #available(iOS 26.0, macOS 26.0, *) {
+                VoiceConversationSettingsButton(controller: controller, tokenProvider: tokenProvider, compact: false)
+                    .padding(20)
+            }
+        }
         .onAppear { pulsing = true }
         .onChange(of: typedFieldFocused) { focused in
             // Keyboard dismissed (or focus stolen) without a submit: close
@@ -433,6 +440,7 @@ struct VoiceModeOverlay: View {
 /// Same controller, same tap semantics (skip playback / force-send).
 struct VoiceModeCompactPanel: View {
     @ObservedObject var controller: VoiceModeController
+    var tokenProvider: (() -> String?)? = nil
     @State private var pulsing = false
 
     private var accentColor: Color {
@@ -511,6 +519,10 @@ struct VoiceModeCompactPanel: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
+            if #available(iOS 26.0, macOS 26.0, *) {
+                VoiceConversationSettingsButton(controller: controller, tokenProvider: tokenProvider, compact: true)
+            }
+
             // Back to the immersive view. Its counterpart is the overlay's
             // chevron-down; the X below still ends the conversation.
             Button {
@@ -548,5 +560,63 @@ struct VoiceModeCompactPanel: View {
         .padding(.horizontal, 16)
         .onAppear { pulsing = true }
         .uiKitIdentifier("VoiceModeCompactPanel.panel")
+    }
+}
+
+/// Shared entry point from either conversation presentation. Keep the draft
+/// while settings are open, and only resume a conversation we paused here.
+@available(iOS 26.0, macOS 26.0, *)
+private struct VoiceConversationSettingsButton: View {
+    @ObservedObject var controller: VoiceModeController
+    var tokenProvider: (() -> String?)?
+    var compact: Bool
+    @State private var showingSettings = false
+    @State private var pausedForSettings = false
+
+    var body: some View {
+        Button {
+            pauseForSettings()
+            showingSettings = true
+        } label: {
+            Image(systemName: "gearshape")
+                .font(.system(size: compact ? 15 : 20, weight: .semibold))
+                .foregroundStyle(compact ? Color.secondary : .white)
+                .frame(width: compact ? 30 : 44, height: compact ? 30 : 44)
+                .background(compact ? Color.clear : .white.opacity(0.15), in: Circle())
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Conversation settings")
+        .uiKitIdentifier(compact ? "VoiceModeCompactPanel.settings" : "VoiceModeOverlay.settings")
+        .sheet(isPresented: $showingSettings, onDismiss: {
+            let shouldResume = pausedForSettings
+            pausedForSettings = false
+            if shouldResume { controller.resumeConversation() }
+        }) {
+            NavigationStack {
+                VoiceSettingsScreen(tokenProvider: {
+                    tokenProvider?() ?? (BundledAgentRuntime.isEnabled ? nil : MachineTokenStore.token)
+                })
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Done") { showingSettings = false }
+                            .uiKitIdentifier("VoiceConversationSettings.done")
+                    }
+                }
+            }
+            #if os(macOS)
+            .frame(minWidth: 480, minHeight: 560)
+            #endif
+        }
+        .onChange(of: controller.phase) { _ in
+            // Sending cannot be paused; hold the next phase once it arrives.
+            if showingSettings { pauseForSettings() }
+        }
+    }
+
+    private func pauseForSettings() {
+        guard controller.isActive, controller.phase != .paused else { return }
+        controller.pauseConversation()
+        if controller.phase == .paused { pausedForSettings = true }
     }
 }

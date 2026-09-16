@@ -123,8 +123,9 @@ public enum SpeechPreferences {
     /// Personal turn-taking preference, independent of the site's voice or
     /// provider configuration. Saved in this app on this device.
     public static let voiceSendModeKey = "voiceSendMode"
+    public static let defaultVoiceSendMode: VoiceSendMode = .sendCommand
     public static var voiceSendMode: VoiceSendMode {
-        VoiceSendMode(rawValue: store.string(forKey: voiceSendModeKey) ?? "") ?? .automatic
+        VoiceSendMode(rawValue: store.string(forKey: voiceSendModeKey) ?? "") ?? defaultVoiceSendMode
     }
 
     /// "apple" (default) or "elevenlabs". Profile ids use the web spelling

@@ -1470,6 +1470,9 @@ public struct RipulAgentScreen: View {
             bridge.selectedEffort ?? "-",
             codexFastMode.menuKey,
         ]
+        #if os(iOS)
+        parts.append(bridge.browserPreviewAvailable ? "browser-preview" : "no-browser-preview")
+        #endif
         if let session, rawModeSessions.contains(session.id) || ProviderConstants.isCliProvider(session.provider) {
             let rawModels = rawModelsForSession(session)
             let currentModelId = currentRawModelId(for: session)
@@ -1598,6 +1601,14 @@ public struct RipulAgentScreen: View {
         .uiKitIdentifier("AgentScreen.contextMenu.nativeChatToggle")
 
         if let session {
+            #if os(iOS)
+            if bridge.browserPreviewAvailable {
+                Button { bridge.showBrowserPreview() } label: {
+                    Label("View browser", systemImage: "pip")
+                }
+                .uiKitIdentifier("AgentScreen.contextMenu.viewBrowserButton")
+            }
+            #endif
             Button {
                 renameText = ""
                 renamingSession = session

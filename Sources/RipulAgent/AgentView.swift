@@ -341,12 +341,12 @@ public struct AgentView<TopBar: View>: View {
                 if voiceMode.presentation == .compact {
                     VStack {
                         Spacer()
-                        VoiceModeCompactPanel(controller: voiceMode)
+                        VoiceModeCompactPanel(controller: voiceMode, tokenProvider: tokenProvider)
                             .padding(.bottom, 92)
                     }
                     .transition(.opacity)
                 } else {
-                    VoiceModeOverlay(controller: voiceMode, bridge: bridge)
+                    VoiceModeOverlay(controller: voiceMode, bridge: bridge, tokenProvider: tokenProvider)
                         .transition(.opacity)
                 }
             }
@@ -461,6 +461,7 @@ public struct AgentView<TopBar: View>: View {
             ])
         }, onViewSimulator: simulatorPreviewAction))
         .modifier(SimulatorPreviewPresenter(bridge: bridge))
+        .modifier(BrowserPreviewPresenter(bridge: bridge))
         .task {
             if !skipBridgeSetup {
                 bridge.searchClickDelegate = searchClickDelegate
@@ -645,6 +646,8 @@ private struct ChatComposer: View {
     let onShowConsoleLogs: () -> Void
     let onHeightChange: (CGFloat) -> Void
 
+    private struct ArtefactChatTarget: Identifiable { let id: String }
+    @State private var artefactChatTarget: ArtefactChatTarget?
     @State private var composerActionPending = false
     @State private var composerActionError: String?
     @State private var chatMessage = ""
@@ -672,6 +675,9 @@ private struct ChatComposer: View {
             }
                 .task(id: bridge.currentSourceChatId) {
                     if let chatId = bridge.currentSourceChatId { await bridge.refreshComposerActions(chatId: chatId) }
+                }
+                .sheet(item: $artefactChatTarget) { target in
+                    ArtefactChatPicker(bridge: bridge, chatID: target.id)
                 }
                 .alert("Message not confirmed", isPresented: Binding(
                     get: { composerActionError != nil }, set: { if !$0 { composerActionError = nil } }
@@ -766,6 +772,9 @@ private struct ChatComposer: View {
             onPause: { Task { await bridge.interruptAgent() } },
             onNewChat: handleNewChat,
             onQuickCommands: bridge.chatInputShowQuickCommands ? onQuickCommands : nil,
+            onAddArtefact: BundledAgentRuntime.isEnabled ? nil : {
+                if let id = bridge.currentSourceChatId { artefactChatTarget = ArtefactChatTarget(id: id) }
+            },
             onAddTodoItem: bridge.chatInputShowTodos ? { bridge.emitTodoItemCreate() } : nil,
             onFetchTodoItems: bridge.chatInputShowTodos ? { await bridge.listTodoItems() } : nil,
             messageHistory: messageHistory,
@@ -855,6 +864,9 @@ private struct ChatComposer: View {
             onPause: { Task { await bridge.interruptAgent() } },
             onNewChat: handleNewChat,
             onQuickCommands: bridge.chatInputShowQuickCommands ? onQuickCommands : nil,
+            onAddArtefact: BundledAgentRuntime.isEnabled ? nil : {
+                if let id = bridge.currentSourceChatId { artefactChatTarget = ArtefactChatTarget(id: id) }
+            },
             onAddTodoItem: bridge.chatInputShowTodos ? { bridge.emitTodoItemCreate() } : nil,
             onFetchTodoItems: bridge.chatInputShowTodos ? { await bridge.listTodoItems() } : nil,
             messageHistory: messageHistory,

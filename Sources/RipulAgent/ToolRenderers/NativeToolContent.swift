@@ -7,8 +7,8 @@ enum NativeToolRendererKind: String {
     case terminal, read, write, edit, patch, grep, glob, logs, evaluate, todos, web, agent, http, tools, host, image, fields
 
     static func resolve(_ toolName: String) -> Self {
-        let name = toolName.replacingOccurrences(of: "^mcp__ripul_tools_+", with: "", options: .regularExpression)
-            .replacingOccurrences(of: "^functions[._]+", with: "", options: .regularExpression)
+        let name = toolName.replacingOccurrences(of: "^functions[._]+", with: "", options: .regularExpression)
+            .replacingOccurrences(of: "^mcp_+ripul_tools_+", with: "", options: .regularExpression)
             .components(separatedBy: ":")[0].lowercased()
         switch name {
         case "bash", "exec_command", "shell_command", "shell", "run_command", "host_run_command", "write_stdin": return .terminal
@@ -18,7 +18,7 @@ enum NativeToolRendererKind: String {
         case "apply_patch": return .patch
         case "grep", "grep_search", "searchfiles": return .grep
         case "glob", "list_dir", "list_directory": return .glob
-        case "host_console_logs", "device_console_logs", "searchconsolelogs": return .logs
+        case "host_console_logs", "device_console_logs", "console_logs", "searchconsolelogs": return .logs
         case "device_evaluate", "browser_run_js", "executecode", "runcode", "exec": return .evaluate
         case "todowrite", "update_plan": return .todos
         case "websearch", "webfetch", "web_search", "web_fetch", "search", "getpagesummary": return .web
@@ -292,27 +292,5 @@ struct NativeToolFileChange {
             return .init(path: path, kind: ToolValue.title(kind), lines: lines,
                          fields: fields.filter { !consumed.contains($0.key) && !(lines != nil && $0.key == "content") && !($0.key == "kind" && $0.value.stringValue != nil) })
         }
-    }
-}
-
-struct NativeToolLogGroup: Equatable {
-    let level: String
-    let message: String
-    let stack: String?
-    let timestamp: CmsJSON?
-    var count: Int
-
-    static func collect(_ entries: [CmsJSON]) -> [Self] {
-        var groups: [Self] = []
-        for entry in entries {
-            let row = entry.objectValue ?? [:]
-            let level = (row.string("level") ?? "LOG").uppercased()
-            let message = row.string("message") ?? entry.stringValue ?? ""
-            let stack = row.string("stack")
-            if let last = groups.last, last.level == level && last.message == message && last.stack == stack {
-                groups[groups.count - 1].count += 1
-            } else { groups.append(.init(level: level, message: message, stack: stack, timestamp: row["ts"] ?? row["timestamp"], count: 1)) }
-        }
-        return groups
     }
 }

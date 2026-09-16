@@ -9,9 +9,15 @@
     /// remeasure or release an offscreen responder without continuous polling.
     var onSizeChange: (() -> Void)? { get set }
     var isEditing: Bool { get }
+    /// Opt in only while the content itself owns panning/zooming.
+    var ownsScrollGestures: Bool { get }
     var accessibilityElements: [Any] { get }
     func update(snapshot: [String: Any]) throws
     func sizeThatFits(width: CGFloat) -> CGSize
+  }
+
+  public extension NativeEmbeddedRenderer {
+    var ownsScrollGestures: Bool { false }
   }
 
   @MainActor public final class NativeEmbedRegistry {

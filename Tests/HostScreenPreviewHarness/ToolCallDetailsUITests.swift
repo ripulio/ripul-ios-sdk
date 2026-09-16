@@ -1,6 +1,74 @@
 import XCTest
 
 final class ToolCallDetailsUITests: XCTestCase {
+    func testConsoleBrowserSearchesUnrevealedLogsAndExpandsLongMessages() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--tool-details-ui-tests", "--renderer=logs-single-prefix", "--console-large-capture"]
+        app.launch()
+        app.buttons["Open tool details"].tap()
+        let message = app.staticTexts["NativeTool.logs.message.129"]
+        XCTAssertTrue(message.waitForExistence(timeout: 5))
+        XCTAssertFalse(message.label.contains("END OF MESSAGE"))
+        app.buttons["NativeTool.logs.expand.129"].tap()
+        XCTAssertTrue(message.label.contains("END OF MESSAGE"))
+        app.buttons["NativeTool.logs.copy"].tap()
+        app.buttons["ToolCallDetails.done"].tap()
+        app.buttons["Read copied command"].tap()
+        let copied = app.staticTexts["Copied command"].label
+        XCTAssertEqual(copied.components(separatedBy: "[INFO]").count - 1, 130)
+        XCTAssertTrue(copied.contains("END OF MESSAGE"))
+        app.buttons["Open tool details"].tap()
+        let search = app.textFields["NativeTool.logs.search"]
+        search.tap(); search.typeText("Captured entry 0\n")
+        XCTAssertEqual(app.staticTexts["NativeTool.logs.matchCount"].label, "1 matching entry")
+        XCTAssertTrue(app.staticTexts["NativeTool.logs.message.0"].exists)
+    }
+
+    func testConsoleBrowserFiltersSearchesOrdersAndCopiesCapturedEntries() {
+        continueAfterFailure = false
+        for light in [true, false] {
+            let app = XCUIApplication()
+            app.launchArguments = ["--tool-details-ui-tests", "--renderer=logs-single-prefix"] + (light ? ["--light-appearance"] : [])
+            app.launch()
+            app.buttons["Open tool details"].tap()
+            let search = app.textFields["NativeTool.logs.search"]
+            XCTAssertTrue(search.waitForExistence(timeout: 5), "The reported single-underscore tool must use the console browser")
+            XCTAssertEqual(app.staticTexts["NativeTool.logs.summary"].label, "4 of 120 logs · 1 error · 1 warning")
+            let error = app.staticTexts["NativeTool.logs.message.3"]
+            let info = app.staticTexts["NativeTool.logs.message.0"]
+            XCTAssertLessThan(error.frame.minY, info.frame.minY)
+            let shot = XCTAttachment(screenshot: app.screenshot())
+            shot.name = "Console browser \(light ? "light" : "dark")"; shot.lifetime = .keepAlways; add(shot)
+
+            app.buttons["NativeTool.logs.level.ERROR"].tap()
+            XCTAssertEqual(app.staticTexts["NativeTool.logs.matchCount"].label, "1 matching entry")
+            XCTAssertFalse(info.exists)
+            app.buttons["NativeTool.logs.stackToggle.3"].tap()
+            XCTAssertTrue(app.staticTexts["NativeTool.logs.stack.3"].exists)
+            search.tap(); search.typeText("fetchData")
+            XCTAssertTrue(error.exists, "Search includes collapsed stack traces")
+            app.buttons["Clear search"].tap()
+            search.tap(); search.typeText("missing")
+            XCTAssertTrue(app.staticTexts["NativeTool.logs.empty"].exists)
+            XCTAssertFalse(app.buttons["NativeTool.logs.copy"].isEnabled)
+            app.buttons["NativeTool.logs.reset"].tap()
+            XCTAssertEqual(app.staticTexts["NativeTool.logs.matchCount"].label, "4 matching entries")
+            app.buttons["NativeTool.logs.order"].tap()
+            app.buttons["Oldest first"].tap()
+            XCTAssertLessThan(info.frame.minY, error.frame.minY)
+            app.buttons["NativeTool.logs.level.INFO"].tap()
+            app.buttons["NativeTool.logs.copy"].tap()
+            app.buttons["ToolCallDetails.done"].tap()
+            app.buttons["Read copied command"].tap()
+            let copied = app.staticTexts["Copied command"].label
+            XCTAssertEqual(copied.components(separatedBy: "\n").count, 2)
+            XCTAssertFalse(copied.contains("Retrying"))
+            XCTAssertTrue(copied.contains("[INFO] Connected"))
+            app.terminate()
+        }
+    }
+
     func testPackageScriptOperationKeepsRunnerShellAndFullCommand() {
         continueAfterFailure = false
         for light in [true, false] {
@@ -669,7 +737,7 @@ final class ToolCallDetailsUITests: XCTestCase {
             ("edit", ["1 added · 1 removed", "const value = 2;", "const value = 1;"]),
             ("codex-patch", ["app.ts", "1 added · 1 removed", "const value = 2;"]),
             ("grep", ["TODO", "src/app.ts:12:TODO add tests"]),
-            ("logs", ["4 of 120 logs · 1 error · 1 warning", "×2", "Connected", "Retrying connection"]),
+            ("logs", ["4 of 120 logs · 1 error · 1 warning", "Repeated 2 times", "Connected", "Retrying connection"]),
             ("todos", ["Inspect existing renderers", "Port native views", "Verify on iPhone"]),
             ("evaluate", ["Inspect the selected view", "Visible", "Yes"]),
         ]

@@ -64,6 +64,15 @@ app, and its beta app can each have a different choice. Identity and personal
 service keys are account-backed. Hosts that provide their own navigation can
 present `RipulProfileScreen`, with an optional plan section supplied as view content.
 
+Hands-free conversations default to sending when the transcript ends with
+**Send command**, followed by a brief pause. Other pauses keep the microphone
+listening. The closing phrase is removed from the message; manual Send remains
+available. An explicitly saved **Detect pauses automatically** choice is preserved.
+The gear button in both the full-screen conversation and compact panel opens
+Voice settings directly, including **Send messages**, recognition and delivery.
+Opening settings pauses the conversation without discarding the transcript;
+closing settings resumes it unless it was already paused.
+
 ## Project Structure
 
 ```

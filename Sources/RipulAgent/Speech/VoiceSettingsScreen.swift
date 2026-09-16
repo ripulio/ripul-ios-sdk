@@ -15,7 +15,7 @@ public struct VoiceSettingsScreen: View {
     // Must match SpeechPreferences.voiceModeStyle's fallback, or the picker
     // shows a selection the app is not actually using.
     @AppStorage(SpeechPreferences.voiceModeStyleKey, store: SpeechPreferences.store) private var voiceModeStyle = "compact"
-    @AppStorage(SpeechPreferences.voiceSendModeKey, store: SpeechPreferences.store) private var voiceSendMode = VoiceSendMode.automatic.rawValue
+    @AppStorage(SpeechPreferences.voiceSendModeKey, store: SpeechPreferences.store) private var voiceSendMode = SpeechPreferences.defaultVoiceSendMode.rawValue
     @AppStorage(SpeechPreferences.speechLanguageKey, store: SpeechPreferences.store) private var speechLanguage = "en"
     @AppStorage(SpeechPreferences.speechKeytermsKey, store: SpeechPreferences.store) private var speechKeyterms = "Ripul"
     @AppStorage(SpeechPreferences.speechPaceKey, store: SpeechPreferences.store) private var speechPace = 1.0

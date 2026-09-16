@@ -2084,6 +2084,19 @@ public final class AgentBridge: NSObject, ObservableObject {
     }()
     #if os(iOS)
     let simulatorPreview = SimulatorPreviewState()
+    let browserPreview = BrowserPreviewState()
+    @Published public private(set) var browserPreviewAvailable = false
+
+    /// Installed only by a host with its own local browser (the Ripul iPhone app).
+    public func configureBrowserPreview(capture: @escaping (Int?) async throws -> BrowserPreviewSnapshot) {
+        browserPreview.capture = capture
+        browserPreviewAvailable = true
+    }
+
+    public func showBrowserPreview(tabId: Int? = nil, automatic: Bool = false) {
+        guard let chatId = currentSourceChatId, browserPreviewAvailable else { return }
+        browserPreview.open(chatId: chatId, tabId: tabId, automatic: automatic)
+    }
     #endif
     public let toolStrip = NativeToolStripStore()
     #if os(iOS)
@@ -3953,6 +3966,18 @@ public final class AgentBridge: NSObject, ObservableObject {
             pendingInputText = dict["text"] as? String
         case "chat:append":
             pendingInputAppend = dict["text"] as? String
+        case "composer:focusTrace":
+            #if os(iOS)
+            guard audience == .developer else { return }
+            let trace = NativeComposerFocusTrace.shared
+            switch dict["operation"] as? String {
+            case "start": trace.start(in: webView?.window, seconds: dict["seconds"] as? Double ?? 90)
+            case "stop": trace.stop()
+            default: break
+            }
+            send(["type": "agent-framework:composer:focusTrace:result", "requestId": dict["requestId"] ?? "",
+                  "trace": trace.snapshot()])
+            #endif
         case "link:open":
             if let urlString = dict["url"] as? String, let url = URL(string: urlString) {
                 NSLog("[AgentBridge] Link open — url: %@", urlString)

@@ -160,6 +160,10 @@ final class NativeToolStripAnchorController {
         }
         guard let host else { return false }
         let isAppearing = host.view.superview == nil
+        if isAppearing || host.view.superview !== target {
+            NativeComposerFocusTrace.shared.record("toolStrip.attach", view: host.view,
+                values: ["reparenting": !isAppearing])
+        }
         if host.parent == nil {
             var responder: UIResponder? = webView
             while let current = responder {
@@ -212,6 +216,9 @@ final class NativeToolStripAnchorController {
     }
 
     private func detach() {
+        if let view = host?.view, view.superview != nil {
+            NativeComposerFocusTrace.shared.record("toolStrip.detach", view: view)
+        }
         retry?.cancel()
         retry = nil
         host?.view.layer.removeAnimation(forKey: Self.appearanceAnimationKey)

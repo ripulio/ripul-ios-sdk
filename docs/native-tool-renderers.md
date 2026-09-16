@@ -67,7 +67,7 @@ progress indicators, and image sheets rather than mounting the web components.
 | Read, Write | Filename, full path, numbered source, read range in parameters |
 | Edit, MultiEdit, apply_patch | Added/removed line diffs, individual replacement chunks or changed files |
 | Grep, Glob | Pattern, search path, match count and rows |
-| Host/device console logs | Severity, time, consecutive repeat counts, expandable stack traces |
+| Host/device console logs | Searchable captured logs, severity filters/counts, newest/oldest ordering, repeat groups, expandable messages and stack traces, filtered Copy |
 | Device evaluate, executeCode | Reason, source, structured result |
 | TodoWrite, update_plan | Progress and task states |
 | Web search/fetch, HTTP | Query, URL, method, result links/snippets or Markdown response |
@@ -121,6 +121,16 @@ view to `NativeToolCallRenderer`, and compose `NativeToolSection`,
 `NativeToolCodeBlock`, `NativeToolParameters`, and `NativeToolValueView`. Keep
 unconsumed parameters accessible. Code, diffs, matches, logs, and generic arrays
 progressively reveal long outputs; copy actions retain the complete text.
+
+Console browsing only filters the recorded result; it never fetches more logs or
+changes the host's logging settings. Count summaries distinguish captured entries
+from the total buffer. Level chips count entries, including folded repeats. Search
+matches messages and stack traces; consecutive groups are formed before filtering
+so separate occurrences stay separate. Rows retain their original identities when
+filtering or reversing order. Copy includes every matching entry and its timestamp
+and stack, including folded repeats and rows beyond the progressive reveal limit.
+Host/device tool names with single- or double-underscore MCP prefixes select the
+same native renderer, including when canonical renderer metadata is absent.
 
 Add a representative transport sample to `shared/tool-call-renderers.json`.
 Both TypeScript normalization tests and Swift decoding tests use that fixture.

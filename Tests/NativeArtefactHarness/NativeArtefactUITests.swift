@@ -1,6 +1,35 @@
 import XCTest
 
 final class NativeArtefactUITests: XCTestCase {
+  func testNativeComposerArtefactPicker() {
+    continueAfterFailure = false
+    let app = XCUIApplication()
+    app.launchArguments = ["--picker"]
+    app.launch()
+    let plus = app.buttons["Attachments and actions"]
+    XCTAssertTrue(plus.waitForExistence(timeout: 20), app.debugDescription)
+    plus.tap()
+    app.buttons["Artefact"].tap()
+    let search = app.textFields["Search artefacts"]
+    XCTAssertTrue(search.waitForExistence(timeout: 10), app.debugDescription)
+    search.tap(); search.typeText("Team")
+    let planner = app.buttons.matching(NSPredicate(format: "label CONTAINS 'Team planner'")).firstMatch
+    XCTAssertTrue(planner.waitForExistence(timeout: 10), app.debugDescription)
+    planner.tap()
+    let add = app.buttons["ArtefactChat.add"]
+    XCTAssertTrue(add.waitForExistence(timeout: 10), app.debugDescription)
+    let shot = XCTAttachment(screenshot: app.screenshot()); shot.name = "Native artefact picker"; shot.lifetime = .keepAlways; self.add(shot)
+    add.tap()
+    XCTAssertTrue(app.staticTexts["ArtefactChat.error"].waitForExistence(timeout: 10))
+    XCTAssertTrue(app.staticTexts["ArtefactChat.error"].label.contains("not confirmed"))
+    add.tap()
+    XCTAssertTrue(plus.waitForExistence(timeout: 10))
+    let posted = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == 'Cards: 1; revision: 2'"), object: app.staticTexts["PickerHarness.receipt"])
+    XCTAssertEqual(XCTWaiter.wait(for: [posted], timeout: 10), .completed, app.debugDescription)
+    XCTAssertEqual(app.staticTexts["PickerHarness.draft"].label, "Draft: Keep my draft")
+    XCTAssertEqual(app.staticTexts["PickerHarness.model"].label, "Model requests: 0")
+  }
+
   func testCalculatorAndChecklistShareHost() {
     let app = XCUIApplication()
     app.launch()
@@ -14,6 +43,37 @@ final class NativeArtefactUITests: XCTestCase {
   }
   func testNativeMapUsesTheSameChatHost() { checkMap(dark: false) }
   func testNativeMapDarkAppearance() { checkMap(dark: true) }
+  // Functional camera movement only; this is not a chat drag/flick quality test.
+  func testExploreChangesMapCamera() {
+    continueAfterFailure = false
+    let app = XCUIApplication()
+    app.launchArguments = ["--overflow"]
+    app.launch()
+    XCTAssertTrue(app.buttons["NativeArtefact.run"].waitForExistence(timeout: 30))
+    app.buttons["Map"].tap()
+    let explore = app.buttons["NativeMap.explore"]
+    XCTAssertTrue(explore.waitForExistence(timeout: 20))
+    app.buttons["Probe"].tap()
+    explore.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+    XCTAssertEqual(explore.label, "Done", app.debugDescription)
+    let map = app.otherElements["NativeMap.map"].maps.firstMatch
+    let camera = app.staticTexts["NativeArtefactHarness.camera"]
+    let before = camera.label
+    map.pinch(withScale: 1.7, velocity: 1)
+    let changed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label != %@", before), object: camera)
+    XCTAssertEqual(XCTWaiter.wait(for: [changed], timeout: 5), .completed, app.debugDescription)
+    let zoomed = camera.label
+    let start = map.coordinate(withNormalizedOffset: CGVector(dx: 0.7, dy: 0.65))
+    let end = map.coordinate(withNormalizedOffset: CGVector(dx: 0.3, dy: 0.65))
+    start.press(forDuration: 0.05, thenDragTo: end)
+    let panned = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label != %@", zoomed), object: camera)
+    XCTAssertEqual(XCTWaiter.wait(for: [panned], timeout: 5), .completed, app.debugDescription)
+    XCTAssertEqual(explore.label, "Done")
+    app.buttons["Updates"].tap()
+    let settled = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == 'Updates done; detach=0; heights=1'"), object: app.staticTexts["NativeArtefactHarness.status"])
+    XCTAssertEqual(XCTWaiter.wait(for: [settled], timeout: 12), .completed, app.debugDescription)
+    XCTAssertEqual(explore.label, "Done")
+  }
   private func checkMap(dark: Bool) {
     continueAfterFailure = false
     let app = XCUIApplication()

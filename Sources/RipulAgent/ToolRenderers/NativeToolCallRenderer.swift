@@ -191,45 +191,6 @@ private struct NativeSearchToolView: View {
     }
 }
 
-private struct NativeConsoleToolView: View {
-    let content: NativeToolContent
-    @State private var visibleRows = 100
-    var body: some View {
-        let query = content.string("query", "filter")
-        if !query.isEmpty { Label(query, systemImage: "line.3.horizontal.decrease").textSelection(.enabled) }
-        NativeToolParameters(args: content.args, excluding: ["query", "filter"], title: "Filters")
-        if let logs = content.output?.objectValue?["logs"]?.toolArray {
-            let groups = NativeToolLogGroup.collect(logs)
-            let total = content.output?.objectValue?.double("total") ?? Double(logs.count)
-            let errors = logs.filter { $0.objectValue?.string("level")?.uppercased() == "ERROR" }.count
-            let warnings = logs.filter { $0.objectValue?.string("level")?.uppercased().hasPrefix("WARN") == true }.count
-            NativeToolSection(title: "Console") {
-                Text(logs.isEmpty ? "No logs matched" : "\(logs.count) of \(CmsJSON.number(total).displayString) logs · \(errors) \(errors == 1 ? "error" : "errors") · \(warnings) \(warnings == 1 ? "warning" : "warnings")")
-                    .font(.caption).foregroundStyle(.secondary).accessibilityIdentifier("NativeTool.logs.summary")
-                LazyVStack(alignment: .leading, spacing: 12) {
-                    ForEach(Array(groups.prefix(visibleRows).enumerated()), id: \.offset) { _, group in
-                        let color: Color = group.level == "ERROR" ? .red : group.level.hasPrefix("WARN") ? .orange : group.level == "INFO" ? .blue : .secondary
-                        VStack(alignment: .leading, spacing: 5) {
-                            HStack {
-                                Text(group.level).fontWeight(.semibold).foregroundStyle(color)
-                                if group.count > 1 { Text("×\(group.count)").accessibilityIdentifier("NativeTool.logs.repeat") }
-                                Spacer()
-                                if let timestamp = group.timestamp?.doubleValue, timestamp.isFinite && timestamp > 0 {
-                                    Text(Date(timeIntervalSince1970: timestamp / 1000), style: .time).foregroundStyle(.secondary)
-                                }
-                            }.font(.caption)
-                            Text(ToolValue.cleanTerminal(group.message)).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
-                            if let stack = group.stack, !stack.isEmpty { DisclosureGroup("Stack trace") { NativeToolCodeBlock(text: stack) } }
-                        }.padding(10).frame(maxWidth: .infinity, alignment: .leading)
-                            .background(color.opacity(0.07), in: RoundedRectangle(cornerRadius: 8))
-                    }
-                    if groups.count > visibleRows { Button("Show more logs") { visibleRows += 200 } }
-                }.accessibilityIdentifier("NativeTool.logs")
-            }
-        } else { NativeToolResultView(content: content, title: "Console") }
-    }
-}
-
 private struct NativeTodoToolView: View {
     let content: NativeToolContent
     var body: some View {

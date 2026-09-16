@@ -2,6 +2,53 @@ import XCTest
 @testable import RipulAgent
 
 final class NativeToolRendererTests: XCTestCase {
+    func testConsoleNamesRouteWithoutCanonicalRendererMetadata() {
+        for name in ["host_console_logs", "device_console_logs", "console_logs",
+                     "mcp_ripul_tools_host_console_logs", "mcp__ripul_tools_host_console_logs",
+                     "mcp__ripul_tools__host_console_logs", "functions.mcp_ripul_tools_device_console_logs"] {
+            XCTAssertEqual(NativeToolRendererKind.resolve(name), .logs, name)
+        }
+        XCTAssertEqual(NativeToolRendererKind.resolve("another_console_logs_tool"), .fields)
+    }
+
+    func testConsoleSearchKeepsCaptureCountsRepeatBoundariesAndCopiesEveryEntry() throws {
+        let logs = try XCTUnwrap(NativeConsoleLogs(ToolValue.parse("""
+        {"total":120,"logs":[
+          {"level":"info","message":"Connected","ts":1789120000000},
+          {"level":"info","message":"Connected","ts":1789120001000},
+          {"level":"warning","message":"Retrying","ts":1789120002000},
+          {"level":"info","message":"Connected","ts":1789120003000},
+          {"level":"error","message":"Failed","stack":"fetchData (app.ts:12)","ts":1789120004000}
+        ]}
+        """)))
+        XCTAssertEqual(logs.total, 120)
+        XCTAssertEqual(logs.levels, ["ERROR", "WARN", "INFO"])
+        let groups = logs.matching(query: " connected ", level: "INFO")
+        XCTAssertEqual(groups.map(\.count), [2, 1], "Filtering must not coalesce non-consecutive repeats")
+        XCTAssertEqual(groups.map(\.id), [0, 3], "Filtering and ordering must retain original row identities")
+        XCTAssertEqual(groups.first?.lastEntry.timestamp, .number(1789120001000))
+        XCTAssertEqual(logs.matching(query: "FETCHDATA", level: nil).map(\.id), [4])
+        XCTAssertTrue(logs.matching(query: "fetchData", level: "INFO").isEmpty)
+        let copy = logs.copyText(query: "Connected", level: nil, newestFirst: false)
+        XCTAssertEqual(copy.components(separatedBy: "\n").count, 3, "Copy includes folded and unrevealed entries")
+        XCTAssertTrue(copy.contains("[INFO] Connected"))
+        XCTAssertEqual(logs.copyText(query: "Connected", level: nil, newestFirst: true).components(separatedBy: "\n"), copy.components(separatedBy: "\n").reversed())
+        XCTAssertTrue(logs.copyText(query: "fetchData", level: nil, newestFirst: true).contains("\nfetchData (app.ts:12)"))
+    }
+
+    func testConsoleCurrentDeviceWebRecordsAndEmptyResults() throws {
+        let output = ToolValue.parse("""
+        {"logs":[{"level":"debug","text":"Web console","timestamp":"2026-09-16T10:00:00.123Z"}]}
+        """)
+        let logs = try XCTUnwrap(NativeConsoleLogs(output))
+        XCTAssertEqual(logs.entries.first?.message, "Web console")
+        XCTAssertNotNil(logs.entries.first?.date)
+        XCTAssertTrue(logs.entries.first!.copyText.hasPrefix("2026-09-16T10:00:00.123Z"))
+        XCTAssertEqual(NativeConsoleLogs(ToolValue.parse("{\"logs\":[]}"))?.entries, [])
+        XCTAssertNil(NativeConsoleLogs(ToolValue.parse("{\"error\":\"Connection failed\"}")))
+        XCTAssertNil(NativeConsoleLogs(.string("unavailable")))
+    }
+
     func testSharedWebNativeFixtures() throws {
         let repo = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         let fixtures = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: repo.appendingPathComponent("shared/tool-call-renderers.json"))) as? [[String: Any]])
