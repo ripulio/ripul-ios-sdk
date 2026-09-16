@@ -5,7 +5,9 @@ import SwiftUI
 struct PreviewTestHost: App {
     var body: some Scene {
         WindowGroup {
-            if ProcessInfo.processInfo.arguments.contains("--simulator-preview-ui-tests") {
+            if ProcessInfo.processInfo.arguments.contains("--explorer-agent-touch-ui-tests") {
+                ExplorerAgentTouchHarness().ignoresSafeArea()
+            } else if ProcessInfo.processInfo.arguments.contains("--simulator-preview-ui-tests") {
                 SimulatorPreviewHarness().preferredColorScheme(.dark)
             } else if ProcessInfo.processInfo.arguments.contains("--anchored-tool-strip-ui-tests") || ProcessInfo.processInfo.arguments.contains("--all-tool-rows-ui-tests") {
                 AnchoredToolStripHarness().ignoresSafeArea(edges: .bottom)

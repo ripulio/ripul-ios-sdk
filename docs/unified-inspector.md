@@ -25,6 +25,10 @@ In an SDK host app, the minimized assistant is isolated from selection: its
 bubble, compact bar and retained console are skipped, so the cursor selects the
 host underneath. Isolation starts when collapse begins. An expanded console can
 still be inspected; minimizing it invalidates access to its retained selections.
+Taps and drags inside minimized agent controls go directly to the agent window,
+so tapping the compact session row reopens the console without selecting or
+pinning an element. The Inspector's own panel and sheets retain touch priority
+where they visibly cover those controls.
 
 Details, Layout, Appearance and Tree share the panel. Native selections retain
 theme token editing, audit and macro recording. Web selections expose CSS layout

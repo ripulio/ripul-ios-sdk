@@ -93,6 +93,20 @@ final class RipulExplorerOverlayWindow: RipulChromeWindow {
             return nil
         }
         if let root = rootViewController?.view, let panel = panelHit(root) { return panel }
+        // Minimized agent controls are interactive chrome, not inspection
+        // targets. Decline this touch so UIKit delivers the entire gesture to
+        // the agent's own window (including its row tap and drag recognizers).
+        // Our visible panel/sheets retain priority where they cover the agent.
+        if #available(iOS 26.0, *), let scene = windowScene {
+            for case let agent as RipulDevOverlayWindow in scene.windows {
+                guard !agent.isInspectorSelectionEnabled, !agent.isHidden,
+                      agent.alpha > 0.01, agent.isUserInteractionEnabled,
+                      agent.windowLevel.rawValue < windowLevel.rawValue else { continue }
+                let agentPoint = agent.convert(point, from: self)
+                if agent.interactiveFrame.contains(agentPoint),
+                   agent.hitTest(agentPoint, with: event) != nil { return nil }
+            }
+        }
         if let capture = ViewInspectorController.live, capture.window === self,
            capture.capturesTouches, !capture.isHidden, capture.isUserInteractionEnabled {
             return capture

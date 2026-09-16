@@ -158,6 +158,7 @@ final class ExplorerSelectionTests: XCTestCase {
 
         let explorer = RipulExplorerOverlayWindow(windowScene: scene)
         explorer.frame = host.frame
+        explorer.windowLevel = UIWindow.Level(rawValue: UIWindow.Level.alert.rawValue + 4)
         let explorerRoot = UIViewController()
         explorerRoot.view.tag = ripulViewExplorerOverlayTag
         explorer.installRoot(explorerRoot)
@@ -170,6 +171,42 @@ final class ExplorerSelectionTests: XCTestCase {
             [host, agent, explorer].forEach { $0.isHidden = true }
         }
         return (host, button, agent, agentButton, inspector)
+    }
+
+    @available(iOS 26.0, *)
+    func testMinimizedAgentControlsTakeTouchesBeforeInspectorCapture() throws {
+        let (_, _, agent, _, inspector) = try overlayFixture()
+        let explorer = try XCTUnwrap(inspector.window as? RipulExplorerOverlayWindow)
+        let point = CGPoint(x: 100, y: 140)
+        for frame in [CGRect(x: 72, y: 112, width: 56, height: 56),
+                      CGRect(x: 12, y: 110, width: 296, height: 64)] {
+            agent.interactiveFrame = frame
+            XCTAssertNil(explorer.hitTest(point, with: nil))
+            XCTAssertNotNil(agent.hitTest(point, with: nil))
+            XCTAssertTrue(explorer.hitTest(CGPoint(x: 100, y: 300), with: nil) === inspector)
+        }
+        agent.isHidden = true
+        XCTAssertTrue(explorer.hitTest(point, with: nil) === inspector)
+        agent.isHidden = false
+        agent.isUserInteractionEnabled = false
+        XCTAssertTrue(explorer.hitTest(point, with: nil) === inspector)
+        agent.isUserInteractionEnabled = true
+        agent.isPassthrough = false
+        agent.isInspectorSelectionEnabled = true
+        XCTAssertTrue(explorer.hitTest(point, with: nil) === inspector)
+    }
+
+    @available(iOS 26.0, *)
+    func testInspectorPanelKeepsTouchPriorityWhenCoveringMinimizedAgent() throws {
+        let (_, _, agent, _, inspector) = try overlayFixture()
+        let explorer = try XCTUnwrap(inspector.window as? RipulExplorerOverlayWindow)
+        agent.interactiveFrame = CGRect(x: 40, y: 120, width: 200, height: 44)
+        let panelRoot = RipulFloatingPanelRootView(frame: explorer.bounds)
+        let panelButton = UIButton(frame: agent.interactiveFrame)
+        panelRoot.addSubview(panelButton)
+        panelRoot.panelView = panelButton
+        explorer.rootViewController?.view.addSubview(panelRoot)
+        XCTAssertTrue(explorer.hitTest(CGPoint(x: 100, y: 140), with: nil) === panelButton)
     }
 
     @available(iOS 26.0, *)
