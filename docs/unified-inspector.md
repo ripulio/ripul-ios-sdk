@@ -21,10 +21,12 @@ does not press it. **Back**, **Parent element** and the Tree tab navigate the sa
 selection. Folding the panel or choosing **Interact with app** returns touches
 to the app while retaining the selection. Unfolding/resuming refreshes it.
 
-In an SDK host app, the minimized assistant is isolated from selection: its
-bubble, compact bar and retained console are skipped, so the cursor selects the
-host underneath. Isolation starts when collapse begins. An expanded console can
-still be inspected; minimizing it invalidates access to its retained selections.
+In an SDK host app, the entire embedded assistant is isolated from selection:
+its bubble, compact bar and expanded or retained console are always skipped.
+Opening the assistant brings it above the explorer, including the explorer's
+panel and sheets. Minimizing it reveals the same explorer with the host selection
+and pin preserved. Explicitly launching Inspector from the assistant minimizes
+the assistant and inspects the host window.
 Taps and drags inside minimized agent controls go directly to the agent window,
 so tapping the compact session row reopens the console without selecting or
 pinning an element. The Inspector's own panel and sheets retain touch priority

@@ -192,7 +192,7 @@ final class ExplorerSelectionTests: XCTestCase {
         XCTAssertTrue(explorer.hitTest(point, with: nil) === inspector)
         agent.isUserInteractionEnabled = true
         agent.isPassthrough = false
-        agent.isInspectorSelectionEnabled = true
+        agent.isExpanded = true
         XCTAssertTrue(explorer.hitTest(point, with: nil) === inspector)
     }
 
@@ -227,52 +227,72 @@ final class ExplorerSelectionTests: XCTestCase {
     }
 
     @available(iOS 26.0, *)
-    func testExpandedAgentCollapseResetsSeedAndNeverFallsBackIntoRetainedConsole() throws {
-        let (host, _, agent, _, inspector) = try overlayFixture()
+    func testLauncherResolvesAgentWindowToHost() async throws {
+        let (host, _, agent, _, oldInspector) = try overlayFixture()
+        oldInspector.window?.isHidden = true
         agent.isPassthrough = false
-        agent.isInspectorSelectionEnabled = true
-        let expanded = inspector.probe(atWindowPoint: CGPoint(x: 100, y: 140), fire: false)
-        XCTAssertEqual((expanded["element"] as? [String: Any])?["id"] as? String, "agent.button")
-        XCTAssertTrue(inspector.hostWindow === agent)
-
-        // Collapse disables inspection before the animation changes touch
-        // routing. Keep the console subtree visible to catch geometric fallback.
-        agent.isInspectorSelectionEnabled = false
-        XCTAssertEqual(inspector.selectionSnapshot()["hasSelection"] as? Bool, false)
-        XCTAssertNil(inspector.composerSelection())
-        host.isUserInteractionEnabled = false
-        let collapsed = inspector.probe(atWindowPoint: CGPoint(x: 100, y: 140), fire: false)
-        XCTAssertEqual((collapsed["element"] as? [String: Any])?["id"] as? String, "host.button")
+        agent.isExpanded = true
+        defer { RipulViewExplorer.dismiss() }
+        XCTAssertTrue(RipulViewExplorer.present(in: agent))
+        for _ in 0..<40 {
+            if let live = ViewInspectorController.live, live !== oldInspector, live.window != nil { break }
+            try await Task.sleep(nanoseconds: 25_000_000)
+        }
+        let inspector = try XCTUnwrap(ViewInspectorController.live)
+        XCTAssertFalse(inspector === oldInspector)
         XCTAssertTrue(inspector.hostWindow === host)
-
-        host.isUserInteractionEnabled = true
-        agent.isInspectorSelectionEnabled = true
-        let restored = inspector.probe(atWindowPoint: CGPoint(x: 100, y: 140), fire: false)
-        XCTAssertEqual((restored["element"] as? [String: Any])?["id"] as? String, "agent.button")
+        let selected = inspector.probe(atWindowPoint: CGPoint(x: 100, y: 140), fire: false)
+        XCTAssertEqual((selected["element"] as? [String: Any])?["id"] as? String, "host.button")
     }
 
     @available(iOS 26.0, *)
-    func testRetainedNativeSelectionCannotRestoreOrActivateMinimizedAgent() throws {
-        let (_, _, agent, agentButton, inspector) = try overlayFixture()
+    func testAgentAlwaysExcludedAndExpansionCoversExplorerWithoutLosingHostPin() throws {
+        let (host, _, agent, _, inspector) = try overlayFixture()
+        let explorer = try XCTUnwrap(inspector.window)
         let session = InspectorSession()
         inspector.session = session
         session.controller = inspector
-        agent.isPassthrough = false
-        agent.isInspectorSelectionEnabled = true
+        for expanded in [true, false, true] {
+            agent.isPassthrough = false // Keep retained content interactive during collapse.
+            agent.isExpanded = expanded
+            XCTAssertEqual(agent.windowLevel > explorer.windowLevel, expanded)
+            XCTAssertFalse(RipulViewExplorer.canInspect(agent))
+            inspector.hostWindow = agent // Even a stale seed cannot select the agent.
+            host.isUserInteractionEnabled = false // Exercise geometric fallback too.
+            let selected = inspector.probe(atWindowPoint: CGPoint(x: 100, y: 140), fire: false)
+            XCTAssertEqual((selected["element"] as? [String: Any])?["id"] as? String, "host.button")
+            XCTAssertTrue(inspector.hostWindow === host)
+        }
+        session.pinned = true
+        agent.isExpanded = false
+        agent.isExpanded = true
+        XCTAssertTrue(session.pinned)
+        XCTAssertEqual(session.native?.accessibilityId, "host.button")
+    }
+
+    @available(iOS 26.0, *)
+    func testRetainedNativeSelectionCannotRestoreOrActivateAnyAgentState() throws {
+        let (_, button, agent, _, inspector) = try overlayFixture()
+        let session = InspectorSession()
+        inspector.session = session
+        session.controller = inspector
         _ = inspector.probe(atWindowPoint: CGPoint(x: 100, y: 140), fire: false)
         let selection = try XCTUnwrap(inspector.nativeSelection)
         var presses = 0
-        agentButton.addAction(UIAction { _ in presses += 1 }, for: .touchUpInside)
-        session.pinned = true
-        agent.isInspectorSelectionEnabled = false
-        XCTAssertFalse(session.pinned)
-        XCTAssertFalse(session.hasSelection)
-        XCTAssertNil(inspector.nativeSelection)
-        inspector.activateSelection()
-        XCTAssertEqual(presses, 0)
-        XCTAssertFalse(session.hasSelection)
-        inspector.restoreNativeSelection(selection, remembering: false)
-        XCTAssertFalse(session.hasSelection)
+        button.addAction(UIAction { _ in presses += 1 }, for: .touchUpInside)
+        // A previously selected host view moved into the assistant is excluded
+        // from retained selection, tree/history restore and explicit activation.
+        agent.rootViewController?.view.addSubview(button)
+        for expanded in [true, false] {
+            agent.isExpanded = expanded
+            XCTAssertEqual(inspector.selectionSnapshot()["hasSelection"] as? Bool, false)
+            XCTAssertNil(inspector.composerSelection())
+            inspector.activateSelection()
+            inspector.restoreNativeSelection(selection, remembering: false)
+            inspector.selectNativeView(button)
+            XCTAssertFalse(session.hasSelection)
+            XCTAssertEqual(presses, 0)
+        }
     }
 }
 #endif

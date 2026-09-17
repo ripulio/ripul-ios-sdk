@@ -72,36 +72,40 @@ final class UnifiedInspectorTests: XCTestCase {
     }
 
     @available(iOS 26.0, *)
-    func testMinimizedAgentWebSelectionCannotRefreshRestoreOrActivate() async throws {
+    func testAgentWebSelectionCannotRefreshRestoreOrActivateInAnyState() async throws {
         let (window, web, _, inspector, session) = try await fixture()
         let agent = RipulDevOverlayWindow(frame: window.frame)
         let root = UIViewController()
         agent.installRoot(root)
         agent.isHidden = false
         agent.isPassthrough = false
-        agent.isInspectorSelectionEnabled = true
-        root.view.addSubview(web)
         defer { session.close(); agent.isHidden = true; window.isHidden = true }
 
         session.pickWeb(web, at: CGPoint(x: 70, y: 45))
         try await waitForWeb(session)
         let id = try XCTUnwrap(session.web?.id)
-        agent.isInspectorSelectionEnabled = false
-        XCTAssertEqual(inspector.selectionSnapshot()["hasSelection"] as? Bool, false)
-        let activation = await session.activateWeb()
-        XCTAssertEqual(activation["success"] as? Bool, false)
-        XCTAssertFalse(session.hasSelection)
+        root.view.addSubview(web)
+        for expanded in [true, false] {
+            agent.isExpanded = expanded
+            XCTAssertEqual(inspector.selectionSnapshot()["hasSelection"] as? Bool, false)
+            let activation = await session.activateWeb()
+            XCTAssertEqual(activation["success"] as? Bool, false)
+            session.selectWeb(id: id, in: web)
+            await session.waitForPick()
+            XCTAssertFalse(session.hasSelection)
+            session.pickWeb(web, at: CGPoint(x: 70, y: 45))
+            await session.waitForPick()
+            XCTAssertFalse(session.hasSelection)
+        }
         let presses = try await web.evaluateJavaScript("window.presses") as? Int
         XCTAssertNil(presses)
-        session.selectWeb(id: id, in: web)
-        await session.waitForPick()
-        XCTAssertFalse(session.hasSelection)
 
-        // A pick whose asynchronous DOM reply arrives after collapse must also
-        // be discarded, even if the retained web view remains attached.
-        agent.isInspectorSelectionEnabled = true
+        // A host DOM reply arriving after the web view moves into the expanded
+        // assistant cannot become a selection either.
+        window.rootViewController?.view.addSubview(web)
         session.pickWeb(web, at: CGPoint(x: 70, y: 45))
-        agent.isInspectorSelectionEnabled = false
+        root.view.addSubview(web)
+        agent.isExpanded = true
         await session.waitForPick()
         XCTAssertFalse(session.hasSelection)
     }

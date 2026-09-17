@@ -44,14 +44,9 @@ public struct RipulElementTap {
 //
 // Host-agnostic launcher for the native View Explorer (`ViewInspectorOverlay`).
 //
-// The overlay must sit at the top of the *application's* window so it can
-// hit-test every view in the running app — `ViewInspectorController` resolves
-// the target via `self.window.hitTest(...)`, so the overlay has to live in the
-// same window as the content it inspects. In a SwiftUI app you can just attach
-// `.overlay { ViewInspectorOverlay(isActive:) }` to the root view. A UIKit host
-// has no such root to hang an `.overlay` on, so this launcher does the mount for
-// it: it embeds a `UIHostingController` carrying the overlay as a child of the
-// top-most view controller in the key window, full-bleed and frontmost.
+// The launcher hosts a full-screen SwiftUI overlay in its own window and
+// passes the host window to `ViewInspectorController` for picking. An app can
+// also attach `.overlay { ViewInspectorOverlay(isActive:) }` to its own root.
 //
 // Usage (from anywhere — a debug menu, a shake handler, a button):
 //
@@ -66,9 +61,10 @@ public struct RipulElementTap {
 // The explorer mounts in its OWN window, not as a child of the top-most view
 // controller: a host-side panel added directly to the key window (WAC's
 // RecordMenu sidebar is a plain `window.addSubview`) would otherwise cover
-// it. Its `alert + 4` level keeps it above host panels and the
-// dev-assistant overlay (`alert + 3`), so one cursor can inspect both. Folding
-// or Interact mode lets touches pass through to those windows.
+// it. Its `alert + 4` level keeps it above host panels and the minimized
+// dev assistant (`alert + 3`). Reopening the assistant raises it above the
+// explorer; the assistant is never an inspection target. Folding or Interact
+// mode lets touches pass through to the host.
 //
 // Being a `RipulChromeWindow` is what keeps that true: it declines key-ness,
 // so a host resolving "the key window" gets the app's window and mounts its
@@ -76,6 +72,8 @@ public struct RipulElementTap {
 
 @available(iOS 16.0, *)
 final class RipulExplorerOverlayWindow: RipulChromeWindow {
+    static let overlayLevel = UIWindow.Level(rawValue: UIWindow.Level.alert.rawValue + 4)
+
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
         let hit = super.hitTest(point, with: event)
         guard rootViewController?.presentedViewController == nil else { return hit }
@@ -99,7 +97,7 @@ final class RipulExplorerOverlayWindow: RipulChromeWindow {
         // Our visible panel/sheets retain priority where they cover the agent.
         if #available(iOS 26.0, *), let scene = windowScene {
             for case let agent as RipulDevOverlayWindow in scene.windows {
-                guard !agent.isInspectorSelectionEnabled, !agent.isHidden,
+                guard !agent.isExpanded, !agent.isHidden,
                       agent.alpha > 0.01, agent.isUserInteractionEnabled,
                       agent.windowLevel.rawValue < windowLevel.rawValue else { continue }
                 let agentPoint = agent.convert(point, from: self)
@@ -120,14 +118,12 @@ final class RipulExplorerOverlayWindow: RipulChromeWindow {
 public enum RipulViewExplorer {
     static weak var contextBridge: AgentBridge?
 
-    /// Shared by picking and retained-selection paths. A minimized assistant
-    /// must never become the seed for the inspector's geometric fallback walk.
+    /// Shared by picking and retained-selection paths. Embedded assistant
+    /// chrome is never a target, including as a geometric fallback seed.
     static func canInspect(_ window: UIWindow) -> Bool {
         guard !window.isHidden, window.alpha > 0.01,
               !(window is RipulExplorerOverlayWindow) else { return false }
-        if #available(iOS 26.0, *), let agent = window as? RipulDevOverlayWindow {
-            return agent.isInspectorSelectionEnabled && !agent.isPassthrough
-        }
+        if #available(iOS 26.0, *), window is RipulDevOverlayWindow { return false }
         return true
     }
 
@@ -167,22 +163,30 @@ public enum RipulViewExplorer {
     /// works — Save is a no-op with an on-screen "not configured" notice.
     public static var macroRecordedAction: ((RipulMacro) -> Void)?
 
-    /// Present the View Explorer over the given window (defaults to the key
-    /// window). No-op if it's already showing. Returns `false` only if no
+    /// Present the View Explorer over the given host window (defaults to the app
+    /// window), minimizing the embedded assistant. Reuses an existing explorer.
+    /// Returns `false` only if no
     /// suitable window/view controller could be found to host it.
     /// `recording: true` opens it already in macro-record mode (the Macro
     /// tab armed) — used by the macro library's "Record new" entry point.
     @discardableResult
     public static func present(in window: UIWindow? = nil, recording: Bool = false, bridge: AgentBridge? = nil) -> Bool {
         if let bridge { contextBridge = bridge }
+        guard let requested = window ?? RipulChrome.appWindow(),
+              let scene = requested.windowScene,
+              let target = canInspect(requested) ? requested : RipulChrome.appWindow(in: scene)
+        else { return false }
+        // Launching from the assistant exposes the host. Reopening the assistant
+        // later covers this same explorer without losing its selection or pin.
+        if #available(iOS 26.0, *) {
+            RipulDevAssistantOverlay.shared.minimizeForInspection(in: scene)
+        }
         guard self.window == nil else { return true }
-        guard let target = window ?? RipulChrome.appWindow(),
-              let scene = target.windowScene else { return false }
 
         hostWindow = target
         let win = RipulExplorerOverlayWindow(windowScene: scene)
         win.frame = scene.screen.bounds
-        win.windowLevel = UIWindow.Level(rawValue: UIWindow.Level.alert.rawValue + 4)
+        win.windowLevel = RipulExplorerOverlayWindow.overlayLevel
         win.backgroundColor = .clear
         let hosting = UIHostingController(rootView: RipulViewExplorerRoot(
             hostWindow: target,

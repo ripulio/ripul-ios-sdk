@@ -10,7 +10,7 @@ let ripulViewExplorerOverlayTag = 0x5249_5055   // "RIPU"
 
 /// Marketing version of the RipulAgent SDK, surfaced in the inspector's copy output as `sdk: …`
 /// so we can always tell which build is actually running on the device. Bump on every release.
-let ripulSDKVersion = "0.7.122"
+let ripulSDKVersion = "0.7.123"
 
 // MARK: - View Inspector Overlay
 //
@@ -1343,8 +1343,8 @@ class ViewInspectorController: UIView {
 
     // MARK: Hit testing
 
-    /// Collapsing the assistant clears its current/pending selection immediately,
-    /// including a pin. The next cursor movement is free to inspect the host.
+    /// Discard any selection retained from a now-excluded window, including a
+    /// pin. Host selections survive assistant expansion and minimization.
     func discardSelection(in unavailableWindow: UIWindow) {
         guard hostWindow === unavailableWindow || currentTarget?.window === unavailableWindow
                 || session?.webView?.window === unavailableWindow else { return }
@@ -1424,8 +1424,8 @@ class ViewInspectorController: UIView {
         overlayRoot?.isUserInteractionEnabled = false
         var hit = window.hitTest(windowPoint, with: nil)
         // The host screen and the embedded agent may occupy different windows.
-        // Follow visible content, including the expanded agent. Its minimized
-        // window stays isolated even over the bubble/compact bar's touch region.
+        // Follow host content across windows, always excluding the assistant
+        // whether it is expanded, minimized or retaining a hidden console.
         if let scene = window.windowScene {
             let candidates = scene.windows.filter {
                 RipulViewExplorer.canInspect($0)

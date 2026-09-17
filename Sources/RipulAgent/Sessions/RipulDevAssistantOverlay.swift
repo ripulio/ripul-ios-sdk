@@ -119,6 +119,13 @@ public final class RipulDevAssistantOverlay {
         (window?.rootViewController as? RipulDevOverlayRootVC)?.showBubble()
     }
 
+    /// Explicitly launching the host inspector reveals the host, even when an
+    /// existing explorer is currently covered by the expanded assistant.
+    func minimizeForInspection(in scene: UIWindowScene) {
+        guard window?.windowScene === scene, window?.isExpanded == true else { return }
+        collapse()
+    }
+
     /// Cold-boot the console NOW (web app load + auth poll + relay) without
     /// showing anything — the first expand becomes instant instead of paying
     /// the boot on tap. Visibility rules are untouched: the bubble still
@@ -166,9 +173,9 @@ public final class RipulDevAssistantOverlay {
     fileprivate func present() {
         guard window == nil, let configuration, let scene = Self.activeWindowScene() else { return }
         let win = RipulDevOverlayWindow(windowScene: scene)
-        // View Explorer sits above us and yields touches inside minimized
-        // interactiveFrame; the surrounding app still routes to its reticule.
-        win.windowLevel = UIWindow.Level(rawValue: UIWindow.Level.alert.rawValue + 3)
+        // Minimized controls sit below the explorer and receive their own taps.
+        // Expanding raises the whole assistant above it via isExpanded.
+        win.isExpanded = false
         win.backgroundColor = .clear
         let root = RipulDevOverlayRootVC()
         root.overlay = self
@@ -231,14 +238,14 @@ final class RipulDevOverlayWindow: RipulChromeWindow {
     }
     var interactiveFrame: CGRect = .zero
 
-    /// Inspection follows the full console only. The bubble, compact bar and
-    /// retained console are isolated from host inspection, including while the
-    /// collapse animation still keeps this window interactive.
-    var isInspectorSelectionEnabled = false {
+    /// Presentation state is independent of delayed touch passthrough during
+    /// collapse. The expanded assistant covers the explorer and owns all taps;
+    /// minimized chrome lets host inspection resume without rebuilding the HUD.
+    var isExpanded = false {
         didSet {
-            if oldValue && !isInspectorSelectionEnabled {
-                ViewInspectorController.live?.discardSelection(in: self)
-            }
+            windowLevel = UIWindow.Level(rawValue:
+                RipulExplorerOverlayWindow.overlayLevel.rawValue + (isExpanded ? 1 : -1))
+            ViewInspectorController.live?.discardSelection(in: self)
         }
     }
 
@@ -591,7 +598,7 @@ final class RipulDevOverlayRootVC: UIViewController {
     }
 
     func showBubble() {
-        (view.window as? RipulDevOverlayWindow)?.isInspectorSelectionEnabled = false
+        (view.window as? RipulDevOverlayWindow)?.isExpanded = false
         hideHostPreview()
         // While the replay HUD is active, the strip owns the bottom edge —
         // hide the console, reveal NOTHING (the HUD restores the minimized
@@ -787,7 +794,7 @@ final class RipulDevOverlayRootVC: UIViewController {
     func prewarmConsole() {
         mountPanel()
         panelHost?.view.isHidden = true
-        (view.window as? RipulDevOverlayWindow)?.isInspectorSelectionEnabled = false
+        (view.window as? RipulDevOverlayWindow)?.isExpanded = false
         (view.window as? RipulDevOverlayWindow)?.isPassthrough = true
         updateInteractiveFrame()
     }
@@ -804,7 +811,7 @@ final class RipulDevOverlayRootVC: UIViewController {
         // corner radius + fade from the bubble's frame to fullscreen) while
         // the bubble zoom-fades away into it.
         guard let panel = panelHost?.view else { return }
-        (view.window as? RipulDevOverlayWindow)?.isInspectorSelectionEnabled = true
+        (view.window as? RipulDevOverlayWindow)?.isExpanded = true
         let s = bubble.bounds.width / view.bounds.width
         let startRadius = (bubble.bounds.width / 2) / s
         panel.layer.masksToBounds = true
