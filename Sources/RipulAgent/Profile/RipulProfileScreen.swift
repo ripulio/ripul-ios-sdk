@@ -11,6 +11,9 @@ public struct RipulProfileScreen<PlanContent: View>: View {
     let baseURL: URL
     let onSignOut: () async -> Void
     let planContent: PlanContent
+    /// Optional app-specific preference sections, without exposing controls in
+    /// other SDK hosts that have not installed the corresponding behavior.
+    let additionalPreferences: (() -> AnyView)?
 
     public init(
         bridge: AgentBridge,
@@ -19,6 +22,7 @@ public struct RipulProfileScreen<PlanContent: View>: View {
         baseURL: URL = AgentConfiguration.defaultBaseURL,
         tokenProvider: @escaping () -> String?,
         onSignOut: @escaping () async -> Void,
+        additionalPreferences: (() -> AnyView)? = nil,
         @ViewBuilder planContent: () -> PlanContent
     ) {
         self.bridge = bridge
@@ -28,6 +32,7 @@ public struct RipulProfileScreen<PlanContent: View>: View {
         self.tokenProvider = tokenProvider
         self.onSignOut = onSignOut
         self.planContent = planContent()
+        self.additionalPreferences = additionalPreferences
     }
 
     @State private var secrets: UserSecretsSnapshot = .empty
@@ -40,6 +45,7 @@ public struct RipulProfileScreen<PlanContent: View>: View {
             planContent
             serviceKeysSection
             preferencesSection
+            additionalPreferences?()
             signOutSection
         }
         .navigationTitle("Profile")
