@@ -72,6 +72,11 @@ The destination uses the composer's source conversation ID, not the containing
 chat tab ID. Removed elements fail explicitly rather than resolving a replacement
 with the same identifier. Editable web elements are excluded from context;
 editable descendants are masked in screenshots and suppress aggregate text.
+Host launches such as shake do not need to supply a bridge: attachment capture
+finds the existing SDK agent in the inspected window's scene, including its
+minimized session row. It reads that agent's current conversation and composer
+options without opening another console. A dismissed agent or absent chat cannot
+receive a new attachment, and an explicitly supplied bridge takes priority.
 
 ## Implementation
 

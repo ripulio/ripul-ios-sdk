@@ -2,9 +2,18 @@ import XCTest
 
 final class InspectorAttachmentUITests: XCTestCase {
     func testNativeAndWebElementsUseReviewedComposerAttachments() {
+        checkAttachments(minimized: false)
+    }
+
+    func testHostGestureAttachesNativeAndWebElementsToMinimizedChat() {
+        checkAttachments(minimized: true)
+    }
+
+    private func checkAttachments(minimized: Bool) {
         continueAfterFailure = false
         let app = XCUIApplication()
         app.launchArguments = ["--inspector-attachment-ui-tests"]
+        if minimized { app.launchArguments.append("--minimized-chat") }
         app.launch()
         let status = app.staticTexts["attachmentHarness.status"]
         XCTAssertTrue(status.waitForExistence(timeout: 10))

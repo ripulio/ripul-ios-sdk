@@ -1,10 +1,59 @@
 #if os(iOS)
 import UIKit
+import WebKit
 import XCTest
 @testable import RipulAgent
 
 @MainActor
 final class ComposerElementContextTests: XCTestCase {
+    @available(iOS 26.0, *)
+    func testHostGestureFindsMinimizedChatWithoutAnExplicitBridge() async throws {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let host = UIWindow(windowScene: scene)
+        let hostRoot = UIViewController()
+        host.rootViewController = hostRoot
+        host.isHidden = false
+        let agent = RipulDevOverlayWindow(windowScene: scene)
+        let root = RipulDevOverlayRootVC()
+        let cache = UserDefaultsSessionCache(suiteName: "io.ripul.tests.minimized-attachment.\(UUID())")
+        root.configuration = RipulSessionsConfiguration(cache: cache, baseURL: URL(string: "http://127.0.0.1:9")!, websiteDataStore: .nonPersistent())
+        agent.installRoot(root)
+        agent.isHidden = false
+        root.showCompact()
+        let bridge = try XCTUnwrap(root.inspectorContextBridge)
+        bridge.sessions = [ChatSession(id: "minimized-tab", sourceChatId: "minimized-chat", displayName: "Minimized chat", createdAt: Date())]
+        bridge.activeSessionId = "minimized-tab"
+        // Isolate destination/option routing from selection geometry. The UI
+        // test captures real native/web elements through this same launch path.
+        var captures = 0
+        bridge.composerContexts.availableOptions = [RipulComposerContext(
+            id: RipulComposerContext.selectedElement.id, title: "Host element",
+            resolve: { captures += 1; return "Reviewed host element" })]
+        defer {
+            RipulViewExplorer.dismiss()
+            agent.isHidden = true
+            host.isHidden = true
+        }
+        RipulViewExplorer.dismiss()
+        let staleBridge = AgentBridge()
+        RipulViewExplorer.contextBridge = staleBridge
+        XCTAssertTrue(RipulViewExplorer.toggle(in: host), "Same no-bridge entry point as the host's shake gesture")
+        XCTAssertNil(RipulViewExplorer.contextBridge, "A host launch must discard an earlier explicit destination")
+        XCTAssertFalse(agent.isExpanded)
+        let draft: ComposerContextAttachmentDraft
+        do { draft = try await RipulViewExplorer.prepareSelectedElementAttachment() }
+        catch { XCTFail("Minimized chat capture failed: \(error.localizedDescription)"); return }
+        XCTAssertEqual(draft.session, "minimized-chat")
+        XCTAssertEqual(draft.item.content, "Reviewed host element")
+        XCTAssertEqual(captures, 1)
+        draft.attach(draft.item)
+        XCTAssertEqual(bridge.composerContexts.attachments(for: "minimized-chat"), [draft.item])
+        XCTAssertTrue(bridge.composerContexts.attachments(for: "minimized-tab").isEmpty)
+        agent.isHidden = true
+        do { _ = try await RipulViewExplorer.prepareSelectedElementAttachment(); XCTFail("A closed agent must not receive new attachments") }
+        catch { XCTAssertTrue(error.localizedDescription.contains("Open a chat")) }
+    }
+
     func testExplorerUsesComposerConversationAndConfiguredOptionsWithReviewedSnapshot() async throws {
         let (window, _, _) = fixture()
         defer { window.isHidden = true }

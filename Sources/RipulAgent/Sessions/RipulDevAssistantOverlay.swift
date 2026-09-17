@@ -283,6 +283,9 @@ final class RipulDevOverlayRootVC: UIViewController {
     /// compact bar (which mirrors the active chat off it). Owning it here also
     /// means the relay comes online before the first panel expand.
     private var sharedBridge: AgentBridge?
+    /// The existing console and minimized row share this conversation owner.
+    /// Reading it must never boot a console or create a new chat.
+    var inspectorContextBridge: AgentBridge? { sharedBridge }
     private var hostPreview: HostScreenPreviewController?
     private lazy var hostPreviewState = HostScreenPreviewState(store: configuration.cache.userDefaults) { [weak self] in
         guard let scene = self?.view.window?.windowScene else { return nil }

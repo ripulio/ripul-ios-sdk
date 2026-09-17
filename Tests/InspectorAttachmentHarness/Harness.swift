@@ -10,11 +10,11 @@ struct InspectorAttachmentHarness: View {
             Button("Open native inspector") { model.open(web: false) }
             Button("Open web inspector") { model.open(web: true) }
             InspectorAttachmentTargets(model: model).frame(height: 260)
-            Spacer()
             InspectorAttachmentStatus(store: model.bridge.composerContexts)
             ComposerContextChips(store: model.bridge.composerContexts, session: "attachment-conversation")
             ComposerContextButton(store: model.bridge.composerContexts, session: "attachment-conversation",
                                   options: model.bridge.composerContexts.availableOptions, size: 44)
+            Spacer()
         }
         .padding(24)
     }
@@ -31,11 +31,17 @@ private struct InspectorAttachmentStatus: View {
 
 @MainActor
 private final class InspectorAttachmentModel: ObservableObject {
-    let bridge = AgentBridge()
+    @Published var bridge = AgentBridge()
+    private var minimizedAgent: RipulDevOverlayWindow?
+    private let usesHostGesture = ProcessInfo.processInfo.arguments.contains("--minimized-chat")
     weak var native: UIButton?
     weak var web: WKWebView?
 
     init() {
+        configureChat()
+    }
+
+    private func configureChat() {
         bridge.sessions = [ChatSession(id: "attachment-tab", sourceChatId: "attachment-conversation", displayName: "Attachment test", createdAt: Date())]
         bridge.activeSessionId = "attachment-tab"
         bridge.composerContexts.availableOptions = [.selectedElement(configuration: .init(defaults: [.instrumentedText, .screenshot]))]
@@ -49,7 +55,26 @@ private final class InspectorAttachmentModel: ObservableObject {
         UserDefaults.standard.set(80, forKey: "viewInspector.posY")
         UserDefaults.standard.set(360, forKey: "viewInspector.w")
         UserDefaults.standard.set(260, forKey: "viewInspector.h")
-        RipulViewExplorer.present(in: window, bridge: bridge)
+        if usesHostGesture {
+            if minimizedAgent == nil, let scene = window.windowScene {
+                let agent = RipulDevOverlayWindow(windowScene: scene)
+                let root = RipulDevOverlayRootVC()
+                root.configuration = RipulSessionsConfiguration(
+                    cache: UserDefaultsSessionCache(suiteName: "io.ripul.attachment-harness.minimized"),
+                    baseURL: URL(string: "http://127.0.0.1:9")!, websiteDataStore: .nonPersistent())
+                agent.installRoot(root)
+                agent.isHidden = false
+                root.showCompact()
+                guard let existingBridge = root.inspectorContextBridge else { return }
+                bridge = existingBridge
+                configureChat()
+                minimizedAgent = agent
+            }
+            // This is exactly the host shake entry point: no bridge supplied.
+            RipulViewExplorer.toggle(in: window)
+        } else {
+            RipulViewExplorer.present(in: window, bridge: bridge)
+        }
         Task {
             try? await Task.sleep(for: .milliseconds(400))
             let local = isWeb ? CGPoint(x: 40, y: 40) : CGPoint(x: target.bounds.midX, y: target.bounds.midY)

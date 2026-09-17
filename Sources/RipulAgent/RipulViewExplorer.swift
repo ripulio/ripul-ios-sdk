@@ -118,8 +118,26 @@ final class RipulExplorerOverlayWindow: RipulChromeWindow {
 public enum RipulViewExplorer {
     static weak var contextBridge: AgentBridge?
 
+    private static var attachmentBridge: AgentBridge? {
+        if let contextBridge { return contextBridge }
+        // Host gestures and tool launches do not have the console's bridge to
+        // pass in. Resolve its existing owner in this scene at attachment time:
+        // minimizing preserves it, and closing/replacing it must not leave a
+        // stale destination behind. Borrowed chat launchers have no bridge.
+        if #available(iOS 26.0, *), let scene = hostWindow?.windowScene {
+            let bridges = scene.windows.compactMap { window -> AgentBridge? in
+                guard let window = window as? RipulDevOverlayWindow,
+                      !window.isHidden, window.alpha > 0.01,
+                      let root = window.rootViewController as? RipulDevOverlayRootVC else { return nil }
+                return root.inspectorContextBridge
+            }
+            if bridges.count == 1 { return bridges[0] }
+        }
+        return nil
+    }
+
     static func prepareSelectedElementAttachment() async throws -> ComposerContextAttachmentDraft {
-        guard let bridge = contextBridge else { throw ComposerContextAttachmentError.noChat }
+        guard let bridge = attachmentBridge else { throw ComposerContextAttachmentError.noChat }
         guard let option = bridge.composerContexts.availableOptions.first(where: { $0.id == RipulComposerContext.selectedElement.id }) else {
             throw ComposerContextAttachmentError.selectedElementUnavailable
         }
@@ -179,11 +197,11 @@ public enum RipulViewExplorer {
     /// tab armed) — used by the macro library's "Record new" entry point.
     @discardableResult
     public static func present(in window: UIWindow? = nil, recording: Bool = false, bridge: AgentBridge? = nil) -> Bool {
-        if let bridge { contextBridge = bridge }
         guard let requested = window ?? RipulChrome.appWindow(),
               let scene = requested.windowScene,
               let target = canInspect(requested) ? requested : RipulChrome.appWindow(in: scene)
         else { return false }
+        contextBridge = bridge
         // Launching from the assistant exposes the host. Reopening the assistant
         // later covers this same explorer without losing its selection or pin.
         if #available(iOS 26.0, *) {
@@ -211,6 +229,7 @@ public enum RipulViewExplorer {
 
     /// Remove the View Explorer if shown.
     public static func dismiss() {
+        contextBridge = nil
         guard let win = window else { return }
         ViewInspectorController.live?.session?.close()
         win.relinquishKey()
