@@ -118,6 +118,14 @@ final class RipulExplorerOverlayWindow: RipulChromeWindow {
 public enum RipulViewExplorer {
     static weak var contextBridge: AgentBridge?
 
+    static func prepareSelectedElementAttachment() async throws -> ComposerContextAttachmentDraft {
+        guard let bridge = contextBridge else { throw ComposerContextAttachmentError.noChat }
+        guard let option = bridge.composerContexts.availableOptions.first(where: { $0.id == RipulComposerContext.selectedElement.id }) else {
+            throw ComposerContextAttachmentError.selectedElementUnavailable
+        }
+        return try await bridge.composerContexts.prepareAttachment(option, for: bridge.currentSourceChatId)
+    }
+
     /// Shared by picking and retained-selection paths. Embedded assistant
     /// chrome is never a target, including as a geometric fallback seed.
     static func canInspect(_ window: UIWindow) -> Bool {

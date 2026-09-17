@@ -2044,6 +2044,37 @@ public final class AgentBridge: NSObject, ObservableObject {
     @Published public var chatInputGlassStyle: String?
     /// Layout mode for the native chat input: nil/"single" (default) or "twoRow" (buttons below text area).
     @Published public var chatInputLayout: String?
+    @Published public private(set) var conversationModes: [String: String] = [:]
+
+    public func conversationMode(for chatId: String?) -> String {
+        guard let chatId else { return "agent" }
+        return conversationModes[chatId] ?? "agent"
+    }
+
+    public func refreshConversationMode(chatId: String) async {
+        guard let webView else { return }
+        if let result = try? await webView.callAsyncJavaScript(
+            "return await window.__ripulGetConversationMode?.(chatId) ?? {mode:'agent'};",
+            arguments: ["chatId": chatId], contentWorld: .page),
+           let dict = result as? [String: Any], let mode = dict["mode"] as? String {
+            if conversationModes[chatId] != mode { conversationModes[chatId] = mode }
+        }
+    }
+
+    public func setConversationMode(chatId: String, mode: String) async -> String? {
+        guard let webView else { return "Reconnect this conversation and try again." }
+        do {
+            let result = try await webView.callAsyncJavaScript(
+                "return await window.__ripulSetConversationMode?.(chatId, mode) ?? {success:false,error:'Conversation mode is unavailable.'};",
+                arguments: ["chatId": chatId, "mode": mode], contentWorld: .page)
+            guard let dict = result as? [String: Any], dict["success"] as? Bool == true else {
+                return (result as? [String: Any])?["error"] as? String ?? "The mode change was not confirmed."
+            }
+            conversationModes[chatId] = mode
+            return nil
+        } catch { return error.localizedDescription }
+    }
+
     /// Whether to show "New to do" and "Pick to do" in the native chat "+" menu. Default true.
     @Published public var chatInputShowTodos: Bool = true
     /// Whether to show "Quick Commands" in the native chat "+" menu. Default true.
@@ -3801,6 +3832,11 @@ public final class AgentBridge: NSObject, ObservableObject {
             handleMastheadConfig(dict)
         case "voice:config":
             handleVoiceConfig(dict)
+        case "conversation:mode":
+            if let chatId = dict["chatId"] as? String, let mode = dict["mode"] as? String,
+               mode == "agent" || mode == "group", conversationModes[chatId] != mode {
+                conversationModes[chatId] = mode
+            }
         case "composer:actions":
             if let chatId = dict["chatId"] as? String,
                let data = try? JSONSerialization.data(withJSONObject: dict),

@@ -10,7 +10,7 @@ let ripulViewExplorerOverlayTag = 0x5249_5055   // "RIPU"
 
 /// Marketing version of the RipulAgent SDK, surfaced in the inspector's copy output as `sdk: …`
 /// so we can always tell which build is actually running on the device. Bump on every release.
-let ripulSDKVersion = "0.7.125"
+let ripulSDKVersion = "0.7.126"
 
 // MARK: - View Inspector Overlay
 //
@@ -2760,9 +2760,8 @@ private struct InspectorIdentityLozenge: View {
 @available(iOS 16.0, *)
 struct InspectorHUD: View {
     @ObservedObject var session: InspectorSession
-    @State private var contextPreview: RipulContextAttachment?
-    @State private var destinationSession: String?
-    @State private var destinationBridge: AgentBridge?
+    @State private var contextPreview: ComposerContextAttachmentDraft?
+    @State private var captureContextTask: Task<Void, Never>?
     @State private var capturingContext = false
     let inspected: InspectedView?
     let history: [UIView]
@@ -2866,12 +2865,13 @@ struct InspectorHUD: View {
         // The HUD always has a dark surface, even when its host app is light.
         // Resolve all adaptive labels and controls against that surface.
         .environment(\.colorScheme, .dark)
-        .sheet(item: $contextPreview) { item in
-            ComposerContextPreview(item: item) { attachment in
-                destinationBridge?.composerContexts.attach(attachment, to: destinationSession)
+        .sheet(item: $contextPreview) { draft in
+            ComposerContextPreview(item: draft.item) { attachment in
+                draft.attach(attachment)
                 folded = true
             }
         }
+        .onDisappear { captureContextTask?.cancel() }
         .onChange(of: session.web != nil) { isWeb in
             if isWeb && (tab == .audit || tab == .macro) { tab = .properties }
             if !isWeb && tab == .eval { tab = .properties }
@@ -2893,18 +2893,17 @@ struct InspectorHUD: View {
                     hudButton("Activate", disabled: !session.hasSelection) { session.activate() }
                         .uiKitIdentifier("Inspector.activate")
                 }
-                hudButton(capturingContext ? "Capturing…" : "Add to chat", disabled: !session.hasSelection || capturingContext) {
-                    guard let bridge = RipulViewExplorer.contextBridge, let id = bridge.activeSessionId else {
-                        session.error = "Open a chat, then choose Add to chat. You can also copy this reference."; return
-                    }
-                    destinationBridge = bridge; destinationSession = id; capturingContext = true
+                hudButton(capturingContext ? "Capturing…" : "Attach element", disabled: !session.hasSelection || capturingContext) {
+                    capturingContext = true
+                    session.error = nil
                     session.pinned = true
-                    Task {
-                        do { contextPreview = try await RipulComposerContext.selectedElement.makeAttachment() }
-                        catch { session.error = error.localizedDescription }
-                        capturingContext = false
+                    captureContextTask = Task { @MainActor in
+                        defer { capturingContext = false }
+                        do { contextPreview = try await RipulViewExplorer.prepareSelectedElementAttachment() }
+                        catch is CancellationError { }
+                        catch { if !Task.isCancelled { session.error = error.localizedDescription } }
                     }
-                }.uiKitIdentifier("Inspector.addToChat")
+                }.uiKitIdentifier("Inspector.attachElement")
                 Spacer(minLength: 0)
                 hudIconButton("hand.point.up.left", label: session.interacting ? "Resume inspecting" : "Interact with app",
                     tone: .cyan, active: session.interacting) {

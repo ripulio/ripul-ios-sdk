@@ -3,6 +3,26 @@ import XCTest
 
 final class ComposerContextTests: XCTestCase {
     @MainActor
+    func testCaptureCancellationAndEmptyContextNeverAttach() async throws {
+        let store = RipulComposerContextStore(storage: nil)
+        let empty = RipulComposerContext(id: "empty", title: "Empty") { "  " }
+        do { _ = try await store.prepareAttachment(empty, for: "chat"); XCTFail("Empty context should fail") }
+        catch { XCTAssertTrue(error.localizedDescription.contains("no content")) }
+        let started = expectation(description: "capture started")
+        var resume: CheckedContinuation<String, Never>?
+        let delayed = RipulComposerContext(id: "delayed", title: "Delayed") {
+            await withCheckedContinuation { continuation in resume = continuation; started.fulfill() }
+        }
+        let task = Task { try await store.prepareAttachment(delayed, for: "chat") }
+        await fulfillment(of: [started], timeout: 2)
+        task.cancel()
+        resume?.resume(returning: "Late capture")
+        do { _ = try await task.value; XCTFail("Cancelled capture must not create a preview") }
+        catch { XCTAssertTrue(error is CancellationError) }
+        XCTAssertTrue(store.attachments(for: "chat").isEmpty)
+    }
+
+    @MainActor
     func testExplicitSelectionIsolationAndAcknowledgedConsumption() {
         let store = RipulComposerContextStore(storage: nil)
         let one = RipulContextAttachment(option: .planningOnly, content: "Plan, do not edit.")

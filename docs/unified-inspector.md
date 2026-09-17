@@ -63,11 +63,13 @@ removes the inline override. Edits override stylesheet rules and refresh the
 diagram immediately. Content dimensions use untransformed CSS layout dimensions
 and account for `box-sizing`, rather than the selection's screen bounding box.
 
-**Add to chat** freezes a selection snapshot and opens the existing context
-preview. The user chooses description, screenshot and optional recognized text,
-then attaches it to the chat that opened the Inspector. Nothing is sent until
-the message is sent. The composer's **Selected element** option uses the same
-selection. Removed elements fail explicitly rather than resolving a replacement
+**Attach element** uses the composer's **Selected element** attachment flow,
+including the host's configured description, screenshot and recognized-text
+choices. Both entry points freeze a draft and its destination conversation before
+opening the same review sheet. **Attach** adds the reviewed snapshot to the
+composer; Cancel adds nothing. Nothing is sent until the message is sent.
+The destination uses the composer's source conversation ID, not the containing
+chat tab ID. Removed elements fail explicitly rather than resolving a replacement
 with the same identifier. Editable web elements are excluded from context;
 editable descendants are masked in screenshots and suppress aggregate text.
 

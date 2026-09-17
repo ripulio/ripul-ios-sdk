@@ -93,6 +93,9 @@ public struct RipulContextAttachment: Identifiable, Equatable, Codable {
 @MainActor
 public final class RipulComposerContextStore: ObservableObject {
     @Published private var selections: [String: [RipulContextAttachment]] = [:]
+    // The same host-configured options used by the visible composer. Keeping
+    // these off AgentBridge's published state avoids invalidating its web view.
+    var availableOptions: [RipulComposerContext] = RipulComposerContext.standard
     private let storage: UserDefaults?
     private let storagePrefix = "ripul.composer-context.v1."
     public init(storage: UserDefaults? = .standard) { self.storage = storage }
@@ -116,6 +119,18 @@ public final class RipulComposerContextStore: ObservableObject {
         items.removeAll { $0.optionID == item.optionID }
         items.append(item); save(items, session: session)
     }
+
+    /// Both the composer menu and Inspector capture a draft before presenting
+    /// the shared review sheet. The destination is frozen before any async work.
+    func prepareAttachment(_ option: RipulComposerContext, for session: String?) async throws -> ComposerContextAttachmentDraft {
+        guard let session, !session.isEmpty else { throw ComposerContextAttachmentError.noChat }
+        let item = try await option.makeAttachment()
+        try Task.checkCancellation()
+        guard item.screen != nil || !item.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw ComposerContextAttachmentError.empty
+        }
+        return ComposerContextAttachmentDraft(item: item, store: self, session: session)
+    }
     public func remove(_ id: UUID, from session: String?) {
         save(attachments(for: session).filter { $0.id != id }, session: session)
     }
@@ -123,5 +138,29 @@ public final class RipulComposerContextStore: ObservableObject {
     func didSend(_ sent: [RipulContextAttachment], session: String?) {
         let ids = Set(sent.filter { $0.duration == .nextMessage }.map(\.id))
         save(attachments(for: session).filter { !ids.contains($0.id) }, session: session)
+    }
+}
+
+struct ComposerContextAttachmentDraft: Identifiable {
+    let item: RipulContextAttachment
+    let store: RipulComposerContextStore
+    let session: String
+    var id: UUID { item.id }
+
+    @MainActor
+    func attach(_ reviewed: RipulContextAttachment) {
+        store.attach(reviewed, to: session)
+    }
+}
+
+enum ComposerContextAttachmentError: LocalizedError {
+    case noChat, empty, selectedElementUnavailable
+
+    var errorDescription: String? {
+        switch self {
+        case .noChat: return "Open a chat before attaching context."
+        case .empty: return "This context has no content yet."
+        case .selectedElementUnavailable: return "Selected element attachments are not available in this app."
+        }
     }
 }

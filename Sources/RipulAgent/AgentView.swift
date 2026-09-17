@@ -279,6 +279,7 @@ public struct AgentView<TopBar: View>: View {
             bridge.evaluateJavaScript("window.__ripulSetHostRenderSuspended?.(\(on))")
         }
         .onAppear {
+            bridge.composerContexts.availableOptions = configuration.composerContexts
             let on = bridge.nativeChatScrollerEnabled
             // Always sync render-suspension state on appear — clears crash-while-suspended
             // localStorage so the web never starts suspended when native chat is off.
@@ -654,6 +655,26 @@ private struct ChatComposer: View {
     @State private var selectedPhotos: [PhotosPickerItem] = []
     @State private var imageAttachments: [NativeImageAttachment] = []
     @State private var addressedParticipants: [String] = []
+    @State private var conversationModePending = false
+    private var isGroupMode: Bool { bridge.conversationMode(for: bridge.currentSourceChatId) == "group" }
+
+    private var conversationModeControl: some View {
+        RipulConversationModeControl(mode: isGroupMode ? "group" : "agent", pending: conversationModePending,
+            onChange: changeConversationMode, onMention: {
+                chatMessage += (chatMessage.isEmpty || chatMessage.hasSuffix(" ") ? "" : " ") + "@Agent "
+            })
+    }
+
+    private func changeConversationMode(_ mode: String) {
+        guard !conversationModePending, let chatId = bridge.currentSourceChatId else { return }
+        conversationModePending = true
+        Task {
+            let error = await bridge.setConversationMode(chatId: chatId, mode: mode)
+            conversationModePending = false
+            if let error { composerActionError = error }
+        }
+    }
+
     /// Stable provider instance for the composer mic (ElevenLabs holds a live
     /// WebSocket/engine, so identity must survive re-renders). Recreated on
     /// appear so a changed dictation-provider preference takes effect when
@@ -671,10 +692,14 @@ private struct ChatComposer: View {
 
             VStack(spacing: 8) {
                 NativeToolStrip(store: bridge.toolStrip) { [weak bridge] event in bridge?.send(event) }
+                if !BundledAgentRuntime.isEnabled { conversationModeControl }
                 chatInput
             }
                 .task(id: bridge.currentSourceChatId) {
-                    if let chatId = bridge.currentSourceChatId { await bridge.refreshComposerActions(chatId: chatId) }
+                    if let chatId = bridge.currentSourceChatId {
+                        await bridge.refreshComposerActions(chatId: chatId)
+                        await bridge.refreshConversationMode(chatId: chatId)
+                    }
                 }
                 .sheet(item: $artefactChatTarget) { target in
                     ArtefactChatPicker(bridge: bridge, chatID: target.id)
@@ -762,11 +787,12 @@ private struct ChatComposer: View {
             imageAttachments: $imageAttachments,
             selectedPhotos: $selectedPhotos,
             isAgentRunning: bridge.isAgentRunning && bridge.pendingUserInteraction == nil && bridge.pendingTextQuestion == nil && bridge.pendingDateQuestion == nil,
-            isAgentPaused: bridge.isAgentPaused,
+            isAgentPaused: bridge.isAgentPaused && !isGroupMode,
             onSubmit: handleSubmit,
-            onSubmitNote: BundledAgentRuntime.isEnabled ? nil : handleNoteSubmit,
-            runningSendLabel: composerActionStore.runningSendLabel(for: bridge.currentSourceChatId),
-            composerActions: composerActionStore.actions(for: bridge.currentSourceChatId),
+            onSubmitNote: BundledAgentRuntime.isEnabled || isGroupMode ? nil : handleNoteSubmit,
+            conversationMode: isGroupMode ? "group" : "agent",
+            runningSendLabel: isGroupMode ? "Send" : composerActionStore.runningSendLabel(for: bridge.currentSourceChatId),
+            composerActions: isGroupMode ? [] : composerActionStore.actions(for: bridge.currentSourceChatId),
             composerActionPending: composerActionPending,
             onComposerAction: handleComposerAction,
             onPause: { Task { await bridge.interruptAgent() } },
@@ -854,11 +880,12 @@ private struct ChatComposer: View {
             imageAttachments: $imageAttachments,
             selectedPhotos: $selectedPhotos,
             isAgentRunning: bridge.isAgentRunning && bridge.pendingUserInteraction == nil && bridge.pendingTextQuestion == nil && bridge.pendingDateQuestion == nil,
-            isAgentPaused: bridge.isAgentPaused,
+            isAgentPaused: bridge.isAgentPaused && !isGroupMode,
             onSubmit: handleSubmit,
-            onSubmitNote: BundledAgentRuntime.isEnabled ? nil : handleNoteSubmit,
-            runningSendLabel: composerActionStore.runningSendLabel(for: bridge.currentSourceChatId),
-            composerActions: composerActionStore.actions(for: bridge.currentSourceChatId),
+            onSubmitNote: BundledAgentRuntime.isEnabled || isGroupMode ? nil : handleNoteSubmit,
+            conversationMode: isGroupMode ? "group" : "agent",
+            runningSendLabel: isGroupMode ? "Send" : composerActionStore.runningSendLabel(for: bridge.currentSourceChatId),
+            composerActions: isGroupMode ? [] : composerActionStore.actions(for: bridge.currentSourceChatId),
             composerActionPending: composerActionPending,
             onComposerAction: handleComposerAction,
             onPause: { Task { await bridge.interruptAgent() } },
@@ -966,7 +993,29 @@ private struct ChatComposer: View {
 
     private func handleSubmit() {
         let message = chatMessage.trimmingCharacters(in: .whitespacesAndNewlines)
-        if bridge.isAgentPaused {
+        if isGroupMode {
+            guard !composerActionPending, let chatId = bridge.currentSourceChatId,
+                  !message.isEmpty || !imageAttachments.isEmpty || !bridge.composerContexts.attachments(for: chatId).isEmpty else { return }
+            let originalText = chatMessage
+            let images = imageAttachments
+            let addressed = addressedParticipants
+            composerActionPending = true
+            Task {
+                let accepted = await bridge.submitMessage(message,
+                    imageAttachments: images.isEmpty ? nil : images.map { $0.toDictionary() },
+                    addressedTo: addressed.isEmpty ? nil : addressed)
+                composerActionPending = false
+                guard bridge.currentSourceChatId == chatId else { return }
+                if accepted {
+                    recordHistory(message)
+                    if chatMessage == originalText { chatMessage = ""; addressedParticipants = [] }
+                    imageAttachments.removeAll { image in images.contains { $0.id == image.id } }
+                    selectedPhotos = []
+                } else { composerActionError = "Message delivery was not confirmed. Your draft has been kept." }
+            }
+            return
+        }
+        if bridge.isAgentPaused && !isGroupMode {
             let addressed = addressedParticipants
             chatMessage = ""
             imageAttachments = []

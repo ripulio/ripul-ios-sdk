@@ -225,6 +225,7 @@ public struct NativeChatInput: View {
     var contextOptions: [RipulComposerContext]
     /// Send a human note (not sent to agent, for human-to-human communication).
     var onSubmitNote: (() -> Void)?
+    var conversationMode: String
     var runningSendLabel: String
     var composerActions: [RipulComposerAction]
     var composerActionPending: Bool
@@ -325,6 +326,7 @@ public struct NativeChatInput: View {
         isAgentPaused: Bool = false,
         onSubmit: @escaping () -> Void,
         onSubmitNote: (() -> Void)? = nil,
+        conversationMode: String = "agent",
         runningSendLabel: String = "Send",
         composerActions: [RipulComposerAction] = [],
         composerActionPending: Bool = false,
@@ -360,6 +362,7 @@ public struct NativeChatInput: View {
         self.isAgentPaused = isAgentPaused
         self.onSubmit = onSubmit
         self.onSubmitNote = onSubmitNote
+        self.conversationMode = conversationMode
         self.runningSendLabel = runningSendLabel
         self.composerActions = composerActions
         self.composerActionPending = composerActionPending
@@ -1391,7 +1394,7 @@ public struct NativeChatInput: View {
     }
 
     private var agentWaiting: Bool {
-        isAgentRunning && !isAgentPaused
+        isAgentRunning && !isAgentPaused && conversationMode != "group"
     }
 
     // Matches ChatTextView's font so the shimmer overlay sits exactly where
@@ -1406,7 +1409,7 @@ public struct NativeChatInput: View {
             height: $textHeight,
             // While waiting, the UIKit placeholder is blanked and the
             // shimmering SwiftUI overlay below renders the copy instead.
-            placeholder: agentWaiting ? "" : isAgentPaused ? "Agent is paused, add new instruction…" : "Message...",
+            placeholder: agentWaiting ? "" : conversationMode == "group" ? "Message the group · @Agent to ask" : isAgentPaused ? "Agent is paused, add new instruction…" : "Message...",
             onSubmit: {
                 // On Catalyst (hardware keyboard) keep focus after sending so the
                 // next message can be typed immediately; on iOS dismiss as before.
@@ -1680,6 +1683,7 @@ public struct NativeChatInput: View {
     var contextOptions: [RipulComposerContext]
     /// Send a human note (not sent to agent, for human-to-human communication).
     var onSubmitNote: (() -> Void)?
+    var conversationMode: String
     var runningSendLabel: String
     var composerActions: [RipulComposerAction]
     var composerActionPending: Bool
@@ -1757,6 +1761,7 @@ public struct NativeChatInput: View {
         isAgentPaused: Bool = false,
         onSubmit: @escaping () -> Void,
         onSubmitNote: (() -> Void)? = nil,
+        conversationMode: String = "agent",
         runningSendLabel: String = "Send",
         composerActions: [RipulComposerAction] = [],
         composerActionPending: Bool = false,
@@ -1789,6 +1794,7 @@ public struct NativeChatInput: View {
         self.isAgentPaused = isAgentPaused
         self.onSubmit = onSubmit
         self.onSubmitNote = onSubmitNote
+        self.conversationMode = conversationMode
         self.runningSendLabel = runningSendLabel
         self.composerActions = composerActions
         self.composerActionPending = composerActionPending
@@ -2553,13 +2559,13 @@ public struct NativeChatInput: View {
     }
 
     private var agentWaiting: Bool {
-        isAgentRunning && !isAgentPaused
+        isAgentRunning && !isAgentPaused && conversationMode != "group"
     }
 
     private var textInputView: some View {
         // While waiting, the TextField placeholder is blanked and the
         // shimmering overlay below renders the copy instead.
-        TextField(agentWaiting ? "" : isAgentPaused ? "Agent is paused, add new instruction…" : "Message...", text: $text, axis: .vertical)
+        TextField(agentWaiting ? "" : conversationMode == "group" ? "Message the group · @Agent to ask" : isAgentPaused ? "Agent is paused, add new instruction…" : "Message...", text: $text, axis: .vertical)
             .textFieldStyle(.plain)
             .lineLimit(1...5)
             .focused($isFocused)

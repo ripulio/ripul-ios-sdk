@@ -5,6 +5,44 @@ import XCTest
 
 @MainActor
 final class ComposerElementContextTests: XCTestCase {
+    func testExplorerUsesComposerConversationAndConfiguredOptionsWithReviewedSnapshot() async throws {
+        let (window, _, _) = fixture()
+        defer { window.isHidden = true }
+        let previous = RipulViewExplorer.contextBridge
+        defer { RipulViewExplorer.contextBridge = previous }
+        let bridge = AgentBridge()
+        bridge.sessions = [
+            ChatSession(id: "attachment-tab-a", sourceChatId: "attachment-chat-a", displayName: "A", createdAt: Date()),
+            ChatSession(id: "attachment-tab-b", sourceChatId: "attachment-chat-b", displayName: "B", createdAt: Date())
+        ]
+        bridge.activeSessionId = "attachment-tab-a"
+        let option = RipulComposerContext.selectedElement(configuration: .init(available: [.instrumentedText, .screenshot], defaults: [.screenshot]))
+        bridge.composerContexts.availableOptions = [option]
+        RipulViewExplorer.contextBridge = bridge
+        let explorer = try await RipulViewExplorer.prepareSelectedElementAttachment()
+        let composer = try await bridge.composerContexts.prepareAttachment(option, for: bridge.currentSourceChatId)
+        XCTAssertEqual(explorer.session, "attachment-chat-a")
+        XCTAssertEqual(explorer.item.screen?.selected, composer.item.screen?.selected)
+        XCTAssertEqual(explorer.item.screen?.available, composer.item.screen?.available)
+        XCTAssertEqual(explorer.item.screen?.selected, [.screenshot])
+        XCTAssertTrue(bridge.composerContexts.attachments(for: "attachment-chat-a").isEmpty, "Capture/cancel must not attach anything")
+        bridge.activeSessionId = "attachment-tab-b"
+        var reviewed = explorer.item
+        reviewed.screen?.selected = [.instrumentedText]
+        explorer.attach(reviewed)
+        XCTAssertEqual(bridge.composerContexts.attachments(for: "attachment-chat-a"), [reviewed])
+        XCTAssertTrue(bridge.composerContexts.attachments(for: "attachment-tab-a").isEmpty)
+        XCTAssertTrue(bridge.composerContexts.attachments(for: "attachment-chat-b").isEmpty)
+        XCTAssertNil(bridge.composerContexts.attachments(for: "attachment-chat-a").first?.screenshotAttachment)
+        bridge.composerContexts.availableOptions = [.currentScreen]
+        do { _ = try await RipulViewExplorer.prepareSelectedElementAttachment(); XCTFail("Host-disabled element context must stay disabled") }
+        catch { XCTAssertTrue(error.localizedDescription.contains("not available")) }
+        bridge.composerContexts.availableOptions = [option]
+        bridge.activeSessionId = nil
+        do { _ = try await RipulViewExplorer.prepareSelectedElementAttachment(); XCTFail("No source conversation must not create a hidden draft") }
+        catch { XCTAssertTrue(error.localizedDescription.contains("Open a chat")) }
+    }
+
     private func fixture() -> (UIWindow, UIButton, ViewInspectorController) {
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 320, height: 640))
         let root = UIViewController()

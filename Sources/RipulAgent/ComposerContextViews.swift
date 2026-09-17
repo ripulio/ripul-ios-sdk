@@ -6,7 +6,7 @@ struct ComposerContextButton: View {
     let session: String?
     let options: [RipulComposerContext]
     let size: CGFloat
-    @State private var preview: RipulContextAttachment?
+    @State private var preview: ComposerContextAttachmentDraft?
     @State private var error: String?
     @State private var loading = false
     @State private var captureTask: Task<Void, Never>?
@@ -38,8 +38,8 @@ struct ComposerContextButton: View {
         .accessibilityLabel("Add context")
         .accessibilityIdentifier("NativeChatInput.context")
         .help("Choose context to attach to your message")
-        .sheet(item: $preview) { item in
-            ComposerContextPreview(item: item) { store.attach($0, to: session) }
+        .sheet(item: $preview) { draft in
+            ComposerContextPreview(item: draft.item) { draft.attach($0) }
         }
         .alert("Context unavailable", isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) {
             Button("OK") { error = nil }
@@ -52,12 +52,9 @@ struct ComposerContextButton: View {
         loading = true
         captureTask = Task { @MainActor in
             do {
-                let attachment = try await option.makeAttachment()
+                let draft = try await store.prepareAttachment(option, for: session)
                 guard !Task.isCancelled else { return }
-                guard attachment.screen != nil || !attachment.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                    error = "This context has no content yet."; loading = false; return
-                }
-                preview = attachment
+                preview = draft
             } catch {
                 guard !Task.isCancelled else { return }
                 self.error = error.localizedDescription
