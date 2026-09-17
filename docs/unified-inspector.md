@@ -5,7 +5,8 @@ and HTML inside a WKWebView on iOS and Catalyst. The Tools menu, Settings,
 solution management and the chat title double-tap launch the same window.
 Browser and native macOS clients use the web Inspector.
 
-The Web/Native identity lozenge at the top names the current selection. Tap it to
+The compact 22-point Web/Native identity lozenge at the top names the current
+selection, with smaller type and spacing to show more of long identities. Tap it to
 copy the full identity, even when it is visually truncated; a checkmark confirms
 the copy. **Copy reference** still copies the detailed inspection report. The
 Details tab and other panels omit the repeated identity badges.

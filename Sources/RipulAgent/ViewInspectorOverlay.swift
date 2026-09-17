@@ -10,7 +10,7 @@ let ripulViewExplorerOverlayTag = 0x5249_5055   // "RIPU"
 
 /// Marketing version of the RipulAgent SDK, surfaced in the inspector's copy output as `sdk: …`
 /// so we can always tell which build is actually running on the device. Bump on every release.
-let ripulSDKVersion = "0.7.124"
+let ripulSDKVersion = "0.7.125"
 
 // MARK: - View Inspector Overlay
 //
@@ -2723,22 +2723,22 @@ private struct InspectorIdentityLozenge: View {
             copied = true
             copySequence += 1
         } label: {
-            HStack(spacing: 8) {
+            HStack(spacing: 5) {
                 if session.hasSelection {
                     Text(kind).foregroundStyle(.orange)
-                        .font(.system(size: 12, weight: .semibold))
-                    Rectangle().fill(Color.orange.opacity(0.4)).frame(width: 1, height: 14)
+                        .font(.system(size: 9, weight: .semibold))
+                    Rectangle().fill(Color.orange.opacity(0.4)).frame(width: 1, height: 10)
                 }
                 Text(session.identity ?? "Select an element")
-                    .font(.system(size: 13, weight: .medium, design: .monospaced))
+                    .font(.system(size: 10, weight: .medium, design: .monospaced))
                     .lineLimit(1).truncationMode(.middle)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .foregroundStyle(session.hasSelection ? .white : .gray)
                 Image(systemName: copied ? "checkmark" : "doc.on.doc")
                     .foregroundStyle(copied ? .green : .orange)
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.system(size: 9, weight: .semibold))
             }
-            .padding(.horizontal, 12).frame(height: 44)
+            .padding(.horizontal, 8).frame(height: 22)
             .background(Color.orange.opacity(0.13), in: Capsule())
             .overlay(Capsule().strokeBorder(Color.orange.opacity(0.45), lineWidth: 1))
             .contentShape(Capsule())
