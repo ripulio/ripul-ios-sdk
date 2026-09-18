@@ -967,7 +967,11 @@ private struct ChatComposer: View {
     // MARK: Submit handlers
 
     private func handleSubmit() {
-        guard !composerActionPending, let chatID = bridge.currentSourceChatId else { return }
+        guard !composerActionPending else { return }
+        // Embedded chats can be ready in the web layer before their session is
+        // represented in the native list. The web submit callable resolves the
+        // active conversation; a native ID is only needed for draft storage.
+        let chatID = bridge.currentSourceChatId
         let originalText = chatMessage
         let message = originalText.trimmingCharacters(in: .whitespacesAndNewlines)
         let images = imageAttachments
@@ -985,7 +989,7 @@ private struct ChatComposer: View {
                 imageAttachments: images.isEmpty ? nil : images.map { $0.toDictionary() },
                 addressedTo: addressed.isEmpty ? nil : addressed)
             composerActionPending = false
-            if accepted {
+            if accepted, let chatID {
                 workspace?.storage.acknowledgeDraft(text: originalText, imageIDs: images.map(\.id), for: chatID)
             }
             // A late acknowledgement must never clear another chat's composer.
