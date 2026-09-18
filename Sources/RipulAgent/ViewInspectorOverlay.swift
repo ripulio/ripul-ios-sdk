@@ -10,7 +10,7 @@ let ripulViewExplorerOverlayTag = 0x5249_5055   // "RIPU"
 
 /// Marketing version of the RipulAgent SDK, surfaced in the inspector's copy output as `sdk: …`
 /// so we can always tell which build is actually running on the device. Bump on every release.
-let ripulSDKVersion = "0.7.130"
+let ripulSDKVersion = "0.7.131"
 
 // MARK: - View Inspector Overlay
 //
@@ -968,6 +968,8 @@ class ViewInspectorController: UIView {
     private var lastTapPosition: CGPoint?
     private let doubleTapInterval: TimeInterval = 0.45
     private let doubleTapDistance: CGFloat = 60
+    /// The reticule's tap zone: the 28pt crosshair plus a thumb's slack.
+    private let reticuleTapRadius: CGFloat = 24
 
     // A short tap pins after the double-tap window. Activation is an explicit
     // HUD action; double-tap still belongs to native theme/macro confirmation.
@@ -1054,6 +1056,20 @@ class ViewInspectorController: UIView {
         event?.modifierFlags.contains(.shift) == true
     }
 
+    /// Double-tap ON the reticule: toggle the highlighted element in the
+    /// basket under the identity lozenge. Touch's counterpart to shift-click,
+    /// which needs a modifier key a phone does not have. The selection itself
+    /// is left alone: no pin change, no element tap, no re-pick.
+    func collectFromReticule() {
+        guard session?.hasSelection == true else { return }
+        UISelectionFeedbackGenerator().selectionChanged()
+        session?.collectCurrent()
+    }
+
+    func reticuleContains(_ point: CGPoint) -> Bool {
+        hypot(point.x - cursorPos.x, point.y - cursorPos.y) <= reticuleTapRadius
+    }
+
     /// Re-pick under the cursor where it already is, without waiting for the
     /// pointer to move. Arming has to show its effect immediately.
     func repickAtCursor() { pickAt(cursorPos) }
@@ -1105,6 +1121,7 @@ class ViewInspectorController: UIView {
         // the host app as an abstract element tap. The payload's `view` is the
         // token-anchor (the .uiKitIdentifier stamp) when one resolved, so the host
         // reads the same element the Edit tab does; `targetView` is the raw pick.
+        let firstTap = lastTapPosition
         if isDoubleTap(at: loc, time: t.timestamp) {
             lastTapTime = nil
             lastTapPosition = nil
@@ -1113,6 +1130,12 @@ class ViewInspectorController: UIView {
             pendingPinToggle?.cancel()
             pendingPinToggle = nil
             suppressNextPinToggle = true
+            // Both taps on the reticule: collect. Anywhere else the pair keeps
+            // its job below — macro step confirmation, the host's element tap.
+            if reticuleContains(loc), firstTap.map(reticuleContains) ?? true {
+                collectFromReticule()
+                return
+            }
             if let element = currentTokenAnchor ?? currentTarget {
                 // The RETICULE, not the finger. The crosshair is a relative,
                 // accelerated cursor (touchesMoved integrates the delta), so
@@ -1212,6 +1235,17 @@ class ViewInspectorController: UIView {
                 return
             }
             if tapped {
+                // Appearance parks the reticule under every tap, so a double-tap
+                // is two taps on one spot: the first selected, the second
+                // collects what it selected.
+                if isDoubleTap(at: loc, time: t.timestamp), reticuleContains(loc) {
+                    lastTapTime = nil
+                    lastTapPosition = nil
+                    collectFromReticule()
+                    return
+                }
+                lastTapTime = t.timestamp
+                lastTapPosition = loc
                 session?.pinned = false
                 cursorPos = loc
                 onCursorMoved?(cursorPos)
@@ -2863,7 +2897,8 @@ private struct InspectorIdentityLozenge: View {
             HStack(spacing: 5) {
                 Text("\(session.collected.count) element\(session.collected.count == 1 ? "" : "s")")
                     .font(.system(size: 9, weight: .semibold)).foregroundStyle(.orange)
-                Text("⇧ click adds").font(.system(size: 9)).foregroundStyle(.gray).lineLimit(1)
+                Text(session.pointerActive ? "⇧ click adds" : "double-tap reticule adds")
+                    .font(.system(size: 9)).foregroundStyle(.gray).lineLimit(1)
                 Spacer(minLength: 0)
                 Button { session.clearCollected() } label: {
                     Image(systemName: "xmark.circle")
@@ -3019,6 +3054,12 @@ struct InspectorHUD: View {
     @State private var contextPreview: ComposerContextAttachmentDraft?
     @State private var captureContextTask: Task<Void, Never>?
     @State private var capturingContext = false
+    /// Folded-header Copy all feedback. The basket itself lives in the
+    /// selection toolbar, which a folded HUD does not show — and folded is how
+    /// the HUD is used on Catalyst — so the header carries the count and the
+    /// one-click copy too.
+    @State private var foldedCopied = false
+    @State private var foldedCopySequence = 0
     let inspected: InspectedView?
     let history: [UIView]
     @Binding var folded: Bool
@@ -3188,7 +3229,18 @@ struct InspectorHUD: View {
                         .accessibilityLabel("Inspector")
                     Text(folded && session.hasSelection ? session.label : "Inspector")
                         .layoutPriority(1).lineLimit(1).foregroundStyle(.white)
-
+                    if folded, !session.collected.isEmpty {
+                        HStack(spacing: 2) {
+                            Image(systemName: "rectangle.stack")
+                            Text("\(session.collected.count)")
+                        }
+                        .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(.orange)
+                        .padding(.horizontal, 5).frame(height: 15)
+                        .background(Color.orange.opacity(0.18), in: Capsule())
+                        .accessibilityLabel("\(session.collected.count) collected elements")
+                        .uiKitIdentifier("Inspector.fold.collectedCount")
+                    }
                 }
                 .font(.system(size: 11, design: .monospaced))
                 .foregroundStyle(Color.pink.opacity(0.8))
@@ -3197,6 +3249,23 @@ struct InspectorHUD: View {
             .uiKitIdentifier("Inspector.fold")
 
             Spacer()
+
+            if folded, !session.collected.isEmpty {
+                hudIconButton(foldedCopied ? "checkmark" : "doc.on.doc",
+                              label: foldedCopied ? "Collected identities copied" : "Copy all collected identities",
+                              tone: foldedCopied ? .green : .orange) {
+                    session.copyCollected()
+                    foldedCopied = true
+                    foldedCopySequence += 1
+                }
+                .uiKitIdentifier("Inspector.fold.copyCollected")
+                .task(id: foldedCopySequence) {
+                    guard foldedCopied else { return }
+                    try? await Task.sleep(nanoseconds: 1_200_000_000)
+                    if !Task.isCancelled { foldedCopied = false }
+                }
+                .onChange(of: session.collected) { _ in foldedCopied = false }
+            }
 
             if let consoleAction {
                 hudIconButton("terminal", label: "Console", tone: .cyan, action: consoleAction)

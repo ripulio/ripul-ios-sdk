@@ -27,7 +27,7 @@ public struct RipulSessionsView: View {
     @ObservedObject private var bridge: AgentBridge
     @StateObject private var model: RipulSessionListModel
     private let cache: RipulSessionCache
-    private let onSelectSession: (ChatSession) -> Void
+    private let onSelectSession: @MainActor (ChatSession) async -> Void
     private let onDismiss: () -> Void
     private let allowRipulAgents: Bool
     private let invitesSection: ((InvitesSectionActions) -> AnyView)?
@@ -61,7 +61,7 @@ public struct RipulSessionsView: View {
         bridge: AgentBridge,
         cache: RipulSessionCache,
         tokenProvider: @escaping () -> String?,
-        onSelectSession: @escaping (ChatSession) -> Void,
+        onSelectSession: @escaping @MainActor (ChatSession) async -> Void,
         onDismiss: @escaping () -> Void = {},
         allowRipulAgents: Bool = false,
         invitesSection: ((InvitesSectionActions) -> AnyView)? = nil,
@@ -98,7 +98,7 @@ public struct RipulSessionsView: View {
 
     private var callbacks: SessionsListCallbacks {
         SessionsListCallbacks(
-            onFocusSession: { session in onSelectSession(session) },
+            onFocusSession: { session in Task { await onSelectSession(session) } },
             onConnect: { machine in
                 if model.usesDirectConnections { createNewChat?(machine.machineId); return }
                 Task { await model.connect(to: machine, onSelect: onSelectSession, onDismiss: onDismiss) }
@@ -162,7 +162,7 @@ public struct RipulSessionsView: View {
             workspace.selectedSessionID = session.id
             workspace.title = session.title
             workspace.isRestoringSelection = restoring
-            onSelectSession(selected)
+            await onSelectSession(selected)
             workspace.isRestoringSelection = false
         }, onDismiss: { if !restoring { onDismiss() } })
     }

@@ -1,0 +1,40 @@
+name: SessionNavigationChecks
+options:
+  deploymentTarget:
+    macOS: '26.0'
+packages:
+  RipulAgent:
+    path: ../..
+settings:
+  base:
+    GENERATE_INFOPLIST_FILE: YES
+    CODE_SIGNING_ALLOWED: NO
+targets:
+  SessionNavigationHost:
+    type: application
+    platform: macOS
+    sources: [App.swift]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.ripul.tests.session-navigation-host
+  SessionNavigationTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - ../RipulAgentTests/SessionOpenFailureTests.swift
+      - ../RipulAgentTests/SessionDataSourceTests.swift
+      - ../RipulAgentTests/SessionDeletionTests.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.ripul.tests.session-navigation
+    dependencies:
+      - target: SessionNavigationHost
+      - package: RipulAgent
+schemes:
+  SessionNavigationChecks:
+    build:
+      targets:
+        SessionNavigationHost: all
+        SessionNavigationTests: [test]
+    test:
+      targets: [SessionNavigationTests]

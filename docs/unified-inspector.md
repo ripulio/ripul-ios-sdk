@@ -20,7 +20,14 @@ rows have their own remove buttons and the basket has a clear button. Plain
 clicks, tree navigation and Back leave the basket alone. Releasing shift
 without clicking restores the pinned selection. Shift-clicks never count as
 the double-tap that fires an element. `device_explorer_probe` reports the
-basket as `collected`.
+basket as `collected`. A folded HUD shows the basket count next to the title
+and its own **Copy all** button, so collecting works without unfolding.
+
+On a touchscreen, **double-tap the reticule** to add the highlighted element to
+the basket, or to take it out again. On the Appearance tab every tap parks the
+reticule under the finger, so a double-tap on an element there selects it and
+collects it in one go. Double-taps away from the reticule keep their existing
+jobs: confirming a macro step, and the host's element-tap action.
 
 Single-tap the chat title to expand or collapse it. Double-tap opens Inspector
 and preserves the title's expanded state. The single tap waits for the system's

@@ -15,5 +15,7 @@ public struct RipulSessionSourceSnapshot {
 @MainActor
 public protocol RipulSessionDataSource: AnyObject {
     func load() async throws -> RipulSessionSourceSnapshot
+    /// Prepare the tab/history without changing focus. The caller owns selection
+    /// and may cancel this request when the user chooses another row.
     func open(_ session: UnifiedSession, bridge: AgentBridge) async throws -> ChatSession
 }

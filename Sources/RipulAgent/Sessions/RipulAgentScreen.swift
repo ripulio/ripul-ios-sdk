@@ -357,50 +357,35 @@ public struct RipulAgentScreen: View {
                     return
                 }
                 let restoring = workspace?.isRestoringSelection == true
+                workspace?.isRestoringSelection = false
+                let waitsForSlide = !showsSessionSplit && !restoring
                 let row = model.unifiedSessions.first { $0.matchKeys.contains(session.sourceChatId) || $0.matchKeys.contains(session.id) }
                 workspace?.selectedSessionID = row?.id ?? session.sourceChatId
                 workspace?.title = session.displayName ?? row?.title ?? "Ripul"
-                let alreadyActive = bridge.activeSessionId == session.id
-                if alreadyActive {
-                    // Re-entering the already-loaded chat. Skip focusSession (its
-                    // __ripulFocusSession blocks ~3s on a V2ChatScroller sweep-timeout
-                    // that never fires for an already-rendered chat) and skip the row
-                    // spinner. Flip showingSessionList from INSIDE a Task, on a clean
-                    // render tick — NOT synchronously in the row tap. A synchronous
-                    // flip conflates the container rebuild with the offset change and
-                    // the slide SNAPS deterministically on re-entry; the deferred flip
-                    // (the same path the other branch uses) reliably slides. One frame
-                    // of sleep lets the tap's render settle before the flip.
-                    Task { @MainActor in
-                        try? await Task.sleep(nanoseconds: 16_000_000)
-                        bridge.logSessionStartMarker("ios.navigation_requested", chatId: session.sourceChatId)
-                        withAnimation(chatOpenAnimation, completionCriteria: .removed) {
-                            if !restoring { showingSessionList.wrappedValue = false }
-                        } completion: {
-                            bridge.logSessionStartMarker("ios.navigation_animation_complete", chatId: session.sourceChatId)
-                        }
-                        try? await Task.sleep(nanoseconds: 700_000_000) // just past the 0.625s open slide
-                        if workspace == nil { bridge.scrollToBottom() }
-                    }
-                } else {
-                    // Different session: show the row spinner, then flip the web view
-                    // BEFORE sliding (focusSession awaits window.__ripulFocusSession)
-                    // so the chat never slides in showing the prior session.
-                    bridge.navigatingToSessionId = session.id
-                    Task { @MainActor in
-                        await bridge.focusSession(id: session.id)
-                        bridge.logSessionStartMarker("ios.navigation_requested", chatId: session.sourceChatId)
-                        withAnimation(chatOpenAnimation, completionCriteria: .removed) {
-                            if !restoring { showingSessionList.wrappedValue = false }
-                        } completion: {
-                            bridge.logSessionStartMarker("ios.navigation_animation_complete", chatId: session.sourceChatId)
-                        }
-                        // Defer the remaining @Published churn past the open animation.
-                        try? await Task.sleep(nanoseconds: 700_000_000) // just past the 0.625s open slide
-                        if workspace == nil { bridge.scrollToBottom() }
+                bridge.navigatingToSessionId = session.id
+                defer {
+                    // The model cancels this entire callback when another row
+                    // is tapped. Its old completion cannot clear the new target.
+                    if !Task.isCancelled, bridge.navigatingToSessionId == session.id {
                         bridge.navigatingToSessionId = nil
                     }
                 }
+                // One render tick is enough for tap feedback. Focus also checks
+                // readiness for an already-active tab whose previous open was
+                // superseded; activeSessionId alone does not prove it is ready.
+                try? await Task.sleep(nanoseconds: 16_000_000)
+                guard !Task.isCancelled else { return }
+                await bridge.focusSession(id: session.id)
+                guard !Task.isCancelled else { return }
+                bridge.logSessionStartMarker("ios.navigation_requested", chatId: session.sourceChatId)
+                withAnimation(chatOpenAnimation, completionCriteria: .removed) {
+                    if !restoring { showingSessionList.wrappedValue = false }
+                } completion: {
+                    bridge.logSessionStartMarker("ios.navigation_animation_complete", chatId: session.sourceChatId)
+                }
+                if waitsForSlide { try? await Task.sleep(nanoseconds: 700_000_000) }
+                guard !Task.isCancelled else { return }
+                if workspace == nil { bridge.scrollToBottom() }
             },
             onDismiss: { dismiss() },
             allowRipulAgents: configuration.allowRipulAgents,

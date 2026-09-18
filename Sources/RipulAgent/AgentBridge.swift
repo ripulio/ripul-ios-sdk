@@ -4784,6 +4784,7 @@ public final class AgentBridge: NSObject, ObservableObject {
     /// global function directly. Updates `sessions` and `activeSessionId`.
     @available(iOS 15.0, macOS 13.0, *)
     private var fetchSessionsCallCount = 0
+    private var sessionFocusRevision = 0
     public func fetchSessions() async {
         // Entries written before the reply-fetch existed — or while the web
         // was unreachable — have no text and would otherwise stay mute for
@@ -4800,6 +4801,7 @@ public final class AgentBridge: NSObject, ObservableObject {
             }
         }
         fetchSessionsCallCount += 1
+        let focusRevision = sessionFocusRevision
         let fetchStart = CFAbsoluteTimeGetCurrent()
         guard let webView else {
             if fetchSessionsCallCount <= 3 {
@@ -4922,11 +4924,11 @@ public final class AgentBridge: NSObject, ObservableObject {
                     self.sessions = filtered
                     ChatSession.saveToCache(filtered)
                 }
-                applyActiveSessionIdFromResponse(activeId)
+                if focusRevision == sessionFocusRevision { applyActiveSessionIdFromResponse(activeId) }
                 self.lastSessionsError = nil
             } else {
                 lastSessionsError = jsError ?? "0 sessions parsed from \(sessionsArray.count) items"
-                applyActiveSessionIdFromResponse(activeId)
+                if focusRevision == sessionFocusRevision { applyActiveSessionIdFromResponse(activeId) }
             }
         } catch {
             lastSessionsError = "callAsyncJS: \(error.localizedDescription)"
@@ -4982,11 +4984,13 @@ public final class AgentBridge: NSObject, ObservableObject {
     /// content is fully rendered. The caller (tap handler) then triggers the
     /// native navigation — the sheet dismissal IS the slide-in transition.
     public func focusSession(id: String) async {
+        guard !Task.isCancelled else { return }
         guard let webView else {
             NSLog("[AgentBridge] focusSession: webView is nil")
             return
         }
         let focusStart = CFAbsoluteTimeGetCurrent()
+        sessionFocusRevision += 1
         handleConsoleLog("LOG: [STARTUP] focusSession START id=\(id.suffix(8))")
         // Clear any new-chat override, then let the activeSessionId didSet
         // re-derive the buttons from the target chat's known phase — switching
@@ -5003,11 +5007,13 @@ public final class AgentBridge: NSObject, ObservableObject {
                 arguments: ["sessionId": id],
                 contentWorld: .page
             )
+            guard !Task.isCancelled else { return }
             let focusMs = Int((CFAbsoluteTimeGetCurrent() - focusStart) * 1000)
             handleConsoleLog("LOG: [STARTUP] focusSession DONE (\(focusMs)ms)")
         } catch {
             NSLog("[AgentBridge] focusSession error: %@", error.localizedDescription)
         }
+        guard !Task.isCancelled else { return }
         // Defer post-focus catch-up past the native open slide. fetchSessions()
         // re-publishes the session list (and syncAgentStatus/syncShowThinking poke
         // the web view), which re-renders the view DURING the slide-in and visibly
@@ -5016,9 +5022,10 @@ public final class AgentBridge: NSObject, ObservableObject {
         // let the slide settle first.
         Task { [weak self] in
             try? await Task.sleep(nanoseconds: 800_000_000)
-            await self?.syncAgentStatus()
-            await self?.syncShowThinking()
-            await self?.fetchSessions()
+            guard let self, self.activeSessionId == id else { return }
+            await self.syncAgentStatus()
+            await self.syncShowThinking()
+            await self.fetchSessions()
         }
     }
 
@@ -7598,17 +7605,17 @@ public final class AgentBridge: NSObject, ObservableObject {
     /// Open/reconnect to an existing session on a remote machine.
     /// Returns the local tab ID and provider metadata on success, or nil + error on failure.
     @available(iOS 15.0, macOS 13.0, *)
-    public func openRemoteSession(machineId: String, sessionId: String, displayName: String? = nil, forceReimport: Bool = false) async -> (tabId: String?, provider: String?, providerLabel: String?, error: String?) {
+    public func openRemoteSession(machineId: String, sessionId: String, displayName: String? = nil, forceReimport: Bool = false, focus: Bool = true) async -> (tabId: String?, provider: String?, providerLabel: String?, error: String?) {
         guard let webView else {
             return (nil, nil, nil, "webView is nil")
         }
         do {
-            var args: [String: Any] = ["machineId": machineId, "sessionId": sessionId, "forceReimport": forceReimport]
+            var args: [String: Any] = ["machineId": machineId, "sessionId": sessionId, "forceReimport": forceReimport, "focus": focus]
             if let displayName { args["displayName"] = displayName }
             let result = try await webView.callAsyncJavaScript(
                 """
                 if (!window.__ripulOpenRemoteSession) return {success:false, error:'not ready'};
-                var opts = forceReimport ? {forceReimport: true} : undefined;
+                var opts = {forceReimport: forceReimport, focus: focus};
                 var r = await window.__ripulOpenRemoteSession(machineId, sessionId, displayName, opts);
                 return JSON.parse(JSON.stringify(r));
                 """,

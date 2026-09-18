@@ -98,6 +98,8 @@ public final class RipulSessionListModel: ObservableObject {
     private var lastAppliedFactsSignature: String = ""
     private var lastLoadCompleted: Date?
     private var initialLoadTask: Task<Void, Never>?
+    private var sessionOpenTask: Task<Void, Never>?
+    private var sessionOpenRequestID: UUID?
     private var hasRefreshedAfterAuth = false
 
     // MARK: - Dependencies
@@ -582,193 +584,127 @@ public final class RipulSessionListModel: ObservableObject {
 
     func openSession(
         _ session: UnifiedSession,
-        onSelect: @escaping (ChatSession) -> Void,
+        onSelect: @escaping @MainActor (ChatSession) async -> Void,
         onDismiss: @escaping () -> Void
     ) {
-        guard openingUnifiedSessionId == nil else { return }
+        // Repeated taps on the same request are harmless. A DIFFERENT row is
+        // new intent, not a duplicate: cancel the old continuation immediately.
+        guard openingUnifiedSessionId != session.id else { return }
+        sessionOpenTask?.cancel()
+        let requestID = UUID()
+        sessionOpenRequestID = requestID
         openingUnifiedSessionId = session.id
+        bridge.navigatingToSessionId = nil
         openSessionError = nil
         bridge.logSessionStartMarker("ios.open_session_start", extra: "sessionId=\(session.id)")
-        if let dataSource {
-            Task { @MainActor in
-                defer { openingUnifiedSessionId = nil }
-                do { onSelect(try await dataSource.open(session, bridge: bridge)) }
-                catch { reportOpenSessionFailure(error.localizedDescription, session: session) }
+        sessionOpenTask = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                // An old request must not clear the newer row's spinner.
+                if sessionOpenRequestID == requestID {
+                    openingUnifiedSessionId = nil
+                    sessionOpenTask = nil
+                    sessionOpenRequestID = nil
+                }
             }
-            return
+            do {
+                try Task.checkCancellation()
+                guard let tab = try await prepareSession(session) else { return }
+                try Task.checkCancellation()
+                // Keep ownership through focus/readiness and the native slide.
+                // The callback runs in this task so cancellation reaches it too.
+                await onSelect(tab)
+                try Task.checkCancellation()
+                if dataSource == nil, session.machineName != nil {
+                    // Catch up after the slide, as before. These chat-scoped
+                    // writes must not hold the opening indicator or block taps.
+                    Task { [weak self] in
+                        guard let self else { return }
+                        if let modelId = SessionModelSelectionCache.modelId(cache: cache, session: session, liveTabId: tab.id) {
+                            _ = await bridge.setChatModel(chatId: tab.sourceChatId, modelId: modelId)
+                        }
+                        await loadRemoteSessions()
+                    }
+                }
+            } catch is CancellationError {
+                bridge.logSessionStartMarker("ios.open_session_superseded", extra: "sessionId=\(session.id)")
+            } catch {
+                guard !Task.isCancelled else { return }
+                reportOpenSessionFailure(error.localizedDescription, session: session)
+            }
         }
+    }
+
+    /// Load a tab without selecting it. Remote JS may outlive Swift cancellation;
+    /// it must never focus a chat as a side effect of finishing an older load.
+    private func prepareSession(_ session: UnifiedSession) async throws -> ChatSession? {
+        if let dataSource { return try await dataSource.open(session, bridge: bridge) }
         let isRemote = session.machineName != nil
-        log("debug_timeline \(elapsed()) openSession: '\(session.title)' ripulSession=\(session.ripulSession != nil) cachedIsOpen=\(session.cachedIsOpen) isRemote=\(isRemote)")
 
-        // The fast paths below (select an already-open / restored web tab
-        // directly) are only safe for sessions whose history the web view can
-        // restore by itself. REMOTE (relay-seeded) sessions can't: their
-        // history lives only in the web view's memory — no DO subscription
-        // (OOM guard), no local persistence — so after an app restart the
-        // restored tab is an empty shell and only the relay open path
-        // (agent:openSession → seed) can refill it. The web's
-        // openRemoteSession has a warm-store check: when the chat is still
-        // live it focuses instantly with NO relay round-trip, and when it's
-        // cold it re-seeds. So remote taps ALWAYS route through it — never
-        // through the tab-select shortcuts. (This was the "stuck spinner /
-        // no history until Remove-from-Ripul" bug: re-entry taps selected
-        // the cold restored tab and the re-seed path never ran.)
-
-        // Fast path: session is already live in the web view.
-        // Defer via Task so SwiftUI renders the highlighted row + spinner
-        // for at least one frame before dismissing.
-        if !isRemote, let ripulTab = session.ripulSession {
-            // Fast path: already live in web view
-            Task { @MainActor in
-                try? await Task.sleep(nanoseconds: 150_000_000) // 150ms
-                openingUnifiedSessionId = nil
-                onSelect(ripulTab)
-            }
-            return
-        }
-
-        // Cached-open path: session was open before app restart.
-        // Don't try relay-open — the web view will restore it.
-        // Keep the list visible until there is a real tab to select, so a
-        // failed restore can show its error beside the row the user tapped.
+        // Remote tabs must still use the relay warm/cold history check. A
+        // restored remote tab can be an empty shell after a webview restart.
+        if !isRemote, let tab = session.ripulSession { return tab }
         if !isRemote, session.cachedIsOpen {
-            log("debug_timeline \(elapsed()) openSession: cachedIsOpen — looking for '\(session.title)' (matchKeys=\(session.matchKeys)), bridge.sessions=\(bridge.sessions.count)")
-
-            // Build lookup keys the same way rematchLocalSessions does:
-            // include stripped cli_ prefixes so "0d3319fa..." matches "cli_0d3319fa..."
             var allKeys = Set(session.matchKeys + [session.id])
-            for key in session.matchKeys {
-                if key.hasPrefix("cli_") { allKeys.insert(String(key.dropFirst(4))) }
+            for key in session.matchKeys where key.hasPrefix("cli_") {
+                allKeys.insert(String(key.dropFirst(4)))
             }
-
-            // Try immediate match — bridge.sessions may already be populated
-            if let tab = findBridgeSession(matchingKeys: allKeys) {
-                log("debug_timeline \(elapsed()) openSession: IMMEDIATE match for '\(session.title)'")
-                Task { @MainActor in
-                    try? await Task.sleep(nanoseconds: 150_000_000)
-                    openingUnifiedSessionId = nil
-                    onSelect(tab)
-                }
-                return
+            if let tab = findBridgeSession(matchingKeys: allKeys) { return tab }
+            for _ in 0..<150 {
+                try await Task.sleep(nanoseconds: 200_000_000)
+                if let tab = findBridgeSession(matchingKeys: allKeys) { return tab }
             }
-
-            // Not found yet — keep the spinner and poll.
-            Task { [weak self] in
-                guard let self else { return }
-                for tick in 0..<150 {  // 30s timeout (150 × 200ms)
-                    try? await Task.sleep(nanoseconds: 200_000_000)
-                    if let tab = findBridgeSession(matchingKeys: allKeys) {
-                        log("debug_timeline \(elapsed()) openSession: FOUND '\(session.title)' after \(tick * 200)ms wait")
-                        openingUnifiedSessionId = nil
-                        onSelect(tab)
-                        return
-                    }
-                    if tick > 0 && tick % 10 == 0 {
-                        log("debug_timeline \(elapsed()) openSession: still waiting for '\(session.title)' (\(tick * 200)ms, bridge.sessions=\(bridge.sessions.count))")
-                    }
-                }
-                log("debug_timeline \(elapsed()) openSession: TIMED OUT waiting for '\(session.title)'")
-                reportOpenSessionFailure("session-restore-timeout: \"\(session.title)\" didn't finish restoring. Try opening it again.", session: session)
-                openingUnifiedSessionId = nil
-            }
-            return
+            reportOpenSessionFailure("session-restore-timeout: \"\(session.title)\" didn't finish restoring. Try opening it again.", session: session)
+            return nil
         }
 
-        // Remote-open path: open (or re-seed) via relay. For remote sessions
-        // this is now ALSO the re-entry path — see the fast-path gating above.
-        // Owner only — opening on a substitute host CREATES the chat there for
-        // real (its scanner then lists it as local), which is how sessions
-        // migrated off a sleeping machine.
+        // Only the owning host may load this history. An already-live tab is
+        // still usable when that host cannot currently be resolved.
         guard let ownerMachineId = resolvedMachineId(for: session) else {
-            // Owner offline or unknown (list still loading, or host offline).
-            // If the web view has a live tab for this session, degrade to the
-            // legacy tab-select so navigation still works — history may be
-            // cold until it's re-tapped with the host reachable.
-            if let ripulTab = session.ripulSession {
-                Task { @MainActor in
-                    try? await Task.sleep(nanoseconds: 150_000_000)
-                    openingUnifiedSessionId = nil
-                    onSelect(ripulTab)
-                }
-                return
-            }
+            if let tab = session.ripulSession { return tab }
             reportOpenSessionFailure(
                 "machine-unavailable: " + (session.machineName.map { "\"\($0)\" isn't connected — this chat lives there." }
                     ?? "This chat's machine isn't connected."), session: session)
-            openingUnifiedSessionId = nil
-            return
+            return nil
         }
-
-        Task {
-            let (tabId, provider, providerLabel, error) =
-                await bridge.openRemoteSession(machineId: ownerMachineId, sessionId: session.id, displayName: session.title)
-
-            if let tabId {
-                let isCliSession = ProviderConstants.isCliProvider(provider)
-                if isCliSession {
-                    let label = providerLabel ?? ProviderConstants.legacyLabel(for: provider ?? ProviderConstants.defaultCliProvider.providerKey ?? "claude-cli")
-                    persistRawModeSession(tabId, provider: label)
-                    await bridge.setRawMode(sessionId: tabId, enabled: true)
-                }
-                // Warm re-entry: the tab is already in `sessions`, so this hits
-                // immediately and we navigate with no list rebuild — the fix for
-                // the ~20s re-entry. A fresh open (tab just created) misses here
-                // because openRemoteSession no longer blocks on fetchSessions, so
-                // pull the list once and retry before reporting a failed open.
-                var newSession = bridge.sessions.first(where: { $0.id == tabId })
-                if newSession == nil {
-                    await bridge.fetchSessions()
-                    newSession = bridge.sessions.first(where: { $0.id == tabId })
-                }
-                if let newSession {
-                    openingUnifiedSessionId = nil
-                    onSelect(newSession)
-                    // Restore the user's explicit model choice for this session.
-                    // The open/import path re-derives the override from the
-                    // transcript's last assistant model, which can't represent
-                    // models outside the web's known families (Kimi k3, Fable)
-                    // or effort variants — the picker cache is the only place
-                    // the true choice survives a close. setChatModel is a no-op
-                    // when the web descriptor already holds this value.
-                    if let modelId = SessionModelSelectionCache.modelId(cache: cache, session: session, liveTabId: tabId) {
-                        bridge.handleConsoleLog("LOG: [MODELSW] native.reapplyOnOpen sessionId=\(session.id.suffix(12)) modelId=\(modelId)")
-                        _ = await bridge.setChatModel(chatId: newSession.sourceChatId, modelId: modelId)
-                    }
-                } else {
-                    reportOpenSessionFailure(
-                        "session-open-incomplete: \"\(session.title)\" couldn't be loaded after the host opened it. Try again.",
-                        session: session)
-                    openingUnifiedSessionId = nil
-                    return
-                }
-                await loadRemoteSessions()
+        let (tabId, provider, providerLabel, error) = await bridge.openRemoteSession(
+            machineId: ownerMachineId, sessionId: session.id, displayName: session.title, focus: false)
+        try Task.checkCancellation()
+        guard let tabId else {
+            if let error, error.hasPrefix(Self.sessionNotFoundPrefix) {
+                if let tabId = session.ripulSession?.id { recentlyClosedLocalIds.insert(tabId) }
+                recentlyArchivedIds.insert(session.id)
+                for key in session.matchKeys { recentlyArchivedIds.insert(key) }
+                removeFromRemoteBuckets(sessionId: session.id)
+                remoteSessions.removeAll { $0.id == session.id }
+                rebuildUnifiedSessions()
+                let message = String(error.dropFirst(Self.sessionNotFoundPrefix.count))
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                reportOpenSessionFailure(Self.sessionNotFoundPrefix + " " + (message.isEmpty
+                    ? "This session was deleted on its host machine. The entry has been removed."
+                    : message), session: session)
             } else {
-                // The host PROVED this session is gone (deleted or archived
-                // there) — the web layer has already closed the local tab and
-                // dropped the pairing. Remove the row so it stops listing as a
-                // zombie, and surface what actually happened; the raw
-                // js-exception this used to show read as "machine unavailable"
-                // even though the machine was perfectly online.
-                if let error, error.hasPrefix(Self.sessionNotFoundPrefix) {
-                    if let tabId = session.ripulSession?.id {
-                        recentlyClosedLocalIds.insert(tabId)
-                    }
-                    recentlyArchivedIds.insert(session.id)
-                    for key in session.matchKeys { recentlyArchivedIds.insert(key) }
-                    removeFromRemoteBuckets(sessionId: session.id)
-                    remoteSessions.removeAll { $0.id == session.id }
-                    rebuildUnifiedSessions()
-                    let message = String(error.dropFirst(Self.sessionNotFoundPrefix.count))
-                        .trimmingCharacters(in: .whitespacesAndNewlines)
-                    reportOpenSessionFailure(Self.sessionNotFoundPrefix + " " + (message.isEmpty
-                        ? "This session was deleted on its host machine. The entry has been removed."
-                        : message), session: session)
-                } else {
-                    reportOpenSessionFailure(error ?? "Failed to open session.", session: session)
-                }
-                openingUnifiedSessionId = nil
+                reportOpenSessionFailure(error ?? "Failed to open session.", session: session)
             }
+            return nil
         }
+        if ProviderConstants.isCliProvider(provider) {
+            let label = providerLabel ?? ProviderConstants.legacyLabel(for: provider ?? ProviderConstants.defaultCliProvider.providerKey ?? "claude-cli")
+            persistRawModeSession(tabId, provider: label)
+            await bridge.setRawMode(sessionId: tabId, enabled: true)
+            try Task.checkCancellation()
+        }
+        var tab = bridge.sessions.first { $0.id == tabId }
+        if tab == nil {
+            await bridge.fetchSessions()
+            try Task.checkCancellation()
+            tab = bridge.sessions.first { $0.id == tabId }
+        }
+        guard let tab else {
+            reportOpenSessionFailure("session-open-incomplete: \"\(session.title)\" couldn't be loaded after the host opened it. Try again.", session: session)
+            return nil
+        }
+        return tab
     }
 
     private func reportOpenSessionFailure(_ error: String, session: UnifiedSession) {
@@ -1154,7 +1090,7 @@ public final class RipulSessionListModel: ObservableObject {
 
     func connect(
         to machine: RemoteMachine,
-        onSelect: @escaping (ChatSession) -> Void,
+        onSelect: @escaping @MainActor (ChatSession) async -> Void,
         onDismiss: @escaping () -> Void
     ) async {
         guard machine.isOnline else {
@@ -1167,7 +1103,7 @@ public final class RipulSessionListModel: ObservableObject {
         connectingMachineId = nil
 
         if let tabId, let session = bridge.sessions.first(where: { $0.id == tabId }) {
-            onSelect(session)
+            await onSelect(session)
         } else if tabId != nil {
             onDismiss()
         } else {
@@ -1184,7 +1120,7 @@ public final class RipulSessionListModel: ObservableObject {
         _ providerKey: String,
         modelId: String? = nil,
         to machine: RemoteMachine,
-        onSelect: @escaping (ChatSession) -> Void,
+        onSelect: @escaping @MainActor (ChatSession) async -> Void,
         onDismiss: @escaping () -> Void
     ) async {
         guard machine.isOnline else {
@@ -1200,7 +1136,7 @@ public final class RipulSessionListModel: ObservableObject {
             let label = ProviderConstants.byProviderKey(providerKey)?.displayLabel ?? providerKey
             persistRawModeSession(tabId, provider: label)
             if let session = bridge.sessions.first(where: { $0.id == tabId }) {
-                onSelect(session)
+                await onSelect(session)
             } else {
                 onDismiss()
             }

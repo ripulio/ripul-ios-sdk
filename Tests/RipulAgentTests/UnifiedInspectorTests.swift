@@ -63,8 +63,7 @@ final class UnifiedInspectorTests: XCTestCase {
 
     func testShiftClickCollectsPinnedOriginTogglesAndCopiesAll() async throws {
         let (window, _, _, inspector, session) = try await fixture()
-        let previousClipboard = UIPasteboard.general.items
-        defer { UIPasteboard.general.items = previousClipboard; session.close(); window.isHidden = true }
+        defer { session.close(); window.isHidden = true }
         session.pointerActive = true
         _ = inspector.probe(atWindowPoint: CGPoint(x: 50, y: 55), fire: false)
         session.lockWhenPickSettles()
@@ -86,9 +85,9 @@ final class UnifiedInspectorTests: XCTestCase {
         XCTAssertEqual(session.collected.map(\.kind), ["Native", "Web"])
         XCTAssertTrue(session.pinned)
         XCTAssertEqual(inspector.selectionSnapshot()["collected"] as? [String], ["native.title", "chat.message"])
-        UIPasteboard.general.string = ""
-        session.copyCollected()
-        XCTAssertEqual(UIPasteboard.general.string, "native.title\nchat.message")
+        // What Copy all writes. The simulator's shared pasteboard stalls for
+        // minutes on access, so the text is checked here, not the clipboard.
+        XCTAssertEqual(session.collectedIdentities, "native.title\nchat.message")
         // A second shift-click on the same element takes it out again.
         session.lockWhenPickSettles(collecting: true)
         XCTAssertEqual(session.collected.map(\.identity), ["native.title"])
@@ -126,6 +125,29 @@ final class UnifiedInspectorTests: XCTestCase {
         _ = inspector.probe(atWindowPoint: CGPoint(x: 50, y: 55), fire: false)
         XCTAssertEqual(session.web?.identifier, "chat.message")
         XCTAssertNil(session.native)
+    }
+
+    func testReticuleDoubleTapCollectsHighlightedElementOnTouch() async throws {
+        let (window, _, _, inspector, session) = try await fixture()
+        defer { session.close(); window.isHidden = true }
+        _ = inspector.probe(atWindowPoint: CGPoint(x: 50, y: 55), fire: false)
+        XCTAssertTrue(inspector.reticuleContains(CGPoint(x: 60, y: 70)))
+        XCTAssertFalse(inspector.reticuleContains(CGPoint(x: 120, y: 55)))
+        inspector.collectFromReticule()
+        XCTAssertEqual(session.collected.map(\.identity), ["native.title"])
+        XCTAssertFalse(session.pinned)
+        XCTAssertEqual(session.native?.accessibilityId, "native.title")
+        _ = inspector.probe(atWindowPoint: CGPoint(x: 90, y: 165), fire: false)
+        try await waitForWeb(session)
+        inspector.collectFromReticule()
+        XCTAssertEqual(session.collected.map(\.identity), ["native.title", "chat.message"])
+        // A second double-tap on the same element takes it out again.
+        inspector.collectFromReticule()
+        XCTAssertEqual(session.collected.map(\.identity), ["native.title"])
+        // Nothing highlighted: nothing collected.
+        session.invalidate()
+        inspector.collectFromReticule()
+        XCTAssertEqual(session.collected.map(\.identity), ["native.title"])
     }
 
     func testShiftRunWithoutClickRestoresPinnedSelection() async throws {
