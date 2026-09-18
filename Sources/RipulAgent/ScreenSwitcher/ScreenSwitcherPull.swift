@@ -99,8 +99,8 @@ public struct ScreenSwitcherPullModifier: ViewModifier {
 
     /// The strip is window-wide, so travel is measured against the window and
     /// not against whatever control the finger happens to be on.
-    private var screenWidth: CGFloat { max(UIScreen.main.bounds.width, 1) }
-    private var screenHeight: CGFloat { max(UIScreen.main.bounds.height, 1) }
+    private var screenWidth: CGFloat { max(switcher?.owningWindow?.bounds.width ?? 1, 1) }
+    private var screenHeight: CGFloat { max(switcher?.owningWindow?.bounds.height ?? 1, 1) }
 
     public func body(content: Content) -> some View {
         // Keep the same content tree when editing disables this gesture.
@@ -128,7 +128,7 @@ public struct ScreenSwitcherPullModifier: ViewModifier {
                     let dy = value.translation.height
                     // Before the threshold, not after: this is the only moment
                     // in the gesture when a stall is free.
-                    if prepared == nil { prepared = ScreenSnapshotter.captureKeyWindow() }
+                    if prepared == nil { prepared = ScreenSnapshotter.capture(window: switcher.owningWindow) }
                     guard max(abs(dx), abs(dy)) >= decisionDistance else { return }
 
                     if direction.travel(dy) > 0, abs(dy) > abs(dx) {

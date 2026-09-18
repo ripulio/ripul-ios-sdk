@@ -71,16 +71,19 @@ public struct SlidePanelOverlay<Content: View>: View {
     @Binding var offset: CGFloat
     public var showsScrim: Bool = true
     public var topInset: CGFloat = 52
+    public var containerWidth: CGFloat? = nil
     @ViewBuilder var content: () -> Content
 
     /// Keeps the view mounted during dismiss animation.
     @State private var keepMounted = false
+    @State private var previousLayoutWidth: CGFloat?
 
-    private var screenWidth: CGFloat { UIScreen.main.bounds.width }
+    @State private var measuredWidth: CGFloat = 1
+    private var screenWidth: CGFloat { max(1, containerWidth ?? measuredWidth) }
 
     /// Mount when presented, during dismiss animation, or when being revealed by an external swipe.
     private var shouldMount: Bool {
-        isPresented || keepMounted || offset < screenWidth
+        isPresented || keepMounted || (previousLayoutWidth != nil && offset < min(screenWidth, previousLayoutWidth ?? screenWidth))
     }
 
     public init(
@@ -88,16 +91,35 @@ public struct SlidePanelOverlay<Content: View>: View {
         offset: Binding<CGFloat>,
         showsScrim: Bool = true,
         topInset: CGFloat = 52,
+        containerWidth: CGFloat? = nil,
         @ViewBuilder content: @escaping () -> Content
     ) {
         self._isPresented = isPresented
         self._offset = offset
         self.showsScrim = showsScrim
         self.topInset = topInset
+        self.containerWidth = containerWidth
         self.content = content
     }
 
     public var body: some View {
+        ZStack { panelBody }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { measuredWidth = max(1, $0) }
+        .onChange(of: screenWidth, initial: true) { oldWidth, width in
+            // A larger container is not a right-edge reveal gesture. Move a
+            // resting closed panel to its new edge without mounting it.
+            let closedWidth = previousLayoutWidth ?? oldWidth
+            let initial = previousLayoutWidth == nil
+            previousLayoutWidth = width
+            if !isPresented && (initial || offset >= closedWidth) {
+                offset = width
+                keepMounted = false
+            }
+        }
+    }
+
+    @ViewBuilder private var panelBody: some View {
         if shouldMount {
             ZStack {
                 if showsScrim {
@@ -131,7 +153,8 @@ public struct SlidePanelOverlay<Content: View>: View {
                                 withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
                                     offset = 0
                                 }
-                            }
+                            },
+                            maxOffset: screenWidth
                         )
                         .frame(width: 20)
                         .ignoresSafeArea()
@@ -232,7 +255,7 @@ public struct InteractiveEdgeSwipeView: UIViewRepresentable {
             onChanged: onChanged,
             onEnded: onEnded,
             onCancelled: onCancelled,
-            maxOffset: maxOffset ?? UIScreen.main.bounds.width
+            maxOffset: maxOffset
         )
     }
 
@@ -252,7 +275,7 @@ public struct InteractiveEdgeSwipeView: UIViewRepresentable {
         context.coordinator.onChanged = onChanged
         context.coordinator.onEnded = onEnded
         context.coordinator.onCancelled = onCancelled
-        context.coordinator.maxOffset = maxOffset ?? UIScreen.main.bounds.width
+        context.coordinator.maxOffset = maxOffset
         context.coordinator.directTransformTarget = directTransformTarget
     }
 
@@ -260,7 +283,7 @@ public struct InteractiveEdgeSwipeView: UIViewRepresentable {
         public var onChanged: ((CGFloat) -> Void)?
         public var onEnded: (CGFloat, CGFloat) -> Void
         public var onCancelled: () -> Void
-        public var maxOffset: CGFloat
+        public var maxOffset: CGFloat?
         weak var directTransformTarget: UIView?
         /// Frozen snapshot of the chat layer captured at drag-start so WKWebView
         /// stops repainting under the moving layer. Placed as a subview on top of
@@ -271,7 +294,7 @@ public struct InteractiveEdgeSwipeView: UIViewRepresentable {
             onChanged: ((CGFloat) -> Void)?,
             onEnded: @escaping (CGFloat, CGFloat) -> Void,
             onCancelled: @escaping () -> Void,
-            maxOffset: CGFloat
+            maxOffset: CGFloat?
         ) {
             self.onChanged = onChanged
             self.onEnded = onEnded
@@ -311,8 +334,9 @@ public struct InteractiveEdgeSwipeView: UIViewRepresentable {
 
         @objc func handlePan(_ recognizer: UIScreenEdgePanGestureRecognizer) {
             let referenceView = recognizer.view?.window
+            let limit = maxOffset ?? directWidth(recognizer.view)
             let translation = recognizer.translation(in: referenceView)
-            let offset = max(0, min(maxOffset, translation.x))
+            let offset = max(0, min(limit, translation.x))
 
             switch recognizer.state {
             case .changed:
@@ -361,7 +385,7 @@ public struct RightEdgeSwipeView: UIViewRepresentable {
             onChanged: onChanged,
             onEnded: onEnded,
             onCancelled: onCancelled,
-            maxOffset: maxOffset ?? UIScreen.main.bounds.width
+            maxOffset: maxOffset
         )
     }
 
@@ -381,20 +405,20 @@ public struct RightEdgeSwipeView: UIViewRepresentable {
         context.coordinator.onChanged = onChanged
         context.coordinator.onEnded = onEnded
         context.coordinator.onCancelled = onCancelled
-        context.coordinator.maxOffset = maxOffset ?? UIScreen.main.bounds.width
+        context.coordinator.maxOffset = maxOffset
     }
 
     public class Coordinator {
         public var onChanged: ((CGFloat) -> Void)?
         public var onEnded: (CGFloat, CGFloat) -> Void
         public var onCancelled: () -> Void
-        public var maxOffset: CGFloat
+        public var maxOffset: CGFloat?
 
         init(
             onChanged: ((CGFloat) -> Void)?,
             onEnded: @escaping (CGFloat, CGFloat) -> Void,
             onCancelled: @escaping () -> Void,
-            maxOffset: CGFloat
+            maxOffset: CGFloat?
         ) {
             self.onChanged = onChanged
             self.onEnded = onEnded
@@ -404,8 +428,9 @@ public struct RightEdgeSwipeView: UIViewRepresentable {
 
         @objc func handlePan(_ recognizer: UIScreenEdgePanGestureRecognizer) {
             let referenceView = recognizer.view?.window
+            let limit = maxOffset ?? directWidth(recognizer.view)
             let translation = recognizer.translation(in: referenceView)
-            let offset = max(0, min(maxOffset, -translation.x))
+            let offset = max(0, min(limit, -translation.x))
 
             switch recognizer.state {
             case .changed:
@@ -420,6 +445,10 @@ public struct RightEdgeSwipeView: UIViewRepresentable {
             }
         }
     }
+}
+
+private func directWidth(_ view: UIView?) -> CGFloat {
+    max(1, view?.superview?.bounds.width ?? view?.window?.bounds.width ?? 1)
 }
 
 // MARK: - Keyboard-Stable Top Bar Support

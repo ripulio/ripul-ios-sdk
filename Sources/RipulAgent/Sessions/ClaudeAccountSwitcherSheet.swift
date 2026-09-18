@@ -100,7 +100,7 @@ public struct ClaudeAccountSwitcherSheet: View {
                 }
             }
         }
-        .presentationDetents([.medium, .large])
+        .ripulSheet(.page, detents: [.medium, .large])
         .task { await refresh() }
         .sheet(item: $signInProfile) { profile in
             HostSignInSheet(machine: machine, bridge: bridge, profile: profile.slug, profileName: profile.name)

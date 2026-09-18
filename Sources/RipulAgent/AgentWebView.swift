@@ -365,36 +365,6 @@ public struct AgentWebView: NSViewRepresentable {
 
 #elseif os(iOS)
 
-/// WKWebView subclass that zeroes-out bottom safe area insets so web content
-/// (100vh, 100%) fills the entire frame including the home indicator region.
-/// The native chat input overlay handles bottom spacing instead.
-class FullBleedWebView: WKWebView {
-    var toolStripAccessibilityElements: (() -> [Any])?
-    override var accessibilityElements: [Any]? {
-        get {
-            guard let native = toolStripAccessibilityElements?(), !native.isEmpty else { return super.accessibilityElements }
-            if let webElements = super.accessibilityElements { return webElements + native }
-            // Direct children of the root scroll view are already exposed.
-            // WebKit's overflow scrollers expose a separate web accessibility
-            // tree, so native children attached there need an explicit entry.
-            return [scrollView] + native.filter { element in
-                guard let view = element as? UIView else { return true }
-                return view.superview !== scrollView
-            }
-        }
-        set { super.accessibilityElements = newValue }
-    }
-    var toolStripHitTest: ((CGPoint, UIEvent?) -> UIView?)?
-    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
-        toolStripHitTest?(point, event) ?? super.hitTest(point, with: event)
-    }
-    override var safeAreaInsets: UIEdgeInsets {
-        var insets = super.safeAreaInsets
-        insets.bottom = 0
-        return insets
-    }
-}
-
 /// Owns the web surface and its embedded native controllers for the lifetime of
 /// this representable. Native rows/widgets find this controller through the
 /// responder chain, so their recycling never edits SwiftUI's controller list.
@@ -432,7 +402,7 @@ public struct AgentWebView: View {
     /// status-bar preference query that re-enters the in-flight body evaluation
     /// and can overflow the stack in Debug builds (see
     /// RipulAgentScreen.topBarOverlay for the full mechanism).
-    @State private var safeAreaTop: CGFloat = 54
+    @State private var safeAreaTop: CGFloat = 0
 
     public var body: some View {
         AgentWebViewRepresentable(configuration: configuration, bridge: bridge)

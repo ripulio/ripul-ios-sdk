@@ -168,7 +168,7 @@ struct PlanTaskSheet: View {
             .onAppear { titleFocused = true }
         }
         #if os(iOS)
-        .presentationDetents([.medium])
+        .ripulSheet(.form, detents: [.medium])
         #endif
     }
 

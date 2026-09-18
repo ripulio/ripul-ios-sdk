@@ -28,7 +28,7 @@ struct PlanSheetView: View {
             }
         }
         #if os(iOS)
-        .presentationDetents([.medium, .large])
+        .ripulSheet(.page, detents: [.medium, .large])
         .presentationDragIndicator(.visible)
         #endif
     }

@@ -41,6 +41,7 @@ public enum SwitcherStop: Equatable {
 /// and never re-render themselves.
 @MainActor
 public final class ScreenSwitcherStore: ObservableObject {
+    public weak var owningWindow: UIWindow?
 
     /// 0 = the live screen fills the window. `deckFraction` = the app-switcher
     /// deck. 1 = the card grid is fully laid out.
@@ -495,7 +496,7 @@ public final class ScreenSwitcherStore: ObservableObject {
         // card and the screen it stands for would be lost behind its own
         // reflection.
         if stop == .screen {
-            activeSnapshot = snapshot ?? ScreenSnapshotter.captureKeyWindow()
+            activeSnapshot = snapshot ?? ScreenSnapshotter.capture(window: owningWindow)
             if let activeSnapshot { snapshots[activeDestinationId] = activeSnapshot }
             deckPosition = CGFloat(order.firstIndex(of: activeDestinationId) ?? 0)
             progress = 0
@@ -884,7 +885,7 @@ public final class ScreenSwitcherStore: ObservableObject {
     private func present(_ target: SwitcherStop) {
         guard stop != target else { return }
         if stop == .screen {
-            if activeSnapshot == nil { activeSnapshot = ScreenSnapshotter.captureKeyWindow() }
+            if activeSnapshot == nil { activeSnapshot = ScreenSnapshotter.capture(window: owningWindow) }
             if let activeSnapshot { snapshots[activeDestinationId] = activeSnapshot }
             deckPosition = CGFloat(order.firstIndex(of: activeDestinationId) ?? 0)
         }
@@ -960,7 +961,7 @@ public final class ScreenSwitcherStore: ObservableObject {
         guard !isActive, !isSliding else { return }
         guard let i = order.firstIndex(of: activeDestinationId) else { return }
 
-        slideOutgoing = snapshot ?? ScreenSnapshotter.captureKeyWindow()
+        slideOutgoing = snapshot ?? ScreenSnapshotter.capture(window: owningWindow)
         if let slideOutgoing { snapshots[activeDestinationId] = slideOutgoing }
 
         slidePreviousId = i > 0 ? order[i - 1] : nil
@@ -1118,6 +1119,7 @@ public enum ScreenSnapshotter {
     /// layout pass, which on a screen hosting a WKWebView costs enough to drop
     /// the first frames of the drag. We want what is already on the glass.
     @MainActor
+    @available(*, deprecated, message: "Pass the owning window to capture(window:)")
     public static func captureKeyWindow() -> UIImage? {
         let scenes = UIApplication.shared.connectedScenes
         guard let window = scenes
@@ -1126,7 +1128,17 @@ public enum ScreenSnapshotter {
             .first(where: { $0.isKeyWindow })
         else { return nil }
 
-        let renderer = UIGraphicsImageRenderer(bounds: window.bounds)
+        return capture(window: window)
+    }
+
+    /// Capture the requesting scene, never a different window's chat.
+    @MainActor
+    public static func capture(window: UIWindow?) -> UIImage? {
+        guard let window, window.bounds.width.isFinite, window.bounds.height.isFinite,
+              window.bounds.width > 0, window.bounds.height > 0 else { return nil }
+        let format = UIGraphicsImageRendererFormat(for: window.traitCollection)
+        format.preferredRange = .standard
+        let renderer = UIGraphicsImageRenderer(bounds: window.bounds, format: format)
         return renderer.image { _ in
             window.drawHierarchy(in: window.bounds, afterScreenUpdates: false)
         }
@@ -1151,6 +1163,7 @@ public extension EnvironmentValues {
 public extension View {
     func screenSwitcher(_ store: ScreenSwitcherStore) -> some View {
         environment(\.screenSwitcher, store)
+            .background(OwningWindowReader { [weak store] in store?.owningWindow = $0 })
     }
 }
 #endif

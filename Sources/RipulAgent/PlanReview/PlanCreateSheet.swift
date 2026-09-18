@@ -109,7 +109,7 @@ public struct PlanCreateSheet: View {
             .onAppear { titleFocused = true }
         }
         #if os(iOS)
-        .presentationDetents([.medium, .large])
+        .ripulSheet(.page, detents: [.medium, .large])
         #endif
     }
 

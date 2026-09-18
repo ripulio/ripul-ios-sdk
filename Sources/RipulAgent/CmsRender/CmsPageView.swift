@@ -626,7 +626,7 @@ private extension View {
     @ViewBuilder
     func inspectorDetents() -> some View {
         self
-            .presentationDetents([.medium, .large])
+            .ripulSheet(.page, detents: [.medium, .large])
             .presentationDragIndicator(.visible)
             .presentationBackgroundInteraction(.enabled(upThrough: .medium))
     }

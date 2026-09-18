@@ -92,7 +92,7 @@
       let heading = UILabel()
       heading.text = "Places"
       heading.font = .preferredFont(forTextStyle: .headline)
-      explore.setTitle("Explore map", for: .normal)
+      explore.setTitle("Explore", for: .normal)
       explore.accessibilityIdentifier = "NativeMap.explore"
       explore.addAction(UIAction { [weak self] _ in self?.toggleExplore() }, for: .touchUpInside)
       let top = UIStackView(arrangedSubviews: [heading, explore])
@@ -154,7 +154,7 @@
       isEditing.toggle()
       map.isScrollEnabled = isEditing
       map.isZoomEnabled = isEditing
-      explore.setTitle(isEditing ? "Done" : "Explore map", for: .normal)
+      explore.setTitle(isEditing ? "Done" : "Explore", for: .normal)
       onSizeChange?()
     }
     private func refreshSelection() {

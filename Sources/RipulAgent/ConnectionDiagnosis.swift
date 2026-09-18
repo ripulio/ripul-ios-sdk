@@ -227,7 +227,7 @@ public struct ConnectionDiagnosisSheet: View {
             .padding(.vertical, 12)
         }
         #if os(iOS)
-        .presentationDetents([.medium, .large], selection: $detent)
+        .ripulSheet(.page, detents: [.medium, .large], selection: $detent)
         // A raw-JSON dump inside a half sheet is a four-line window onto a
         // 5KB payload; opening it is a request for the room to read it.
         .onChange(of: showDetails) { _, expanded in

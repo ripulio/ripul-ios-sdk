@@ -1411,11 +1411,9 @@ public struct NativeChatInput: View {
             // shimmering SwiftUI overlay below renders the copy instead.
             placeholder: agentWaiting ? "" : conversationMode == "group" ? "Message the group · @Agent to ask" : isAgentPaused ? "Agent is paused, add new instruction…" : "Message...",
             onSubmit: {
-                // On Catalyst (hardware keyboard) keep focus after sending so the
-                // next message can be typed immediately; on iOS dismiss as before.
-                #if !targetEnvironment(macCatalyst)
-                dismissKeyboard()
-                #endif
+                // This callback is a hardware-keyboard command (including
+                // iPhone Mirroring). Keep focus for the next message. The
+                // onscreen Return inserts a newline; Send buttons dismiss.
                 submitMessage()
             },
             onTextChange: { newText in
@@ -1427,7 +1425,13 @@ public struct NativeChatInput: View {
                     handleSlashDetection(newText)
                 }
             },
-            onFocusChanged: onFocusChanged
+            onFocusChanged: onFocusChanged,
+            onPasteImages: { images in
+                let attachments = images.compactMap { PhotoAttachmentHelper.makeAttachment(from: $0) }
+                guard !attachments.isEmpty else { return false }
+                imageAttachments.append(contentsOf: attachments)
+                return true
+            }
         )
         .frame(maxWidth: .infinity, minHeight: textHeight, maxHeight: textHeight, alignment: .leading)
         .overlay(alignment: .topLeading) {
@@ -2881,7 +2885,7 @@ struct HistorySheet: View {
         #if os(macOS)
         .frame(minWidth: 400, minHeight: 300)
         #else
-        .presentationDetents([.medium, .large], selection: .constant(.large))
+        .ripulSheet(.page, detents: [.medium, .large], selection: .constant(.large))
         #endif
     }
 
@@ -3000,7 +3004,7 @@ struct TodoPickerSheet: View {
         #if os(macOS)
         .frame(minWidth: 400, minHeight: 400)
         #else
-        .presentationDetents([.medium, .large])
+        .ripulSheet(.page, detents: [.medium, .large])
         #endif
         .task {
             guard let onFetch else { loading = false; return }
@@ -3072,7 +3076,15 @@ public struct GlassChatInputBackground: ViewModifier {
             } else {
                 let style: Glass = glassStyle == "regular" ? .regular : .clear
                 content
-                    .background(.clear)
+                    // Keep the readability blur inside the same shape as the
+                    // composer glass, never across the surrounding chat lane.
+                    .background {
+                        if glassStyle != "regular" {
+                            RoundedRectangle(cornerRadius: 22)
+                                .fill(.ultraThinMaterial)
+                                .opacity(0.6)
+                        }
+                    }
                     .glassEffect(style, in: .rect(cornerRadius: 22))
             }
         } else {
@@ -3120,6 +3132,18 @@ private struct ChatInputGlassGroup<Content: View>: View {
 #if os(iOS)
 /// UITextView subclass that suppresses the iOS autofill toolbar above the keyboard.
 class ChatTextView: UITextView {
+    /// Return true only after images have become composer attachments. Reading
+    /// clipboard contents happens in the explicit Paste action, never on focus.
+    var onPasteImages: (([UIImage]) -> Bool)?
+
+    override func paste(_ sender: Any?) {
+        if isEditable, let onPasteImages, let images = UIPasteboard.general.images,
+           !images.isEmpty, onPasteImages(images) {
+            return
+        }
+        super.paste(sender)
+    }
+
     override func resignFirstResponder() -> Bool {
         NativeComposerFocusTrace.shared.record("editor.resign.request", view: self, stack: true)
         let resigned = super.resignFirstResponder()
@@ -3158,6 +3182,10 @@ class ChatTextView: UITextView {
     }
 
     override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
+        if action == #selector(paste(_:)), isEditable, onPasteImages != nil,
+           UIPasteboard.general.hasImages {
+            return true
+        }
         let name = NSStringFromSelector(action)
         if name.lowercased().contains("autofill") {
             return false
@@ -3180,23 +3208,29 @@ class ChatTextView: UITextView {
         }
     }
 
-    #if targetEnvironment(macCatalyst)
-    /// Hardware-keyboard Return (no Shift) sends the message; Shift+Return inserts a
-    /// newline. Wired by NoAutofillTextView to the submit action. iPhone (non-Catalyst)
-    /// keeps the default behaviour where Return inserts a newline.
+    /// Key commands come from hardware keyboards, including iPhone Mirroring.
+    /// Onscreen Return still uses UITextView's normal newline insertion.
     var onReturnKey: (() -> Void)?
 
     override var keyCommands: [UIKeyCommand]? {
+        // Let an input method use Return to confirm its marked text instead
+        // of accidentally sending an unfinished composition.
+        guard isEditable, markedTextRange == nil, onReturnKey != nil else { return super.keyCommands }
         let send = UIKeyCommand(input: "\r", modifierFlags: [], action: #selector(handleReturnKey))
         send.wantsPriorityOverSystemBehavior = true
         let newline = UIKeyCommand(input: "\r", modifierFlags: .shift, action: #selector(handleShiftReturnKey))
         newline.wantsPriorityOverSystemBehavior = true
-        return [send, newline]
+        return [send, newline] + (super.keyCommands ?? [])
     }
 
-    @objc private func handleReturnKey() { onReturnKey?() }
-    @objc private func handleShiftReturnKey() { insertText("\n") }
-    #endif
+    @objc private func handleReturnKey() {
+        guard isEditable, markedTextRange == nil else { return }
+        onReturnKey?()
+    }
+    @objc private func handleShiftReturnKey() {
+        guard isEditable, markedTextRange == nil else { return }
+        insertText("\n")
+    }
 }
 
 /// UITextView wrapper that completely disables autofill suggestions.
@@ -3208,6 +3242,7 @@ struct NoAutofillTextView: UIViewRepresentable {
     var onSubmit: () -> Void
     var onTextChange: ((String) -> Void)?
     var onFocusChanged: ((Bool) -> Void)?
+    var onPasteImages: (([UIImage]) -> Bool)?
 
     private let minHeight: CGFloat = 36
     private let maxHeight: CGFloat = 120
@@ -3266,9 +3301,8 @@ struct NoAutofillTextView: UIViewRepresentable {
 
     func updateUIView(_ textView: ChatTextView, context: Context) {
         context.coordinator.parent = self
-        #if targetEnvironment(macCatalyst)
+        textView.onPasteImages = onPasteImages
         textView.onReturnKey = onSubmit
-        #endif
         // Keep placeholder text in sync with SwiftUI state
         if context.coordinator.placeholderLabel?.text != placeholder {
             context.coordinator.placeholderLabel?.text = placeholder

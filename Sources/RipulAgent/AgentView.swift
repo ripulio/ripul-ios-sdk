@@ -1,4 +1,5 @@
 import SwiftUI
+import Combine
 
 #if canImport(PhotosUI)
 import PhotosUI
@@ -428,30 +429,6 @@ public struct AgentView<TopBar: View>: View {
             }
         }
         #endif
-        .sheet(item: $bridge.pendingUserInteraction) { question in
-            UserInteractionSheet(question: question, onRespond: { answer in
-                bridge.respondToUserInteraction(answer: answer)
-            }, onOpenLink: { url in
-                bridge.linkOpenDelegate?.agentBridge(bridge, didRequestOpenLink: url)
-                bridge.pendingUserInteraction = nil
-            })
-        }
-        .sheet(item: $bridge.pendingTextQuestion) { question in
-            UserTextInputSheet(question: question, onRespond: { answer in
-                bridge.respondToTextQuestion(answer: answer)
-            }, onOpenLink: { url in
-                bridge.linkOpenDelegate?.agentBridge(bridge, didRequestOpenLink: url)
-                bridge.pendingTextQuestion = nil
-            })
-        }
-        .sheet(item: $bridge.pendingDateQuestion) { question in
-            UserDatePickerSheet(question: question, onRespond: { answer in
-                bridge.respondToDateQuestion(answer: answer)
-            }, onOpenLink: { url in
-                bridge.linkOpenDelegate?.agentBridge(bridge, didRequestOpenLink: url)
-                bridge.pendingDateQuestion = nil
-            })
-        }
         .sheet(item: $bridge.pendingFileView) { request in
             FileViewerSheet(request: request)
         }
@@ -539,17 +516,13 @@ public struct AgentView<TopBar: View>: View {
 
     /// Bottom inset for the native scroller so its last message clears the reused
     /// ChatComposer (which sits below it). Mirrors `updateWebBottomPadding`:
-    /// measured input height + resting inset + the 32pt composer fade gradient + 8.
-    /// Without the fade term the last message slips ~32pt under the composer.
+    /// measured input height + resting inset + an 8pt gap above the composer.
     private var nativeScrollerBottomInset: CGFloat {
-        let fadeGradientHeight: CGFloat = 32
         #if os(iOS)
-        let safeBottom = UIApplication.shared.connectedScenes
-            .compactMap { ($0 as? UIWindowScene)?.keyWindow?.safeAreaInsets.bottom }
-            .first ?? 0
-        return chatInputMeasuredHeight + composerBottomInset + safeBottom + fadeGradientHeight + 8
+        let safeBottom = bridge.hostingWindow?.safeAreaInsets.bottom ?? 0
+        return chatInputMeasuredHeight + composerBottomInset + safeBottom + 8
         #else
-        return chatInputMeasuredHeight + composerBottomInset + fadeGradientHeight + 8
+        return chatInputMeasuredHeight + composerBottomInset + 8
         #endif
     }
 
@@ -567,16 +540,13 @@ public struct AgentView<TopBar: View>: View {
         guard chatInputMeasuredHeight > 0 else { return }
         let bottomPad: CGFloat
         #if os(iOS)
-        let safeBottom = UIApplication.shared.connectedScenes
-            .compactMap { ($0 as? UIWindowScene)?.keyWindow?.safeAreaInsets.bottom }
-            .first ?? 0
+        let safeBottom = bridge.hostingWindow?.safeAreaInsets.bottom ?? 0
         // Resting padding only — keyboard shift is handled natively via WKWebView offset
         bottomPad = 8 + safeBottom
         #else
         bottomPad = 8
         #endif
-        let fadeGradientHeight: CGFloat = 32
-        let totalHeight = Int(chatInputMeasuredHeight + bottomPad + fadeGradientHeight + 8)
+        let totalHeight = Int(chatInputMeasuredHeight + bottomPad + 8)
         bridge.setNativeChatInputHeight(totalHeight)
     }
 
@@ -631,6 +601,9 @@ public extension AgentView where TopBar == EmptyView {
 // spiking CPU. Same pattern AgentView already uses for the scroll button.
 @available(iOS 16.0, macOS 14.0, *)
 private struct ChatComposer: View {
+    @Environment(\.ripulWindowContext) private var workspace
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var draftChatID: String?
     @ObservedObject var bridge: AgentBridge
     @ObservedObject var composerActionStore: RipulComposerActionStore
     var contextOptions: [RipulComposerContext]
@@ -692,7 +665,7 @@ private struct ChatComposer: View {
 
             VStack(spacing: 8) {
                 NativeToolStrip(store: bridge.toolStrip) { [weak bridge] event in bridge?.send(event) }
-                if !BundledAgentRuntime.isEnabled { conversationModeControl }
+                if !BundledAgentRuntime.isEnabled && bridge.showsConversationMode(for: bridge.currentSourceChatId) { conversationModeControl }
                 chatInput
             }
                 .task(id: bridge.currentSourceChatId) {
@@ -714,55 +687,39 @@ private struct ChatComposer: View {
                     }
                 )
                 .padding(.horizontal, 12)
-                .padding(.top, 32)
-                .background(
-                    Rectangle()
-                        .fill(.ultraThinMaterial)
-                        .opacity(0.6)
-                        .mask(
-                            VStack(spacing: 0) {
-                                LinearGradient(
-                                    colors: [.clear, .black],
-                                    startPoint: .top,
-                                    endPoint: .bottom
-                                )
-                                .frame(height: 32)
-                                Color.black
-                            }
-                        )
-                        .allowsHitTesting(false)
-                )
-                .overlay(alignment: .bottom) {
-                    // Extend blur below the chat input into safe area
-                    Rectangle()
-                        .fill(.ultraThinMaterial)
-                        .opacity(0.6)
-                        .frame(height: 12)
-                        .mask(
-                            LinearGradient(
-                                colors: [.black, .clear],
-                                startPoint: .top,
-                                endPoint: .bottom
-                            )
-                        )
-                        .offset(y: 12)
-                        .allowsHitTesting(false)
-                }
+                // NativeChatInput owns the rounded glass surface. Keep its
+                // surrounding gutters and home-indicator gap transparent.
         }
         .padding(.bottom, bottomInset)
         .onPreferenceChange(ChatInputHeightKey.self) { height in
             onHeightChange(height)
         }
         .onChange(of: selectedPhotos) { newItems in
+            guard !newItems.isEmpty else { return }
+            let chatID = bridge.currentSourceChatId
             Task {
-                imageAttachments = await PhotoAttachmentHelper.process(newItems)
+                let images = await PhotoAttachmentHelper.process(newItems)
+                guard bridge.currentSourceChatId == chatID, selectedPhotos == newItems else { return }
+                imageAttachments = images
             }
+        }
+        .onAppear { restoreDraft(for: bridge.currentSourceChatId) }
+        .onChange(of: bridge.currentSourceChatId) { chatID in restoreDraft(for: chatID) }
+        .onChange(of: imageAttachments.map(\.id)) { _ in saveDraft() }
+        .onChange(of: addressedParticipants) { _ in saveDraft() }
+        .onChange(of: scenePhase) { _ in saveDraft() }
+        .onDisappear { saveDraft() }
+        .onReceive(workspace?.storage.acknowledgements.eraseToAnyPublisher() ?? Empty().eraseToAnyPublisher()) { accepted in
+            guard draftChatID == accepted.chatID else { return }
+            if chatMessage == accepted.text { chatMessage = ""; addressedParticipants = [] }
+            imageAttachments.removeAll { accepted.imageIDs.contains($0.id) }
         }
         .onChange(of: chatMessage) { newValue in
             if newValue.lowercased().hasPrefix(debugCommandTrigger) {
                 chatMessage = ""
                 onDebugCommands()
             }
+            saveDraft()
         }
         .onChange(of: bridge.pendingInputText) { text in
             if let text {
@@ -778,6 +735,24 @@ private struct ChatComposer: View {
         }
     }
 
+    private func saveDraft() {
+        guard let storage = workspace?.storage, let chatID = draftChatID else { return }
+        for image in imageAttachments { storage.saveImage(image, for: chatID) }
+        storage.saveDraft(.init(text: chatMessage, participants: addressedParticipants,
+                               imageIDs: imageAttachments.map(\.id)), for: chatID)
+    }
+
+    private func restoreDraft(for chatID: String?) {
+        guard let storage = workspace?.storage, chatID != draftChatID else { return }
+        saveDraft()
+        draftChatID = chatID
+        selectedPhotos = []
+        let draft = chatID.map { storage.draft(for: $0) } ?? .init()
+        chatMessage = draft.text
+        addressedParticipants = draft.participants
+        imageAttachments = chatID.map { storage.images(for: $0, ids: draft.imageIDs) } ?? []
+    }
+
     // MARK: Chat input
 
     #if os(iOS)
@@ -786,7 +761,7 @@ private struct ChatComposer: View {
             text: $chatMessage,
             imageAttachments: $imageAttachments,
             selectedPhotos: $selectedPhotos,
-            isAgentRunning: bridge.isAgentRunning && bridge.pendingUserInteraction == nil && bridge.pendingTextQuestion == nil && bridge.pendingDateQuestion == nil,
+            isAgentRunning: bridge.isAgentRunning,
             isAgentPaused: bridge.isAgentPaused && !isGroupMode,
             onSubmit: handleSubmit,
             onSubmitNote: BundledAgentRuntime.isEnabled || isGroupMode ? nil : handleNoteSubmit,
@@ -879,7 +854,7 @@ private struct ChatComposer: View {
             text: $chatMessage,
             imageAttachments: $imageAttachments,
             selectedPhotos: $selectedPhotos,
-            isAgentRunning: bridge.isAgentRunning && bridge.pendingUserInteraction == nil && bridge.pendingTextQuestion == nil && bridge.pendingDateQuestion == nil,
+            isAgentRunning: bridge.isAgentRunning,
             isAgentPaused: bridge.isAgentPaused && !isGroupMode,
             onSubmit: handleSubmit,
             onSubmitNote: BundledAgentRuntime.isEnabled || isGroupMode ? nil : handleNoteSubmit,
@@ -992,68 +967,41 @@ private struct ChatComposer: View {
     // MARK: Submit handlers
 
     private func handleSubmit() {
-        let message = chatMessage.trimmingCharacters(in: .whitespacesAndNewlines)
-        if isGroupMode {
-            guard !composerActionPending, let chatId = bridge.currentSourceChatId,
-                  !message.isEmpty || !imageAttachments.isEmpty || !bridge.composerContexts.attachments(for: chatId).isEmpty else { return }
-            let originalText = chatMessage
-            let images = imageAttachments
-            let addressed = addressedParticipants
-            composerActionPending = true
-            Task {
-                let accepted = await bridge.submitMessage(message,
-                    imageAttachments: images.isEmpty ? nil : images.map { $0.toDictionary() },
-                    addressedTo: addressed.isEmpty ? nil : addressed)
-                composerActionPending = false
-                guard bridge.currentSourceChatId == chatId else { return }
-                if accepted {
-                    recordHistory(message)
-                    if chatMessage == originalText { chatMessage = ""; addressedParticipants = [] }
-                    imageAttachments.removeAll { image in images.contains { $0.id == image.id } }
-                    selectedPhotos = []
-                } else { composerActionError = "Message delivery was not confirmed. Your draft has been kept." }
-            }
+        guard !composerActionPending, let chatID = bridge.currentSourceChatId else { return }
+        let originalText = chatMessage
+        let message = originalText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let images = imageAttachments
+        let addressed = addressedParticipants
+        let hasContent = !message.isEmpty || !images.isEmpty || !bridge.composerContexts.attachments(for: chatID).isEmpty
+        if bridge.isAgentPaused && !isGroupMode && !hasContent {
+            Task { await bridge.resumeAgent() }
             return
         }
-        if bridge.isAgentPaused && !isGroupMode {
-            let addressed = addressedParticipants
-            chatMessage = ""
-            imageAttachments = []
-            selectedPhotos = []
-            addressedParticipants = []
-            if message.isEmpty && bridge.composerContexts.attachments(for: bridge.currentSourceChatId).isEmpty {
-                Task { await bridge.resumeAgent() }
-            } else {
-                recordHistory(message)
-                Task {
-                    await bridge.submitMessage(
-                        message,
-                        imageAttachments: nil,
-                        addressedTo: addressed.isEmpty ? nil : addressed
-                    )
-                }
+        guard hasContent else { return }
+        composerActionPending = true
+        saveDraft()
+        Task {
+            let accepted = await bridge.submitMessage(message,
+                imageAttachments: images.isEmpty ? nil : images.map { $0.toDictionary() },
+                addressedTo: addressed.isEmpty ? nil : addressed)
+            composerActionPending = false
+            if accepted {
+                workspace?.storage.acknowledgeDraft(text: originalText, imageIDs: images.map(\.id), for: chatID)
             }
-        } else {
-            guard !message.isEmpty || !imageAttachments.isEmpty || !bridge.composerContexts.attachments(for: bridge.currentSourceChatId).isEmpty else { return }
-            if !message.isEmpty { recordHistory(message) }
-            let images = imageAttachments
-            let addressed = addressedParticipants
-            chatMessage = ""
-            imageAttachments = []
-            selectedPhotos = []
-            addressedParticipants = []
-            Task {
-                let imgDicts: [[String: String]]? = images.isEmpty ? nil : images.map { $0.toDictionary() }
-                await bridge.submitMessage(
-                    message,
-                    imageAttachments: imgDicts,
-                    addressedTo: addressed.isEmpty ? nil : addressed
-                )
+            // A late acknowledgement must never clear another chat's composer.
+            guard bridge.currentSourceChatId == chatID else { return }
+            if accepted {
+                recordHistory(message)
+                if chatMessage == originalText { chatMessage = ""; addressedParticipants = [] }
+                imageAttachments.removeAll { image in images.contains { $0.id == image.id } }
+                selectedPhotos = []
+                saveDraft()
+            } else {
+                composerActionError = (bridge.messageSubmissionError ?? "Message delivery was not confirmed.") + " Your draft has been kept."
             }
         }
-        #if os(iOS)
-        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
-        #endif
+        // NativeChatInput's tapped Send controls own keyboard dismissal.
+        // Hardware Return uses this same submission path while retaining focus.
     }
 
     private func handleComposerAction(_ action: String) {
@@ -1086,7 +1034,7 @@ private struct ChatComposer: View {
         chatMessage = ""
         Task { await bridge.submitNote(message) }
         #if os(iOS)
-        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+        bridge.hostingWindow?.endEditing(true)
         #endif
     }
 
@@ -1097,7 +1045,7 @@ private struct ChatComposer: View {
         chatMessage = ""
         Task { await bridge.submitMessage(message) }
         #if os(iOS)
-        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+        bridge.hostingWindow?.endEditing(true)
         #endif
     }
 

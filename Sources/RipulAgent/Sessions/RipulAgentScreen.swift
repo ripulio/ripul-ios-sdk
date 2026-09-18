@@ -10,68 +10,6 @@ public struct RipulSessionColumnWidthKey: PreferenceKey {
     }
 }
 
-/// Keeps host chrome out of the docked metadata pane on Catalyst.
-public struct RipulMetadataColumnWidthKey: PreferenceKey {
-    public static let defaultValue: CGFloat = 0
-    public static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = max(value, nextValue())
-    }
-}
-
-#if targetEnvironment(macCatalyst)
-private struct CatalystMetadataPane<Panel: View>: ViewModifier {
-    let panel: Panel
-    @Environment(\.horizontalSizeClass) private var sizeClass
-    @State private var preferredWidth: CGFloat = 340
-    @State private var resizeStart: CGFloat?
-
-    func body(content: Content) -> some View {
-        if sizeClass == .regular {
-            GeometryReader { geometry in
-                let maximumWidth = max(280, min(480, geometry.size.width - 560))
-                let paneWidth = min(preferredWidth, maximumWidth)
-                HStack(spacing: 0) {
-                    content
-                        .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
-                    Rectangle()
-                        .fill(.separator)
-                        .frame(width: 1)
-                        .overlay {
-                            Color.clear
-                                .frame(width: 10)
-                                .contentShape(Rectangle())
-                                .gesture(
-                                    DragGesture(minimumDistance: 0)
-                                        .onChanged { value in
-                                            if resizeStart == nil { resizeStart = paneWidth }
-                                            preferredWidth = min(maximumWidth, max(280, (resizeStart ?? paneWidth) - value.translation.width))
-                                        }
-                                        .onEnded { _ in resizeStart = nil }
-                                )
-                        }
-                        .accessibilityLabel("Metadata column width")
-                        .accessibilityAdjustableAction { direction in
-                            switch direction {
-                            case .increment: preferredWidth = min(maximumWidth, paneWidth + 40)
-                            case .decrement: preferredWidth = max(280, paneWidth - 40)
-                            @unknown default: break
-                            }
-                        }
-                    panel
-                        .frame(width: paneWidth)
-                        .frame(maxHeight: .infinity, alignment: .top)
-                        .background(Color(uiColor: .secondarySystemBackground))
-                        .preference(key: RipulMetadataColumnWidthKey.self, value: paneWidth + 1)
-                }
-            }
-            .ignoresSafeArea(.container, edges: .top)
-        } else {
-            content
-        }
-    }
-}
-#endif
-
 /// Spring for the chat <-> session-list slide. Used for gesture settles and for
 /// closing back to the list. Bump `response` to slow it further.
 private let chatSlideSpring: Animation = .spring(response: 0.45, dampingFraction: 0.86)
@@ -171,6 +109,8 @@ public struct RipulAgentScreenSlots {
 /// `configuration.cache`. Keep everything else identical.
 @available(iOS 26.0, *)
 public struct RipulAgentScreen: View {
+    @Environment(\.ripulWindowContext) private var workspace
+    @Environment(\.supportsMultipleWindows) private var supportsMultipleWindows
     @ObservedObject var bridge: AgentBridge
     @ObservedObject var model: RipulSessionListModel
     let configuration: RipulSessionsConfiguration
@@ -178,7 +118,44 @@ public struct RipulAgentScreen: View {
     let slots: RipulAgentScreenSlots
 
     @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @State private var availableWidth: CGFloat = 0
+    @State private var dockedMetadataWidth: CGFloat = 0
+    private var chatAreaWidth: CGFloat { max(1, availableWidth - (metadataIsDocked ? dockedMetadataWidth : 0)) }
+    private var canShowSessionSplit: Bool {
+        WorkspaceColumns.showsSessionAndChat(width: availableWidth, hasActiveChat: bridge.activeSessionId != nil)
+    }
+    private var showsSessionSplit: Bool {
+        #if targetEnvironment(macCatalyst)
+        canShowSessionSplit && columnVisibility.wrappedValue != .detailOnly
+        #else
+        canShowSessionSplit
+        #endif
+    }
+    @State private var preferredSessionWidth: CGFloat = 420
+    private var resizableSessionWidth: CGFloat? {
+        #if targetEnvironment(macCatalyst)
+        preferredSessionWidth
+        #else
+        nil
+        #endif
+    }
+    private var resizeSessionPane: ((CGFloat) -> Void)? {
+        #if targetEnvironment(macCatalyst)
+        { preferredSessionWidth = $0 }
+        #else
+        nil
+        #endif
+    }
+    private var sessionPaneWidth: CGFloat {
+        WorkspaceColumns.sessionListWidth(in: chatAreaWidth, preferred: resizableSessionWidth)
+    }
+    private var detailOverlayWidth: CGFloat {
+        showsSessionSplit ? max(1, chatAreaWidth - sessionPaneWidth - 1) : chatAreaWidth
+    }
+    private var metadataIsDocked: Bool {
+        WorkspaceColumns.showsMetadata(width: availableWidth, hasActiveChat: bridge.activeSessionId != nil)
+    }
+    private var isListMode: Bool { showingSessionList.wrappedValue && !showsSessionSplit }
     /// Starts on the session LIST, exactly like the app (ContentView seeds
     /// showingSessionList = true) - landing on an empty chat instead is the
     /// single most visible 'nothing like Ripul' break for SDK hosts.
@@ -254,12 +231,12 @@ public struct RipulAgentScreen: View {
     @State private var workingDirectoryPickerSession: String?
     @State private var favoriteFiles: [String] = []
     // Metadata panel — offset from right edge (screenWidth = hidden, 0 = fully visible).
-    @State private var metadataOffset: CGFloat = UIScreen.main.bounds.width
+    @State private var metadataOffset: CGFloat = 1
     @State private var showingMetadata = false
     // File viewer panel — slides a native StandaloneFileViewer over the chat using the
     // SAME SlidePanelOverlay as the metadata panel and the Files tab, so it slides in
     // and thumb-tracks back exactly like navigating into/out of a chat session.
-    @State private var fileViewerOffset: CGFloat = UIScreen.main.bounds.width
+    @State private var fileViewerOffset: CGFloat = 1
     @State private var localColumnVisibility: NavigationSplitViewVisibility = .all
     private var columnVisibility: Binding<NavigationSplitViewVisibility> {
         slots.sessionColumnVisibility ?? $localColumnVisibility
@@ -281,11 +258,7 @@ public struct RipulAgentScreen: View {
     /// Window-level top inset for the floating top bar, fed by
     /// `WindowSafeAreaTopReader` — see topBarOverlay for why it can be neither
     /// inherited from the hierarchy nor read from UIApplication during body.
-    #if targetEnvironment(macCatalyst)
     @State private var safeAreaTop: CGFloat = 0
-    #else
-    @State private var safeAreaTop: CGFloat = 54
-    #endif
 
     private var cache: RipulSessionCache { configuration.cache }
 
@@ -321,7 +294,14 @@ public struct RipulAgentScreen: View {
             hideChatInput: true,
             nativeChatInputHeight: 140
         )
-        config.websiteDataStore = configuration.websiteDataStore
+        config.websiteDataStore = workspace?.websiteDataStore ?? configuration.websiteDataStore
+        if let id = workspace?.id.uuidString {
+            config.configureWebView = { configuration in
+                configuration.userContentController.addUserScript(WKUserScript(
+                    source: "window.__ripulWorkspaceID = '\(id)';",
+                    injectionTime: .atDocumentStart, forMainFrameOnly: true))
+            }
+        }
         config.standalone = configuration.standalone
         config.chatPresentation = configuration.chatPresentation
         config.composerContexts = configuration.composerContexts
@@ -376,6 +356,10 @@ public struct RipulAgentScreen: View {
                     withAnimation(.easeInOut(duration: 0.28)) { showingSessionList.wrappedValue = false }
                     return
                 }
+                let restoring = workspace?.isRestoringSelection == true
+                let row = model.unifiedSessions.first { $0.matchKeys.contains(session.sourceChatId) || $0.matchKeys.contains(session.id) }
+                workspace?.selectedSessionID = row?.id ?? session.sourceChatId
+                workspace?.title = session.displayName ?? row?.title ?? "Ripul"
                 let alreadyActive = bridge.activeSessionId == session.id
                 if alreadyActive {
                     // Re-entering the already-loaded chat. Skip focusSession (its
@@ -391,12 +375,12 @@ public struct RipulAgentScreen: View {
                         try? await Task.sleep(nanoseconds: 16_000_000)
                         bridge.logSessionStartMarker("ios.navigation_requested", chatId: session.sourceChatId)
                         withAnimation(chatOpenAnimation, completionCriteria: .removed) {
-                            showingSessionList.wrappedValue = false
+                            if !restoring { showingSessionList.wrappedValue = false }
                         } completion: {
                             bridge.logSessionStartMarker("ios.navigation_animation_complete", chatId: session.sourceChatId)
                         }
                         try? await Task.sleep(nanoseconds: 700_000_000) // just past the 0.625s open slide
-                        bridge.scrollToBottom()
+                        if workspace == nil { bridge.scrollToBottom() }
                     }
                 } else {
                     // Different session: show the row spinner, then flip the web view
@@ -407,13 +391,13 @@ public struct RipulAgentScreen: View {
                         await bridge.focusSession(id: session.id)
                         bridge.logSessionStartMarker("ios.navigation_requested", chatId: session.sourceChatId)
                         withAnimation(chatOpenAnimation, completionCriteria: .removed) {
-                            showingSessionList.wrappedValue = false
+                            if !restoring { showingSessionList.wrappedValue = false }
                         } completion: {
                             bridge.logSessionStartMarker("ios.navigation_animation_complete", chatId: session.sourceChatId)
                         }
                         // Defer the remaining @Published churn past the open animation.
                         try? await Task.sleep(nanoseconds: 700_000_000) // just past the 0.625s open slide
-                        bridge.scrollToBottom()
+                        if workspace == nil { bridge.scrollToBottom() }
                         bridge.navigatingToSessionId = nil
                     }
                 }
@@ -439,93 +423,25 @@ public struct RipulAgentScreen: View {
             showsTitleLozenge: false,
             // The host's app-nav sidebar is a pinned rail at regular width, so
             // there is nothing for a right-drag on the list to slide open.
-            showingSidebar: horizontalSizeClass == .regular ? nil : slots.showingSidebar,
+            showingSidebar: slots.showingSidebar,
             quickActionsEnabled: configuration.quickActionsEnabled,
-            // Regular width pins the list beside the chat, whose floating
-            // header stays outside this column. Reserving 52pt here would
-            // leave an empty strip above Machines.
-            reservesTopBarSpace: horizontalSizeClass != .regular,
+            // The list has either the host's Agents/Plans bar or our Sessions
+            // bar above it at every width. Docking metadata must not remove
+            // that header's clearance and put Machines underneath its buttons.
+            reservesTopBarSpace: true,
             onListedSessionsChanged: slots.onListedSessionsChanged
         )
+        // SessionChatColumns extends both panes through the vertical safe area
+        // so chat can draw behind the glass. Restore the list's window clearance
+        // explicitly, in addition to its app-header reservation. Local geometry
+        // reports zero here because the column has already consumed the inset.
+        .padding(.top, safeAreaTop)
         .environment(\.createNewChat, slots.onNewChat)
         .environment(\.cloudSessionFeaturesEnabled, !configuration.standalone)
     }
 
-    #if targetEnvironment(macCatalyst)
-    @State private var catalystSessionsWidth: CGFloat = 420
-    @State private var catalystResizeStart: CGFloat?
-    #endif
-
-    // The Mac sessions pane has no navigation of its own. A nested
-    // NavigationSplitView reserves a title-bar region even with its toolbar
-    // hidden, so use a directly sized pane and splitter on Catalyst.
-    private var regularSplit: some View {
-        #if targetEnvironment(macCatalyst)
-        GeometryReader { geometry in
-            let maximumWidth = max(240, min(640, geometry.size.width - 320))
-            let paneWidth = min(catalystSessionsWidth, maximumWidth)
-            HStack(spacing: 0) {
-                if columnVisibility.wrappedValue != .detailOnly {
-                    sessionListColumn(dismiss: {})
-                        .frame(width: paneWidth)
-                        .preference(key: RipulSessionColumnWidthKey.self, value: paneWidth + 1)
-                    Rectangle()
-                        .fill(.separator)
-                        .frame(width: 1)
-                        .overlay {
-                            Color.clear
-                                .frame(width: 10)
-                                .contentShape(Rectangle())
-                                .gesture(
-                                    DragGesture(minimumDistance: 0)
-                                        .onChanged { value in
-                                            if catalystResizeStart == nil { catalystResizeStart = paneWidth }
-                                            catalystSessionsWidth = min(maximumWidth, max(240, (catalystResizeStart ?? paneWidth) + value.translation.width))
-                                        }
-                                        .onEnded { _ in catalystResizeStart = nil }
-                                )
-                        }
-                        .accessibilityLabel("Sessions column width")
-                        .accessibilityAdjustableAction { direction in
-                            switch direction {
-                            case .increment: catalystSessionsWidth = min(maximumWidth, paneWidth + 40)
-                            case .decrement: catalystSessionsWidth = max(240, paneWidth - 40)
-                            @unknown default: break
-                            }
-                        }
-                }
-                regularChatDetail
-                    .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
-            }
-        }
-        .ignoresSafeArea(.container, edges: .top)
-        #else
-        NavigationSplitView(columnVisibility: columnVisibility) {
-            sessionListColumn(dismiss: {})
-                .navigationSplitViewColumnWidth(min: 420, ideal: 420)
-        } detail: {
-            regularChatDetail
-        }
-        .navigationSplitViewStyle(.balanced)
-        #endif
-    }
-
-    private var regularChatDetail: some View {
-        // Keep the web view and its floating chrome confined to the chat pane.
-        agentWebView(fillsSafeArea: false)
-            .overlay(alignment: .top) {
-                topBarOverlay
-                    .ignoresSafeArea(edges: .top)
-            }
-    }
-
-    @ViewBuilder private var layout: some View {
-        if horizontalSizeClass == .regular {
-            regularSplit
-        } else {
-            compactBody
-        }
-    }
+    // All platforms keep the same list/chat container mounted across width changes.
+    private var layout: some View { compactBody }
 
     /// True while the tab-mirror overlay owns the webview. The agent screen's
     /// edge-swipe affordances must stand down then: their UIKit recognizers
@@ -536,6 +452,10 @@ public struct RipulAgentScreen: View {
 
     private var compactBody: some View {
         AgentChatDragContainer(
+            screenWidth: chatAreaWidth,
+            split: showsSessionSplit,
+            preferredListWidth: resizableSessionWidth,
+            onResizeList: resizeSessionPane,
             showingSessionList: showingSessionList,
             showingMetadata: showingMetadata,
             suppressEdgeSwipe: mirrorOwnsWebview,
@@ -550,22 +470,31 @@ public struct RipulAgentScreen: View {
                         showingSessionList.wrappedValue = false
                     }
                 })
+                .overlay(alignment: .top) {
+                    if showsSessionSplit && !slots.hidesListModeBar {
+                        GlassTopBar(title: "Sessions", showLeading: slots.showingSidebar != nil,
+                            onLeading: { slots.showingSidebar?.wrappedValue = true }) {
+                            sessionListMenuItems
+                        }
+                        .padding(.top, safeAreaTop)
+                    }
+                }
             },
             chat: {
-                agentWebView(fillsSafeArea: true)
+                agentWebView(fillsSafeArea: !showsSessionSplit)
                     .overlay(alignment: .trailing) {
-                        if !showingSessionList.wrappedValue && !showingMetadata && !mirrorOwnsWebview {
+                        if !isListMode && !showingMetadata && !mirrorOwnsWebview {
                             RightEdgeSwipeView(
                                 onChanged: { offset in
                                     guard bridge.fileViewerTitle == nil else { return }
                                     var t = Transaction()
                                     t.disablesAnimations = true
-                                    let screenWidth = UIScreen.main.bounds.width
+                                    let screenWidth = detailOverlayWidth
                                     withTransaction(t) { metadataOffset = screenWidth - offset }
                                 },
                                 onEnded: { offset, velocity in
                                     guard bridge.fileViewerTitle == nil else { return }
-                                    let screenWidth = UIScreen.main.bounds.width
+                                    let screenWidth = detailOverlayWidth
                                     let shouldCommit = offset > screenWidth * 0.35 || velocity > 400
                                     if shouldCommit {
                                         withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
@@ -581,7 +510,7 @@ public struct RipulAgentScreen: View {
                                 onCancelled: {
                                     guard bridge.fileViewerTitle == nil else { return }
                                     withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
-                                        metadataOffset = UIScreen.main.bounds.width
+                                        metadataOffset = detailOverlayWidth
                                     }
                                 }
                             )
@@ -606,13 +535,15 @@ public struct RipulAgentScreen: View {
         // Metadata panel — compact: slides in from the right edge; regular (iPad /
         // Mac Catalyst): docks as a trailing inspector column.
         .overlay {
-            if horizontalSizeClass != .regular {
+            if !metadataIsDocked {
                 SlidePanelOverlay(
                     isPresented: $showingMetadata,
-                    offset: $metadataOffset
+                    offset: $metadataOffset,
+                    containerWidth: detailOverlayWidth
                 ) {
                     metadataPanel
                 }
+                .padding(.leading, showsSessionSplit ? sessionPaneWidth + 1 : 0)
             }
         }
         // File viewer — slides a native StandaloneFileViewer over the chat (its own
@@ -625,42 +556,37 @@ public struct RipulAgentScreen: View {
                     get: { bridge.fileViewerTitle != nil },
                     set: { presented in if !presented { bridge.requestFileViewerClose() } }
                 ),
-                offset: $fileViewerOffset
+                offset: $fileViewerOffset,
+                containerWidth: detailOverlayWidth
             ) {
                 if let path = bridge.fileViewerFilePath {
                     StandaloneFileViewer(
                         filePath: path,
-                        chatId: bridge.activeSessionId,
+                        chatId: bridge.fileViewerChatId ?? bridge.activeSessionId,
+                        line: bridge.fileViewerLine,
                         readBridge: bridge,
                         siteKey: configuration.siteKey,
                         baseURL: configuration.baseURL
                     )
+                    .id("\(path):\(bridge.fileViewerLine ?? 0):\(bridge.fileViewerChatId ?? "")")
                 }
             }
+            .padding(.leading, showsSessionSplit ? sessionPaneWidth + 1 : 0)
         }
         // On a wide screen the metadata panel is always docked as a permanent
         // trailing column (no toggle); compact uses the slide-out overlay above.
-        #if targetEnvironment(macCatalyst)
-        // Keep the pane outside the chat/file overlays, as the inspector was,
-        // without the inspector container's reserved title-bar region.
-        .modifier(CatalystMetadataPane(panel: metadataPanel))
-        #else
-        .inspector(isPresented: .constant(horizontalSizeClass == .regular)) {
-            metadataPanel
-                .inspectorColumnWidth(min: 280, ideal: 340, max: 480)
-        }
-        #endif
+        // Keep metadata outside the chat/file overlays. A native inspector can
+        // adapt into a sheet during resizing, even as this layout is replaced;
+        // the inline pane cannot leave that detached presentation behind.
+        .modifier(DockedMetadataPane(panel: metadataPanel, isPresented: metadataIsDocked))
         // Floating top bar — compact only. On the regular split it's applied to the
         // chat detail instead, so the glass strip doesn't span the sidebar / metadata
         // columns.
         .overlay(alignment: .top) {
-            if horizontalSizeClass != .regular {
-                // Pin to the physical top; topBarOverlay adds the window inset
-                // back. Previously this branch inherited the inset while the
-                // regular branch zeroed it — see topBarOverlay.
-                topBarOverlay
-                    .ignoresSafeArea(edges: .top)
-            }
+            topBarOverlay
+                .padding(.leading, showsSessionSplit ? sessionPaneWidth + 1 : 0)
+                .padding(.trailing, metadataIsDocked ? dockedMetadataWidth : 0)
+                .ignoresSafeArea(edges: .top)
         }
         // Read-only banner when viewing a committed session
         .overlay(alignment: .bottom) {
@@ -679,6 +605,16 @@ public struct RipulAgentScreen: View {
 
     public var body: some View {
         decoratedLayout
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { availableWidth = $0 }
+        .onPreferenceChange(RipulMetadataColumnWidthKey.self) { dockedMetadataWidth = $0 }
+        .onChange(of: metadataIsDocked) { _, docked in
+            if docked { showingMetadata = false }
+        }
+        .onChange(of: detailOverlayWidth) { _, width in
+            if !showingMetadata { metadataOffset = width }
+            if bridge.fileViewerTitle == nil { fileViewerOffset = width }
+        }
+        .preference(key: RipulSessionColumnWidthKey.self, value: showsSessionSplit ? sessionPaneWidth + 1 : 0)
         .renameSessionAlert(renamingSession: $renamingSession, renameText: $renameText, bridge: bridge)
         .alert("CLI Error", isPresented: $showRawModeError) {
             Button("OK", role: .cancel) {}
@@ -691,7 +627,7 @@ public struct RipulAgentScreen: View {
             Text(forkError)
         }
         .sheet(item: $modelPickerTarget) { target in
-            modelPickerSheet(for: target)
+            modelPickerSheet(for: target).ripulSheet(.page)
         }
         .modifier(workingDirectoryPickerSheet)
         .modifier(AppWorkingDirectorySheet(bridge: bridge))
@@ -763,12 +699,14 @@ public struct RipulAgentScreen: View {
             if !configuration.standalone { Task { await refreshFavoriteDirectories() } }
         }
         .onReceive(NotificationCenter.default.publisher(for: .ripulDiscussFile)) { notification in
+            guard notification.object as? AgentBridge === bridge else { return }
             if let path = notification.userInfo?["path"] as? String {
                 let line = notification.userInfo?["line"] as? Int
                 startDiscussSession(path: path, line: line)
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .ripulFocusSession)) { notification in
+            guard notification.object as? AgentBridge === bridge else { return }
             if let shortSha = notification.userInfo?["commitShortSha"] as? String,
                let title = notification.userInfo?["commitSessionTitle"] as? String,
                let machineId = notification.userInfo?["commitMachineId"] as? String,
@@ -785,6 +723,11 @@ public struct RipulAgentScreen: View {
             }
         }
         .onChange(of: bridge.activeSessionId) { newId in
+            if let session = bridge.sessions.first(where: { $0.id == newId }) {
+                let row = model.unifiedSessions.first { $0.matchKeys.contains(session.sourceChatId) || $0.matchKeys.contains(session.id) }
+                workspace?.selectedSessionID = row?.id ?? session.sourceChatId
+                workspace?.title = session.displayName ?? row?.title ?? "Ripul"
+            }
             if let info = commitViewInfo, newId != info.tabId {
                 bridge.unmarkSessionEphemeral(info.tabId)
                 commitViewInfo = nil
@@ -838,7 +781,7 @@ public struct RipulAgentScreen: View {
             // whole split there, so keeping this one would stack the screen's
             // "Agents" lozenge behind the root bar's Agents|Plans picker.
             let hiddenForHostBar = slots.hidesListModeBar
-                && showingSessionList.wrappedValue
+                && isListMode
                 && !showingMetadata
                 && bridge.fileViewerTitle == nil
             ZStack(alignment: .top) {
@@ -935,7 +878,7 @@ public struct RipulAgentScreen: View {
         // spring (chatSlideSpring) when closing back to the list. The previous
         // fixed 0.6s spring desynced from the (variable) slide duration — e.g. the
         // lozenge settled in 0.6s while the panel was still travelling.
-        .animation(showingSessionList.wrappedValue ? chatSlideSpring : chatOpenAnimation, value: showingSessionList.wrappedValue)
+        .animation(isListMode ? chatSlideSpring : chatOpenAnimation, value: isListMode)
         .animation(.spring(response: 0.6, dampingFraction: 0.65), value: showingMetadata)
         // No .animation(value: chatTitleLozengeExpanded) here — the morph's
         // spring lives on its glass container in `titleLozengeContent`.
@@ -955,7 +898,7 @@ public struct RipulAgentScreen: View {
     /// file, not a chat, so the lozenge there keeps its old tap-through
     /// behaviour and never morphs.
     private var expandedTitleAvailable: Bool {
-        !showingSessionList.wrappedValue
+        !isListMode
             && !showingMetadata
             && bridge.fileViewerTitle == nil
             && commitViewInfo == nil
@@ -1048,14 +991,15 @@ public struct RipulAgentScreen: View {
     }
 
     /// Leading button — morphs between chevron.left and line.3.horizontal.
-    /// Hidden on regular width: the session list is a pinned sidebar there, so
-    /// navigating "back" to it (the burger) is redundant. Also hidden in list
+    /// Hidden only when the session list actually fits beside the chat.
+    /// A regular size class alone does not guarantee that. Also hidden in list
     /// mode when the host has no sidebar to open.
     private func agentLeading(session: ChatSession?) -> (() -> AnyView)? {
         #if targetEnvironment(macCatalyst)
-        if horizontalSizeClass == .regular {
+        if canShowSessionSplit {
             return {
                 AnyView(Button {
+                    showingSessionList.wrappedValue = false
                     columnVisibility.wrappedValue = columnVisibility.wrappedValue == .detailOnly ? .all : .detailOnly
                 } label: {
                     Image(systemName: "sidebar.left")
@@ -1067,10 +1011,10 @@ public struct RipulAgentScreen: View {
             }
         }
         #endif
-        guard horizontalSizeClass != .regular,
-              !showingSessionList.wrappedValue || slots.showingSidebar != nil
+        guard (!showsSessionSplit || showingMetadata || commitViewInfo != nil),
+              !isListMode || slots.showingSidebar != nil
         else { return nil }
-        let inList = showingSessionList.wrappedValue
+        let inList = isListMode
         let action = unifiedLeadingAction(session: session)
         return {
             AnyView(
@@ -1091,6 +1035,7 @@ public struct RipulAgentScreen: View {
                     .frame(width: 44, height: 44)
                     .modifier(GlassCircleModifier(glassStyle: "regular"))
                 }
+                .accessibilityLabel(inList ? "Show app sidebar" : "Back to sessions")
                 .uiKitIdentifier("AgentScreen.topBar.leadingButton")
             )
         }
@@ -1107,9 +1052,16 @@ public struct RipulAgentScreen: View {
     /// checker gives up ("unable to type-check in reasonable time") on iOS.
     @ViewBuilder
     private func agentMenuContent(session: ChatSession?) -> some View {
+        if !isListMode, let session, supportsMultipleWindows, let open = workspace?.openWindow {
+            Button("Open in New Window", systemImage: "rectangle.on.rectangle") {
+                let row = model.unifiedSessions.first { $0.matchKeys.contains(session.sourceChatId) || $0.matchKeys.contains(session.id) }
+                open(row?.id ?? session.sourceChatId)
+            }
+            .accessibilityIdentifier("Workspace.openSessionWindow")
+        }
         if showingMetadata {
             metadataMenuItems
-        } else if showingSessionList.wrappedValue {
+        } else if isListMode {
             sessionListMenuItems
         } else {
             if let info = commitViewInfo, session?.id == info.tabId {
@@ -1119,6 +1071,13 @@ public struct RipulAgentScreen: View {
                     Label("Resume Session", systemImage: "play.fill")
                 }
                 .uiKitIdentifier("AgentScreen.contextMenu.resumeButton")
+            }
+            if !metadataIsDocked {
+                Button {
+                    metadataOffset = detailOverlayWidth
+                    showingMetadata = true
+                } label: { Label("Session Info", systemImage: "info.circle") }
+                .uiKitIdentifier("AgentScreen.contextMenu.sessionInfo")
             }
             agentMenuItems(session: session)
         }
@@ -1146,7 +1105,7 @@ public struct RipulAgentScreen: View {
         if let info = commitViewInfo, session?.id == info.tabId {
             return { dismissCommitView() }
         }
-        if showingSessionList.wrappedValue {
+        if isListMode {
             return {
                 if let showingSidebar = slots.showingSidebar {
                     withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) { showingSidebar.wrappedValue = true }
@@ -1287,7 +1246,7 @@ public struct RipulAgentScreen: View {
                         .foregroundColor(.primary)
                         .lineLimit(1)
                         .contentTransition(.interpolate)
-                    if showingSessionList.wrappedValue, let screenTip = slots.screenTip {
+                    if isListMode, let screenTip = slots.screenTip {
                         screenTip("agent")
                     }
                 }
@@ -1307,7 +1266,7 @@ public struct RipulAgentScreen: View {
     /// the screen there, not a session — and for a brand-new chat that hasn't
     /// reached the list yet. All of those fall back to the plain title pair.
     private func unifiedRow(for session: ChatSession?) -> UnifiedSession? {
-        guard !showingSessionList.wrappedValue,
+        guard !isListMode,
               !showingMetadata,
               bridge.fileViewerTitle == nil,
               let session else { return nil }
@@ -1320,7 +1279,7 @@ public struct RipulAgentScreen: View {
         if let info = commitViewInfo, session?.id == info.tabId {
             return info.sessionTitle
         }
-        return showingSessionList.wrappedValue ? "Agents" : (session?.displayName ?? "New Chat")
+        return isListMode ? "Agents" : (session?.displayName ?? "New Chat")
     }
 
     private func unifiedSubtitle(session: ChatSession?) -> String? {
@@ -1328,7 +1287,7 @@ public struct RipulAgentScreen: View {
         if let info = commitViewInfo, session?.id == info.tabId {
             return info.shortSha
         }
-        return showingSessionList.wrappedValue ? nil : topBarSubtitle(session: session)
+        return isListMode ? nil : topBarSubtitle(session: session)
     }
 
     @ViewBuilder
@@ -1443,7 +1402,7 @@ public struct RipulAgentScreen: View {
 
     private func agentMenuKey(session: ChatSession?) -> String {
         if showingMetadata { return "meta" }
-        if showingSessionList.wrappedValue {
+        if isListMode {
             // SessionListMenu renders from the machines roster (default-machine
             // entries) and deliberately does not observe it — this key is what
             // refreshes it.
@@ -1788,11 +1747,10 @@ public struct RipulAgentScreen: View {
                 activityItems: [shareURL],
                 applicationActivities: activities
             )
-            // compactMap, not `.first as?` — with CarPlay connected a
-            // CPTemplateApplicationScene can be first in connectedScenes.
-            if let windowScene = UIApplication.shared.connectedScenes
-                .compactMap({ $0 as? UIWindowScene }).first,
-               let rootVC = windowScene.windows.first?.rootViewController {
+            // Present from the requesting workspace, including its iPad popover anchor.
+            if let rootVC = bridge.hostingWindow?.rootViewController {
+                activityVC.popoverPresentationController?.sourceView = rootVC.view
+                activityVC.popoverPresentationController?.sourceRect = CGRect(x: rootVC.view.bounds.midX, y: rootVC.view.bounds.midY, width: 1, height: 1)
                 rootVC.present(activityVC, animated: true)
             }
         } catch {
@@ -2182,7 +2140,7 @@ public struct RipulAgentScreen: View {
     /// Extracted to the public TopSafeAreaGlass so the shell's root bar draws
     /// the same strip.
     private var safeAreaGlass: some View {
-        TopSafeAreaGlass()
+        TopSafeAreaGlass(topInset: safeAreaTop)
     }
 }
 
@@ -2192,6 +2150,10 @@ public struct RipulAgentScreen: View {
 /// body. During finger tracking, only this small wrapper updates its offset state
 /// while the heavy AgentView stays stable.
 private struct AgentChatDragContainer<SessionList: View, Chat: View>: View {
+    let screenWidth: CGFloat
+    let split: Bool
+    let preferredListWidth: CGFloat?
+    let onResizeList: ((CGFloat) -> Void)?
     @Binding var showingSessionList: Bool
     let showingMetadata: Bool
     /// Mirror active — the left-edge back-swipe stands down (see
@@ -2217,7 +2179,6 @@ private struct AgentChatDragContainer<SessionList: View, Chat: View>: View {
     // settle uses the spring rather than the pick-a-session brake.
     @State private var gestureSettling = false
 
-    private var screenWidth: CGFloat { UIScreen.main.bounds.width }
 
     /// While dragging, track the finger directly. Otherwise derive from
     /// showingSessionList so programmatic shows/hides animate in the same frame
@@ -2237,6 +2198,10 @@ private struct AgentChatDragContainer<SessionList: View, Chat: View>: View {
     }
 
     init(
+        screenWidth: CGFloat,
+        split: Bool,
+        preferredListWidth: CGFloat? = nil,
+        onResizeList: ((CGFloat) -> Void)? = nil,
         showingSessionList: Binding<Bool>,
         showingMetadata: Bool,
         suppressEdgeSwipe: Bool = false,
@@ -2248,6 +2213,10 @@ private struct AgentChatDragContainer<SessionList: View, Chat: View>: View {
         @ViewBuilder sessionList: () -> SessionList,
         @ViewBuilder chat: () -> Chat
     ) {
+        self.screenWidth = screenWidth
+        self.split = split
+        self.preferredListWidth = preferredListWidth
+        self.onResizeList = onResizeList
         self._showingSessionList = showingSessionList
         self.showingMetadata = showingMetadata
         self.suppressEdgeSwipe = suppressEdgeSwipe
@@ -2261,28 +2230,25 @@ private struct AgentChatDragContainer<SessionList: View, Chat: View>: View {
     }
 
     var body: some View {
-        ZStack {
-            sessionList
-                .allowsHitTesting(showingSessionList)
-
-            chat
-                .overlay(alignment: .leading) {
-                    if !showingSessionList && !showingMetadata && !suppressEdgeSwipe {
-                        InteractiveEdgeSwipeView(
-                            onChanged: handleChanged,
-                            onEnded: { offset, velocity in
-                                handleEnded(offset: offset, velocity: velocity)
-                            },
-                            onCancelled: handleCancelled
-                        )
-                        .frame(width: 20)
-                        .ignoresSafeArea()
-                    }
+        SessionChatColumns(width: screenWidth, showsBoth: split,
+            showingList: showingSessionList, chatOffset: effectiveOffset,
+            canInteractWithChat: !showingMetadata, list: sessionList,
+            chat: chat.overlay(alignment: .leading) {
+                if !split && !showingSessionList && !showingMetadata && !suppressEdgeSwipe {
+                    InteractiveEdgeSwipeView(
+                        onChanged: handleChanged,
+                        onEnded: { offset, velocity in handleEnded(offset: offset, velocity: velocity) },
+                        onCancelled: handleCancelled,
+                        maxOffset: screenWidth
+                    )
+                    .frame(width: 20)
+                    .ignoresSafeArea()
                 }
-                .modifier(SlideEffect(offset: effectiveOffset))
-                .allowsHitTesting(!showingSessionList && !showingMetadata)
-        }
-        .animation(slideAnimation, value: effectiveOffset)
+            }, preferredListWidth: preferredListWidth, onResizeList: onResizeList)
+        // Animate navigation, not the window width embedded in effectiveOffset.
+        // Gesture settling already supplies its own explicit transaction.
+        .animation(split ? nil : slideAnimation, value: showingSessionList)
+        .onChange(of: split) { _, _ in gestureActive = false; gestureSettling = false }
         .onChange(of: showingSessionList) { _ in
             // Any list<->chat transition clears the gesture-settle flag. This
             // replaces a 600ms timer that could fire mid-slide (flipping the flag

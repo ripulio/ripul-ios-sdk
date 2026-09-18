@@ -50,6 +50,15 @@ final class InspectorSession: ObservableObject {
     @Published private(set) var native: InspectedView?
     @Published private(set) var web: InspectorWebElement?
     @Published var pinned = false
+    /// A hardware pointer (mouse / trackpad) is driving the explorer.
+    ///
+    /// Hover re-picks on EVERY cursor move, so with a mouse attached the
+    /// highlight chases the pointer and an element can never be settled on —
+    /// moving off it to reach the HUD replaces it first. Pointer mode therefore
+    /// selects one shot: the click that picks also pins, and the reticle in the
+    /// identity lozenge arms the next pick. Owned by `ViewInspectorController`,
+    /// published here because the HUD renders from it.
+    @Published var pointerActive = false
     @Published var interacting = false
     @Published var error: String?
     @Published private(set) var historyCount = 0
@@ -57,6 +66,9 @@ final class InspectorSession: ObservableObject {
     private(set) weak var webView: WKWebView?
     private var generation = 0
     private var picking = false
+    /// One-shot pointer selection asked to pin, but a web pick was still in
+    /// flight. See `lockWhenPickSettles()`.
+    private var lockPending = false
     private var pendingPick: (WKWebView, CGPoint, Int)?
     private struct Target {
         var native: InspectorNativeSelection?
@@ -164,7 +176,32 @@ final class InspectorSession: ObservableObject {
                 }
             }
             picking = false
+            applyPendingLock()
         }
+    }
+
+    /// Pin the selection as soon as the in-flight pick has settled.
+    ///
+    /// One-shot pointer selection cannot simply set `pinned` on the click: a web
+    /// pick is asynchronous, and `pickWeb`'s continuation DISCARDS its reply when
+    /// `pinned` has turned true in the meantime — so the click would lock an
+    /// empty selection and throw away the very element it was aimed at. A native
+    /// pick has already completed by the time this is called, so it pins now.
+    func lockWhenPickSettles() {
+        if picking { lockPending = true } else { pinned = true }
+    }
+
+    /// Arm the next one-shot pick: hover picks again until the next click.
+    func armPointerSelection() {
+        lockPending = false
+        pinned = false
+        controller?.repickAtCursor()
+    }
+
+    private func applyPendingLock() {
+        guard lockPending else { return }
+        lockPending = false
+        pinned = true
     }
 
     private func adoptWeb(_ info: InspectorWebElement, view: WKWebView, remembering: Bool = true) {
@@ -175,7 +212,7 @@ final class InspectorSession: ObservableObject {
     }
 
     func invalidate() {
-        generation += 1; pendingPick = nil
+        generation += 1; pendingPick = nil; lockPending = false
         clearWebHighlight(); web = nil; native = nil; target = nil; webView = nil
     }
 

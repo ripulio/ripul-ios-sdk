@@ -161,7 +161,7 @@ public struct SessionTagsEditor: View {
                 }
             }
         }
-        .presentationDetents([.medium, .large])
+        .ripulSheet(.page, detents: [.medium, .large])
         .onAppear { inputFocused = true }
     }
 }

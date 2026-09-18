@@ -145,6 +145,10 @@ public struct NewChatSheet: View {
             } }
         }
         .interactiveDismissDisabled(loadingID != nil)
+        // This is a form plus a searchable model list — the widest, tallest
+        // content we present modally. Declared here rather than at each call
+        // site so every consumer of the shared creation sheet gets it.
+        .ripulSheet(.page)
         .onChange(of: draft) { _, _ in
             if !allowsRelay { draft.connection = .direct }
             draft.selectInitial(from: machines, preferredRelayID: preferredRelayID)

@@ -226,7 +226,7 @@ public struct QuickCommandsSheet: View {
             }
         }
         #if os(iOS)
-        .presentationDetents([.medium, .large])
+        .ripulSheet(.page, detents: [.medium, .large])
         .presentationDragIndicator(.visible)
         #else
         .frame(width: 360, height: 450)

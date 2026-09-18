@@ -83,12 +83,12 @@ final class NativeArtefactUITests: XCTestCase {
     app.buttons["Map"].tap()
     let explore = app.buttons["NativeMap.explore"]
     XCTAssertTrue(explore.waitForExistence(timeout: 20), app.debugDescription)
-    XCTAssertEqual(explore.label, "Explore map")
+    XCTAssertEqual(explore.label, "Explore")
     XCTAssertTrue(app.otherElements["NativeMap.map"].maps.firstMatch.exists, app.debugDescription)
     explore.tap()
     XCTAssertEqual(explore.label, "Done")
     explore.tap()
-    XCTAssertEqual(explore.label, "Explore map")
+    XCTAssertEqual(explore.label, "Explore")
     let place = app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH 'London Eye'")).firstMatch
     XCTAssertTrue(place.waitForExistence(timeout: 15), app.debugDescription)
     place.tap()

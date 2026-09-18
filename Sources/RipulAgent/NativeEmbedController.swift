@@ -240,8 +240,8 @@
       entry.scroller = target
       controller.view.frame = frame
       let desired =
-        ceil(renderer.sizeThatFits(width: frame.width).height * UIScreen.main.scale)
-        / UIScreen.main.scale
+        ceil(renderer.sizeThatFits(width: frame.width).height * max(1, webView.traitCollection.displayScale))
+        / max(1, webView.traitCollection.displayScale)
       guard desired.isFinite, desired > 0, desired <= 20000 else { return false }
       let height = desired / scale
       // DOM space must be committed before showing an initially attached view.

@@ -124,7 +124,7 @@ private struct CmsModalSheetChrome: ViewModifier {
     func body(content: Content) -> some View {
         if #available(iOS 16.0, macOS 13.0, *) {
             content
-                .presentationDetents([.medium, .large])
+                .ripulSheet(.page, detents: [.medium, .large])
                 .interactiveDismissDisabled(!backdropCloses)
         } else {
             content

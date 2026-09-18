@@ -101,7 +101,7 @@ public struct RemoteActionSheet: View {
             }
         }
         #if os(iOS)
-        .presentationDetents([.medium, .large])
+        .ripulSheet(.page, detents: [.medium, .large])
         #endif
         .onAppear {
             if let initialResult {

@@ -126,7 +126,7 @@ public struct WorkingDirectoryPicker: View {
             }
         }
         #if os(iOS)
-        .presentationDetents([.medium, .large])
+        .ripulSheet(.page, detents: [.medium, .large])
         #else
         // A macOS sheet sizes to its content's minimum, which for a List of
         // short rows is unreadably narrow.

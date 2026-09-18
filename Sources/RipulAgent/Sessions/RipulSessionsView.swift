@@ -1,4 +1,5 @@
 import SwiftUI
+import Combine
 
 /// Public, drop-in native session list.
 ///
@@ -22,6 +23,7 @@ import SwiftUI
 /// native app's SessionListScreen), and optionally `chooseMode:` / `showingSidebar:`.
 @available(iOS 26.0, macOS 26.0, *)
 public struct RipulSessionsView: View {
+    @Environment(\.ripulWindowContext) private var workspace
     @ObservedObject private var bridge: AgentBridge
     @StateObject private var model: RipulSessionListModel
     private let cache: RipulSessionCache
@@ -37,10 +39,8 @@ public struct RipulSessionsView: View {
     private let showingSidebar: Binding<Bool>?
     private let quickActionsEnabled: Bool
     /// Embedded mode reserves 52pt at the top for the host screen's floating
-    /// unified bar. Pass `false` where no floating bar covers the list — at
-    /// regular width `RipulAgentScreen` pins it as a `NavigationSplitView`
-    /// sidebar column (which brings its own navigation-bar strip) and overlays
-    /// the bar on the chat detail only, so the reservation is dead space.
+    /// unified bar. Pass `false` only where no floating bar covers the list.
+    /// The shared agent workspace has a list header even with docked metadata.
     private let reservesTopBarSpace: Bool
     /// Pick mode: when set, tapping a session hands back its IDENTITY without
     /// opening it — no tab creation, no remote history import, no focus
@@ -153,6 +153,26 @@ public struct RipulSessionsView: View {
         model.openSession(session, onSelect: onSelectSession, onDismiss: onDismiss)
     }
 
+    private func honorWindowRequest() {
+        guard onPickUnifiedSession == nil, bridge.isSessionsReady,
+              model.openingUnifiedSessionId == nil,
+              let workspace, let wanted = workspace.pendingSessionID,
+              let session = model.unifiedSessions.first(where: { $0.id == wanted || $0.matchKeys.contains(wanted) }) else { return }
+        // The cached catalogue and JS callables precede authenticated relay setup.
+        // Direct/local sessions do not depend on that web authentication path.
+        guard model.usesDirectConnections || session.machineName == nil || model.hasCompletedAuthRefresh else { return }
+        let restoring = workspace.restoresPendingSession
+        workspace.pendingSessionID = nil
+        workspace.restoresPendingSession = false
+        model.openSession(session, onSelect: { selected in
+            workspace.selectedSessionID = session.id
+            workspace.title = session.title
+            workspace.isRestoringSelection = restoring
+            onSelectSession(selected)
+            workspace.isRestoringSelection = false
+        }, onDismiss: { if !restoring { onDismiss() } })
+    }
+
     public var body: some View {
         GlassSessionsList(
             bridge: bridge,
@@ -225,6 +245,10 @@ public struct RipulSessionsView: View {
                 remoteActionsByMachine = RemoteActionDescriptor.loadAllCached(cache: cache)
             }
         }
+        .onReceive(workspace?.$pendingSessionID.eraseToAnyPublisher() ?? Just(nil).eraseToAnyPublisher()) { _ in honorWindowRequest() }
+        .onChange(of: model.unifiedSessions.map(\.id)) { _ in honorWindowRequest() }
+        .onChange(of: bridge.isSessionsReady) { _ in honorWindowRequest() }
+        .onChange(of: model.hasCompletedAuthRefresh) { _ in honorWindowRequest() }
         .onRipulOpenSessionRequest(sessionCount: model.unifiedSessions.count) { honorOpenSessionRequest() }
         .onAppear { machineIcons = RemoteMachine.iconsByDisplayName(machines: model.machines, cache: cache) }
         .onChange(of: model.machines) { _, machines in

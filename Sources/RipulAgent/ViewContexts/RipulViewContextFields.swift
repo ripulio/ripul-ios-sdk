@@ -28,6 +28,7 @@ struct RipulViewContextField: Identifiable {
         .init(key: "bubbleActions", title: "Bubble actions", group: "Chat features", kind: .allowlist),
         .init(key: "hideWelcomeScreen", title: "Hide welcome screen", group: "Welcome screen", kind: .boolean),
         .init(key: "userMessageNavigation", title: "User message navigation", group: "Chat features", kind: .boolean),
+        .init(key: "conversationModes", title: "Conversation modes (Agent / Group)", group: "Chat features", kind: .boolean),
         .init(key: "showThinkingPanels", title: "Show thinking panels", group: "Thinking", kind: .boolean),
         .init(key: "promptCollectionId", title: "Prompt collection id", group: "Welcome screen", kind: .text),
         .init(key: "inlineThinkingFontSize", title: "Inline thinking font size", group: "Thinking", kind: .number),

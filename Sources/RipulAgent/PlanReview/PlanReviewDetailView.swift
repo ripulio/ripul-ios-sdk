@@ -753,7 +753,7 @@ struct PlanReviewDetailView: View {
             }
         }
         #if os(iOS)
-        .presentationDetents([.medium])
+        .ripulSheet(.form, detents: [.medium])
         #endif
     }
 }

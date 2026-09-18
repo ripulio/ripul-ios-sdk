@@ -68,6 +68,8 @@ public struct RipulListedSession: Equatable {
 
 @available(iOS 26.0, macOS 26.0, *)
 public struct GlassSessionsList: View {
+    @Environment(\.ripulWindowContext) private var workspace
+    @Environment(\.supportsMultipleWindows) private var supportsMultipleWindows
     @Environment(\.cloudSessionFeaturesEnabled) private var cloudFeatures
     @ObservedObject var bridge: AgentBridge
     /// Per-chat activity/phase/action maps, observed so the list re-sorts and
@@ -545,6 +547,10 @@ public struct GlassSessionsList: View {
     /// nothing to a plan.
     @ViewBuilder
     private func sessionContextMenu(_ session: UnifiedSession) -> some View {
+        if supportsMultipleWindows, let open = workspace?.openWindow {
+            Button("Open in New Window", systemImage: "rectangle.on.rectangle") { open(session.id) }
+                .accessibilityIdentifier("Workspace.openSessionWindow")
+        }
         if cloudFeatures {
         Button {
             onArchiveUnifiedSession(session)

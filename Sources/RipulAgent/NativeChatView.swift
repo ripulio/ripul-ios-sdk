@@ -155,7 +155,7 @@ private struct NativeChatMessageRow: View {
     /// Full GFM markdown (headings, lists, tables, code blocks, blockquotes) via
     /// MarkdownUI — mirroring the web's markdown chat bubble. Syntax highlighting
     /// is intentionally deferred, so code blocks render monospaced but unstyled.
-    /// Matches the theme used by the live UserInteractionSheet for consistency.
+    /// Uses the same MarkdownUI theme as the rest of the native chat surface.
     @ViewBuilder
     private func markdownBody(_ string: String) -> some View {
         Markdown(string)

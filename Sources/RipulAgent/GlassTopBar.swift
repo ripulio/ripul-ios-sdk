@@ -372,6 +372,8 @@ public struct GlassTopBar<MenuContent: View, CenterContent: View>: View {
 /// behaviour is exactly the old always-re-resolve.
 @available(iOS 15.0, macOS 13.0, *)
 private struct TrailingMenuHost<MenuContent: View>: View, Equatable {
+    @Environment(\.ripulWindowContext) private var workspace
+    @Environment(\.supportsMultipleWindows) private var supportsMultipleWindows
     let key: String?
     let namespace: Namespace.ID
     let onMenuOpen: (() -> Void)?
@@ -384,6 +386,11 @@ private struct TrailingMenuHost<MenuContent: View>: View, Equatable {
 
     var body: some View {
         Menu {
+            if supportsMultipleWindows, let open = workspace?.openWindow {
+                Button("New Window", systemImage: "plus.rectangle.on.rectangle") { open(nil) }
+                    .accessibilityIdentifier("Workspace.newWindow")
+                Divider()
+            }
             menu()
         } label: {
             Image(systemName: "ellipsis")

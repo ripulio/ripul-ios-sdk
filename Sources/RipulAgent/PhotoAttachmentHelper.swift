@@ -51,15 +51,11 @@ public enum PhotoAttachmentHelper {
     public static var compressionQuality: CGFloat = 0.5
 
     private static func makeAttachment(from data: Data) -> NativeImageAttachment? {
-        let id = "img_\(Int(Date().timeIntervalSince1970 * 1000))_\(Int.random(in: 0..<100000))"
-
         #if os(iOS)
         guard let uiImage = UIImage(data: data) else { return nil }
-        let resized = downsample(uiImage, maxDimension: maxDimension)
-        let jpeg = resized.jpegData(compressionQuality: compressionQuality) ?? data
-        let base64 = jpeg.base64EncodedString()
-        return NativeImageAttachment(id: id, mediaType: "image/jpeg", data: base64, thumbnail: resized)
+        return makeAttachment(from: uiImage)
         #elseif os(macOS)
+        let id = "img_\(Int(Date().timeIntervalSince1970 * 1000))_\(Int.random(in: 0..<100000))"
         guard let nsImage = NSImage(data: data) else { return nil }
         let resized = downsampleMac(nsImage, maxDimension: maxDimension)
         let tiffData = resized.tiffRepresentation
@@ -71,6 +67,14 @@ public enum PhotoAttachmentHelper {
     }
 
     #if os(iOS)
+    /// Clipboard images use exactly the same normalization as Photos selections.
+    static func makeAttachment(from image: UIImage) -> NativeImageAttachment? {
+        let resized = downsample(image, maxDimension: maxDimension)
+        guard let jpeg = resized.jpegData(compressionQuality: compressionQuality) else { return nil }
+        return NativeImageAttachment(id: "img_\(UUID().uuidString)", mediaType: "image/jpeg",
+                                     data: jpeg.base64EncodedString(), thumbnail: resized)
+    }
+
     /// Public entry point for camera capture path in NativeChatInput.
     public static func downsamplePublic(_ image: UIImage) -> UIImage {
         return downsample(image, maxDimension: maxDimension)
@@ -78,10 +82,13 @@ public enum PhotoAttachmentHelper {
 
     private static func downsample(_ image: UIImage, maxDimension: CGFloat) -> UIImage {
         let size = image.size
-        let scale = min(maxDimension / max(size.width, size.height), 1.0)
-        if scale >= 1.0 { return image }
-        let newSize = CGSize(width: size.width * scale, height: size.height * scale)
-        let renderer = UIGraphicsImageRenderer(size: newSize)
+        let pixelSize = CGSize(width: size.width * image.scale, height: size.height * image.scale)
+        let scale = min(maxDimension / max(pixelSize.width, pixelSize.height), 1.0)
+        if scale >= 1.0 && image.imageOrientation == .up { return image }
+        let newSize = CGSize(width: pixelSize.width * scale, height: pixelSize.height * scale)
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1 // The relay limit is in pixels, independent of display scale.
+        let renderer = UIGraphicsImageRenderer(size: newSize, format: format)
         return renderer.image { _ in
             image.draw(in: CGRect(origin: .zero, size: newSize))
         }

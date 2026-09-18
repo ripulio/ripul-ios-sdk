@@ -78,7 +78,7 @@ public struct HostSignInSheet: View {
                 }
             }
         }
-        .presentationDetents([.medium, .large])
+        .ripulSheet(.page, detents: [.medium, .large])
         .task { await refreshStatus() }
     }
 

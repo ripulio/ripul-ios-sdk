@@ -10,7 +10,7 @@ let ripulViewExplorerOverlayTag = 0x5249_5055   // "RIPU"
 
 /// Marketing version of the RipulAgent SDK, surfaced in the inspector's copy output as `sdk: …`
 /// so we can always tell which build is actually running on the device. Bump on every release.
-let ripulSDKVersion = "0.7.127"
+let ripulSDKVersion = "0.7.128"
 
 // MARK: - View Inspector Overlay
 //
@@ -887,6 +887,28 @@ class ViewInspectorController: UIView {
     /// of silently doing nothing.
     var onFireOutcome: ((String) -> Void)?
 
+    /// A hardware pointer (mouse / trackpad) is driving the explorer.
+    ///
+    /// There is no useful "is a mouse attached?" API here: hover is delivered
+    /// only for an indirect pointer, so the first hover event IS the detection,
+    /// and a `.direct` touch is that answer changing back when the user puts the
+    /// mouse down and uses a finger.
+    ///
+    /// It matters because hover re-picks on every cursor move. With a mouse the
+    /// highlight chases the pointer and no element can be settled on — moving
+    /// off it towards the HUD replaces it before it can be acted on. Pointer
+    /// mode therefore selects ONE SHOT: the click that picks also pins, and the
+    /// reticle in the identity lozenge arms the next pick.
+    private(set) var pointerActive = false {
+        didSet {
+            guard pointerActive != oldValue else { return }
+            session?.pointerActive = pointerActive
+            // The finger path never needed arming, so a pin left behind by the
+            // pointer would freeze it for no reason the user can see.
+            if !pointerActive { session?.pinned = false }
+        }
+    }
+
     /// Appearance selects directly on tap release and moves the existing cursor
     /// relatively on drag. Neither gesture confirms a macro action or pins.
     var selectsAppearance = false {
@@ -982,10 +1004,31 @@ class ViewInspectorController: UIView {
 
     @objc private func pointerMoved(_ gesture: UIHoverGestureRecognizer) {
         guard gesture.state == .changed || gesture.state == .began else { return }
+        pointerActive = true
         cursorPos = gesture.location(in: self)
         onCursorMoved?(cursorPos)
+        // The reticle follows the physical cursor even once the selection is
+        // locked — it is where the mouse is, not what is selected. `pickAt`
+        // itself is the thing that stops while pinned.
         pickAt(cursorPos)
     }
+
+    /// One-shot pointer selection: the click that picked an element also pins
+    /// it, so the hover that follows the mouse away cannot replace the element
+    /// before it can be read, copied or attached. Armed again from the reticle
+    /// in the identity lozenge (`InspectorIdentityLozenge`).
+    private func lockPointerSelection() {
+        guard pointerActive, session?.pinned != true else { return }
+        // A short tap also schedules a delayed pin TOGGLE; left alone it would
+        // undo this lock a fraction of a second after the click that made it.
+        pendingPinToggle?.cancel()
+        pendingPinToggle = nil
+        session?.lockWhenPickSettles()
+    }
+
+    /// Re-pick under the cursor where it already is, without waiting for the
+    /// pointer to move. Arming has to show its effect immediately.
+    func repickAtCursor() { pickAt(cursorPos) }
 
     func resetCursor() {
         cursorPos = CGPoint(x: bounds.width / 2, y: bounds.height / 2)
@@ -998,6 +1041,14 @@ class ViewInspectorController: UIView {
         guard let t = touches.first else { return }
         let loc = t.location(in: self)
         NSLog("[RipulViewExplorer] touchesBegan loc=(%.1f, %.1f) lastTapTime=%.3f timestamp=%.3f", loc.x, loc.y, lastTapTime ?? -1, t.timestamp)
+
+        // A click and a finger tap arrive down the same path; only the touch
+        // type tells them apart, and only one of them wants one-shot selection.
+        switch t.type {
+        case .indirectPointer: pointerActive = true
+        case .direct: pointerActive = false
+        default: break
+        }
 
         if selectsAppearance {
             // Wait to distinguish a tap from a drag. Moving the cursor now
@@ -1053,6 +1104,10 @@ class ViewInspectorController: UIView {
         touchDownTime = t.timestamp
         touchMoved = false
         pickAt(cursorPos)
+        // On mouse-DOWN, not up: the pick that matters is the one under the
+        // cursor at the moment of the click, and locking here means the
+        // highlight visibly freezes as the button goes down.
+        lockPointerSelection()
     }
 
     /// Two quick taps near each other count as a double-tap on the highlighted element.
@@ -1113,6 +1168,10 @@ class ViewInspectorController: UIView {
                 onCursorMoved?(cursorPos)
                 pickAt(cursorPos)
             }
+            // Unconditional: a drag-release in Edit unpinned on the way through
+            // (`updateAppearanceDrag`), so it has to end locked as well or a
+            // click-drag would silently leave the pointer re-armed.
+            lockPointerSelection()
             return
         }
 
@@ -1127,6 +1186,10 @@ class ViewInspectorController: UIView {
         guard !touchMoved,
               t.timestamp - touchDownTime < tapMaxDuration,
               session != nil else { return }
+        // Pointer mode pinned on mouse-down. Toggling here would UNPIN the
+        // element a fraction of a second after the click that selected it —
+        // which is the whole bug one-shot selection exists to fix.
+        guard !pointerActive else { return }
         pendingPinToggle?.cancel()
         let work = DispatchWorkItem { [weak self] in self?.session?.pinned.toggle() }
         pendingPinToggle = work
@@ -1782,9 +1845,15 @@ struct ViewInspectorTouchLayer: UIViewRepresentable {
     let onFireOutcome: ((String) -> Void)?
 
     func makeUIView(context: Context) -> ViewInspectorController {
-        let v = ViewInspectorController(frame: UIScreen.main.bounds)
+        let v = ViewInspectorController(frame: .zero)
         v.session = session
         session.controller = v
+        // The session is a `@StateObject` on the overlay and outlives this
+        // controller, which is rebuilt on every mount. Seeding it from the fresh
+        // controller keeps the two from disagreeing about pointer mode: a stale
+        // `true` here would leave the lozenge armed AND make the controller's
+        // `didSet` a no-op, so the first finger touch could never clear it.
+        session.pointerActive = v.pointerActive
         v.capturesTouches = capturesTouches
         v.selectsAppearance = selectsAppearance
         v.hostWindow = hostWindow
@@ -2715,9 +2784,44 @@ private struct InspectorIdentityLozenge: View {
     @ObservedObject var session: InspectorSession
     @State private var copied = false
     @State private var copySequence = 0
+    @State private var pulsing = false
     private var kind: String { session.web == nil ? "Native" : "Web" }
+    /// Pointer mode only: hover is live and the next click will take the shot.
+    private var armed: Bool { !session.pinned }
 
     var body: some View {
+        HStack(spacing: 0) {
+            if session.pointerActive { reticle }
+            identity
+        }
+        .padding(.horizontal, 8).frame(height: 22)
+        .background(Color.orange.opacity(0.13), in: Capsule())
+        .overlay(Capsule().strokeBorder(Color.orange.opacity(armed && session.pointerActive ? 0.8 : 0.45), lineWidth: 1))
+    }
+
+    /// The target. With a mouse attached the lozenge is where selection state
+    /// lives: lit means hover is picking and the next click locks; dim means the
+    /// shot is taken and pressing this takes another.
+    private var reticle: some View {
+        Button {
+            if armed { session.pinned = true } else { session.armPointerSelection() }
+        } label: {
+            Image(systemName: "scope")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(armed ? Color.orange : Color.gray)
+                .scaleEffect(armed && pulsing ? 1.16 : 1)
+                .frame(width: 20, height: 22)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(armed ? "Armed — click an element to select it" : "Select another element")
+        .accessibilityHint(armed ? "Locks the element under the pointer" : "Arms the pointer for one more selection")
+        .uiKitIdentifier("Inspector.reticle")
+        .onAppear { startPulse() }
+        .onChange(of: armed) { _ in startPulse() }
+    }
+
+    private var identity: some View {
         Button {
             session.copyIdentity()
             copied = true
@@ -2729,7 +2833,7 @@ private struct InspectorIdentityLozenge: View {
                         .font(.system(size: 9, weight: .semibold))
                     Rectangle().fill(Color.orange.opacity(0.4)).frame(width: 1, height: 10)
                 }
-                Text(session.identity ?? "Select an element")
+                Text(session.identity ?? (session.pointerActive ? "Click an element" : "Select an element"))
                     .font(.system(size: 10, weight: .medium, design: .monospaced))
                     .lineLimit(1).truncationMode(.middle)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -2738,10 +2842,8 @@ private struct InspectorIdentityLozenge: View {
                     .foregroundStyle(copied ? .green : .orange)
                     .font(.system(size: 9, weight: .semibold))
             }
-            .padding(.horizontal, 8).frame(height: 22)
-            .background(Color.orange.opacity(0.13), in: Capsule())
-            .overlay(Capsule().strokeBorder(Color.orange.opacity(0.45), lineWidth: 1))
-            .contentShape(Capsule())
+            .frame(height: 22)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain).disabled(!session.hasSelection)
         .accessibilityLabel(copied ? "Identity copied" : "Copy \(kind) identity")
@@ -2754,6 +2856,12 @@ private struct InspectorIdentityLozenge: View {
             try? await Task.sleep(nanoseconds: 1_200_000_000)
             if !Task.isCancelled { copied = false }
         }
+    }
+
+    private func startPulse() {
+        pulsing = false
+        guard armed else { return }
+        withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) { pulsing = true }
     }
 }
 
@@ -3123,10 +3231,8 @@ public struct ViewInspectorOverlay: View {
     let hostWindow: UIWindow?
     @StateObject private var session = InspectorSession()
     private var inspected: InspectedView? { session.native }
-    @State private var cursorPosition: CGPoint = CGPoint(
-        x: UIScreen.main.bounds.width / 2,
-        y: UIScreen.main.bounds.height / 2
-    )
+    @State private var cursorPosition: CGPoint = .zero
+    @State private var containerSize: CGSize = .zero
     private var history: [UIView] { [] }
     /// When folded, the HUD header stays visible but touch capture is removed so
     /// normal app interaction resumes. The crosshair reticule can optionally stay
@@ -3262,8 +3368,8 @@ public struct ViewInspectorOverlay: View {
                 // ".posY", ".w", ".h"); the grip is hidden while folded.
                 RipulFloatingPanel(
                     storageKey: "viewInspector",
-                    defaultSize: CGSize(width: min(360, UIScreen.main.bounds.width - 16),
-                                        height: UIScreen.main.bounds.height * 0.3),
+                    defaultSize: CGSize(width: max(1, min(360, containerSize.width - 16)),
+                                        height: max(1, containerSize.height * 0.3)),
                     minSize: CGSize(width: 220, height: 180),
                     showsResizeGrip: !folded,
                     avoidsKeyboard: true
@@ -3290,6 +3396,12 @@ public struct ViewInspectorOverlay: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 .ignoresSafeArea()
+            }
+            .onGeometryChange(for: CGSize.self) { $0.size } action: { size in
+                let firstLayout = containerSize == .zero
+                containerSize = size
+                cursorPosition = firstLayout ? CGPoint(x: size.width / 2, y: size.height / 2)
+                    : CGPoint(x: min(max(0, cursorPosition.x), size.width), y: min(max(0, cursorPosition.y), size.height))
             }
             .transition(.opacity)
             .onAppear {

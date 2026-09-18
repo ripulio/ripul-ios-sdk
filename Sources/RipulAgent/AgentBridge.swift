@@ -769,47 +769,12 @@ public struct MastheadConfig: Equatable {
     public var glassStyle: String?       // "regular", "clear", or "identity" (iOS 26+ only)
 }
 
-/// A multichoice question from the web app, presented natively as a sheet.
-public struct UserInteractionQuestion: Identifiable {
-    public let id: String  // responseKey
-    public let question: String
-    public let options: [Option]
-    public let multiSelect: Bool
-    /// Structured table rows from the tool (array of dictionaries, keys are column headers).
-    public let table: [[String: String]]?
-
-    public struct Option {
-        public let label: String
-        public let value: Any
-        public let description: String?
-        public let link: String?
-    }
-}
-
-/// A free-text input question from the web app, presented natively as a sheet.
-public struct UserTextQuestion: Identifiable {
-    public let id: String  // responseKey
-    public let question: String
-}
-
 /// A file view request from the web app, presented natively as a sheet.
 public struct FileViewRequest: Identifiable {
     public let id: String
     public let filePath: String
     public let content: String?
     public let language: String?
-}
-
-/// A date picker question from the web app, presented natively as a sheet.
-/// When `includeTime` is true, the picker shows both date and time components
-/// and the response is formatted as "YYYY-MM-DDTHH:mm".
-public struct UserDateQuestion: Identifiable {
-    public let id: String  // responseKey
-    public let question: String
-    public let includeTime: Bool
-    public let minDate: Date?
-    public let maxDate: Date?
-    public let defaultDate: Date?
 }
 
 public enum AgentTurnPhase: String {
@@ -2044,7 +2009,14 @@ public final class AgentBridge: NSObject, ObservableObject {
     @Published public var chatInputGlassStyle: String?
     /// Layout mode for the native chat input: nil/"single" (default) or "twoRow" (buttons below text area).
     @Published public var chatInputLayout: String?
+    @Published public private(set) var conversationModeSwitchers: [String: Bool] = [:]
     @Published public private(set) var conversationModes: [String: String] = [:]
+    @Published public private(set) var messageSubmissionError: String?
+
+    public func showsConversationMode(for chatId: String?) -> Bool {
+        guard let chatId else { return false }
+        return conversationModeSwitchers[chatId] ?? false
+    }
 
     public func conversationMode(for chatId: String?) -> String {
         guard let chatId else { return "agent" }
@@ -2058,6 +2030,9 @@ public final class AgentBridge: NSObject, ObservableObject {
             arguments: ["chatId": chatId], contentWorld: .page),
            let dict = result as? [String: Any], let mode = dict["mode"] as? String {
             if conversationModes[chatId] != mode { conversationModes[chatId] = mode }
+            if let visible = dict["showModeSwitcher"] as? Bool, conversationModeSwitchers[chatId] != visible {
+                conversationModeSwitchers[chatId] = visible
+            }
         }
     }
 
@@ -2079,12 +2054,6 @@ public final class AgentBridge: NSObject, ObservableObject {
     @Published public var chatInputShowTodos: Bool = true
     /// Whether to show "Quick Commands" in the native chat "+" menu. Default true.
     @Published public var chatInputShowQuickCommands: Bool = true
-    /// A multichoice question awaiting native UI presentation.
-    @Published public var pendingUserInteraction: UserInteractionQuestion?
-    /// A free-text question awaiting native UI presentation.
-    @Published public var pendingTextQuestion: UserTextQuestion?
-    /// A date picker question awaiting native UI presentation.
-    @Published public var pendingDateQuestion: UserDateQuestion?
     /// A file view request awaiting native sheet presentation.
     @Published public var pendingFileView: FileViewRequest?
     /// Tool-call inspection updates stay off the bridge's own publisher.
@@ -2153,6 +2122,9 @@ public final class AgentBridge: NSObject, ObservableObject {
     @Published public var fileViewerIsMarkdown: Bool = false
     /// Full file path of the file currently shown in the viewer; nil when closed.
     @Published public var fileViewerFilePath: String? = nil
+    /// Source location and chat captured when a reference was tapped.
+    public var fileViewerLine: Int? = nil
+    public var fileViewerChatId: String? = nil
     /// When true, closing the file viewer should navigate back to the sessions list.
     public var fileViewerReturnToSessions: Bool = false
 
@@ -2162,6 +2134,10 @@ public final class AgentBridge: NSObject, ObservableObject {
     @Published public var currentPageContext: PageContext = .default
 
     private weak var webView: WKWebView?
+    #if os(iOS)
+    /// The owning scene, never an arbitrary app-wide first window.
+    public var hostingWindow: UIWindow? { webView?.window }
+    #endif
 
     /// Run an async JS callable in the page world and hand back its raw result.
     ///
@@ -3833,6 +3809,10 @@ public final class AgentBridge: NSObject, ObservableObject {
         case "voice:config":
             handleVoiceConfig(dict)
         case "conversation:mode":
+            if let chatId = dict["chatId"] as? String, let visible = dict["showModeSwitcher"] as? Bool,
+               conversationModeSwitchers[chatId] != visible {
+                conversationModeSwitchers[chatId] = visible
+            }
             if let chatId = dict["chatId"] as? String, let mode = dict["mode"] as? String,
                mode == "agent" || mode == "group", conversationModes[chatId] != mode {
                 conversationModes[chatId] = mode
@@ -4068,16 +4048,21 @@ public final class AgentBridge: NSObject, ObservableObject {
             let isMarkdown = dict["isMarkdown"] as? Bool ?? false
             let filePath = dict["filePath"] as? String
             NSLog("[AgentBridge] File viewer expand — title: %@, isMarkdown: %d, path: %@", title ?? "nil", isMarkdown, filePath ?? "nil")
+            let line = dict["line"] as? Int
+            fileViewerLine = line.flatMap { $0 > 0 ? $0 : nil }
+            fileViewerChatId = dict["chatId"] as? String
+            fileViewerFilePath = filePath
+            fileViewerIsMarkdown = isMarkdown
             fileViewerExpanded = true
             fileViewerTitle = title
-            fileViewerIsMarkdown = isMarkdown
-            fileViewerFilePath = filePath
         case "fileViewer:collapse":
             NSLog("[AgentBridge] File viewer collapse")
             fileViewerExpanded = false
             fileViewerTitle = nil
             fileViewerIsMarkdown = false
             fileViewerFilePath = nil
+            fileViewerLine = nil
+            fileViewerChatId = nil
         case "page:context":
             let page = dict["page"] as? String ?? "chat"
             let showHeader = dict["showNativeHeader"] as? Bool ?? true
@@ -4094,12 +4079,6 @@ public final class AgentBridge: NSObject, ObservableObject {
                 safeAreaMode: safeArea,
                 mirrorUrl: dict["mirrorUrl"] as? String
             )
-        case "userInteraction:multiChoice":
-            handleUserInteractionMultiChoice(dict)
-        case "userInteraction:text":
-            handleUserInteractionText(dict)
-        case "userInteraction:date":
-            handleUserInteractionDate(dict)
         case "getConsoleLogs":
             let requestId = dict["requestId"] as? String ?? ""
             // Native logs live in the host-owned RipulLog buffer (so they exist from
@@ -4499,6 +4478,7 @@ public final class AgentBridge: NSObject, ObservableObject {
         addressedTo: [String]? = nil,
         modality: String? = nil
     ) async -> Bool {
+        messageSubmissionError = nil
         guard let webView else { return false }
         let contextSession = currentSourceChatId
         let contextAttachments = composerContexts.attachments(for: contextSession)
@@ -4531,11 +4511,13 @@ public final class AgentBridge: NSObject, ObservableObject {
             )
             if let dict = result as? [String: Any] {
                 let success = dict["success"] as? Bool ?? false
+                if !success { messageSubmissionError = dict["error"] as? String }
                 if success { composerContexts.didSend(contextAttachments, session: contextSession) }
                 return success
             }
             return false
         } catch {
+            messageSubmissionError = error.localizedDescription
             NSLog("[AgentBridge] submitMessage error: %@", error.localizedDescription)
             return false
         }
@@ -7490,8 +7472,8 @@ public final class AgentBridge: NSObject, ObservableObject {
     /// Codex). Pass `keepRemote: true` to skip the remote archive so the CLI
     /// still sees the session in its own list (e.g. for a "Remove from Ripul"
     /// action that only clears Ripul-side state).
-    /// Returns (success, results, errors) — local cleanup always proceeds even if
-    /// remote steps fail. The caller can present the results/errors to the user.
+    /// Returns (success, results, errors). Keep the native row on failure so a
+    /// refused remote deletion cannot briefly disappear and then reappear.
     @available(iOS 15.0, macOS 13.0, *)
     public func deleteSession(tabId: String, machineId: String?, remoteSessionId: String?, keepRemote: Bool = false) async -> (success: Bool, results: [String], errors: [String]) {
         guard let webView else {
@@ -7525,6 +7507,8 @@ public final class AgentBridge: NSObject, ObservableObject {
             let errors = dict["errors"] as? [String] ?? []
             NSLog("[AgentBridge] deleteSession: success=%@ results=%@ errors=%@",
                   success ? "true" : "false", results.joined(separator: ", "), errors.joined(separator: ", "))
+
+            guard success else { return (false, results, errors) }
 
             // Remove from local state and persist so the zombie can't return from cache
             let deleted = sessions.first(where: { $0.id == tabId })
@@ -8567,6 +8551,9 @@ public final class AgentBridge: NSObject, ObservableObject {
         // in-chat web viewer), so we must not depend on a web round-trip to clear it.
         fileViewerExpanded = false
         fileViewerTitle = nil
+        fileViewerFilePath = nil
+        fileViewerLine = nil
+        fileViewerChatId = nil
         // Also close the (web-only) in-chat viewer if one is showing; harmless on native.
         evaluateVoidJavaScript("window.__ripulCloseFileViewer?.()")
     }
@@ -9328,132 +9315,6 @@ public final class AgentBridge: NSObject, ObservableObject {
                 NSLog("[AgentBridge] Fallback JS eval error: %@", error.localizedDescription)
             }
         }
-    }
-
-    // MARK: - User Interaction (native multichoice)
-
-    private func handleUserInteractionMultiChoice(_ dict: [String: Any]) {
-        guard let responseKey = dict["responseKey"] as? String,
-              let question = dict["question"] as? String,
-              let rawOptions = dict["options"] as? [[String: Any]] else {
-            NSLog("[AgentBridge] Invalid userInteraction:multiChoice payload")
-            return
-        }
-
-        let multiSelect = dict["multiSelect"] as? Bool ?? false
-        let options = rawOptions.map { raw in
-            UserInteractionQuestion.Option(
-                label: raw["label"] as? String ?? "",
-                value: raw["value"] ?? raw["label"] ?? "",
-                description: raw["description"] as? String,
-                link: raw["link"] as? String
-            )
-        }
-
-        // Parse structured table rows if present
-        var table: [[String: String]]?
-        if let rawTable = dict["table"] as? [[String: Any]] {
-            table = rawTable.map { row in
-                var mapped: [String: String] = [:]
-                for (key, value) in row {
-                    mapped[key] = "\(value)"
-                }
-                return mapped
-            }
-        }
-
-        pendingUserInteraction = UserInteractionQuestion(
-            id: responseKey,
-            question: question,
-            options: options,
-            multiSelect: multiSelect,
-            table: table
-        )
-    }
-
-    /// Send the user's selection back to the web app and clear the pending question.
-    public func respondToUserInteraction(answer: Any) {
-        guard let interaction = pendingUserInteraction else { return }
-        send([
-            "type": "\(messagePrefix)userInteraction:response",
-            "version": protocolVersion,
-            "timestamp": currentTimestamp(),
-            "responseKey": interaction.id,
-            "answer": answer,
-        ])
-        pendingUserInteraction = nil
-    }
-
-    /// Send the user's text response back to the web app and clear the pending question.
-    public func respondToTextQuestion(answer: String) {
-        guard let question = pendingTextQuestion else { return }
-        send([
-            "type": "\(messagePrefix)userInteraction:response",
-            "version": protocolVersion,
-            "timestamp": currentTimestamp(),
-            "responseKey": question.id,
-            "answer": answer,
-        ])
-        pendingTextQuestion = nil
-    }
-
-    /// Send the user's date selection back to the web app and clear the pending question.
-    public func respondToDateQuestion(answer: String) {
-        guard let question = pendingDateQuestion else { return }
-        send([
-            "type": "\(messagePrefix)userInteraction:response",
-            "version": protocolVersion,
-            "timestamp": currentTimestamp(),
-            "responseKey": question.id,
-            "answer": answer,
-        ])
-        pendingDateQuestion = nil
-    }
-
-    private func handleUserInteractionText(_ dict: [String: Any]) {
-        guard let responseKey = dict["responseKey"] as? String,
-              let question = dict["question"] as? String else {
-            NSLog("[AgentBridge] Invalid userInteraction:text payload")
-            return
-        }
-        pendingTextQuestion = UserTextQuestion(id: responseKey, question: question)
-    }
-
-    private func handleUserInteractionDate(_ dict: [String: Any]) {
-        guard let responseKey = dict["responseKey"] as? String,
-              let question = dict["question"] as? String else {
-            NSLog("[AgentBridge] Invalid userInteraction:date payload")
-            return
-        }
-
-        let includeTime = dict["includeTime"] as? Bool ?? false
-
-        let minDate = (dict["minDate"] as? String).flatMap { Self.parseDateString($0) }
-        let maxDate = (dict["maxDate"] as? String).flatMap { Self.parseDateString($0) }
-        let defaultDate = (dict["defaultDate"] as? String).flatMap { Self.parseDateString($0) }
-
-        pendingDateQuestion = UserDateQuestion(
-            id: responseKey,
-            question: question,
-            includeTime: includeTime,
-            minDate: minDate,
-            maxDate: maxDate,
-            defaultDate: defaultDate
-        )
-    }
-
-    /// Parse a date string in either "YYYY-MM-DD" or "YYYY-MM-DDTHH:mm" format.
-    private static func parseDateString(_ string: String) -> Date? {
-        // Try datetime format first (YYYY-MM-DDTHH:mm)
-        let dtFormatter = DateFormatter()
-        dtFormatter.dateFormat = "yyyy-MM-dd'T'HH:mm"
-        dtFormatter.locale = Locale(identifier: "en_US_POSIX")
-        if let date = dtFormatter.date(from: string) { return date }
-
-        // Fall back to date-only (YYYY-MM-DD)
-        let dateFormatter = ISO8601DateFormatter()
-        dateFormatter.formatOptions = [.withFullDate]
-        return dateFormatter.date(from: string)
     }
 
     private func currentTimestamp() -> Int {

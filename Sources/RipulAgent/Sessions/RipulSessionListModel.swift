@@ -29,6 +29,8 @@ public final class RipulSessionListModel: ObservableObject {
     /// not loaded yet", not "new account" — otherwise bad connectivity drops
     /// returning users onto the marketing cards.
     @Published public private(set) var hasSuccessfulMachinesResponse: Bool = false
+    /// Per-window startup fact; a persisted successful fetch is not current auth readiness.
+    @Published public private(set) var hasCompletedAuthRefresh = false
     @Published public private(set) var isLoadingRemoteSessions = false
     @Published public var openingUnifiedSessionId: String?
     @Published public var archivingUnifiedSessionId: String?
@@ -342,6 +344,7 @@ public final class RipulSessionListModel: ObservableObject {
         // before the rebuild. The push-triggered fetch may have run before the
         // relay connected, producing sessions without hostChatId dedup keys.
         await bridge.fetchSessions()
+        hasCompletedAuthRefresh = true
         // Load remote sessions in background — don't block the session list on relay connections.
         // loadRemoteSessions already does incremental rebuildUnifiedSessions() as each machine
         // responds, so local sessions appear immediately and remote ones trickle in.
@@ -884,7 +887,7 @@ public final class RipulSessionListModel: ObservableObject {
                     errors.isEmpty ? nil : "Failed:\n• " + errors.joined(separator: "\n• "),
                     results.isEmpty ? nil : "Completed:\n• " + results.joined(separator: "\n• "),
                 ] as [String?]).compactMap { $0 }.joined(separator: "\n\n")
-                openSessionError = "Session removed locally.\n\n\(summary)"
+                openSessionError = "Couldn't delete this session.\n\n\(summary)"
             }
 
             // Give the remote host time to process the archive before re-fetching

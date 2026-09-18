@@ -180,7 +180,7 @@ struct ToolCallDetailsSheet: View {
         }
         .accessibilityIdentifier("ToolCallDetails.sheet")
         #if os(iOS)
-        .presentationDetents([.large])
+        .ripulSheet(.page, detents: [.large])
         .presentationDragIndicator(.visible)
         #else
         .frame(minWidth: 520, idealWidth: 720, minHeight: 420, idealHeight: 650)
