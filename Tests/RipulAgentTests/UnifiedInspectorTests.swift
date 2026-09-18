@@ -100,6 +100,34 @@ final class UnifiedInspectorTests: XCTestCase {
         XCTAssertEqual(inspector.selectionSnapshot()["collected"] as? [String], [])
     }
 
+    func testShiftClickEntryCollectsThroughAppearanceTouchPath() async throws {
+        let (window, _, _, inspector, session) = try await fixture()
+        defer { session.close(); window.isHidden = true }
+        session.pointerActive = true
+        _ = inspector.probe(atWindowPoint: CGPoint(x: 50, y: 55), fire: false)
+        session.lockWhenPickSettles()
+        XCTAssertTrue(session.pinned)
+        // Appearance is the default tab and selects on release at the click
+        // location, not the reticle. The touch layer hands that location here.
+        inspector.selectsAppearance = true
+        inspector.collectPointerSelection(at: CGPoint(x: 90, y: 165))
+        try await waitForWeb(session)
+        for _ in 0..<100 {
+            if session.collected.count == 2 { break }
+            try await Task.sleep(nanoseconds: 30_000_000)
+        }
+        XCTAssertEqual(session.collected.map(\.identity), ["native.title", "chat.message"])
+        XCTAssertTrue(session.pinned)
+        XCTAssertTrue(session.extending)
+        session.setExtending(false)
+        XCTAssertEqual(session.web?.identifier, "chat.message")
+        XCTAssertEqual(session.collected.count, 2)
+        // The pin still holds against a plain hover afterwards.
+        _ = inspector.probe(atWindowPoint: CGPoint(x: 50, y: 55), fire: false)
+        XCTAssertEqual(session.web?.identifier, "chat.message")
+        XCTAssertNil(session.native)
+    }
+
     func testShiftRunWithoutClickRestoresPinnedSelection() async throws {
         let (window, _, _, inspector, session) = try await fixture()
         defer { session.close(); window.isHidden = true }

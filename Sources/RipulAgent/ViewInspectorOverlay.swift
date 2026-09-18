@@ -10,7 +10,7 @@ let ripulViewExplorerOverlayTag = 0x5249_5055   // "RIPU"
 
 /// Marketing version of the RipulAgent SDK, surfaced in the inspector's copy output as `sdk: …`
 /// so we can always tell which build is actually running on the device. Bump on every release.
-let ripulSDKVersion = "0.7.129"
+let ripulSDKVersion = "0.7.130"
 
 // MARK: - View Inspector Overlay
 //
@@ -1029,16 +1029,29 @@ class ViewInspectorController: UIView {
         session?.lockWhenPickSettles()
     }
 
-    /// Shift-click: add the element under the pointer to the basket under the
-    /// identity lozenge (or take it out again) and keep the selection locked.
-    /// Unlike `lockPointerSelection` this runs while already pinned, which is
-    /// the normal state between shift-clicks; the pick that preceded it went
-    /// through the pin because `InspectorSession.extending` was set first.
-    private func collectPointerSelection() {
-        guard pointerActive else { return }
+    /// Shift-click at a point in the explorer's own coordinates: put the
+    /// element there in the basket under the identity lozenge (or take it out
+    /// again) and keep the selection locked. Unlike `lockPointerSelection` this
+    /// runs while already pinned, which is the normal state between
+    /// shift-clicks; `extending` is set first so the pick goes through the pin.
+    ///
+    /// BOTH touch paths land here. The reticle path passes the cursor; the
+    /// Appearance path — the DEFAULT tab, which selects on release at the click
+    /// location — passes that location. The first cut only handled the reticle
+    /// path, so on a freshly opened Inspector a shift-click did nothing at all.
+    func collectPointerSelection(at point: CGPoint) {
         pendingPinToggle?.cancel()
         pendingPinToggle = nil
+        session?.setExtending(true)
+        cursorPos = CGPoint(x: max(0, min(bounds.width - 1, point.x)),
+                            y: max(0, min(bounds.height - 1, point.y)))
+        onCursorMoved?(cursorPos)
+        pickAt(cursorPos)
         session?.lockWhenPickSettles(collecting: true)
+    }
+
+    private static func shiftHeld(_ event: UIEvent?) -> Bool {
+        event?.modifierFlags.contains(.shift) == true
     }
 
     /// Re-pick under the cursor where it already is, without waiting for the
@@ -1055,7 +1068,8 @@ class ViewInspectorController: UIView {
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard let t = touches.first else { return }
         let loc = t.location(in: self)
-        NSLog("[RipulViewExplorer] touchesBegan loc=(%.1f, %.1f) lastTapTime=%.3f timestamp=%.3f", loc.x, loc.y, lastTapTime ?? -1, t.timestamp)
+        NSLog("[RipulViewExplorer] touchesBegan loc=(%.1f, %.1f) lastTapTime=%.3f timestamp=%.3f type=%ld shift=%d appearance=%d",
+              loc.x, loc.y, lastTapTime ?? -1, t.timestamp, t.type.rawValue, Self.shiftHeld(event) ? 1 : 0, selectsAppearance ? 1 : 0)
 
         // A click and a finger tap arrive down the same path; only the touch
         // type tells them apart, and only one of them wants one-shot selection.
@@ -1077,15 +1091,13 @@ class ViewInspectorController: UIView {
         // A shift-click with a pointer collects instead of selecting. It never
         // counts towards a double-tap: two quick shift-clicks on one element
         // toggle it in and out of the basket, they do not fire the element.
-        if pointerActive, event?.modifierFlags.contains(.shift) == true {
+        if pointerActive, Self.shiftHeld(event) {
             lastTapTime = nil
             lastTapPosition = nil
             lastTouch = loc
             touchDownTime = t.timestamp
             touchMoved = false
-            session?.setExtending(true)
-            pickAt(cursorPos)
-            collectPointerSelection()
+            collectPointerSelection(at: cursorPos)
             return
         }
 
@@ -1192,7 +1204,14 @@ class ViewInspectorController: UIView {
             guard lastTouch != nil else { return }
             let loc = t.location(in: self)
             updateAppearanceDrag(at: loc)
-            if !touchMoved && t.timestamp - touchDownTime < tapMaxDuration {
+            let tapped = !touchMoved && t.timestamp - touchDownTime < tapMaxDuration
+            // Appearance selects on release, so its shift-click lands here:
+            // collect the element under the click and keep the pin.
+            if tapped, pointerActive, Self.shiftHeld(event) {
+                collectPointerSelection(at: loc)
+                return
+            }
+            if tapped {
                 session?.pinned = false
                 cursorPos = loc
                 onCursorMoved?(cursorPos)
