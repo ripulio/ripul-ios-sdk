@@ -283,6 +283,9 @@ struct VoiceModeOverlay: View {
                     }
                     .uiKitIdentifier("VoiceModeOverlay.exit")
                 }
+                // These labels already draw their circular controls. Suppress
+                // Catalyst's default button bezel, as in the compact panel.
+                .buttonStyle(.plain)
                 .padding(.bottom, bottomPadding)
             }
         }
@@ -408,6 +411,7 @@ struct VoiceModeOverlay: View {
                     .background(canSubmitTyped ? Color.white : Color.white.opacity(0.2), in: Circle())
                     .contentShape(Circle())
             }
+            .buttonStyle(.plain)
             .disabled(!canSubmitTyped)
             .padding(.trailing, 6)
             .uiKitIdentifier("VoiceModeOverlay.typedSend")

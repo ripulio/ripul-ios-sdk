@@ -31,8 +31,6 @@ public struct RipulSessionsView: View {
     private let onDismiss: () -> Void
     private let allowRipulAgents: Bool
     private let invitesSection: ((InvitesSectionActions) -> AnyView)?
-    private let foldersSection: (() -> AnyView)?
-    private let solutionManagement: RipulSolutionManagement?
     private let emptyStateOverride: (() -> AnyView)?
     private let chooseMode: RipulChooseMode?
     private let showsTitleLozenge: Bool
@@ -67,8 +65,6 @@ public struct RipulSessionsView: View {
         onDismiss: @escaping () -> Void = {},
         allowRipulAgents: Bool = false,
         invitesSection: ((InvitesSectionActions) -> AnyView)? = nil,
-        foldersSection: (() -> AnyView)? = nil,
-        solutionManagement: RipulSolutionManagement? = nil,
         emptyStateOverride: (() -> AnyView)? = nil,
         model: RipulSessionListModel? = nil,
         chooseMode: RipulChooseMode? = nil,
@@ -85,8 +81,6 @@ public struct RipulSessionsView: View {
         self.onDismiss = onDismiss
         self.allowRipulAgents = allowRipulAgents
         self.invitesSection = invitesSection
-        self.foldersSection = foldersSection
-        self.solutionManagement = solutionManagement
         self.emptyStateOverride = emptyStateOverride
         self.chooseMode = chooseMode
         self.showsTitleLozenge = showsTitleLozenge
@@ -225,8 +219,6 @@ public struct RipulSessionsView: View {
                 await bridge.executeRemoteAction(machineId: machine.machineId, actionId: action.id, params: params)
             } : nil,
             invitesSection: invitesSection,
-            foldersSection: foldersSection,
-            solutionManagement: solutionManagement,
             emptyStateOverride: emptyStateOverride,
             onListedSessionsChanged: onListedSessionsChanged,
             searchText: $searchText,

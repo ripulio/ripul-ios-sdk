@@ -542,7 +542,7 @@ private struct ToolsTabView: View {
             }
 
             // Solution management (collections, contexts, testing mode) moved to
-            // the agent screen's "Solution management" disclosure after Folders.
+            // the host's own "Solutions" screen (RipulSolutionsScreen).
             Section {
                 Toggle(isOn: webHudBinding($scrollHudOn, key: "enableScrollHud")) {
                     Label("Scroll HUD", systemImage: "scroll")

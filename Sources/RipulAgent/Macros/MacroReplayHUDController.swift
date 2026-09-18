@@ -13,10 +13,10 @@ public protocol MacroReplayPresenting {
 }
 
 /// Set by the replay HUD's "open context" action (tap the finished strip) —
-/// consumed by the console's Solution management section (opens the macro
-/// library) and by the library itself (opens the editor for exactly this
-/// macro), so a replay's finish state is a one-tap return to the edit-test
-/// loop instead of a drill-back-down through the sessions list.
+/// consumed by the Solutions screen (opens the macro library) and by the
+/// library itself (opens the editor for exactly this macro), so a replay's
+/// finish state is a one-tap return to the edit-test loop instead of a
+/// drill-back-down through the sessions list.
 enum MacroDeepLink {
     static var pendingEditorMacro: RipulMacro?
     /// The editor's unsaved working copy, stashed when a HUD replay begins —

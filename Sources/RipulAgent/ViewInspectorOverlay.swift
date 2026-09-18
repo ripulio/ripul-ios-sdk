@@ -10,7 +10,7 @@ let ripulViewExplorerOverlayTag = 0x5249_5055   // "RIPU"
 
 /// Marketing version of the RipulAgent SDK, surfaced in the inspector's copy output as `sdk: …`
 /// so we can always tell which build is actually running on the device. Bump on every release.
-let ripulSDKVersion = "0.7.128"
+let ripulSDKVersion = "0.7.129"
 
 // MARK: - View Inspector Overlay
 //
@@ -1005,6 +1005,9 @@ class ViewInspectorController: UIView {
     @objc private func pointerMoved(_ gesture: UIHoverGestureRecognizer) {
         guard gesture.state == .changed || gesture.state == .began else { return }
         pointerActive = true
+        // Shift held: hover keeps previewing through the pin so the next
+        // shift-click can be aimed. Released: the pin holds again.
+        session?.setExtending(gesture.modifierFlags.contains(.shift))
         cursorPos = gesture.location(in: self)
         onCursorMoved?(cursorPos)
         // The reticle follows the physical cursor even once the selection is
@@ -1024,6 +1027,18 @@ class ViewInspectorController: UIView {
         pendingPinToggle?.cancel()
         pendingPinToggle = nil
         session?.lockWhenPickSettles()
+    }
+
+    /// Shift-click: add the element under the pointer to the basket under the
+    /// identity lozenge (or take it out again) and keep the selection locked.
+    /// Unlike `lockPointerSelection` this runs while already pinned, which is
+    /// the normal state between shift-clicks; the pick that preceded it went
+    /// through the pin because `InspectorSession.extending` was set first.
+    private func collectPointerSelection() {
+        guard pointerActive else { return }
+        pendingPinToggle?.cancel()
+        pendingPinToggle = nil
+        session?.lockWhenPickSettles(collecting: true)
     }
 
     /// Re-pick under the cursor where it already is, without waiting for the
@@ -1056,6 +1071,21 @@ class ViewInspectorController: UIView {
             lastTouch = loc
             touchDownTime = t.timestamp
             touchMoved = false
+            return
+        }
+
+        // A shift-click with a pointer collects instead of selecting. It never
+        // counts towards a double-tap: two quick shift-clicks on one element
+        // toggle it in and out of the basket, they do not fire the element.
+        if pointerActive, event?.modifierFlags.contains(.shift) == true {
+            lastTapTime = nil
+            lastTapPosition = nil
+            lastTouch = loc
+            touchDownTime = t.timestamp
+            touchMoved = false
+            session?.setExtending(true)
+            pickAt(cursorPos)
+            collectPointerSelection()
             return
         }
 
@@ -1248,6 +1278,7 @@ class ViewInspectorController: UIView {
             "hasSelection": false,
             "reticule": ["x": Double(windowPoint.x), "y": Double(windowPoint.y)],
             "readout": "",
+            "collected": session?.collected.map(\.identity) ?? [],
         ]
         if let web = session?.web, let view = session?.webView,
            let window = view.window, RipulViewExplorer.canInspect(window) {
@@ -1458,7 +1489,7 @@ class ViewInspectorController: UIView {
     }
 
     private func pickAt(_ point: CGPoint) {
-        guard session?.pinned != true, session?.interacting != true else { return }
+        guard session?.pinned != true || session?.extending == true, session?.interacting != true else { return }
         // Pick against the HOST window when the explorer runs in its own
         // overlay window (self.window is the overlay, not the host); for
         // embedded mounts, self.window IS the host window.
@@ -2784,24 +2815,130 @@ private struct InspectorIdentityLozenge: View {
     @ObservedObject var session: InspectorSession
     @State private var copied = false
     @State private var copySequence = 0
-    @State private var pulsing = false
-    private var kind: String { session.web == nil ? "Native" : "Web" }
+    @State private var copiedAll = false
+    @State private var copyAllSequence = 0
+    private var kind: String { session.kind }
     /// Pointer mode only: hover is live and the next click will take the shot.
     private var armed: Bool { !session.pinned }
+    /// Rows past this many scroll, so a long basket cannot push the panel off screen.
+    private let visibleRows = 6
+    private let rowHeight: CGFloat = 18
 
     var body: some View {
-        HStack(spacing: 0) {
-            if session.pointerActive { reticle }
-            identity
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 0) {
+                if session.pointerActive { reticle }
+                identity
+            }
+            .padding(.horizontal, 8).frame(height: 22)
+            .background(Color.orange.opacity(0.13), in: Capsule())
+            .overlay(Capsule().strokeBorder(Color.orange.opacity(armed && session.pointerActive ? 0.8 : 0.45), lineWidth: 1))
+            if !session.collected.isEmpty { basket }
         }
-        .padding(.horizontal, 8).frame(height: 22)
-        .background(Color.orange.opacity(0.13), in: Capsule())
-        .overlay(Capsule().strokeBorder(Color.orange.opacity(armed && session.pointerActive ? 0.8 : 0.45), lineWidth: 1))
+    }
+
+    /// Shift-clicked elements, one line each, copied together with one click.
+    /// The lozenge above stays the live selection; this is the basket.
+    private var basket: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 5) {
+                Text("\(session.collected.count) element\(session.collected.count == 1 ? "" : "s")")
+                    .font(.system(size: 9, weight: .semibold)).foregroundStyle(.orange)
+                Text("⇧ click adds").font(.system(size: 9)).foregroundStyle(.gray).lineLimit(1)
+                Spacer(minLength: 0)
+                Button { session.clearCollected() } label: {
+                    Image(systemName: "xmark.circle")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(.gray)
+                        .frame(width: 18, height: 20)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Clear collected elements")
+                .uiKitIdentifier("Inspector.collection.clear")
+                Button {
+                    session.copyCollected()
+                    copiedAll = true
+                    copyAllSequence += 1
+                } label: {
+                    HStack(spacing: 3) {
+                        Image(systemName: copiedAll ? "checkmark" : "doc.on.doc")
+                        Text(copiedAll ? "Copied" : "Copy all")
+                    }
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(copiedAll ? .green : .orange)
+                    .frame(height: 20)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(copiedAll ? "Collected identities copied" : "Copy all collected identities")
+                .accessibilityHint("Copies one identity per line to the clipboard")
+                .uiKitIdentifier("Inspector.collection.copy")
+            }
+            .frame(height: 20)
+            if session.collected.count > visibleRows {
+                ScrollView(.vertical) { rows }
+                    .frame(height: CGFloat(visibleRows) * rowHeight)
+            } else {
+                rows
+            }
+        }
+        .padding(.horizontal, 8).padding(.bottom, 3)
+        .background(Color.orange.opacity(0.13), in: RoundedRectangle(cornerRadius: 11))
+        .overlay(RoundedRectangle(cornerRadius: 11).strokeBorder(Color.orange.opacity(0.45), lineWidth: 1))
+        .uiKitIdentifier("Inspector.collection")
+        .onChange(of: session.collected) { _ in copiedAll = false }
+        .task(id: copyAllSequence) {
+            guard copiedAll else { return }
+            try? await Task.sleep(nanoseconds: 1_200_000_000)
+            if !Task.isCancelled { copiedAll = false }
+        }
+    }
+
+    private var rows: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(session.collected) { element in row(element) }
+        }
+    }
+
+    private func row(_ element: InspectorCollectedElement) -> some View {
+        HStack(spacing: 5) {
+            Text(element.kind)
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(.orange)
+                .frame(width: 32, alignment: .leading)
+            Rectangle().fill(Color.orange.opacity(0.4)).frame(width: 1, height: 10)
+            Text(element.identity)
+                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                .lineLimit(1).truncationMode(.middle)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .foregroundStyle(element == session.current ? Color.white : Color.white.opacity(0.72))
+            Button { session.removeCollected(element) } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundStyle(.gray)
+                    .frame(width: 18, height: rowHeight)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Remove \(element.identity)")
+            .uiKitIdentifier("Inspector.collection.remove")
+        }
+        .frame(height: rowHeight)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("\(element.kind) \(element.identity)")
+        .uiKitIdentifier("Inspector.collection.row")
     }
 
     /// The target. With a mouse attached the lozenge is where selection state
     /// lives: lit means hover is picking and the next click locks; dim means the
     /// shot is taken and pressing this takes another.
+    ///
+    /// Colour carries that on its own — do NOT add a pulse with `withAnimation`
+    /// and `.repeatForever`. That sets the animation on the TRANSACTION, not on
+    /// this icon, so every view updating in the same pass inherits it; driven off
+    /// `armed` (which flips while the HUD re-renders) it left the whole floating
+    /// panel bouncing and fading forever.
     private var reticle: some View {
         Button {
             if armed { session.pinned = true } else { session.armPointerSelection() }
@@ -2809,7 +2946,6 @@ private struct InspectorIdentityLozenge: View {
             Image(systemName: "scope")
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(armed ? Color.orange : Color.gray)
-                .scaleEffect(armed && pulsing ? 1.16 : 1)
                 .frame(width: 20, height: 22)
                 .contentShape(Rectangle())
         }
@@ -2817,8 +2953,6 @@ private struct InspectorIdentityLozenge: View {
         .accessibilityLabel(armed ? "Armed — click an element to select it" : "Select another element")
         .accessibilityHint(armed ? "Locks the element under the pointer" : "Arms the pointer for one more selection")
         .uiKitIdentifier("Inspector.reticle")
-        .onAppear { startPulse() }
-        .onChange(of: armed) { _ in startPulse() }
     }
 
     private var identity: some View {
@@ -2858,11 +2992,6 @@ private struct InspectorIdentityLozenge: View {
         }
     }
 
-    private func startPulse() {
-        pulsing = false
-        guard armed else { return }
-        withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) { pulsing = true }
-    }
 }
 
 @available(iOS 16.0, *)

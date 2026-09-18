@@ -405,18 +405,6 @@ public struct RipulAgentScreen: View {
             onDismiss: { dismiss() },
             allowRipulAgents: configuration.allowRipulAgents,
             invitesSection: configuration.invitesSection,
-            foldersSection: configuration.foldersSection,
-            // nil omits the panel entirely — GlassSessionsList renders it only
-            // when present, so the role gate needs no plumbing further down.
-            solutionManagement: configuration.showsSolutionManagement
-                ? RipulSolutionManagement(
-                    registry: configuration.registry,
-                    baseURL: configuration.baseURL,
-                    tokenProvider: tokenProvider,
-                    showsSiteKeyAdmin: configuration.showsSiteKeyAdmin,
-                    buildsApp: configuration.buildsApp
-                )
-                : nil,
             emptyStateOverride: configuration.emptyStateOverride,
             model: model,
             chooseMode: slots.chooseMode,

@@ -6,6 +6,53 @@ import WebKit
 /// (100vh, 100%) fills the entire frame including the home indicator region.
 /// The native chat input overlay handles bottom spacing instead.
 class FullBleedWebView: WKWebView {
+    private let observedScrollPans = NSHashTable<UIPanGestureRecognizer>.weakObjects()
+    private var scrollDirections: [ObjectIdentifier: String] = [:]
+
+    // Native tool/widget touches can bypass DOM touchmove. Observe the actual
+    // ancestor scroll gesture, without replacing WebKit's delegate, adding a
+    // competing recognizer, publishing SwiftUI state, or writing an offset.
+    private func observeScrollIntent(from hit: UIView?, event: UIEvent?) {
+        guard event?.type == .touches else { return }
+        var ancestor = hit
+        while let view = ancestor, view !== self {
+            if let scroll = view as? UIScrollView {
+                let pan = scroll.panGestureRecognizer
+                if !observedScrollPans.contains(pan) {
+                    observedScrollPans.add(pan)
+                    pan.addTarget(self, action: #selector(scrollIntentChanged(_:)))
+                }
+            }
+            ancestor = view.superview
+        }
+    }
+
+    @objc private func scrollIntentChanged(_ pan: UIPanGestureRecognizer) {
+        let id = ObjectIdentifier(pan)
+        guard pan.state == .began || pan.state == .changed else {
+            scrollDirections.removeValue(forKey: id)
+            return
+        }
+        guard let scroll = pan.view as? UIScrollView, bounds.width > 0 else { return }
+        let velocity = pan.velocity(in: scroll)
+        guard abs(velocity.y) > abs(velocity.x), abs(velocity.y) > 2 else { return }
+        let direction = velocity.y > 0 ? "up" : "down"
+        guard scrollDirections[id] != direction else { return }
+        scrollDirections[id] = direction
+        let viewport = scroll.convert(scroll.bounds, to: self)
+        // DOM validates the scrolling viewport, so a map or horizontal tool
+        // strip's own interaction cannot release chat following.
+        callAsyncJavaScript("""
+            const scale = document.documentElement.clientWidth / nativeWidth;
+            window.dispatchEvent(new CustomEvent('ripul:user-scroll-intent', { detail: {
+                direction, left: left * scale, top: top * scale,
+                width: width * scale, height: height * scale
+            }}));
+            """, arguments: ["direction": direction, "left": viewport.minX,
+                "top": viewport.minY, "width": viewport.width, "height": viewport.height,
+                "nativeWidth": bounds.width], in: nil, in: .page, completionHandler: nil)
+    }
+
     #if !targetEnvironment(macCatalyst)
     private var edgeUpdateScheduled = false
     private var hasTopClearance: Bool?
@@ -63,7 +110,9 @@ class FullBleedWebView: WKWebView {
     }
     var toolStripHitTest: ((CGPoint, UIEvent?) -> UIView?)?
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
-        toolStripHitTest?(point, event) ?? super.hitTest(point, with: event)
+        let hit = toolStripHitTest?(point, event) ?? super.hitTest(point, with: event)
+        observeScrollIntent(from: hit, event: event)
+        return hit
     }
     override var safeAreaInsets: UIEdgeInsets {
         var insets = super.safeAreaInsets

@@ -374,7 +374,9 @@ public final class SpeechService: NSObject, ObservableObject {
         }
         guard speechStatus == .authorized else { throw SpeechServiceError.speechRecognitionDenied }
 
-        #if os(iOS)
+        // Match NativeSpeechProviders' Mac capture-permission path. Hardened
+        // Runtime also requires the host's audio-input entitlement.
+        #if os(iOS) && !targetEnvironment(macCatalyst)
         let granted = await AVAudioApplication.requestRecordPermission()
         #else
         let granted = await AVCaptureDevice.requestAccess(for: .audio)

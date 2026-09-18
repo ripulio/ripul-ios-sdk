@@ -118,7 +118,7 @@ final class MacroReplayHUDControllerTests: XCTestCase {
     }
 
     /// openContext deep-links to the macro's editor: the pending value is
-    /// set (consumed by the Solution management section → library → editor)
+    /// set (consumed by the Solutions screen → library → editor)
     /// and the strip hides.
     func testOpenContextSetsPendingEditorAndHides() async {
         let controller = MacroReplayHUDController.shared

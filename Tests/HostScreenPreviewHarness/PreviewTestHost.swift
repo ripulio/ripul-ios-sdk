@@ -209,11 +209,19 @@ private struct NativeToolStripHarnessSurface: View {
     @State private var draft = ""
 
     private func update(idle: Bool = false) {
-        strip.receive(["ownerId": "fixture", "chatId": "chat", "groupId": group,
-                       "updatedAt": Date().timeIntervalSince1970 * 1000 - (idle ? 20_001 : 0),
-                       "tools": (1...count).reversed().map { n in
-                           ["id": "call-\(n)", "label": ["Python", "Grep", "Read", "Xcode", "Diff"][(n - 1) % 5], "count": n == 1 ? 2 : 1]
-                       }])
+        // Typed piecewise: as one nested literal this expression exceeds the
+        // compiler's type-check budget on a loaded machine.
+        let labels = ["Python", "Grep", "Read", "Xcode", "Diff"]
+        let tools: [[String: Any]] = (1...count).reversed().map { (n: Int) -> [String: Any] in
+            let id: String = "call-\(n)"
+            let label: String = labels[(n - 1) % 5]
+            let uses: Int = n == 1 ? 2 : 1
+            return ["id": id, "label": label, "count": uses]
+        }
+        let updatedAt: Double = Date().timeIntervalSince1970 * 1000 - (idle ? 20_001 : 0)
+        let payload: [String: Any] = ["ownerId": "fixture", "chatId": "chat", "groupId": group,
+                                      "updatedAt": updatedAt, "tools": tools]
+        strip.receive(payload)
     }
 
     var body: some View {

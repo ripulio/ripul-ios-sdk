@@ -11,6 +11,17 @@ copy the full identity, even when it is visually truncated; a checkmark confirms
 the copy. **Copy reference** still copies the detailed inspection report. The
 Details tab and other panels omit the repeated identity badges.
 
+With a mouse or trackpad (Catalyst, iPad pointer), **shift-click** collects
+elements instead of replacing the selection. Holding shift lets hover preview
+through the pin; each shift-click toggles the element under the pointer in a
+basket listed under the lozenge, seeded with the already pinned element on the
+first shift-click. **Copy all** puts one identity per line on the clipboard;
+rows have their own remove buttons and the basket has a clear button. Plain
+clicks, tree navigation and Back leave the basket alone. Releasing shift
+without clicking restores the pinned selection. Shift-clicks never count as
+the double-tap that fires an element. `device_explorer_probe` reports the
+basket as `collected`.
+
 Single-tap the chat title to expand or collapse it. Double-tap opens Inspector
 and preserves the title's expanded state. The single tap waits for the system's
 double-tap recognition window; the expanded title's navigation buttons retain

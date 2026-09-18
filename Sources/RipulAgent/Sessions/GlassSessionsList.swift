@@ -131,12 +131,6 @@ public struct GlassSessionsList: View {
     /// Handed this list's own open/dismiss actions so accepting an invite can
     /// land the user in the joined chat.
     var invitesSection: ((InvitesSectionActions) -> AnyView)? = nil
-    /// Optional folders (file browser) section, rendered where FolderTreeSection was.
-    var foldersSection: (() -> AnyView)? = nil
-    /// Developer's solution-shaping controls (collections, contexts, testing
-    /// mode), rendered as a disclosure directly after Folders. Nil on surfaces
-    /// that shouldn't manage anything.
-    var solutionManagement: RipulSolutionManagement? = nil
     /// Optional empty-state override, rendered instead of the built-in empty text.
     var emptyStateOverride: (() -> AnyView)? = nil
     /// Optional universal-link opener (was DeepLinkHandler.shared).
@@ -173,9 +167,6 @@ public struct GlassSessionsList: View {
     /// Session whose tags are being edited (drives the tags editor sheet).
     @State private var taggingSession: UnifiedSession? = nil
 
-    // Folder tree
-    @State private var foldersExpanded = false
-
     public init(
         bridge: AgentBridge,
         sessionStore: SessionListStore,
@@ -210,8 +201,6 @@ public struct GlassSessionsList: View {
         remoteActionsByMachine: [String: [RemoteActionDescriptor]] = [:],
         onExecuteAction: ((RemoteMachine, RemoteActionDescriptor, [String: Any]) async -> [String: Any])? = nil,
         invitesSection: ((InvitesSectionActions) -> AnyView)? = nil,
-        foldersSection: (() -> AnyView)? = nil,
-        solutionManagement: RipulSolutionManagement? = nil,
         emptyStateOverride: (() -> AnyView)? = nil,
         onListedSessionsChanged: (([RipulListedSession]) -> Void)? = nil,
         onOpenUniversalLink: ((URL) -> Void)? = nil,
@@ -252,8 +241,6 @@ public struct GlassSessionsList: View {
         self.remoteActionsByMachine = remoteActionsByMachine
         self.onExecuteAction = onExecuteAction
         self.invitesSection = invitesSection
-        self.foldersSection = foldersSection
-        self.solutionManagement = solutionManagement
         self.emptyStateOverride = emptyStateOverride
         self.onOpenUniversalLink = onOpenUniversalLink
         self._searchText = searchText
@@ -320,8 +307,8 @@ public struct GlassSessionsList: View {
     /// reserve": the body grows on its own after it opens (remote actions and
     /// the host's Claude-account row both arrive async), so an arithmetic
     /// reserve is a guess that goes stale. Half the stack leaves room for the
-    /// row's own header plus the Sessions / Folders / Solution headers on any
-    /// screen size. Nil until measured, which means "no ceiling" — the row
+    /// row's own header plus the Sessions header on any screen size. Nil
+    /// until measured, which means "no ceiling" — the row
     /// still bounds itself by its own natural height.
     private var machinePanelCap: CGFloat? {
         guard panelStackHeight > 0 else { return nil }
@@ -860,29 +847,6 @@ public struct GlassSessionsList: View {
         !searchText.trimmingCharacters(in: .whitespaces).isEmpty
     }
 
-    // MARK: - Folders Panel
-
-    @ViewBuilder
-    private var foldersPanelSection: some View {
-        if machines.contains(where: { $0.isOnline && !$0.isDisabled(cache: cache) }) {
-            if let foldersSection {
-                foldersSection()
-            } else {
-                // Default: the same FolderTreeSection the app embeds (iOS-only).
-                // The slot exists for hosts that need a custom panel; nil gets
-                // the app's 1:1 files browser.
-                #if os(iOS)
-                FolderTreeSection(
-                    bridge: bridge,
-                    isExpanded: $foldersExpanded,
-                    rootPathOverride: selectedProjectPath,
-                    onFileOpened: onDismissSheet
-                )
-                #endif
-            }
-        }
-    }
-
     @ViewBuilder
     private var floatingActionBars: some View {
         if isSelecting && !selectedSessionIds.isEmpty {
@@ -1008,21 +972,11 @@ public struct GlassSessionsList: View {
                         // gets the remaining space to grow into) — collapsed, this
                         // must NOT hold an infinite frame, or the panel's outer
                         // frame stays full-height around its now-tiny header row:
-                        // a blank gap where the list used to be, with Folders /
-                        // Solution management stuck below it instead of sliding up
-                        // to fill the space GlassSectionPanel's own collapse
+                        // a blank gap where the list used to be, with the panels
+                        // below it stuck there instead of sliding up to fill the
+                        // space GlassSectionPanel's own collapse
                         // (`if isExpanded { content }`) already freed.
                         .frame(maxHeight: sessionsExpanded ? .infinity : nil, alignment: .top)
-                    foldersPanelSection
-
-                    // Developer's solution-shaping controls, after Folders.
-                    #if os(iOS)
-                    if let solutionManagement {
-                        if #available(iOS 16.0, *) {
-                            SolutionManagementSection(management: solutionManagement, bridge: bridge)
-                        }
-                    }
-                    #endif
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 8)
@@ -1038,7 +992,8 @@ public struct GlassSessionsList: View {
                 // VStack: the frame's height is the container's regardless of
                 // what the children do, so there is no feedback loop between
                 // the ceiling and the height it is derived from. The top bar is
-                // a safeAreaInset, so this is already net of it.
+                // a safeAreaInset and the bottom insets below are applied
+                // OUTSIDE this frame, so this is already net of both.
                 .background(
                     GeometryReader { geo in
                         Color.clear.preference(
@@ -1047,6 +1002,17 @@ public struct GlassSessionsList: View {
                         )
                     }
                 )
+                // Sessions is the stack's LAST child now that Folders and
+                // Solution management have gone, and it is the greedy one — so
+                // its bottom edge is the stack's, and without an inset the list
+                // runs under the home indicator and off screen. Outside the
+                // frame on purpose: that way the .infinity above resolves to
+                // the height the stack may actually use, which is what the
+                // measurement feeds to machinePanelCap.
+                .padding(.bottom, 16)
+                // Adds only what the container hasn't already inset, so this is
+                // correct whether or not a host consumed the safe area first.
+                .safeAreaPadding(.bottom)
                 .onPreferenceChange(SessionsPanelStackHeightKey.self) { height in
                     panelStackHeight = height
                 }

@@ -500,7 +500,10 @@ public final class ElevenLabsNativeSpeechProvider: NSObject, NativeSpeechProvidi
 
         do {
             try SpeechPrivacyRequirements.validate(requiresSpeechRecognition: false)
-            #if os(iOS)
+            // Use the shared Mac capture-permission path on Catalyst.
+            // AVAudioApplication also supports Catalyst; either API requires
+            // the host's audio-input entitlement when Hardened Runtime is on.
+            #if os(iOS) && !targetEnvironment(macCatalyst)
             let permitted = await AVAudioApplication.requestRecordPermission()
             #else
             let permitted = await AVCaptureDevice.requestAccess(for: .audio)

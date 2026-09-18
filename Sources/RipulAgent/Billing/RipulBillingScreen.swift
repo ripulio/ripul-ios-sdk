@@ -15,11 +15,11 @@ import UIKit
 // ---------------------------------------------------------------------------
 
 /// Cross-layer handoff for `ripul://billing` — the host app flips the latch
-/// and posts the notification; SolutionManagementSection consumes whichever
+/// and posts the notification; RipulSolutionsScreen consumes whichever
 /// arrives usable (notification when mounted, latch at first appear).
 public enum RipulBillingDeepLink {
     public static let notification = Notification.Name("ripulOpenBillingScreen")
-    /// Consumed at section appear when the section wasn't mounted in time
+    /// Consumed at screen appear when the screen wasn't mounted in time
     /// to hear the notification.
     public static var pending = false
 

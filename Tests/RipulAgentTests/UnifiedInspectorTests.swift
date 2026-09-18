@@ -61,6 +61,62 @@ final class UnifiedInspectorTests: XCTestCase {
         XCTAssertNil(session.web)
     }
 
+    func testShiftClickCollectsPinnedOriginTogglesAndCopiesAll() async throws {
+        let (window, _, _, inspector, session) = try await fixture()
+        let previousClipboard = UIPasteboard.general.items
+        defer { UIPasteboard.general.items = previousClipboard; session.close(); window.isHidden = true }
+        session.pointerActive = true
+        _ = inspector.probe(atWindowPoint: CGPoint(x: 50, y: 55), fire: false)
+        session.lockWhenPickSettles()
+        XCTAssertTrue(session.pinned)
+        // Pinned: hover cannot replace the element...
+        _ = inspector.probe(atWindowPoint: CGPoint(x: 90, y: 165), fire: false)
+        try await Task.sleep(nanoseconds: 300_000_000)
+        XCTAssertEqual(session.native?.accessibilityId, "native.title")
+        XCTAssertNil(session.web)
+        // ...until shift is held, when hover previews through the pin.
+        session.setExtending(true)
+        _ = inspector.probe(atWindowPoint: CGPoint(x: 90, y: 165), fire: false)
+        try await waitForWeb(session)
+        XCTAssertEqual(session.web?.identifier, "chat.message")
+        XCTAssertTrue(session.collected.isEmpty)
+        // The shift-click collects the clicked element AND the pinned origin.
+        session.lockWhenPickSettles(collecting: true)
+        XCTAssertEqual(session.collected.map(\.identity), ["native.title", "chat.message"])
+        XCTAssertEqual(session.collected.map(\.kind), ["Native", "Web"])
+        XCTAssertTrue(session.pinned)
+        XCTAssertEqual(inspector.selectionSnapshot()["collected"] as? [String], ["native.title", "chat.message"])
+        UIPasteboard.general.string = ""
+        session.copyCollected()
+        XCTAssertEqual(UIPasteboard.general.string, "native.title\nchat.message")
+        // A second shift-click on the same element takes it out again.
+        session.lockWhenPickSettles(collecting: true)
+        XCTAssertEqual(session.collected.map(\.identity), ["native.title"])
+        // Releasing shift after a click keeps the clicked element current.
+        session.setExtending(false)
+        XCTAssertEqual(session.web?.identifier, "chat.message")
+        session.clearCollected()
+        XCTAssertTrue(session.collected.isEmpty)
+        XCTAssertEqual(inspector.selectionSnapshot()["collected"] as? [String], [])
+    }
+
+    func testShiftRunWithoutClickRestoresPinnedSelection() async throws {
+        let (window, _, _, inspector, session) = try await fixture()
+        defer { session.close(); window.isHidden = true }
+        session.pointerActive = true
+        _ = inspector.probe(atWindowPoint: CGPoint(x: 50, y: 55), fire: false)
+        session.lockWhenPickSettles()
+        session.setExtending(true)
+        _ = inspector.probe(atWindowPoint: CGPoint(x: 90, y: 165), fire: false)
+        try await waitForWeb(session)
+        XCTAssertNil(session.native)
+        session.setExtending(false)
+        XCTAssertEqual(session.native?.accessibilityId, "native.title")
+        XCTAssertNil(session.web)
+        XCTAssertTrue(session.pinned)
+        XCTAssertTrue(session.collected.isEmpty)
+    }
+
     func testLateWebReplyCannotReplaceNewNativeSelection() async throws {
         let (window, _, button, inspector, session) = try await fixture()
         defer { session.close(); window.isHidden = true }

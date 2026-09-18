@@ -9,6 +9,15 @@ struct InspectorNativeSelection {
     let localPoint: CGPoint
 }
 
+/// One element gathered into the identity lozenge by a shift-click. Only the
+/// identity is kept: the basket exists to be copied as a list of IDs, so a
+/// rebuilt or removed view keeps its line.
+struct InspectorCollectedElement: Identifiable, Equatable {
+    let kind: String
+    let identity: String
+    var id: String { kind + "|" + identity }
+}
+
 struct InspectorWebElement: Decodable, Identifiable {
     struct Box: Decodable { let x, y, width, height: Double
         var cgRect: CGRect { CGRect(x: x, y: y, width: width, height: height) }
@@ -60,6 +69,15 @@ final class InspectorSession: ObservableObject {
     /// published here because the HUD renders from it.
     @Published var pointerActive = false
     @Published var interacting = false
+    /// Elements gathered by shift-clicking with a pointer, in the order they
+    /// were added. Listed under the identity lozenge and copied as one list.
+    @Published private(set) var collected: [InspectorCollectedElement] = []
+    /// Shift is held while a pointer drives the explorer. Hover keeps picking
+    /// through the pin so the next shift-click can be aimed, and that click
+    /// adds its element to `collected` instead of replacing the selection.
+    /// Owned by `ViewInspectorController`, which reads the modifier off every
+    /// hover and click.
+    @Published private(set) var extending = false
     @Published var error: String?
     @Published private(set) var historyCount = 0
     weak var controller: ViewInspectorController?
@@ -69,6 +87,13 @@ final class InspectorSession: ObservableObject {
     /// One-shot pointer selection asked to pin, but a web pick was still in
     /// flight. See `lockWhenPickSettles()`.
     private var lockPending = false
+    /// A shift-click asked to collect, but its web pick was still in flight.
+    private var collectPending = false
+    /// The pinned selection when a shift run began. It seeds the basket on the
+    /// first shift-click (click A, shift-click B collects both, as in every
+    /// desktop list), and it is restored when the run ends without a click,
+    /// so holding shift and moving the mouse cannot lose a pinned element.
+    private var extendingOrigin: (target: Target, element: InspectorCollectedElement)?
     private var pendingPick: (WKWebView, CGPoint, Int)?
     private struct Target {
         var native: InspectorNativeSelection?
@@ -86,6 +111,11 @@ final class InspectorSession: ObservableObject {
         return candidates.first { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     }
     var label: String { identity ?? "Inspector" }
+    var kind: String { web == nil ? "Native" : "Web" }
+    /// The current selection as a basket entry, when it has an identity.
+    var current: InspectorCollectedElement? { identity.map { InspectorCollectedElement(kind: kind, identity: $0) } }
+    /// One identity per line, in collection order: what Copy all puts on the clipboard.
+    var collectedIdentities: String { collected.map(\.identity).joined(separator: "\n") }
     var canGoUp: Bool { web.map { !$0.ancestors.isEmpty || webView != nil } ?? (native?.view.superview != nil) }
 
     func waitForPick() async {
@@ -153,7 +183,7 @@ final class InspectorSession: ObservableObject {
     }
 
     func pickWeb(_ view: WKWebView, at point: CGPoint) {
-        guard !pinned, !interacting else { return }
+        guard !pinned || extending, !interacting else { return }
         generation += 1
         pendingPick = (view, point, generation)
         guard !picking else { return }
@@ -165,7 +195,7 @@ final class InspectorSession: ObservableObject {
                     // UIKit points and CSS pixels differ under page zoom. Convert
                     // using the current layout viewport in the same JS operation.
                     let value = try await Self.call(view, "pickInView", [point.x, point.y, view.bounds.width, view.bounds.height])
-                    guard ticket == generation, !pinned, !interacting else {
+                    guard ticket == generation, !pinned || extending, !interacting else {
                         if webView !== view { _ = try? await Self.call(view, "clear") }
                         continue
                     }
@@ -187,13 +217,24 @@ final class InspectorSession: ObservableObject {
     /// `pinned` has turned true in the meantime — so the click would lock an
     /// empty selection and throw away the very element it was aimed at. A native
     /// pick has already completed by the time this is called, so it pins now.
-    func lockWhenPickSettles() {
-        if picking { lockPending = true } else { pinned = true }
+    ///
+    /// `collecting` is the shift-click: once settled, the element is toggled in
+    /// the basket as well as locked.
+    func lockWhenPickSettles(collecting: Bool = false) {
+        if picking {
+            lockPending = true
+            collectPending = collectPending || collecting
+        } else {
+            pinned = true
+            if collecting { collectCurrent() }
+        }
     }
 
     /// Arm the next one-shot pick: hover picks again until the next click.
     func armPointerSelection() {
         lockPending = false
+        collectPending = false
+        extendingOrigin = nil
         pinned = false
         controller?.repickAtCursor()
     }
@@ -202,6 +243,69 @@ final class InspectorSession: ObservableObject {
         guard lockPending else { return }
         lockPending = false
         pinned = true
+        if collectPending {
+            collectPending = false
+            collectCurrent()
+        }
+    }
+
+    // MARK: Shift-click collection
+
+    /// Shift went down or up with a pointer attached. Entering a run while
+    /// pinned remembers that selection as the origin; leaving a run that never
+    /// clicked puts it back.
+    func setExtending(_ on: Bool) {
+        guard on != extending else { return }
+        extending = on
+        if on {
+            if pinned, let target, let current { extendingOrigin = (target, current) }
+        } else if let origin = extendingOrigin {
+            extendingOrigin = nil
+            if !isCurrent(origin.target) { restore(origin.target) }
+        }
+    }
+
+    /// Toggle the current selection in the basket. The first collection of a
+    /// run also seeds the pinned origin, so the pair reads as both elements.
+    func collectCurrent() {
+        guard let current else { return }
+        if let origin = extendingOrigin {
+            extendingOrigin = nil
+            if collected.isEmpty, origin.element != current { collected.append(origin.element) }
+        }
+        if let index = collected.firstIndex(of: current) { collected.remove(at: index) }
+        else { collected.append(current) }
+    }
+
+    func removeCollected(_ element: InspectorCollectedElement) {
+        collected.removeAll { $0 == element }
+    }
+
+    func clearCollected() {
+        collected = []
+        extendingOrigin = nil
+    }
+
+    func copyCollected() {
+        guard !collected.isEmpty else { return }
+        UIPasteboard.general.string = collectedIdentities
+    }
+
+    private func isCurrent(_ candidate: Target) -> Bool {
+        candidate.native?.info.view === target?.native?.info.view
+            && candidate.webView === target?.webView && candidate.webID == target?.webID
+    }
+
+    /// Re-select a remembered target if it is still on screen.
+    @discardableResult
+    private func restore(_ candidate: Target) -> Bool {
+        if let selection = candidate.native, selection.info.view.window != nil {
+            controller?.restoreNativeSelection(selection, remembering: false); return true
+        }
+        if let view = candidate.webView, view.window != nil, let id = candidate.webID {
+            selectWeb(id: id, remembering: false, in: view); return true
+        }
+        return false
     }
 
     private func adoptWeb(_ info: InspectorWebElement, view: WKWebView, remembering: Bool = true) {
@@ -212,7 +316,7 @@ final class InspectorSession: ObservableObject {
     }
 
     func invalidate() {
-        generation += 1; pendingPick = nil; lockPending = false
+        generation += 1; pendingPick = nil; lockPending = false; collectPending = false
         clearWebHighlight(); web = nil; native = nil; target = nil; webView = nil
     }
 
@@ -220,7 +324,9 @@ final class InspectorSession: ObservableObject {
         if let view = webView { Task { _ = try? await Self.call(view, "clear") } }
     }
 
-    func close() { invalidate(); controller = nil }
+    func close() {
+        invalidate(); clearCollected(); extending = false; controller = nil
+    }
 
     func selectWeb(id: String, remembering: Bool = true, in view: WKWebView? = nil) {
         guard let view = view ?? webView else { return }
@@ -247,12 +353,7 @@ final class InspectorSession: ObservableObject {
     func back() {
         while let previous = history.popLast() {
             historyCount = history.count
-            if let selection = previous.native, selection.info.view.window != nil {
-                controller?.restoreNativeSelection(selection, remembering: false); return
-            }
-            if let view = previous.webView, view.window != nil, let id = previous.webID {
-                selectWeb(id: id, remembering: false, in: view); return
-            }
+            if restore(previous) { return }
         }
     }
 
