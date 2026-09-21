@@ -21,6 +21,40 @@ public struct ClaudeAccountSwitcherSheet: View {
 
     @Environment(\.dismiss) private var dismiss
 
+    public init(machine: RemoteMachine, bridge: AgentBridge, onSwitched: ((ClaudeAccountProfile?) -> Void)? = nil) {
+        self.machine = machine
+        self.bridge = bridge
+        self.onSwitched = onSwitched
+    }
+
+    public var body: some View {
+        NavigationStack {
+            List { ClaudeAccountSection(machine: machine, bridge: bridge, onSwitched: onSwitched) }
+                .navigationTitle("Claude accounts")
+                #if os(iOS)
+                .navigationBarTitleDisplayMode(.inline)
+                #endif
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Done") { dismiss() }.uiKitIdentifier("ClaudeAccountSwitcherSheet.done")
+                    }
+                }
+        }
+        #if os(macOS)
+        .frame(minWidth: 480, minHeight: 420)
+        #endif
+        .ripulSheet(.page, detents: [.medium, .large])
+    }
+}
+
+/// Account rows shared by Settings and the per-machine shortcut, without another navigation layer.
+struct ClaudeAccountSection: View {
+    let machine: RemoteMachine
+    let bridge: AgentBridge
+    var onSwitched: ((ClaudeAccountProfile?) -> Void)? = nil
+    var refreshToken: UUID? = nil
+    @Environment(\.scenePhase) private var scenePhase
+
     @State private var accounts: [ClaudeAccountProfile] = []
     @State private var active: String = "default"
     @State private var loading = true
@@ -31,77 +65,56 @@ public struct ClaudeAccountSwitcherSheet: View {
     @State private var signInProfile: ClaudeAccountProfile?
     @State private var deleteCandidate: ClaudeAccountProfile?
 
-    public init(machine: RemoteMachine, bridge: AgentBridge, onSwitched: ((ClaudeAccountProfile?) -> Void)? = nil) {
-        self.machine = machine
-        self.bridge = bridge
-        self.onSwitched = onSwitched
-    }
-
-    public var body: some View {
-        NavigationStack {
-            Group {
+    var body: some View {
+        Section {
+            if !machine.isOnline {
+                Text("Connect to this Mac to manage accounts.").foregroundStyle(.secondary)
+            } else {
                 if loading && accounts.isEmpty {
-                    HStack(spacing: 10) {
-                        ProgressView()
-                        Text("Loading accounts…").foregroundStyle(.secondary)
+                    ProgressView("Loading accounts…").uiKitIdentifier("ClaudeAccountSwitcherSheet.loading")
+                }
+                ForEach(accounts) { account in accountRow(account) }
+                if let error, !error.isEmpty {
+                    Text(error).font(.caption).foregroundStyle(.orange)
+                    Button("Retry") { Task { await refresh() } }.disabled(loading)
+                }
+                if addingAccount {
+                    HStack(spacing: 8) {
+                        TextField("Account name (e.g. Work)", text: $newName)
+                            #if os(iOS)
+                            .textInputAutocapitalization(.words)
+                            #endif
+                            .uiKitIdentifier("ClaudeAccountSwitcherSheet.nameField")
+                        Button("Create") { Task { await createAndSignIn() } }
+                            .disabled(loading || newName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                            .uiKitIdentifier("ClaudeAccountSwitcherSheet.createAccount")
+                        Button("Cancel") { addingAccount = false; newName = "" }.disabled(loading)
                     }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .uiKitIdentifier("ClaudeAccountSwitcherSheet.loading")
                 } else {
-                    List {
-                        Section {
-                            ForEach(accounts) { account in
-                                accountRow(account)
-                            }
-                        } footer: {
-                            Text("New sessions use the selected account. Running sessions switch after their current reply.")
-                        }
-
-                        if let error, !error.isEmpty {
-                            Section {
-                                Text(error)
-                                    .font(.caption)
-                                    .foregroundStyle(.orange)
-                            }
-                        }
-
-                        Section {
-                            if addingAccount {
-                                HStack(spacing: 8) {
-                                    TextField("Account name (e.g. Work)", text: $newName)
-                                        #if os(iOS)
-                                        .textInputAutocapitalization(.words)
-                                        #endif
-                                        .uiKitIdentifier("ClaudeAccountSwitcherSheet.nameField")
-                                    Button("Create") { Task { await createAndSignIn() } }
-                                        .disabled(newName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                                        .uiKitIdentifier("ClaudeAccountSwitcherSheet.createAccount")
-                                }
-                            } else {
-                                Button {
-                                    addingAccount = true
-                                } label: {
-                                    Label("Add account", systemImage: "plus")
-                                }
-                                .uiKitIdentifier("ClaudeAccountSwitcherSheet.addAccount")
-                            }
-                        }
-                    }
+                    Button { addingAccount = true } label: { Label("Add account", systemImage: "plus") }
+                        .disabled(loading || switchingTo != nil)
+                        .uiKitIdentifier("ClaudeAccountSwitcherSheet.addAccount")
                 }
             }
-            .navigationTitle("Claude account")
-            #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
-            #endif
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Done") { dismiss() }
-                        .uiKitIdentifier("ClaudeAccountSwitcherSheet.done")
-                }
+        } header: {
+            HStack {
+                Label(machine.displayName, systemImage: "desktopcomputer")
+                Spacer()
+                if !machine.isOnline { Text("Offline") }
+            }
+        } footer: {
+            if machine.isOnline {
+                Text("New sessions use the selected account. Running sessions switch after their current reply.")
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .ripulSheet(.page, detents: [.medium, .large])
-        .task { await refresh() }
+        .task(id: refreshToken) {
+            repeat {
+                await refresh()
+                do { try await Task.sleep(nanoseconds: 60_000_000_000) } catch { break }
+            } while !Task.isCancelled
+        }
+        .onChange(of: scenePhase) { phase in if phase == .active { Task { await refresh() } } }
         .sheet(item: $signInProfile) { profile in
             HostSignInSheet(machine: machine, bridge: bridge, profile: profile.slug, profileName: profile.name)
         }
@@ -135,27 +148,34 @@ public struct ClaudeAccountSwitcherSheet: View {
         Button {
             Task { await handleTap(account) }
         } label: {
-            HStack(spacing: 10) {
-                Image(systemName: "person.circle")
-                    .foregroundStyle(isActive ? Color.accentColor : Color.secondary)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(account.isDefault ? "\(account.name) (this Mac's login)" : account.name)
-                        .font(.subheadline.weight(isActive ? .semibold : .regular))
-                        .foregroundStyle(.primary)
-                    Text(account.email ?? (account.loggedIn ? "Signed in" : "Not signed in — tap to sign in"))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 10) {
+                    Image(systemName: "person.circle")
+                        .foregroundStyle(isActive ? Color.accentColor : Color.secondary)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(account.isDefault ? "\(account.name) (this Mac's login)" : account.name)
+                            .font(.subheadline.weight(isActive ? .semibold : .regular))
+                            .foregroundStyle(.primary)
+                        Text(account.email ?? (account.loggedIn ? "Signed in" : "Not signed in — tap to sign in"))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    if switchingTo == account.slug {
+                        ProgressView()
+                    } else if isActive {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundStyle(.green)
+                    }
                 }
-                Spacer()
-                if switchingTo == account.slug {
-                    ProgressView()
-                } else if isActive {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundStyle(.green)
+                if account.loggedIn {
+                    CodingAccountUsageView(usage: account.usage, plan: account.plan)
                 }
             }
+            .contentShape(Rectangle())
         }
-        .disabled(switchingTo != nil)
+        .buttonStyle(.plain)
+        .disabled(loading || switchingTo != nil)
         .uiKitIdentifier("ClaudeAccountSwitcherSheet.accountRow.\(account.slug)")
         // The default profile is the Mac's own login — removing it would sign the Mac
         // out of Claude entirely, so only extra profiles offer removal.
@@ -172,7 +192,7 @@ public struct ClaudeAccountSwitcherSheet: View {
     }
 
     private func handleTap(_ account: ClaudeAccountProfile) async {
-        if account.slug == active || switchingTo != nil { return }
+        if (account.slug == active && account.loggedIn) || switchingTo != nil { return }
         // No login yet → sign the profile in rather than switching to it.
         guard account.loggedIn else {
             signInProfile = account
@@ -220,10 +240,10 @@ public struct ClaudeAccountSwitcherSheet: View {
     }
 
     private func refresh() async {
+        guard machine.isOnline else { loading = false; return }
         loading = true
         let result = await bridge.fetchClaudeAccounts(machineId: machine.machineId)
-        accounts = result.accounts
-        active = result.active
+        if result.error == nil { accounts = result.accounts; active = result.active }
         error = result.error
         loading = false
     }

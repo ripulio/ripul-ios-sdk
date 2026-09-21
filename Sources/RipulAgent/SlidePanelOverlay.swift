@@ -72,6 +72,11 @@ public struct SlidePanelOverlay<Content: View>: View {
     public var showsScrim: Bool = true
     public var topInset: CGFloat = 52
     public var containerWidth: CGFloat? = nil
+    /// Whether the panel's own left-edge swipe dismisses it. Off when the
+    /// content has taken that edge for itself (a mirrored Android emulator
+    /// reads it as Back), so the recogniser is not installed at all and the
+    /// touch reaches the content.
+    public var edgeSwipeEnabled: Bool = true
     @ViewBuilder var content: () -> Content
 
     /// Keeps the view mounted during dismiss animation.
@@ -92,6 +97,7 @@ public struct SlidePanelOverlay<Content: View>: View {
         showsScrim: Bool = true,
         topInset: CGFloat = 52,
         containerWidth: CGFloat? = nil,
+        edgeSwipeEnabled: Bool = true,
         @ViewBuilder content: @escaping () -> Content
     ) {
         self._isPresented = isPresented
@@ -99,6 +105,7 @@ public struct SlidePanelOverlay<Content: View>: View {
         self.showsScrim = showsScrim
         self.topInset = topInset
         self.containerWidth = containerWidth
+        self.edgeSwipeEnabled = edgeSwipeEnabled
         self.content = content
     }
 
@@ -117,6 +124,30 @@ public struct SlidePanelOverlay<Content: View>: View {
                 keepMounted = false
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
+            settleAfterInterruption()
+        }
+    }
+
+    /// Land a panel the system interrupted mid-slide.
+    ///
+    /// The offset is only ever strictly between the two edges while a finger
+    /// is tracking it — programmatic moves set the model to its destination in
+    /// one step and animate the presentation. So a partial offset on
+    /// `didBecomeActive`, when no touch can be live, is a drag whose cancel
+    /// never reached the owner: backgrounded mid-swipe, a call, Control Centre.
+    /// Left alone it sits there, half-revealed, until the next edge swipe.
+    /// Panels at either edge — including a dismiss still animating out — are
+    /// untouched.
+    private func settleAfterInterruption() {
+        guard offset > 0, offset < screenWidth else { return }
+        NSLog("[FGSETTLE] slide panel settled from offset=\(Int(offset))/\(Int(screenWidth)) presented=\(isPresented)")
+        // Stay mounted through the slide-out; the offset observer below
+        // unmounts once it has landed, as it does for a bounced-back reveal.
+        if !isPresented { keepMounted = true }
+        withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
+            offset = isPresented ? 0 : screenWidth
+        }
     }
 
     @ViewBuilder private var panelBody: some View {
@@ -134,30 +165,32 @@ public struct SlidePanelOverlay<Content: View>: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .modifier(SlideEffect(offset: offset))
                     .overlay(alignment: .leading) {
-                        InteractiveEdgeSwipeView(
-                            onChanged: { dragOffset in
-                                var t = Transaction()
-                                t.disablesAnimations = true
-                                withTransaction(t) { offset = dragOffset }
-                            },
-                            onEnded: { dragOffset, velocity in
-                                if dragOffset > screenWidth * 0.35 || velocity > 400 {
-                                    performDismiss()
-                                } else {
+                        if edgeSwipeEnabled {
+                            InteractiveEdgeSwipeView(
+                                onChanged: { dragOffset in
+                                    var t = Transaction()
+                                    t.disablesAnimations = true
+                                    withTransaction(t) { offset = dragOffset }
+                                },
+                                onEnded: { dragOffset, velocity in
+                                    if dragOffset > screenWidth * 0.35 || velocity > 400 {
+                                        performDismiss()
+                                    } else {
+                                        withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
+                                            offset = 0
+                                        }
+                                    }
+                                },
+                                onCancelled: {
                                     withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
                                         offset = 0
                                     }
-                                }
-                            },
-                            onCancelled: {
-                                withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
-                                    offset = 0
-                                }
-                            },
-                            maxOffset: screenWidth
-                        )
-                        .frame(width: 20)
-                        .ignoresSafeArea()
+                                },
+                                maxOffset: screenWidth
+                            )
+                            .frame(width: 20)
+                            .ignoresSafeArea()
+                        }
                     }
             }
             .onAppear {

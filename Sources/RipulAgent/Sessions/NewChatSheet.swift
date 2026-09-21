@@ -28,6 +28,7 @@ public struct NewChatSheet: View {
     let onRetryModels: (() -> Void)?
     let onManageAccess: () -> Void
     let onDismiss: () -> Void
+    let onManageCodexAccounts: ((NewChatMachine) -> Void)?
     let onLaunch: (NewChatLaunch) async throws -> Void
     @State private var draft: NewChatDraft
     @State private var search = ""
@@ -43,11 +44,12 @@ public struct NewChatSheet: View {
                 loadDirectModels: ((String) async -> Void)? = nil,
                 modelsLoading: Bool = false, modelsError: String? = nil,
                 onRetryModels: (() -> Void)? = nil, onManageAccess: @escaping () -> Void,
-                onDismiss: @escaping () -> Void, onLaunch: @escaping (NewChatLaunch) async throws -> Void) {
+                onDismiss: @escaping () -> Void, onManageCodexAccounts: ((NewChatMachine) -> Void)? = nil, onLaunch: @escaping (NewChatLaunch) async throws -> Void) {
         self.machines = machines; self.relayModels = relayModels; self.directModels = directModels
         self.directCatalogs = directCatalogs; self.loadDirectModels = loadDirectModels
         self.cache = cache; self.allowsRelay = allowsRelay; self.preferredRelayID = preferredRelayID
         self.modelsLoading = modelsLoading; self.modelsError = modelsError; self.onRetryModels = onRetryModels
+        self.onManageCodexAccounts = onManageCodexAccounts
         self.onManageAccess = onManageAccess; self.onDismiss = onDismiss; self.onLaunch = onLaunch
         var initial = NewChatDraft(data: cache.object(forKey: Self.preferencesKey) as? Data,
                                    forcedConnection: allowsRelay ? nil : .direct)
@@ -100,6 +102,10 @@ public struct NewChatSheet: View {
                             Text(machine.name + (machine.unavailableReason == nil ? "" : " · unavailable")).tag(machine.id)
                         }
                     }.accessibilityIdentifier("NewChat.machine")
+                    if let onManageCodexAccounts, let machine = candidates.first(where: { $0.id == draft.machineID }) {
+                        Button { onManageCodexAccounts(machine) } label: { Label("Codex accounts", systemImage: "person.2") }
+                            .disabled(machine.unavailableReason != nil).accessibilityIdentifier("NewChat.codexAccounts")
+                    }
                     Toggle("Use another folder", isOn: $usingCustomFolder)
                         .accessibilityIdentifier("NewChat.folderOverride")
                     if usingCustomFolder {

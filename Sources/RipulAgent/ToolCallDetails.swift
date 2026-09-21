@@ -15,6 +15,7 @@ struct ToolCallDetail: Decodable, Identifiable, Equatable {
     let renderArguments: CmsJSON?
     let commandPresentation: ShellToolPresentation?
     var simulatorTargets: [SimulatorTarget]? = nil
+    var task: ToolTaskActivity? = nil
 
     var statusTitle: String {
         switch status {
@@ -212,12 +213,24 @@ private struct ToolCallDisclosure: View {
                             .accessibilityIdentifier("ToolCallDetails.viewSimulator.\(call.id).\(index)")
                         }
                     }
-                    NativeToolCallRenderer(call: call, summaryTitle: call.commandPresentation == nil ? summary.title : summary.subtitle)
-                    if let error = call.error { detailSection("Error", text: error) }
+                    if let task = call.task {
+                        ToolTaskActivityView(task: task)
+                        if !task.synthetic {
+                            DisclosureGroup("Launch details") {
+                                NativeToolCallRenderer(call: call, summaryTitle: summary.title)
+                                if let error = call.error { detailSection("Launch error", text: error) }
+                            }
+                            .accessibilityIdentifier("ToolTask.launchDetails")
+                        }
+                    } else {
+                        NativeToolCallRenderer(call: call, summaryTitle: call.commandPresentation == nil ? summary.title : summary.subtitle)
+                        if let error = call.error { detailSection("Error", text: error) }
+                    }
                     DisclosureGroup("Call information") {
                         VStack(alignment: .leading, spacing: 12) {
                             Text(call.toolName).font(.subheadline)
                             Text(call.id).font(.caption).foregroundStyle(.secondary)
+                            if let task = call.task { Text("Task \(task.id)").font(.caption).foregroundStyle(.secondary) }
                             if call.commandPresentation != nil, let command = call.recordedCommand {
                                 NativeToolCodeBlock(text: command, syntax: .shell, identifier: "ToolCallDetails.invocation")
                             }
@@ -231,7 +244,7 @@ private struct ToolCallDisclosure: View {
         } label: {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 6) {
-                    Text("Call \(number) of \(count)")
+                    Text(call.task?.kindTitle ?? "Call \(number) of \(count)")
                         .fontWeight(.semibold)
                         .textCase(.uppercase)
                     if call.timestamp > 0 {
@@ -239,7 +252,7 @@ private struct ToolCallDisclosure: View {
                         Text(Date(timeIntervalSince1970: call.timestamp / 1000), format: .dateTime.hour().minute())
                     }
                     Spacer(minLength: 4)
-                    statusBadge
+                    if let task = call.task { ToolTaskStatus(status: task.status) } else { statusBadge }
                 }
                 .font(.caption2)
                 .foregroundStyle(.secondary)
@@ -251,19 +264,19 @@ private struct ToolCallDisclosure: View {
                         .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
                         .accessibilityHidden(true)
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(summary.title)
+                        Text(call.task?.title ?? summary.title)
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(.primary)
                             .lineLimit(2)
                             .accessibilityIdentifier("ToolCallDetails.summary.\(call.id)")
-                        if let context = call.commandPresentation?.executionContext {
+                        if call.task == nil, let context = call.commandPresentation?.executionContext {
                             Text(context)
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
                                 .lineLimit(2)
                                 .accessibilityIdentifier("ToolCallDetails.executionContext.\(call.id)")
                         }
-                        if let subtitle = summary.subtitle {
+                        if let subtitle = call.task == nil ? summary.subtitle : call.task?.variant {
                             Text(subtitle)
                                 .font(.system(.caption, design: summary.isCode ? .monospaced : .default))
                                 .foregroundStyle(.secondary)

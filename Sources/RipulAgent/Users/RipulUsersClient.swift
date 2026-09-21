@@ -13,9 +13,11 @@ import Foundation
 // Clerk, reachable solely through `GET /admin/users`, which holds the secret
 // key server-side.
 //
-// Read-only by design. Changing a tier or granting admin is a Clerk-dashboard
-// act with billing consequences; this surface answers "who is this person and
-// what can they do", nothing more.
+// One write, and only one: `updatePlan` sets a person's tier and/or admin
+// role through `PATCH /admin/users/:id/plan` (admin-gated server-side). A tier
+// set this way is marked `planSource: "manual"` and the billing webhook treats
+// it as a floor — Stripe/Apple events may raise it, never lower it — so a comp
+// survives the person's own renewals and cancellations.
 // ---------------------------------------------------------------------------
 
 /// One Ripul account, as projected by `GET /admin/users`.
@@ -31,6 +33,9 @@ public struct RipulPlatformUser: Identifiable, Hashable {
     public let role: String?
     /// "free" | "pro" | "enterprise".
     public let tier: String
+    /// "manual" when an admin set the plan by hand (a floor for billing
+    /// events), "billing" or nil when Stripe/Apple own it.
+    public let planSource: String?
     public let quotaUsed: Int
     public let quotaLimit: Int
     public let percentUsed: Int
@@ -47,6 +52,7 @@ public struct RipulPlatformUser: Identifiable, Hashable {
         self.imageURL = (json["imageUrl"] as? String)?.nilIfBlank
         self.role = (json["role"] as? String)?.nilIfBlank
         self.tier = json["tier"] as? String ?? "free"
+        self.planSource = (json["planSource"] as? String)?.nilIfBlank
         self.quotaUsed = json["quotaUsed"] as? Int ?? 0
         self.quotaLimit = json["quotaLimit"] as? Int ?? 0
         self.percentUsed = json["percentUsed"] as? Int ?? 0
@@ -61,6 +67,28 @@ public struct RipulPlatformUser: Identifiable, Hashable {
         let withFraction = ISO8601DateFormatter()
         withFraction.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return withFraction.date(from: string) ?? ISO8601DateFormatter().date(from: string)
+    }
+
+    private init(copying other: RipulPlatformUser, tier: String, role: String?, planSource: String?) {
+        self.id = other.id
+        self.email = other.email
+        self.firstName = other.firstName
+        self.lastName = other.lastName
+        self.username = other.username
+        self.imageURL = other.imageURL
+        self.role = role
+        self.tier = tier
+        self.planSource = planSource
+        self.quotaUsed = other.quotaUsed
+        self.quotaLimit = other.quotaLimit
+        self.percentUsed = other.percentUsed
+        self.lastActive = other.lastActive
+        self.createdAt = other.createdAt
+    }
+
+    /// The same person with the plan fields the server just confirmed.
+    public func withPlan(_ plan: RipulPlanUpdate) -> RipulPlatformUser {
+        RipulPlatformUser(copying: self, tier: plan.tier, role: plan.role, planSource: plan.planSource)
     }
 
     public var isAdmin: Bool { role?.lowercased() == "admin" }
@@ -95,6 +123,22 @@ public struct RipulPlatformUser: Identifiable, Hashable {
         case "pro": return "Pro"
         default: return "Free"
         }
+    }
+}
+
+/// What `PATCH /admin/users/:id/plan` confirms.
+public struct RipulPlanUpdate: Hashable {
+    public let userId: String
+    public let tier: String
+    public let role: String?
+    public let planSource: String?
+
+    init?(json: [String: Any]) {
+        guard let userId = json["userId"] as? String, let tier = json["tier"] as? String else { return nil }
+        self.userId = userId
+        self.tier = tier
+        self.role = (json["role"] as? String)?.nilIfBlank
+        self.planSource = (json["planSource"] as? String)?.nilIfBlank
     }
 }
 
@@ -147,6 +191,50 @@ public final class RipulUsersClient {
             throw RipulSolutionContextsError.malformedResponse
         }
         return rows.compactMap(RipulPlatformUser.init(json:))
+    }
+
+    /// Set a person's tier and/or admin role. Pass nil to leave one alone.
+    /// `role` is "admin" to grant, "user" to remove. The server refuses an
+    /// admin removing their own role and returns its reason verbatim.
+    public func updatePlan(userId: String, tier: String?, role: String?) async throws -> RipulPlanUpdate {
+        guard let token = tokenProvider(), !token.isEmpty else {
+            throw RipulSolutionContextsError.notSignedIn
+        }
+        let encoded = userId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? userId
+        guard let url = URL(string: "api/admin/users/\(encoded)/plan", relativeTo: baseURL) else {
+            throw RipulSolutionContextsError.malformedResponse
+        }
+
+        var body: [String: Any] = [:]
+        if let tier { body["tier"] = tier }
+        if let role { body["role"] = role }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "PATCH"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await URLSession.shared.data(for: request)
+        } catch {
+            throw RipulSolutionContextsError.transport(error)
+        }
+        guard let http = response as? HTTPURLResponse else {
+            throw RipulSolutionContextsError.malformedResponse
+        }
+        let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+        guard (200..<300).contains(http.statusCode) else {
+            let message = ((object?["error"] as? [String: Any])?["message"] as? String)
+                ?? HTTPURLResponse.localizedString(forStatusCode: http.statusCode)
+            throw RipulSolutionContextsError.server(status: http.statusCode, message: message, detail: nil)
+        }
+        guard let object, let plan = RipulPlanUpdate(json: object) else {
+            throw RipulSolutionContextsError.malformedResponse
+        }
+        return plan
     }
 }
 

@@ -21,7 +21,7 @@ final class RipulUsersModel: ObservableObject {
     @Published var loading = false
     @Published var errorMessage: String?
 
-    private let client: RipulUsersClient
+    let client: RipulUsersClient
 
     init(client: RipulUsersClient) {
         self.client = client
@@ -90,7 +90,9 @@ public struct RipulUsersScreen: View {
                 Section("\(group.name) (\(group.users.count))") {
                     ForEach(group.users) { user in
                         NavigationLink {
-                            RipulUserDetailView(user: user)
+                            RipulUserDetailView(user: user, client: model.client) {
+                                Task { await model.load() }
+                            }
                         } label: {
                             row(user)
                         }
@@ -201,13 +203,27 @@ struct RipulUserAvatar: View {
 
 // ---------------------------------------------------------------------------
 // Detail — every field the endpoint carries, with the derived platform role
-// spelled out. The user id is copyable because it is the join key to
-// `site_key_owners`, which is where a person's *portal* role lives.
+// spelled out, and the one thing an admin can change: the plan. The user id is
+// copyable because it is the join key to `site_key_owners`, which is where a
+// person's *portal* role lives.
 // ---------------------------------------------------------------------------
 
 @available(iOS 16.0, *)
 struct RipulUserDetailView: View {
-    let user: RipulPlatformUser
+    @State private var user: RipulPlatformUser
+    private let client: RipulUsersClient
+    private let onChange: () -> Void
+
+    @State private var pendingTier: String?
+    @State private var pendingRole: String?
+    @State private var saving = false
+    @State private var errorMessage: String?
+
+    init(user: RipulPlatformUser, client: RipulUsersClient, onChange: @escaping () -> Void) {
+        _user = State(initialValue: user)
+        self.client = client
+        self.onChange = onChange
+    }
 
     private static let stamp: DateFormatter = {
         let f = DateFormatter()
@@ -215,6 +231,14 @@ struct RipulUserDetailView: View {
         f.timeStyle = .short
         return f
     }()
+
+    private static let tiers: [(id: String, label: String)] = [
+        ("free", "Free"), ("pro", "Pro"), ("enterprise", "Enterprise"),
+    ]
+
+    private static func tierLabel(_ id: String) -> String {
+        tiers.first { $0.id == id }?.label ?? id.capitalized
+    }
 
     var body: some View {
         List {
@@ -229,13 +253,15 @@ struct RipulUserDetailView: View {
                 .padding(.vertical, 4)
             }
 
+            planSection
+
             // Explicit header:/footer: closures — there is no
             // Section(_ titleKey:, content:, footer:) overload, so the string
             // form cannot carry a footer.
             Section {
                 field("Resolved role", user.resolvedRoleId)
                 field("Clerk role", user.role ?? "—")
-                field("Tier", user.tier.capitalized)
+                field("Tier", Self.tierLabel(user.tier))
             } header: {
                 Text("Platform role")
             } footer: {
@@ -260,6 +286,96 @@ struct RipulUserDetailView: View {
         }
         .navigationTitle(user.displayName)
         .navigationBarTitleDisplayMode(.inline)
+        .disabled(saving)
+        .overlay {
+            if saving { ProgressView().controlSize(.large) }
+        }
+        .confirmationDialog(
+            "Set \(user.displayName) to \(Self.tierLabel(pendingTier ?? ""))?",
+            isPresented: Binding(get: { pendingTier != nil }, set: { if !$0 { pendingTier = nil } }),
+            titleVisibility: .visible,
+            presenting: pendingTier
+        ) { tier in
+            Button("Set to \(Self.tierLabel(tier))") {
+                Task { await apply(tier: tier, role: nil) }
+            }
+        } message: { tier in
+            Text(tier == "free"
+                 ? "Ends any manual plan. Billing events apply normally again."
+                 : "Marked as set by an admin: their own Stripe or Apple events can raise it but won't lower it. No charge is made.")
+        }
+        .confirmationDialog(
+            pendingRole == "admin" ? "Make \(user.displayName) a platform admin?" : "Remove admin from \(user.displayName)?",
+            isPresented: Binding(get: { pendingRole != nil }, set: { if !$0 { pendingRole = nil } }),
+            titleVisibility: .visible,
+            presenting: pendingRole
+        ) { role in
+            Button(role == "admin" ? "Make Admin" : "Remove Admin", role: role == "admin" ? nil : .destructive) {
+                Task { await apply(tier: nil, role: role) }
+            }
+        } message: { role in
+            Text(role == "admin"
+                 ? "Admins bypass every team check and reach site keys, the model catalog, accounts and billing."
+                 : "They keep their subscription tier and lose every admin surface.")
+        }
+        .alert(
+            "Couldn't change the plan",
+            isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })
+        ) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(errorMessage ?? "")
+        }
+    }
+
+    // MARK: Plan controls
+
+    private var planSection: some View {
+        Section {
+            Picker("Tier", selection: Binding(
+                get: { user.tier },
+                set: { next in if next != user.tier { pendingTier = next } }
+            )) {
+                ForEach(Self.tiers, id: \.id) { tier in
+                    Text(tier.label).tag(tier.id)
+                }
+            }
+            .pickerStyle(.segmented)
+            .uiKitIdentifier("UserDetail.plan.tier")
+
+            Toggle("Platform admin", isOn: Binding(
+                get: { user.isAdmin },
+                set: { on in if on != user.isAdmin { pendingRole = on ? "admin" : "user" } }
+            ))
+            .uiKitIdentifier("UserDetail.plan.admin")
+        } header: {
+            Text("Plan")
+        } footer: {
+            Text(planFootnote)
+        }
+    }
+
+    private var planFootnote: String {
+        switch user.planSource {
+        case "manual":
+            return "Set by an admin. Billing events can raise this tier but won't lower it."
+        case "billing":
+            return "Owned by Stripe or Apple. Changing it here marks it as set by an admin."
+        default:
+            return "Changes apply on the person's next token refresh, within a minute."
+        }
+    }
+
+    private func apply(tier: String?, role: String?) async {
+        saving = true
+        defer { saving = false }
+        do {
+            let plan = try await client.updatePlan(userId: user.id, tier: tier, role: role)
+            user = user.withPlan(plan)
+            onChange()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 
     @ViewBuilder

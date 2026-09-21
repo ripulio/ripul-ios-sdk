@@ -61,6 +61,7 @@ struct QuickLaunchPickerButton: View {
     /// Long-press affordance: open the Claude account switcher for `machine`.
     /// Nil ⇒ no context menu.
     var onSwitchAccount: (() -> Void)? = nil
+    var onSwitchCodexAccount: (() -> Void)? = nil
 
     @State private var isPresented = false
     @Environment(\.createNewChat) private var createNewChat
@@ -104,6 +105,10 @@ struct QuickLaunchPickerButton: View {
         // Lives on the launch button because "which account pays" is a launch
         // decision; Settings remains the discoverable home.
         .contextMenu {
+            if let onSwitchCodexAccount {
+                Button("Switch Codex account…", systemImage: "person.2", action: onSwitchCodexAccount)
+                    .uiKitIdentifier("\(identifierPrefix).quickModelPicker.switchCodexAccount")
+            }
             if let onSwitchAccount {
                 Button {
                     onSwitchAccount()

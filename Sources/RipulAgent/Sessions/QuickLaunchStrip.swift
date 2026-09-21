@@ -69,6 +69,7 @@ struct QuickLaunchStrip: View {
     /// picker button). Nil ⇒ no context menu — embedded hosts keep exactly
     /// the UI they have today.
     var onSwitchAccount: (() -> Void)? = nil
+    var onSwitchCodexAccount: (() -> Void)? = nil
 
     /// Targets we can actually launch given what the caller wired up. CLI and
     /// axis-2 subscription both need a host; only platform-API can start without.
@@ -127,7 +128,8 @@ struct QuickLaunchStrip: View {
                     onNewApiSession: onNewApiSession,
                     labelled: !effectiveShowCircles,
                     isLaunching: isLaunching,
-                    onSwitchAccount: onSwitchAccount
+                    onSwitchAccount: onSwitchAccount,
+                    onSwitchCodexAccount: onSwitchCodexAccount
                 )
             }
         }

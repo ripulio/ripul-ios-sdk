@@ -1,6 +1,44 @@
 import XCTest
 
 final class ToolCallDetailsUITests: XCTestCase {
+    func testBusyLozengeRemainsVisibleUntilTaskEnds() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--tool-strip-ui-tests"]
+        app.launch()
+        app.buttons["Start tasks"].tap()
+        let task = app.buttons["NativeToolStrip.tool.call-1"]
+        XCTAssertTrue(task.waitForExistence(timeout: 5))
+        XCTAssertTrue(task.label.contains("Running"))
+        app.buttons["Idle tools"].tap()
+        XCTAssertTrue(task.exists)
+        XCTAssertFalse(app.buttons["NativeToolStrip.summary"].exists)
+        let shot = XCTAttachment(screenshot: app.screenshot())
+        shot.name = "Busy task lozenge"; shot.lifetime = .keepAlways; add(shot)
+        app.buttons["Finish tasks"].tap()
+        XCTAssertTrue(app.buttons["NativeToolStrip.summary"].waitForExistence(timeout: 3))
+    }
+
+    func testTaskActivityLeadsWithProgressAndKeepsLaunchDetailsSecondary() {
+        continueAfterFailure = false
+        for light in [true, false] {
+            let app = XCUIApplication()
+            app.launchArguments = ["--tool-details-ui-tests", "--task-activity"] + (light ? ["--light-appearance"] : [])
+            app.launch()
+            app.buttons["Open tool details"].tap()
+            XCTAssertTrue(app.staticTexts["ToolCallDetails.summary.call-1"].waitForExistence(timeout: 5))
+            XCTAssertEqual(app.staticTexts["ToolCallDetails.summary.call-1"].label, "Check background task rendering")
+            XCTAssertTrue(app.staticTexts["Recent activity"].exists)
+            XCTAssertTrue(app.staticTexts["1,234 tokens · 8 tool uses · 42s"].exists)
+            XCTAssertFalse(app.staticTexts["NativeTool.command"].exists, "The launch renderer starts inside its own disclosure")
+            let shot = XCTAttachment(screenshot: app.screenshot())
+            shot.name = "Task activity \(light ? "light" : "dark")"; shot.lifetime = .keepAlways; add(shot)
+            app.buttons["ToolCallDetails.done"].tap()
+            XCTAssertTrue(app.staticTexts["Details dismissed"].exists)
+            app.terminate()
+        }
+    }
+
     func testConsoleBrowserSearchesUnrevealedLogsAndExpandsLongMessages() {
         continueAfterFailure = false
         let app = XCUIApplication()

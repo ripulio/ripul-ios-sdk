@@ -84,6 +84,13 @@ public struct ChatSession: Identifiable, Equatable, Codable {
     public var projectName: String?
     /// Git branch, from the same publish. No absolute path travels with it.
     public var gitBranch: String?
+    /// True for a chat reached only through someone else's accepted share
+    /// invitation. Such a chat has no host machine of its own to archive or
+    /// delete against — it drives Remove-chat/Leave-chat instead of
+    /// Archive/Delete in the session list. Optional (not Bool with a
+    /// property default) so a cache written before this field existed
+    /// decodes as nil rather than throwing — see displayNameSource above.
+    public var isSharedGuest: Bool?
 
     public init(
         id: String,
@@ -99,7 +106,8 @@ public struct ChatSession: Identifiable, Equatable, Codable {
         displayNameSource: String? = nil,
         displayNameRenamedAt: Double? = nil,
         projectName: String? = nil,
-        gitBranch: String? = nil
+        gitBranch: String? = nil,
+        isSharedGuest: Bool? = nil
     ) {
         self.id = id
         self.sourceChatId = sourceChatId
@@ -115,6 +123,7 @@ public struct ChatSession: Identifiable, Equatable, Codable {
         self.displayNameRenamedAt = displayNameRenamedAt
         self.projectName = projectName
         self.gitBranch = gitBranch
+        self.isSharedGuest = isSharedGuest
     }
 
     /// Navigation seed from a successful creation reply. Keep tab identity and
@@ -136,6 +145,34 @@ public struct ChatSession: Identifiable, Equatable, Codable {
             model: modelId,
             hostChatId: result["hostChatId"] as? String,
             displayNameSource: "auto"
+        )
+    }
+
+    /// One decoder for the session wire shape, shared by the pull path
+    /// (`__ripulGetSessions`) and the push path (`sessions:list:response`).
+    /// They used to be two hand-copied parsers, and the push one had silently
+    /// dropped `modelId` — so every push, which fires exactly when the web
+    /// learns a session's model, erased the model the pull had just read.
+    static func fromWire(_ item: [String: Any]) -> ChatSession? {
+        guard let id = item["id"] as? String,
+              let sourceChatId = item["sourceChatId"] as? String,
+              let displayName = item["displayName"] as? String else { return nil }
+        let createdAtMs = item["createdAt"] as? Double ?? 0
+        return ChatSession(
+            id: id, sourceChatId: sourceChatId,
+            displayName: displayName,
+            createdAt: Date(timeIntervalSince1970: createdAtMs / 1000),
+            remoteMachineName: item["remoteMachineName"] as? String,
+            provider: item["provider"] as? String,
+            providerLabel: item["providerLabel"] as? String,
+            model: item["modelId"] as? String,
+            hostChatId: item["hostChatId"] as? String,
+            sizeBytes: (item["sizeBytes"] as? NSNumber)?.intValue,
+            displayNameSource: item["displayNameSource"] as? String,
+            displayNameRenamedAt: (item["displayNameRenamedAt"] as? NSNumber)?.doubleValue,
+            projectName: item["projectName"] as? String,
+            gitBranch: item["gitBranch"] as? String,
+            isSharedGuest: item["isSharedGuest"] as? Bool
         )
     }
 
@@ -502,6 +539,8 @@ public struct ClaudeAccountProfile: Identifiable, Equatable {
     public let email: String?
     public let loggedIn: Bool
     public let isDefault: Bool
+    public var plan: String? = nil
+    public var usage: CodingAccountUsage? = nil
 
     public var id: String { slug }
 
@@ -511,7 +550,12 @@ public struct ClaudeAccountProfile: Identifiable, Equatable {
             name: dict["name"] as? String ?? "",
             email: dict["email"] as? String,
             loggedIn: dict["loggedIn"] as? Bool ?? false,
-            isDefault: dict["isDefault"] as? Bool ?? false
+            isDefault: dict["isDefault"] as? Bool ?? false,
+            plan: dict["plan"] as? String,
+            usage: (dict["usage"] as? [String: Any]).flatMap { value in
+                guard let data = try? JSONSerialization.data(withJSONObject: value) else { return nil }
+                return try? JSONDecoder().decode(CodingAccountUsage.self, from: data)
+            }
         )
     }
 }
@@ -869,22 +913,36 @@ public struct PageContext: Equatable {
 
 // MARK: - Native logging that reaches the log tools
 
-/// Drop-in replacements for `NSLog` that ALSO append to the `consoleLogs` buffer
+/// Drop-in replacements for `NSLog` that ALSO append to the `RipulLog` buffer
 /// `device_console_logs` / `host_console_logs` read — so native diagnostics are
 /// readable by the tools, not just in Xcode/Console. Prefer these over a bare
 /// `NSLog` for any native log worth surfacing. They tee to the OS log too, so a
 /// message emitted before the bridge exists is still visible in Xcode.
+///
+/// The sink is `RipulLog`, NOT `AgentBridge.current`. It used to be the latter,
+/// and everything written through these helpers was liable to vanish: `current`
+/// is the most-recently-INITIALIZED bridge, so in an app that builds more than
+/// one (the chat surface plus the dev console) it can point at a bridge whose
+/// `consoleLogs` no reader ever merges. Proven on device — `VoiceModeController`
+/// logged `[VOICE] start` through `handleConsoleLog` and the capture edges
+/// through `nlog`, from the same function, and only the former ever arrived.
+/// `RipulLog` is owned by nobody, lives from module load, and is merged by both
+/// `ConsoleLogsTool` and the relay's `getConsoleLogs` responder.
+///
+/// Synchronous, like `RipulLog.append` itself: a line emitted microseconds
+/// before a crash is already in the buffer. The old `Task { @MainActor }` hop
+/// meant the last thing logged before a hang was the first thing lost.
 public func nlog(_ message: String) {
     Foundation.NSLog("%@", message)   // Foundation.* bypasses the NSLog tee shadow (no double-append)
-    Task { @MainActor in AgentBridge.current?.handleConsoleLog("LOG: [native] \(message)") }
+    RipulLog.shared.append("[native] \(message)", level: .log)
 }
 public func nwarn(_ message: String) {
     Foundation.NSLog("%@", message)
-    Task { @MainActor in AgentBridge.current?.handleConsoleLog("WARN: [native] \(message)") }
+    RipulLog.shared.append("[native] \(message)", level: .warn)
 }
 public func nerror(_ message: String) {
     Foundation.NSLog("%@", message)
-    Task { @MainActor in AgentBridge.current?.handleConsoleLog("ERROR: [native] \(message)") }
+    RipulLog.shared.append("[native] \(message)", level: .error)
 }
 
 /// Which audience an `AgentBridge` channel serves. Fixed for the bridge's
@@ -1149,10 +1207,10 @@ public final class AgentBridge: NSObject, ObservableObject {
                 handleConsoleLog("LOG: [WAITING] reply fetch chat=…\(chatId.suffix(8)) result=unavailable")
                 return
             }
-            guard let text = dict["text"] as? String, !text.isEmpty else {
-                handleConsoleLog("LOG: [WAITING] reply fetch chat=…\(chatId.suffix(8)) result=empty")
-                return
-            }
+            // An empty answer is the ordinary outcome here — most chats have
+            // no loadable reply — so it is not logged. `unavailable` (the web
+            // didn't answer) and the error path below still are.
+            guard let text = dict["text"] as? String, !text.isEmpty else { return }
             backfillWaitingPreview(chatId: chatId, preview: text)
         } catch {
             handleConsoleLog("LOG: [WAITING] reply fetch chat=…\(chatId.suffix(8)) error=\(error.localizedDescription)")
@@ -1254,14 +1312,12 @@ public final class AgentBridge: NSObject, ObservableObject {
         // on launch, which is the bug being fixed.
         let canonical = Self.canonicalChatKey(chatId)
         if let readAt = Self.readStamps(cache: cache)[canonical] {
-            guard let eventDate else {
-                handleConsoleLog("LOG: [WAITING] \(phase.rawValue) chat=…\(chatId.suffix(8)) no-timestamp, already read — leaving read")
-                return
-            }
-            guard eventDate > readAt else {
-                handleConsoleLog("LOG: [WAITING] \(phase.rawValue) chat=…\(chatId.suffix(8)) older than read stamp — leaving read")
-                return
-            }
+            // Both branches leave the entry read, and both fire once per
+            // session on a cold start — 39 lines of "nothing changed" in a
+            // 344-line buffer, which is what buried the signal. Silent by
+            // design: only the write below, which changes state, logs.
+            guard let eventDate else { return }
+            guard eventDate > readAt else { return }
         }
 
         var entries = Self.waitingSessions(cache: cache).filter { $0.chatId != chatId }
@@ -1269,10 +1325,7 @@ public final class AgentBridge: NSObject, ObservableObject {
         case .completed, .failed, .awaitingInput:
             // Watching it IS reading it. Falls through with the entry already
             // filtered out, so the session ends up read rather than unread.
-            if isViewingChat(chatId) {
-                handleConsoleLog("LOG: [WAITING] \(phase.rawValue) chat=…\(chatId.suffix(8)) on-screen — read, not marking")
-                break
-            }
+            if isViewingChat(chatId) { break }
             let title = sessions.first(where: { $0.id == chatId || $0.sourceChatId == chatId })?
                 .displayName.trimmingCharacters(in: .whitespacesAndNewlines)
             entries.append(WaitingSession(
@@ -2011,6 +2064,34 @@ public final class AgentBridge: NSObject, ObservableObject {
     @Published public var chatInputLayout: String?
     @Published public private(set) var conversationModeSwitchers: [String: Bool] = [:]
     @Published public private(set) var conversationModes: [String: String] = [:]
+    /// Pending quoted replies per chat, mirrored from the web transcript.
+    @Published public private(set) var replyTargets: [String: RipulReplyTarget] = [:]
+
+    public func replyTarget(for chatId: String?) -> RipulReplyTarget? {
+        guard let chatId else { return nil }
+        return replyTargets[chatId]
+    }
+
+    /// Native's cancel button. The web store is the authority, so clear it there
+    /// too; the mirror clears immediately for a responsive strip either way.
+    public func clearReplyTarget(chatId: String) async {
+        if replyTargets[chatId] != nil { replyTargets[chatId] = nil }
+        guard let webView else { return }
+        _ = try? await webView.callAsyncJavaScript(
+            "return await window.__ripulClearReplyTarget?.(chatId) ?? {success:false};",
+            arguments: ["chatId": chatId], contentWorld: .page)
+    }
+
+    private func handleReplyTarget(_ dict: [String: Any]) {
+        guard let chatId = dict["chatId"] as? String else { return }
+        if let raw = dict["target"] as? [String: Any],
+           let data = try? JSONSerialization.data(withJSONObject: raw),
+           let target = try? JSONDecoder().decode(RipulReplyTarget.self, from: data) {
+            if replyTargets[chatId] != target { replyTargets[chatId] = target }
+        } else if replyTargets[chatId] != nil {
+            replyTargets[chatId] = nil
+        }
+    }
     @Published public private(set) var messageSubmissionError: String?
 
     public func showsConversationMode(for chatId: String?) -> Bool {
@@ -2127,6 +2208,12 @@ public final class AgentBridge: NSObject, ObservableObject {
     public var fileViewerChatId: String? = nil
     /// When true, closing the file viewer should navigate back to the sessions list.
     public var fileViewerReturnToSessions: Bool = false
+
+    /// True while a web artefact's full page is open — the native chat input
+    /// hides behind it, and the top bar shows the artefact's own back button.
+    @Published public var artefactPageExpanded: Bool = false
+    /// Artefact title shown in the native title bar while its page is open; nil when closed.
+    @Published public var artefactPageTitle: String? = nil
 
     /// Current web page context — drives native chrome visibility.
     /// Updated by the web app via `page:context` messages and by the navigation
@@ -2826,6 +2913,10 @@ public final class AgentBridge: NSObject, ObservableObject {
                 self?.startupBudget.sample(at: ProcessInfo.processInfo.systemUptime, isActive: true)
             }
         }
+        // Geometry backstop for the "came back mid-rotation" report: every window
+        // re-lays out against its current bounds on foreground, so a size change
+        // that landed while suspended is measured. See ForegroundLayoutNudge.
+        ForegroundLayoutNudge.install()
         // Main-thread stall detection. Called straight through rather than from
         // a `Task { @MainActor }`: this class is already @MainActor, so the hop
         // bought nothing and added a way for the start to silently not happen —
@@ -3785,6 +3876,10 @@ public final class AgentBridge: NSObject, ObservableObject {
         case "sessions:ready":
             NSLog("[AgentBridge] Sessions ready received")
             isSessionsReady = true
+            // The web's stores have just hydrated. Any pull that ran before
+            // this answered empty and was kept on the cached list; pull again
+            // now rather than waiting for the next focus or settings change.
+            Task { [weak self] in await self?.fetchSessions() }
         case "workScope:changed":
             // The shared work scope moved — from this app, the web Plans
             // screen, or the web sessions list. Every native surface showing
@@ -3817,6 +3912,8 @@ public final class AgentBridge: NSObject, ObservableObject {
                mode == "agent" || mode == "group", conversationModes[chatId] != mode {
                 conversationModes[chatId] = mode
             }
+        case "composer:replyTarget":
+            handleReplyTarget(dict)
         case "composer:actions":
             if let chatId = dict["chatId"] as? String,
                let data = try? JSONSerialization.data(withJSONObject: dict),
@@ -4063,6 +4160,15 @@ public final class AgentBridge: NSObject, ObservableObject {
             fileViewerFilePath = nil
             fileViewerLine = nil
             fileViewerChatId = nil
+        case "artefact:expand":
+            let title = dict["title"] as? String
+            NSLog("[AgentBridge] Artefact page expand — title: %@", title ?? "nil")
+            artefactPageExpanded = true
+            artefactPageTitle = title
+        case "artefact:collapse":
+            NSLog("[AgentBridge] Artefact page collapse")
+            artefactPageExpanded = false
+            artefactPageTitle = nil
         case "page:context":
             let page = dict["page"] as? String ?? "chat"
             let showHeader = dict["showNativeHeader"] as? Bool ?? true
@@ -4416,7 +4522,10 @@ public final class AgentBridge: NSObject, ObservableObject {
         let chatStr = chatId.map { " chatId=\($0)" } ?? ""
         let extraStr = extra.isEmpty ? "" : " \(extra)"
         let line = "[SESSION-START] stage=\(stage) ts=\(ts)\(chatStr)\(extraStr)"
-        NSLog("%@", line)
+        // Foundation.NSLog, NOT the module's tee shadow: the tee would ALSO
+        // append to RipulLog, so every marker landed in the buffer twice —
+        // once as `[native] [SESSION-START] …` and once as the WARN below.
+        Foundation.NSLog("%@", line)
         handleConsoleLog("WARN: \(line)")
     }
 
@@ -4840,34 +4949,7 @@ public final class AgentBridge: NSObject, ObservableObject {
             }
 
             let activeId = dict["activeId"] as? String
-            let parsed: [ChatSession] = sessionsArray.compactMap { item in
-                guard let id = item["id"] as? String,
-                      let sourceChatId = item["sourceChatId"] as? String,
-                      let displayName = item["displayName"] as? String else { return nil }
-                let createdAtMs = item["createdAt"] as? Double ?? 0
-                let createdAt = Date(timeIntervalSince1970: createdAtMs / 1000)
-                let remoteMachineName = item["remoteMachineName"] as? String
-                let provider = item["provider"] as? String
-                let providerLabel = item["providerLabel"] as? String
-                let model = item["modelId"] as? String
-                let hostChatId = item["hostChatId"] as? String
-                let sizeBytes = (item["sizeBytes"] as? NSNumber)?.intValue
-                let displayNameSource = item["displayNameSource"] as? String
-                let displayNameRenamedAt = (item["displayNameRenamedAt"] as? NSNumber)?.doubleValue
-                let projectName = item["projectName"] as? String
-                let gitBranch = item["gitBranch"] as? String
-                return ChatSession(id: id, sourceChatId: sourceChatId,
-                                   displayName: displayName, createdAt: createdAt,
-                                   remoteMachineName: remoteMachineName,
-                                   provider: provider, providerLabel: providerLabel,
-                                   model: model,
-                                   hostChatId: hostChatId,
-                                   sizeBytes: sizeBytes,
-                                   displayNameSource: displayNameSource,
-                                   displayNameRenamedAt: displayNameRenamedAt,
-                                   projectName: projectName,
-                                   gitBranch: gitBranch)
-            }
+            let parsed: [ChatSession] = sessionsArray.compactMap(ChatSession.fromWire)
 
             // Filter out ephemeral commit-viewer sessions (tracked explicitly
             // by CommitsScreen via ephemeralSessionIds, persisted to UserDefaults).
@@ -5987,6 +6069,27 @@ public final class AgentBridge: NSObject, ObservableObject {
         return []
     }
 
+    /// Invite a teammate into the active chat by email — the same owner-issued
+    /// invitation the share sheet's "Invite by Email" sends. Returns a
+    /// user-facing error message, or nil on success.
+    @available(iOS 15.0, macOS 13.0, *)
+    public func inviteTeammate(email: String) async -> String? {
+        guard let webView else { return "The chat isn't ready yet" }
+        do {
+            let result = try await webView.callAsyncJavaScript(
+                "return await window.__ripulInviteToSession?.(email) ?? { success: false, error: 'Invitations unavailable' };",
+                arguments: ["email": email],
+                contentWorld: .page
+            )
+            guard let dict = result as? [String: Any] else { return "Unexpected response" }
+            if dict["success"] as? Bool == true { return nil }
+            return dict["error"] as? String ?? "Invitation failed"
+        } catch {
+            NSLog("[AgentBridge] inviteTeammate error: %@", error.localizedDescription)
+            return error.localizedDescription
+        }
+    }
+
     /// Query the web view for autocomplete suggestions for a given category and query string.
     /// Used by the native @ picker in NativeChatInput.
     /// Returns an array of dictionaries representing standard suggestions.
@@ -6096,6 +6199,36 @@ public final class AgentBridge: NSObject, ObservableObject {
             }
         } catch {
             NSLog("[AgentBridge] closeSession error: %@", error.localizedDescription)
+        }
+    }
+
+    /// End an invited guest's own membership in a shared chat (requires a
+    /// fresh owner invitation to rejoin), then close its local tab. Distinct
+    /// from `closeSession`, which only ever hides a chat locally.
+    @available(iOS 15.0, macOS 13.0, *)
+    public func leaveSharedChat(id: String) async -> (success: Bool, error: String?) {
+        guard let webView else { return (false, "Reconnect and try again.") }
+        do {
+            let result = try await webView.callAsyncJavaScript(
+                "if (window.__ripulLeaveSharedChat) return await window.__ripulLeaveSharedChat(tabId);",
+                arguments: ["tabId": id],
+                contentWorld: .page
+            )
+            guard let dict = result as? [String: Any], dict["success"] as? Bool == true else {
+                return (false, (result as? [String: Any])?["error"] as? String ?? "Couldn't leave this chat.")
+            }
+            let closed = sessions.first(where: { $0.id == id })
+            sessions.removeAll { $0.id == id }
+            if let sourceChatId = closed?.sourceChatId {
+                sessionList.sessionPhases.removeValue(forKey: sourceChatId)
+                sessionLifecycleSequences.removeValue(forKey: sourceChatId)
+            }
+            if activeSessionId == id {
+                activeSessionId = sessions.first?.id
+            }
+            return (true, nil)
+        } catch {
+            return (false, error.localizedDescription)
         }
     }
 
@@ -8489,21 +8622,28 @@ public final class AgentBridge: NSObject, ObservableObject {
         )
     }
 
+    /// The native bar's row moved (a pose change) — recompute the web
+    /// clearance under it. No-op until the page has loaded once.
+    public func refreshNativeHeaderHeight() {
+        guard didFinishFirstNavigation else { return }
+        updateNativeHeaderHeight()
+    }
+
     /// Re-inject `--native-header-height` CSS variable to account for the masthead.
     private func updateNativeHeaderHeight() {
         guard let webView else { return }
-        let insetTop: CGFloat
-        #if os(iOS)
-        if let windowScene = webView.window?.windowScene {
-            insetTop = windowScene.keyWindow?.safeAreaInsets.top ?? 54
-        } else {
-            insetTop = 54
-        }
-        #else
-        insetTop = 0
-        #endif
         let mastheadExtra = mastheadConfig != nil ? Int(mastheadConfig?.height ?? 48) + 12 : 0
-        let totalHeight = Int(insetTop) + 44 + mastheadExtra
+        let totalHeight: Int
+        #if os(iOS)
+        // The row the native bar occupies in the OWNING window — a corner
+        // camera (iPhone Duo open) pulls it above the rectangular inset;
+        // content below it still clears the camera's band.
+        let clearance = webView.window.map { WindowTopChromeLayout.clearance(for: $0) }
+            ?? WindowTopChromeClearance(top: 54, safeTop: 54)
+        totalHeight = Int(clearance.contentClearance(below: 44)) + mastheadExtra
+        #else
+        totalHeight = 44 + mastheadExtra
+        #endif
         let js = "document.documentElement.style.setProperty('--native-header-height', '\(totalHeight)px')"
         webView.evaluateJavaScript(js) { _, error in
             if let error {
@@ -8563,6 +8703,20 @@ public final class AgentBridge: NSObject, ObservableObject {
         fileViewerChatId = nil
         // Also close the (web-only) in-chat viewer if one is showing; harmless on native.
         evaluateVoidJavaScript("window.__ripulCloseFileViewer?.()")
+    }
+
+    /// Ask the web artefact page to close (triggered by the native back button
+    /// or the back swipe).
+    ///
+    /// Unlike the file viewer, this page lives in THIS web view, so the web side
+    /// owns the dismissal and reports it back as `artefact:collapse`. Clear the
+    /// title anyway, so the bar reverts even if the page has already gone (a
+    /// chat switch, a reload) and cannot leave the chat wearing the wrong bar.
+    public func requestArtefactPageClose() {
+        NSLog("[AgentBridge] requestArtefactPageClose")
+        artefactPageExpanded = false
+        artefactPageTitle = nil
+        evaluateVoidJavaScript("window.__ripulCloseArtefactPage?.()")
     }
 
     /// Zoom in the markdown file viewer.
@@ -8911,31 +9065,8 @@ public final class AgentBridge: NSObject, ObservableObject {
         guard let sessionsArray = message["sessions"] as? [[String: Any]] else { return }
         let activeId = message["activeId"] as? String
 
-        let parsed: [ChatSession] = sessionsArray.compactMap { dict in
-            guard let id = dict["id"] as? String,
-                  let sourceChatId = dict["sourceChatId"] as? String,
-                  let displayName = dict["displayName"] as? String else { return nil }
-            let createdAtMs = dict["createdAt"] as? Double ?? 0
-            let createdAt = Date(timeIntervalSince1970: createdAtMs / 1000)
-            let remoteMachineName = dict["remoteMachineName"] as? String
-            let provider = dict["provider"] as? String
-            let providerLabel = dict["providerLabel"] as? String
-            let hostChatId = dict["hostChatId"] as? String
-            let sizeBytes = (dict["sizeBytes"] as? NSNumber)?.intValue
-            let displayNameSource = dict["displayNameSource"] as? String
-            let displayNameRenamedAt = (dict["displayNameRenamedAt"] as? NSNumber)?.doubleValue
-            let projectName = dict["projectName"] as? String
-            let gitBranch = dict["gitBranch"] as? String
-            return ChatSession(id: id, sourceChatId: sourceChatId, displayName: displayName, createdAt: createdAt,
-                               remoteMachineName: remoteMachineName,
-                               provider: provider, providerLabel: providerLabel,
-                               hostChatId: hostChatId,
-                               sizeBytes: sizeBytes,
-                               displayNameSource: displayNameSource,
-                               displayNameRenamedAt: displayNameRenamedAt,
-                               projectName: projectName,
-                               gitBranch: gitBranch)
-        }
+        // Same decoder as the pull path — see `ChatSession.fromWire`.
+        let parsed: [ChatSession] = sessionsArray.compactMap(ChatSession.fromWire)
 
         // Filter out ephemeral commit-viewer sessions (tracked explicitly
         // by CommitsScreen via ephemeralSessionIds, persisted to UserDefaults).
@@ -8977,9 +9108,12 @@ public final class AgentBridge: NSObject, ObservableObject {
                 if initialSync > 0 {
                     Self.debugLog("[AgentBridge] handleSessionsListResponse: initialSync=\(initialSync) skipAuto=\(skipAuto)")
                 }
+                // Publish only on change, like the pull path. An unconditional
+                // assignment re-fired every `$sessions` sink on every push and
+                // re-ran the unified rebuild for nothing.
+                self.sessions = filtered
+                ChatSession.saveToCache(filtered)
             }
-            self.sessions = filtered
-            ChatSession.saveToCache(filtered)
             applyActiveSessionIdFromResponse(activeId)
             sessionsRetryCount = 0
             NSLog("[AgentBridge] Sessions updated: %d sessions (%d commit-view filtered), active: %@",

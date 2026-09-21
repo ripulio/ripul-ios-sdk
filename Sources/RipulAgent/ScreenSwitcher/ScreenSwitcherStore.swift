@@ -24,6 +24,11 @@ public enum SwitcherStop: Equatable {
     case deck
     /// The full card board, with the springboard beneath it.
     case grid
+    /// Past the grid: the card you came in on has folded into the host's
+    /// floating chat bubble. A landing you pass THROUGH rather than rest on —
+    /// the moment the spring settles here the store hands off to the host
+    /// (`onBubble`), which shows its real bubble and calls `completeBubble`.
+    case bubble
 }
 
 // MARK: - Screen Switcher Store
@@ -31,7 +36,7 @@ public enum SwitcherStop: Equatable {
 /// Drives the Safari-style screen overview ("Exposé") that every `GlassTopBar`
 /// can summon by swiping down on its title lozenge.
 ///
-/// **Leaf ObservableObject, deliberately.** `progress` publishes on every drag
+/// **Leaf ObservableObject, deliberately.** `progress` publishes on every motion
 /// frame. If the shell (`ContentView`) observed this, each frame would re-render
 /// the WKWebView host and every mounted screen — the exact failure documented for
 /// `AgentBridge`'s 53-field object. So the store is injected through a plain
@@ -45,6 +50,7 @@ public final class ScreenSwitcherStore: ObservableObject {
 
     /// 0 = the live screen fills the window. `deckFraction` = the app-switcher
     /// deck. 1 = the card grid is fully laid out.
+    /// This is the eased visible position, not the latest thumb position.
     /// Every geometric property of the transition is a pure function of this one
     /// value, which is what keeps the motion continuous: there is no discrete
     /// state swap mid-flight for the eye to catch.
@@ -75,6 +81,11 @@ public final class ScreenSwitcherStore: ObservableObject {
     /// than `isOpen`: both stops are places you can act from, and only the live
     /// screen is not.
     public var isSettled: Bool { stop != .screen }
+
+    /// True from the release that chose the bubble until the host has taken
+    /// over. No tap is live here: the card is mid-fold and the board is about
+    /// to be rearranged underneath it.
+    public var isBubbling: Bool { stop == .bubble }
 
     /// True while a finger is actually down. The overview blurs only in this
     /// state, so releasing always resolves to sharp regardless of which way the
@@ -355,7 +366,59 @@ public final class ScreenSwitcherStore: ObservableObject {
         snapshots[id] = nil
     }
 
-    public init() {}
+    public init() {
+        observeLifecycle()
+    }
+
+    deinit {
+        pullDisplayLink?.invalidate()
+        for token in lifecycleObservers { NotificationCenter.default.removeObserver(token) }
+    }
+
+    // MARK: - Interruption recovery
+
+    private var lifecycleObservers: [NSObjectProtocol] = []
+
+    /// Settle on both edges of an interruption. `willResignActive` is the
+    /// moment the system takes the touch away, so putting the store back THERE
+    /// means the app-switcher snapshot is already at rest; `didBecomeActive`
+    /// is the backstop for anything that slipped through while suspended.
+    private func observeLifecycle() {
+        let center = NotificationCenter.default
+        for name in [UIApplication.willResignActiveNotification, UIApplication.didBecomeActiveNotification] {
+            lifecycleObservers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.settleAfterInterruption() }
+            })
+        }
+    }
+
+    /// Bring every gesture-driven transient back to its nearest resting stop.
+    ///
+    /// SwiftUI's `DragGesture` never reports cancellation: `onEnded` does not
+    /// run when the system takes the touch away — a backgrounding, an incoming
+    /// call, Control Centre pulled over a drag. Each gesture in the overview
+    /// clears its own axis on the NEXT touch (`ScreenSwitcherPullModifier.
+    /// tracking`), but nothing put the STORE back, so the screen sat half-shrunk
+    /// on the ramp, or half-slid toward a neighbour, until a later drag happened
+    /// to reset it. That is the "came back frozen mid-transition" report.
+    ///
+    /// Safe to call at any time: a store already at rest does nothing.
+    public func settleAfterInterruption() {
+        var settled: [String] = []
+        if let pending = pendingPullStop {
+            settle(to: pending)
+            settled.append("released ramp")
+        }
+        if isDragging { settled.append("ramp@" + String(format: "%.2f", Double(progress))); cancelInteractive() }
+        if isSliding { settled.append("slide@" + String(format: "%.2f", Double(slideFraction))); cancelSlide() }
+        if cardDragActive { settled.append("card@\(Int(deckCardOffset))"); cancelDeckCardDrag() }
+        if deckPanActive { settled.append("pan@" + String(format: "%.2f", Double(deckPosition))); endDeckPan(velocity: 0, pitch: 1) }
+        if isWarming, !isActive { settled.append("warmup"); cancelPrepareToOpen() }
+        // One line per settle that changed something, so the next "came back
+        // frozen" report can be read off the device log. A store at rest logs
+        // nothing, and this runs on both edges of every app switch.
+        if !settled.isEmpty { NSLog("[FGSETTLE] switcher settled \(settled.joined(separator: " "))") }
+    }
 
     // MARK: - Snapshots
 
@@ -440,15 +503,90 @@ public final class ScreenSwitcherStore: ObservableObject {
     /// on toward the grid would first snap the deck back to full screen.
     private var interactiveBase: CGFloat = 0
 
-    /// Total travel that maps to one full unit of `progress`.
-    ///
-    /// Set by the overlay to the distance the active card's bottom edge actually
-    /// has to cover, so that edge sits under the thumb for the whole drag rather
-    /// than running away from it. A fixed distance cannot do that: the edge has
-    /// to cross from the bottom of the screen to a grid slot two thirds of the
-    /// way up it, so any value short of that is the card moving faster than the
-    /// finger — which reads as the gesture being over-accelerated even though
-    /// nothing is accelerating.
+    /// Intent and visible position are separate. A delayed/batched touch update
+    /// must not teleport the card to the thumb. Release decisions still use
+    /// intent, so smoothing cannot make a quick pull miss its intended stop.
+    private var pullTarget: CGFloat = 0
+    private var pullSpeed: CGFloat = 0
+    private var pullLastFrame: CFTimeInterval?
+    private var pullDisplayLink: CADisplayLink?
+    private var pullHasPresentedStart = false
+    private var pendingPullStop: SwitcherStop?
+
+    private func beginPullMotion() {
+        endPullMotion()
+        pullTarget = progress
+        let target = PullFrameTarget(store: self)
+        let link = CADisplayLink(target: target, selector: #selector(PullFrameTarget.tick(_:)))
+        pullDisplayLink = link
+        link.add(to: .main, forMode: .common)
+    }
+
+    private func endPullMotion() {
+        pullDisplayLink?.invalidate()
+        pullDisplayLink = nil
+        pullLastFrame = nil
+        pullSpeed = 0
+        pullHasPresentedStart = false
+        pendingPullStop = nil
+    }
+
+    /// Called by the display clock, also exercised with explicit timestamps in
+    /// tests. The first tick holds the starting frame; later ticks ease toward
+    /// intent with bounded speed/acceleration. Lost frames are never caught up.
+    func advanceInteractiveFrame(at timestamp: CFTimeInterval) {
+        guard isActive, isDragging || pendingPullStop != nil else { return }
+        guard let previous = pullLastFrame else {
+            pullLastFrame = timestamp
+            return
+        }
+        pullLastFrame = timestamp
+        pullHasPresentedStart = true
+        if let pending = pendingPullStop {
+            settle(to: pending)
+            return
+        }
+        let dt = CGFloat(min(1.0 / 60, max(0, timestamp - previous)))
+        guard dt > 0 else { return }
+        let distance = pullTarget - progress
+        let desiredSpeed = max(-2.8, min(2.8, distance / 0.09))
+        let acceleration = 16 * dt
+        pullSpeed += max(-acceleration, min(acceleration, desiredSpeed - pullSpeed))
+        var movement = pullSpeed * dt
+        if movement * distance >= 0, abs(movement) >= abs(distance) {
+            movement = distance
+            pullSpeed = 0
+        }
+        var next = max(0, min(canBubble ? Self.bubbleProgress : 1, progress + movement))
+        let resting = abs(pullTarget - next) < 0.0001 && abs(pullSpeed) < 0.001
+        if resting { next = pullTarget }
+        // These are already presentation-frame positions. An inherited SwiftUI
+        // animation would interpolate them a second time and reintroduce lag.
+        if next != progress {
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) { progress = next }
+        }
+        if resting {
+            pullDisplayLink?.isPaused = true
+            pullLastFrame = nil
+        }
+    }
+
+    /// CADisplayLink retains its target; the target must not retain the store.
+    @MainActor
+    private final class PullFrameTarget: NSObject {
+        weak var store: ScreenSwitcherStore?
+        init(store: ScreenSwitcherStore) { self.store = store }
+        @objc func tick(_ link: CADisplayLink) {
+            guard let store else { link.invalidate(); return }
+            store.advanceInteractiveFrame(at: link.timestamp)
+        }
+    }
+
+    /// Travel mapping to one full unit of pull intent. Calibrated to the window
+    /// so the deck/grid/bubble thresholds stay familiar across screen sizes.
+    /// Visible progress deliberately trails this intent to favour smooth motion.
     public var travelDistance: CGFloat = 220
 
     /// Set the ramp's length from the window, once, before a gesture starts.
@@ -488,8 +626,109 @@ public final class ScreenSwitcherStore: ObservableObject {
     /// i.e. `(1 - deckScale) / 2`.
     private static let deckStopFraction: CGFloat = 0.11
 
+    // MARK: - Bubble stop
+
+    /// Where the active card folds to when the pull carries on past the grid,
+    /// in the owning window's coordinates. Asked once per gesture, at the
+    /// moment the pull begins from the live screen, and frozen for the rest of
+    /// it — a target that moved mid-drag would steer the card under the finger.
+    ///
+    /// Return nil to leave the ramp as it was: two stops, grid last. The shell
+    /// answers for the ACTIVE document, so it can offer the bubble only for
+    /// screens that have somewhere to fold into (a chat over a floating
+    /// launcher) and never for a settings page.
+    public var bubbleTargetProvider: (() -> CGRect?)?
+
+    /// The frozen target for the gesture in flight. Read by the overlay per
+    /// frame; nil whenever the current pull has no third landing.
+    @Published public private(set) var bubbleTarget: CGRect?
+
+    /// Whether this pull can reach the bubble at all. Needs a target AND another
+    /// card to land the board on — folding the only card away would leave the
+    /// overview open on nothing.
+    public var canBubble: Bool { bubbleTarget != nil && documents.count > 1 }
+
+    /// Raised once the fold has visibly landed, with the id of the document
+    /// that folded. The shell shows its real bubble and rearranges its own
+    /// navigation, then — inside this callback — calls
+    /// `completeBubble(retiring:landingOn:)` to tell the board what to show
+    /// instead. A shell that returns without doing so gets the board back at
+    /// the grid, card intact.
+    public var onBubble: ((String) -> Void)?
+
+    /// How far past the grid the ramp runs to the bubble, in units of
+    /// `progress`. A little over a third of the grid pull again — enough that
+    /// the fold is a decision rather than an overshoot, short enough to reach
+    /// from a title bar in one draw of the thumb.
+    public static let bubbleProgress: CGFloat = 1.35
+
+    /// Release past this and the card folds; short of it, it returns to the grid.
+    private var bubbleThreshold: CGFloat { 1 + (Self.bubbleProgress - 1) * 0.5 }
+
+    /// The most recently visited document other than `id` — the screen the
+    /// board lands on when `id` folds away. Recency, not display order: what
+    /// you were looking at before this is the honest "previous screen".
+    public func mostRecentlyUsed(
+        excluding id: String,
+        where isCandidate: (SwitcherDocument) -> Bool = { _ in true }
+    ) -> SwitcherDocument? {
+        for candidate in recency where candidate != id {
+            if let document = document(for: candidate), isCandidate(document) { return document }
+        }
+        return documents.first { $0.id != id && isCandidate($0) }
+    }
+
+    /// Finish a fold the shell has accepted.
+    ///
+    /// The folded card leaves the board — it is the bubble now, and a card that
+    /// stood for it as well would offer the same chat twice. Not `close(id:)`:
+    /// nothing is being closed, so `onClose` must not fire and the chat's own
+    /// resource stays exactly as it was. With a landing document the board
+    /// stays open on it, highlighted at progress 1 exactly as if it had been
+    /// pulled to the grid from that screen; without one the overview dismisses
+    /// flat, because there is no card left to zoom back into.
+    public func completeBubble(retiring id: String?, landingOn landingId: String?) {
+        guard stop == .bubble else { return }
+        if let id, let i = documents.firstIndex(where: { $0.id == id }) {
+            withAnimation(.easeOut(duration: 0.25)) { documents.remove(at: i) }
+            forget(id)
+        }
+        bubbleTarget = nil
+        guard let landingId, let landing = document(for: landingId) else {
+            dismissFlat()
+            return
+        }
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            activeDestinationId = landing.id
+            progress = 1
+            stop = .grid
+            interactiveBase = 1
+            isCommitted = true
+            isDragging = false
+        }
+        activeSnapshot = snapshot(for: landing.id)
+        deckPosition = CGFloat(order.firstIndex(of: landing.id) ?? 0)
+        touch(landing.id)
+    }
+
+    /// Fade the whole overview out and unmount. Shared by the quick-launch
+    /// dismissal and a fold with nowhere to land.
+    private func dismissFlat() {
+        isFlatDismissing = true
+        settleToken &+= 1
+        let token = settleToken
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 280_000_000)
+            guard self.settleToken == token else { return }
+            self.teardown()
+        }
+    }
+
     public func beginInteractive(snapshot: UIImage?) {
-        guard !isOpen else { return }
+        guard !isOpen, !isBubbling, !isDragging else { return }
+        settleToken &+= 1
         // Only capture when starting from the live screen. Resuming the pull
         // FROM the deck must not re-snapshot: the key window is the deck at that
         // point, so capturing would paste a picture of the switcher onto the
@@ -500,6 +739,9 @@ public final class ScreenSwitcherStore: ObservableObject {
             if let activeSnapshot { snapshots[activeDestinationId] = activeSnapshot }
             deckPosition = CGFloat(order.firstIndex(of: activeDestinationId) ?? 0)
             progress = 0
+            // Asked here and not per frame: the answer depends on where the
+            // host's bubble would sit, and that must not move under a drag.
+            bubbleTarget = bubbleTargetProvider?()
         }
         interactiveBase = progress
         isActive = true
@@ -507,23 +749,35 @@ public final class ScreenSwitcherStore: ObservableObject {
         isWarming = false
         isDragging = true
         isCommitted = stop == .deck
+        beginPullMotion()
     }
 
     public func updateInteractive(translation: CGFloat) {
-        guard isActive, !isOpen else { return }
+        guard isDragging, isActive, !isOpen, !isBubbling else { return }
         // Relative to where the drag began, not to zero. Clamped at both ends so
-        // an overshoot in either direction cannot invert the transform.
-        progress = max(0, min(1, interactiveBase + translation / travelDistance))
+        // an overshoot in either direction cannot invert the transform. The top
+        // of the ramp is the grid — unless this pull can fold, in which case the
+        // card keeps travelling past it into the bubble.
+        let top = canBubble ? Self.bubbleProgress : 1
+        pullTarget = max(0, min(top, interactiveBase + translation / travelDistance))
+        pullDisplayLink?.isPaused = false
         // Distance only, not velocity: velocity is a property of the release,
         // and the blur has to answer "what happens if I let go NOW" on every
         // frame while the finger is still moving.
-        isCommitted = progress >= deckThreshold
+        isCommitted = pullTarget >= deckThreshold
     }
 
     public func endInteractive(translation: CGFloat, velocity: CGFloat) {
-        guard isActive, !isOpen else { return }
+        guard isDragging, isActive, !isOpen, !isBubbling else { return }
         isDragging = false
-        settle(to: destination(velocity: velocity))
+        let target = destination(progress: pullTarget, velocity: velocity)
+        if pullHasPresentedStart {
+            settle(to: target)
+        } else {
+            // Even a flick released during mounting gets a full-size first
+            // frame before the settling spring starts, never a pre-shrunk card.
+            pendingPullStop = target
+        }
     }
 
     /// Which stop a release lands on.
@@ -533,14 +787,23 @@ public final class ScreenSwitcherStore: ObservableObject {
     /// the grid would make the deck unreachable by anyone who swipes briskly —
     /// which is most people — and the deck is the stop this gesture now exists
     /// to offer.
-    private func destination(velocity: CGFloat) -> SwitcherStop {
+    private func destination(progress: CGFloat, velocity: CGFloat) -> SwitcherStop {
         let flickUp = velocity > commitVelocity
         let flickDown = velocity < -commitVelocity
 
         if flickDown {
             // Step back one stop rather than all the way out, so a downward
-            // flick from between the two landings lands on the deck.
+            // flick from between the two landings lands on the deck — and one
+            // from past the grid lands on the grid.
+            if progress > 1 { return .grid }
             return progress > deckFraction ? .deck : .screen
+        }
+        if canBubble {
+            // The fold cannot be flicked into from below the grid: a brisk pull
+            // that would have opened the board must not fold the chat away
+            // instead. Past the grid it takes distance, or a flick.
+            if progress >= bubbleThreshold { return .bubble }
+            if flickUp, progress > 1 { return .bubble }
         }
         if progress >= gridThreshold { return .grid }
         if flickUp { return progress >= deckFraction ? .grid : .deck }
@@ -549,7 +812,7 @@ public final class ScreenSwitcherStore: ObservableObject {
     }
 
     public func cancelInteractive() {
-        guard isActive, !isOpen else { return }
+        guard isActive, !isOpen, !isBubbling else { return }
         isDragging = false
         // Back to whichever stop the drag began at — a cancelled gesture is one
         // that never happened, not one that dismissed.
@@ -620,7 +883,12 @@ public final class ScreenSwitcherStore: ObservableObject {
         // the instant the axis locked.
         endGlide()
         deckPanStart = deckPosition
+        deckPanActive = true
     }
+
+    /// True between `beginDeckPan` and its release, so an interrupted pan can
+    /// be handed back to the deck's bounds — see `settleAfterInterruption`.
+    private var deckPanActive = false
 
     /// Stop any coast in progress, leaving the deck exactly where it had got to.
     private func endGlide() {
@@ -670,6 +938,7 @@ public final class ScreenSwitcherStore: ObservableObject {
     /// has no duration at all — it simply runs out, and the tail is as long as
     /// the throw deserves.
     public func endDeckPan(velocity: CGFloat, pitch: CGFloat) {
+        deckPanActive = false
         guard stop == .deck, pitch > 0 else { return }
         endGlide()
 
@@ -773,6 +1042,20 @@ public final class ScreenSwitcherStore: ObservableObject {
         if deckCardId != id { deckCardOffset = 0 }
         deckCardId = id
         cardDragStart = deckCardOffset
+        cardDragActive = true
+    }
+
+    /// True between `beginDeckCardDrag` and its release. A lifted card with no
+    /// release is what an interruption leaves behind — see
+    /// `settleAfterInterruption`.
+    private var cardDragActive = false
+
+    /// The finger left a lifted card without a release. Land it the way a short
+    /// release would, rather than leaving it hanging off its slot.
+    public func cancelDeckCardDrag() {
+        cardDragActive = false
+        guard deckCardId != nil else { return }
+        springCardBack(velocity: 0)
     }
 
     /// Upward only. A downward drag on a card is the deck being pulled back
@@ -837,6 +1120,7 @@ public final class ScreenSwitcherStore: ObservableObject {
     private static let cardSpringDamping: CGFloat = 22
 
     public func endDeckCardDrag(velocity: CGFloat, height: CGFloat) {
+        cardDragActive = false
         guard let id = deckCardId, height > 0 else { return }
         // Distance OR speed. A card dragged most of the way up should go even if
         // it was released standing still, and a card barely lifted should go if
@@ -894,11 +1178,22 @@ public final class ScreenSwitcherStore: ObservableObject {
     }
 
     public func close() {
-        guard isActive else { return }
+        guard isActive, !isBubbling else { return }
         settle(to: .screen)
     }
 
+    /// A host-owned transition already covers the overview. Retire it beneath
+    /// that cover rather than running a competing zoom or leaving a delayed
+    /// fold callback alive after the chat has been restored.
+    public func closeImmediately() {
+        settleToken &+= 1
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) { teardown() }
+    }
+
     public func select(_ id: String) {
+        guard !isBubbling else { return }
         onSelect?(id)
         // Nothing to defer any more: under stable open-order, visiting a
         // document does not move it, so the flying card's origin slot is still
@@ -928,14 +1223,7 @@ public final class ScreenSwitcherStore: ObservableObject {
         // to navigate, so it has to exist in the set before onSelect fires.
         open(document)
         onSelect?(document.id)
-        isFlatDismissing = true
-        settleToken &+= 1
-        let token = settleToken
-        Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 280_000_000)
-            guard self.settleToken == token else { return }
-            self.teardown()
-        }
+        dismissFlat()
     }
 
     // MARK: - Sideways travel
@@ -1046,6 +1334,7 @@ public final class ScreenSwitcherStore: ObservableObject {
     }
 
     private func teardown() {
+        endPullMotion()
         endGlide()
         endCardSpring()
         isActive = false
@@ -1059,6 +1348,7 @@ public final class ScreenSwitcherStore: ObservableObject {
         deckPosition = 0
         deckCardId = nil
         deckCardOffset = 0
+        bubbleTarget = nil
     }
 
     /// Invalidates a pending unmount when a new gesture starts before the last
@@ -1073,6 +1363,7 @@ public final class ScreenSwitcherStore: ObservableObject {
         case .screen: return 0
         case .deck: return deckFraction
         case .grid: return 1
+        case .bubble: return Self.bubbleProgress
         }
     }
 
@@ -1080,6 +1371,7 @@ public final class ScreenSwitcherStore: ObservableObject {
     /// there is exactly one spring in the system and no two animations can
     /// disagree about where the card is.
     private func settle(to target: SwitcherStop) {
+        endPullMotion()
         stop = target
         isDragging = false
         isCommitted = target != .screen
@@ -1097,6 +1389,21 @@ public final class ScreenSwitcherStore: ObservableObject {
         let token = settleToken
         withAnimation(.spring(response: 0.42, dampingFraction: 0.86)) {
             progress = progress(of: target)
+        }
+        if target == .bubble {
+            // Hand off once the fold has visibly landed, not on release: the
+            // host's real bubble appears over the folded card, and the swap
+            // reads as one object only if the card is already there.
+            let folded = activeDestinationId
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 460_000_000)
+                guard self.settleToken == token, self.stop == .bubble else { return }
+                self.onBubble?(folded)
+                // A host that did not take the fold would leave the overview
+                // parked on a card with nowhere to go. Put it back on the grid.
+                if self.stop == .bubble { self.settle(to: .grid) }
+            }
+            return
         }
         guard target == .screen else { return }
         // Unmount only after the spring has visually come to rest. A 0.42

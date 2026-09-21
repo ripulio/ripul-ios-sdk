@@ -9,6 +9,29 @@ final class ToolCallDetailsTests: XCTestCase {
         return value
     }
 
+    @MainActor func testTaskActivityUpdatesWithoutResettingTheOpenSheet() {
+        let store = ToolCallDetailsStore()
+        var task: [String: Any] = ["id": "task-a", "type": "local_bash", "title": "Run checks", "status": "running",
+                                  "entries": [["kind": "tool", "label": "Read", "detail": "one.ts"]], "totalCount": 11, "synthetic": false]
+        var launch = call("a", result: "Started in background")
+        launch["status"] = "running"
+        launch["task"] = task
+        store.receive(["requestId": "task", "title": "Tool calls", "calls": [launch]], opening: true)
+        XCTAssertEqual(store.request?.calls.first?.task?.entries.first?.detail, "one.ts")
+        XCTAssertEqual(store.request?.calls.first?.task?.subtitle, "Shell")
+        store.setExpanded(false, callId: "a")
+        task["entries"] = [["kind": "tool", "label": "Read", "detail": "two.ts"]]
+        task["status"] = "completed"
+        task["summary"] = "Checks passed"
+        launch["task"] = task
+        launch["status"] = "completed"
+        store.receive(["requestId": "task", "title": "Tool calls", "calls": [launch]], opening: false)
+        XCTAssertTrue(store.expandedCallIds.isEmpty)
+        XCTAssertEqual(store.request?.calls.first?.task?.entries.first?.detail, "two.ts")
+        XCTAssertEqual(store.request?.calls.first?.task?.summary, "Checks passed")
+        XCTAssertEqual(store.request?.calls.first?.result, "Started in background")
+    }
+
     @MainActor func testMultipleExpandedCallsSurviveResultsAndNewIterations() {
         let store = ToolCallDetailsStore()
         store.receive(["requestId": "one", "title": "Bash", "calls": [call("a"), call("b")]], opening: true)

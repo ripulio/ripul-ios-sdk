@@ -53,6 +53,12 @@ class FullBleedWebView: WKWebView {
                 "nativeWidth": bounds.width], in: nil, in: .page, completionHandler: nil)
     }
 
+    /// Fires on the main queue, outside any SwiftUI update, when the row the
+    /// native top bar occupies moves (see `WindowTopChromeLayout`) after the
+    /// first measurement. The bridge re-injects the web clearance under it.
+    var onTopClearanceChange: (() -> Void)?
+    private var lastTopClearance: CGFloat?
+
     #if !targetEnvironment(macCatalyst)
     private var edgeUpdateScheduled = false
     private var hasTopClearance: Bool?
@@ -82,6 +88,11 @@ class FullBleedWebView: WKWebView {
             guard let self else { return }
             self.edgeUpdateScheduled = false
             guard let window = self.window else { return }
+            let clearance = WindowTopChromeLayout.clearance(for: window).top
+            if let last = self.lastTopClearance, last != clearance {
+                self.onTopClearanceChange?()
+            }
+            self.lastTopClearance = clearance
             let hasClearance = window.safeAreaInsets.top > 0
             guard hasClearance != self.hasTopClearance else { return }
             self.hasTopClearance = hasClearance

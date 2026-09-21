@@ -97,6 +97,24 @@ public struct ParticipantSuggestion: Identifiable {
     }
 }
 
+/// A teammate for the @ picker — someone the signed-in account shares a team
+/// with who is not yet in this chat. Picking one inserts the mention AND
+/// invites them (the same owner-issued, email-keyed invitation as the share
+/// sheet's "Invite by Email"). `id` is the roster's `human-<userId>`.
+public struct TeammateSuggestion: Identifiable {
+    public let id: String
+    public let name: String
+    public let email: String
+    public let description: String?
+
+    public init(id: String, name: String, email: String, description: String? = nil) {
+        self.id = id
+        self.name = name
+        self.email = email
+        self.description = description
+    }
+}
+
 /// A branch suggestion for the @ picker — a git branch of the chat's repo.
 /// `token` is the serialised `[context: …]` chip text; the composer displays it
 /// as a readable alias (see `ContextMentionAliasing`) and swaps the token back
@@ -226,6 +244,9 @@ public struct NativeChatInput: View {
     /// Send a human note (not sent to agent, for human-to-human communication).
     var onSubmitNote: (() -> Void)?
     var conversationMode: String
+    /// The message being replied to, shown above the field until sent or cancelled.
+    var replyTarget: RipulReplyTarget?
+    var onCancelReply: (() -> Void)?
     var runningSendLabel: String
     var composerActions: [RipulComposerAction]
     var composerActionPending: Bool
@@ -255,6 +276,12 @@ public struct NativeChatInput: View {
     /// When provided, the `@` overlay shows a "Branches" section; picking one
     /// inserts its `[context: …]` token, resolved to live branch facts at send.
     var onQueryBranches: ((String) async -> [BranchSuggestion])?
+    /// Optional callback to fetch teammates not yet in this chat. When provided,
+    /// the `@` overlay shows a "Team" section under People; picking one inserts
+    /// the mention and hands the row to `onInviteTeammate`.
+    var onQueryTeammates: (() async -> [TeammateSuggestion])?
+    /// Invite a picked teammate into the chat. Returns a user-facing error, or nil.
+    var onInviteTeammate: ((TeammateSuggestion) async -> String?)?
     /// Structured participant IDs picked since the last send. Cleared on submit
     /// by the parent so a new turn starts empty. Drives `addressedTo` routing.
     @Binding var addressedParticipants: [String]
@@ -302,6 +329,11 @@ public struct NativeChatInput: View {
     @State private var participantSuggestions: [ParticipantSuggestion] = []
     @State private var branchSuggestions: [BranchSuggestion] = []
     @State private var allBranchSuggestions: [BranchSuggestion] = []
+    @State private var allTeammateSuggestions: [TeammateSuggestion] = []
+    @State private var teammateSuggestions: [TeammateSuggestion] = []
+    /// Outcome of the last teammate invitation, shown briefly above the field.
+    @State private var atNotice: String?
+    @State private var atNoticeTask: Task<Void, Never>?
     /// Classes hidden via the toggle chips (persisted in UserDefaults).
     @State private var hiddenClasses: Set<String> = Set(AtClassToggleSpec.all.filter { AtClassToggles.isHidden($0.key) }.map(\.key))
     @State private var showHistorySheet = false
@@ -327,6 +359,8 @@ public struct NativeChatInput: View {
         onSubmit: @escaping () -> Void,
         onSubmitNote: (() -> Void)? = nil,
         conversationMode: String = "agent",
+        replyTarget: RipulReplyTarget? = nil,
+        onCancelReply: (() -> Void)? = nil,
         runningSendLabel: String = "Send",
         composerActions: [RipulComposerAction] = [],
         composerActionPending: Bool = false,
@@ -343,6 +377,8 @@ public struct NativeChatInput: View {
         onQueryFiles: ((String) async -> [FileSuggestion])? = nil,
         onQueryElements: (() async -> [ElementSuggestion])? = nil,
         onQueryParticipants: (() async -> [ParticipantSuggestion])? = nil,
+        onQueryTeammates: (() async -> [TeammateSuggestion])? = nil,
+        onInviteTeammate: ((TeammateSuggestion) async -> String?)? = nil,
         onQueryBranches: ((String) async -> [BranchSuggestion])? = nil,
         addressedParticipants: Binding<[String]> = .constant([]),
         onFocusChanged: ((Bool) -> Void)? = nil,
@@ -363,6 +399,8 @@ public struct NativeChatInput: View {
         self.onSubmit = onSubmit
         self.onSubmitNote = onSubmitNote
         self.conversationMode = conversationMode
+        self.replyTarget = replyTarget
+        self.onCancelReply = onCancelReply
         self.runningSendLabel = runningSendLabel
         self.composerActions = composerActions
         self.composerActionPending = composerActionPending
@@ -380,6 +418,8 @@ public struct NativeChatInput: View {
         self.onQueryElements = onQueryElements
         self.onQueryParticipants = onQueryParticipants
         self.onQueryBranches = onQueryBranches
+        self.onQueryTeammates = onQueryTeammates
+        self.onInviteTeammate = onInviteTeammate
         self._addressedParticipants = addressedParticipants
         self.onFocusChanged = onFocusChanged
         self.onPlusLongPress = onPlusLongPress
@@ -502,6 +542,10 @@ public struct NativeChatInput: View {
 
     public var body: some View {
         VStack(spacing: 4) {
+            if let atNotice {
+                atNoticeBanner(atNotice)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
             if showAtSuggestions {
                 unifiedSuggestionsOverlay
                     .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -599,7 +643,7 @@ public struct NativeChatInput: View {
     /// Detect `@` followed by typing and populate a single ranked suggestion list
     /// (participants first, then files, then UI elements).
     private func handleAtDetection(_ value: String) {
-        guard onQueryFiles != nil || onQueryElements != nil || onQueryParticipants != nil || onQueryBranches != nil else { return }
+        guard onQueryFiles != nil || onQueryElements != nil || onQueryParticipants != nil || onQueryBranches != nil || onQueryTeammates != nil else { return }
 
         guard let atRange = value.range(of: "@", options: .backwards) else {
             dismissAtOverlay()
@@ -636,6 +680,15 @@ public struct NativeChatInput: View {
                     }
                 }
             }
+            if !hiddenClasses.contains("people"), let queryTeammates = onQueryTeammates {
+                Task {
+                    let results = await queryTeammates()
+                    await MainActor.run {
+                        allTeammateSuggestions = results
+                        teammateSuggestions = filterTeammates(by: afterAt, all: results)
+                    }
+                }
+            }
             if !hiddenClasses.contains("repo"), let queryBranches = onQueryBranches {
                 Task {
                     let results = await queryBranches(afterAt)
@@ -657,6 +710,7 @@ public struct NativeChatInput: View {
         } else {
             // Already open — refilter cached lists locally.
             participantSuggestions = filterParticipants(by: afterAt, all: allParticipantSuggestions)
+            teammateSuggestions = filterTeammates(by: afterAt, all: allTeammateSuggestions)
             branchSuggestions = filterBranches(by: afterAt, all: allBranchSuggestions)
             elementSuggestions = filterElements(by: afterAt, all: allElementSuggestions)
         }
@@ -684,6 +738,12 @@ public struct NativeChatInput: View {
         return all.filter { $0.name.lowercased().contains(q) || $0.id.lowercased().contains(q) }
     }
 
+    private func filterTeammates(by query: String, all: [TeammateSuggestion]) -> [TeammateSuggestion] {
+        guard !query.isEmpty else { return all }
+        let q = query.lowercased()
+        return all.filter { $0.name.lowercased().contains(q) || $0.email.lowercased().contains(q) }
+    }
+
     private func filterElements(by query: String, all: [ElementSuggestion]) -> [ElementSuggestion] {
         guard !query.isEmpty else { return all }
         let q = query.lowercased()
@@ -703,6 +763,8 @@ public struct NativeChatInput: View {
         allElementSuggestions = []
         participantSuggestions = []
         allParticipantSuggestions = []
+        teammateSuggestions = []
+        allTeammateSuggestions = []
         branchSuggestions = []
         allBranchSuggestions = []
         atTriggerIndex = nil
@@ -740,6 +802,27 @@ public struct NativeChatInput: View {
             addressedParticipants.append(suggestion.id)
         }
         dismissAtOverlay()
+    }
+
+    private func selectTeammateSuggestion(_ suggestion: TeammateSuggestion) {
+        if let triggerIdx = atTriggerIndex {
+            let before = String(text[text.startIndex..<triggerIdx])
+            text = before + "@" + suggestion.name + " "
+        } else {
+            text += "@" + suggestion.name + " "
+        }
+        if !addressedParticipants.contains(suggestion.id) {
+            addressedParticipants.append(suggestion.id)
+        }
+        dismissAtOverlay()
+        guard let onInviteTeammate else { return }
+        let who = suggestion.name.replacingOccurrences(of: "_", with: " ")
+        Task {
+            let error = await onInviteTeammate(suggestion)
+            await MainActor.run {
+                showAtNotice(error.map { "Couldn't invite \(who): \($0)" } ?? "Invited \(who) to this chat")
+            }
+        }
     }
 
     private func selectBranchSuggestion(_ suggestion: BranchSuggestion) {
@@ -857,9 +940,10 @@ public struct NativeChatInput: View {
         VStack(spacing: 0) {
             classToggleRow
             let peopleShown = !participantSuggestions.isEmpty && !hiddenClasses.contains("people")
+            let teamShown = !teammateSuggestions.isEmpty && !hiddenClasses.contains("people")
             let branchesShown = !branchSuggestions.isEmpty && !hiddenClasses.contains("repo")
             let filesShown = !fileSuggestions.isEmpty && !hiddenClasses.contains("files")
-            let hasResults = peopleShown || branchesShown || filesShown || !elementSuggestions.isEmpty
+            let hasResults = peopleShown || teamShown || branchesShown || filesShown || !elementSuggestions.isEmpty
             if !hasResults {
                 HStack(spacing: 8) {
                     Image(systemName: "magnifyingglass")
@@ -884,8 +968,20 @@ public struct NativeChatInput: View {
                                 }
                             }
                         }
-                        if branchesShown {
+                        if teamShown {
                             if peopleShown {
+                                Divider()
+                            }
+                            suggestionSectionHeader("Team")
+                            ForEach(teammateSuggestions) { suggestion in
+                                teammateRow(suggestion)
+                                if suggestion.id != teammateSuggestions.last?.id {
+                                    Divider().padding(.leading, 40)
+                                }
+                            }
+                        }
+                        if branchesShown {
+                            if peopleShown || teamShown {
                                 Divider()
                             }
                             suggestionSectionHeader("Branches")
@@ -897,7 +993,7 @@ public struct NativeChatInput: View {
                             }
                         }
                         if filesShown {
-                            if peopleShown || branchesShown {
+                            if peopleShown || teamShown || branchesShown {
                                 Divider()
                             }
                             suggestionSectionHeader("Files")
@@ -909,7 +1005,7 @@ public struct NativeChatInput: View {
                             }
                         }
                         if !elementSuggestions.isEmpty {
-                            if peopleShown || branchesShown || filesShown {
+                            if peopleShown || teamShown || branchesShown || filesShown {
                                 Divider()
                             }
                             suggestionSectionHeader("UI Elements")
@@ -970,6 +1066,67 @@ public struct NativeChatInput: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+    }
+
+    private func teammateRow(_ suggestion: TeammateSuggestion) -> some View {
+        Button {
+            selectTeammateSuggestion(suggestion)
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "person.badge.plus")
+                    .foregroundStyle(.secondary)
+                    .frame(width: 20)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(suggestion.name)
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                    Text(suggestion.description ?? "Invite to this chat")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                Spacer()
+                Text("Invite")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.tint)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("NativeChatInput.at.teammate")
+    }
+
+    /// One line above the field, gone after a few seconds: what happened to
+    /// the invitation the last teammate pick sent.
+    private func atNoticeBanner(_ message: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "person.badge.plus")
+                .foregroundStyle(.secondary)
+            Text(message)
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+            Spacer()
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(.ultraThinMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .padding(.horizontal, 16)
+        .accessibilityIdentifier("NativeChatInput.at.notice")
+    }
+
+    private func showAtNotice(_ message: String) {
+        atNoticeTask?.cancel()
+        withAnimation { atNotice = message }
+        atNoticeTask = Task {
+            try? await Task.sleep(nanoseconds: 4_000_000_000)
+            guard !Task.isCancelled else { return }
+            await MainActor.run { withAnimation { atNotice = nil } }
+        }
     }
 
     private func fileRow(_ suggestion: FileSuggestion) -> some View {
@@ -1239,6 +1396,9 @@ public struct NativeChatInput: View {
                 // Group adjacent glass surfaces so they share the same sampling region.
                 VStack(spacing: 0) {
                     ComposerContextChips(store: contextStore, session: contextSessionID)
+                    if let replyTarget {
+                        ReplyTargetStrip(target: replyTarget, onCancel: onCancelReply)
+                    }
                     if !imageAttachments.isEmpty {
                         imageThumbsRow
                     }
@@ -1279,6 +1439,9 @@ public struct NativeChatInput: View {
                 // Full-width text area
                 VStack(spacing: 0) {
                     ComposerContextChips(store: contextStore, session: contextSessionID)
+                    if let replyTarget {
+                        ReplyTargetStrip(target: replyTarget, onCancel: onCancelReply)
+                    }
                     if !imageAttachments.isEmpty {
                         imageThumbsRow
                     }
@@ -1688,6 +1851,9 @@ public struct NativeChatInput: View {
     /// Send a human note (not sent to agent, for human-to-human communication).
     var onSubmitNote: (() -> Void)?
     var conversationMode: String
+    /// The message being replied to, shown above the field until sent or cancelled.
+    var replyTarget: RipulReplyTarget?
+    var onCancelReply: (() -> Void)?
     var runningSendLabel: String
     var composerActions: [RipulComposerAction]
     var composerActionPending: Bool
@@ -1717,6 +1883,12 @@ public struct NativeChatInput: View {
     /// When provided, the `@` overlay shows a "Branches" section; picking one
     /// inserts its `[context: …]` token, resolved to live branch facts at send.
     var onQueryBranches: ((String) async -> [BranchSuggestion])?
+    /// Optional callback to fetch teammates not yet in this chat. When provided,
+    /// the `@` overlay shows a "Team" section under People; picking one inserts
+    /// the mention and hands the row to `onInviteTeammate`.
+    var onQueryTeammates: (() async -> [TeammateSuggestion])?
+    /// Invite a picked teammate into the chat. Returns a user-facing error, or nil.
+    var onInviteTeammate: ((TeammateSuggestion) async -> String?)?
     /// Structured participant IDs picked since the last send. Cleared on submit
     /// by the parent so a new turn starts empty. Drives `addressedTo` routing.
     @Binding var addressedParticipants: [String]
@@ -1749,6 +1921,11 @@ public struct NativeChatInput: View {
     @State private var participantSuggestions: [ParticipantSuggestion] = []
     @State private var branchSuggestions: [BranchSuggestion] = []
     @State private var allBranchSuggestions: [BranchSuggestion] = []
+    @State private var allTeammateSuggestions: [TeammateSuggestion] = []
+    @State private var teammateSuggestions: [TeammateSuggestion] = []
+    /// Outcome of the last teammate invitation, shown briefly above the field.
+    @State private var atNotice: String?
+    @State private var atNoticeTask: Task<Void, Never>?
     /// Classes hidden via the toggle chips (persisted in UserDefaults).
     @State private var hiddenClasses: Set<String> = Set(AtClassToggleSpec.all.filter { AtClassToggles.isHidden($0.key) }.map(\.key))
     /// Composer-visible alias → the `[context: …]` token it stands in for.
@@ -1766,6 +1943,8 @@ public struct NativeChatInput: View {
         onSubmit: @escaping () -> Void,
         onSubmitNote: (() -> Void)? = nil,
         conversationMode: String = "agent",
+        replyTarget: RipulReplyTarget? = nil,
+        onCancelReply: (() -> Void)? = nil,
         runningSendLabel: String = "Send",
         composerActions: [RipulComposerAction] = [],
         composerActionPending: Bool = false,
@@ -1782,6 +1961,8 @@ public struct NativeChatInput: View {
         onQueryFiles: ((String) async -> [FileSuggestion])? = nil,
         onQueryElements: (() async -> [ElementSuggestion])? = nil,
         onQueryParticipants: (() async -> [ParticipantSuggestion])? = nil,
+        onQueryTeammates: (() async -> [TeammateSuggestion])? = nil,
+        onInviteTeammate: ((TeammateSuggestion) async -> String?)? = nil,
         onQueryBranches: ((String) async -> [BranchSuggestion])? = nil,
         addressedParticipants: Binding<[String]> = .constant([]),
         onFocusChanged: ((Bool) -> Void)? = nil,
@@ -1799,6 +1980,8 @@ public struct NativeChatInput: View {
         self.onSubmit = onSubmit
         self.onSubmitNote = onSubmitNote
         self.conversationMode = conversationMode
+        self.replyTarget = replyTarget
+        self.onCancelReply = onCancelReply
         self.runningSendLabel = runningSendLabel
         self.composerActions = composerActions
         self.composerActionPending = composerActionPending
@@ -1816,6 +1999,8 @@ public struct NativeChatInput: View {
         self.onQueryElements = onQueryElements
         self.onQueryParticipants = onQueryParticipants
         self.onQueryBranches = onQueryBranches
+        self.onQueryTeammates = onQueryTeammates
+        self.onInviteTeammate = onInviteTeammate
         self._addressedParticipants = addressedParticipants
         self.onFocusChanged = onFocusChanged
         self.speechProvider = speechProvider
@@ -1830,7 +2015,7 @@ public struct NativeChatInput: View {
     /// Detect `@` followed by typing and populate a single ranked suggestion list
     /// (participants first, then files, then UI elements).
     private func handleAtDetection(_ value: String) {
-        guard onQueryFiles != nil || onQueryElements != nil || onQueryParticipants != nil || onQueryBranches != nil else { return }
+        guard onQueryFiles != nil || onQueryElements != nil || onQueryParticipants != nil || onQueryBranches != nil || onQueryTeammates != nil else { return }
 
         guard let atRange = value.range(of: "@", options: .backwards) else {
             dismissAtOverlay()
@@ -1867,6 +2052,15 @@ public struct NativeChatInput: View {
                     }
                 }
             }
+            if !hiddenClasses.contains("people"), let queryTeammates = onQueryTeammates {
+                Task {
+                    let results = await queryTeammates()
+                    await MainActor.run {
+                        allTeammateSuggestions = results
+                        teammateSuggestions = filterTeammates(by: afterAt, all: results)
+                    }
+                }
+            }
             if !hiddenClasses.contains("repo"), let queryBranches = onQueryBranches {
                 Task {
                     let results = await queryBranches(afterAt)
@@ -1888,6 +2082,7 @@ public struct NativeChatInput: View {
         } else {
             // Already open — refilter cached lists locally.
             participantSuggestions = filterParticipants(by: afterAt, all: allParticipantSuggestions)
+            teammateSuggestions = filterTeammates(by: afterAt, all: allTeammateSuggestions)
             branchSuggestions = filterBranches(by: afterAt, all: allBranchSuggestions)
             elementSuggestions = filterElements(by: afterAt, all: allElementSuggestions)
         }
@@ -1915,6 +2110,12 @@ public struct NativeChatInput: View {
         return all.filter { $0.name.lowercased().contains(q) || $0.id.lowercased().contains(q) }
     }
 
+    private func filterTeammates(by query: String, all: [TeammateSuggestion]) -> [TeammateSuggestion] {
+        guard !query.isEmpty else { return all }
+        let q = query.lowercased()
+        return all.filter { $0.name.lowercased().contains(q) || $0.email.lowercased().contains(q) }
+    }
+
     private func filterElements(by query: String, all: [ElementSuggestion]) -> [ElementSuggestion] {
         guard !query.isEmpty else { return all }
         let q = query.lowercased()
@@ -1934,6 +2135,8 @@ public struct NativeChatInput: View {
         allElementSuggestions = []
         participantSuggestions = []
         allParticipantSuggestions = []
+        teammateSuggestions = []
+        allTeammateSuggestions = []
         branchSuggestions = []
         allBranchSuggestions = []
         atTriggerIndex = nil
@@ -1971,6 +2174,27 @@ public struct NativeChatInput: View {
             addressedParticipants.append(suggestion.id)
         }
         dismissAtOverlay()
+    }
+
+    private func selectTeammateSuggestion(_ suggestion: TeammateSuggestion) {
+        if let triggerIdx = atTriggerIndex {
+            let before = String(text[text.startIndex..<triggerIdx])
+            text = before + "@" + suggestion.name + " "
+        } else {
+            text += "@" + suggestion.name + " "
+        }
+        if !addressedParticipants.contains(suggestion.id) {
+            addressedParticipants.append(suggestion.id)
+        }
+        dismissAtOverlay()
+        guard let onInviteTeammate else { return }
+        let who = suggestion.name.replacingOccurrences(of: "_", with: " ")
+        Task {
+            let error = await onInviteTeammate(suggestion)
+            await MainActor.run {
+                showAtNotice(error.map { "Couldn't invite \(who): \($0)" } ?? "Invited \(who) to this chat")
+            }
+        }
     }
 
     private func selectBranchSuggestion(_ suggestion: BranchSuggestion) {
@@ -2088,9 +2312,10 @@ public struct NativeChatInput: View {
         VStack(spacing: 0) {
             classToggleRow
             let peopleShown = !participantSuggestions.isEmpty && !hiddenClasses.contains("people")
+            let teamShown = !teammateSuggestions.isEmpty && !hiddenClasses.contains("people")
             let branchesShown = !branchSuggestions.isEmpty && !hiddenClasses.contains("repo")
             let filesShown = !fileSuggestions.isEmpty && !hiddenClasses.contains("files")
-            let hasResults = peopleShown || branchesShown || filesShown || !elementSuggestions.isEmpty
+            let hasResults = peopleShown || teamShown || branchesShown || filesShown || !elementSuggestions.isEmpty
             if !hasResults {
                 HStack(spacing: 8) {
                     Image(systemName: "magnifyingglass")
@@ -2115,8 +2340,20 @@ public struct NativeChatInput: View {
                                 }
                             }
                         }
-                        if branchesShown {
+                        if teamShown {
                             if peopleShown {
+                                Divider()
+                            }
+                            suggestionSectionHeader("Team")
+                            ForEach(teammateSuggestions) { suggestion in
+                                teammateRow(suggestion)
+                                if suggestion.id != teammateSuggestions.last?.id {
+                                    Divider().padding(.leading, 40)
+                                }
+                            }
+                        }
+                        if branchesShown {
+                            if peopleShown || teamShown {
                                 Divider()
                             }
                             suggestionSectionHeader("Branches")
@@ -2128,7 +2365,7 @@ public struct NativeChatInput: View {
                             }
                         }
                         if filesShown {
-                            if peopleShown || branchesShown {
+                            if peopleShown || teamShown || branchesShown {
                                 Divider()
                             }
                             suggestionSectionHeader("Files")
@@ -2140,7 +2377,7 @@ public struct NativeChatInput: View {
                             }
                         }
                         if !elementSuggestions.isEmpty {
-                            if peopleShown || branchesShown || filesShown {
+                            if peopleShown || teamShown || branchesShown || filesShown {
                                 Divider()
                             }
                             suggestionSectionHeader("UI Elements")
@@ -2201,6 +2438,67 @@ public struct NativeChatInput: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+    }
+
+    private func teammateRow(_ suggestion: TeammateSuggestion) -> some View {
+        Button {
+            selectTeammateSuggestion(suggestion)
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "person.badge.plus")
+                    .foregroundStyle(.secondary)
+                    .frame(width: 20)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(suggestion.name)
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                    Text(suggestion.description ?? "Invite to this chat")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                Spacer()
+                Text("Invite")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.tint)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("NativeChatInput.at.teammate")
+    }
+
+    /// One line above the field, gone after a few seconds: what happened to
+    /// the invitation the last teammate pick sent.
+    private func atNoticeBanner(_ message: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "person.badge.plus")
+                .foregroundStyle(.secondary)
+            Text(message)
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+            Spacer()
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(.ultraThinMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .padding(.horizontal, 16)
+        .accessibilityIdentifier("NativeChatInput.at.notice")
+    }
+
+    private func showAtNotice(_ message: String) {
+        atNoticeTask?.cancel()
+        withAnimation { atNotice = message }
+        atNoticeTask = Task {
+            try? await Task.sleep(nanoseconds: 4_000_000_000)
+            guard !Task.isCancelled else { return }
+            await MainActor.run { withAnimation { atNotice = nil } }
+        }
     }
 
     private func fileRow(_ suggestion: FileSuggestion) -> some View {
@@ -2272,6 +2570,10 @@ public struct NativeChatInput: View {
         .overlay(alignment: .top) {
             if showAtSuggestions {
                 unifiedSuggestionsOverlay
+                    .offset(y: -8)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            } else if let atNotice {
+                atNoticeBanner(atNotice)
                     .offset(y: -8)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
@@ -2432,6 +2734,9 @@ public struct NativeChatInput: View {
 
                 VStack(spacing: 0) {
                     ComposerContextChips(store: contextStore, session: contextSessionID)
+                    if let replyTarget {
+                        ReplyTargetStrip(target: replyTarget, onCancel: onCancelReply)
+                    }
                     if !imageAttachments.isEmpty {
                         imageThumbsRow
                     }
@@ -2472,6 +2777,9 @@ public struct NativeChatInput: View {
             VStack(spacing: 6) {
                 VStack(spacing: 0) {
                     ComposerContextChips(store: contextStore, session: contextSessionID)
+                    if let replyTarget {
+                        ReplyTargetStrip(target: replyTarget, onCancel: onCancelReply)
+                    }
                     if !imageAttachments.isEmpty {
                         imageThumbsRow
                     }

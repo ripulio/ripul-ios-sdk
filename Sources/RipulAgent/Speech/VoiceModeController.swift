@@ -49,6 +49,25 @@ public final class VoiceModeController: ObservableObject {
             // not have to re-derive that.
             if phase != .speaking, phase != .paused { playbackLive = false }
             updateNowPlaying()
+            // One line per genuine transition. `didSet` fires on same-value
+            // assignment too, hence the guard. This is the spine of any
+            // "what happened during that drop?" read of the buffer.
+            if phase != oldValue { nlog("[VOICE] phase \(Self.phaseLabel(oldValue)) -> \(Self.phaseLabel(phase))") }
+        }
+    }
+
+    /// Log-safe name for a phase. `.notice` carries user-facing text, so it is
+    /// named rather than printed — a notice body can be an error string of
+    /// arbitrary length and this line must stay one line.
+    private static func phaseLabel(_ phase: Phase) -> String {
+        switch phase {
+        case .inactive: return "inactive"
+        case .listening: return "listening"
+        case .sending: return "sending"
+        case .thinking: return "thinking"
+        case .speaking: return "speaking"
+        case .paused: return "paused"
+        case .notice: return "notice"
         }
     }
     /// In-flight partial for the current utterance (grey in the UI).
@@ -106,6 +125,14 @@ public final class VoiceModeController: ObservableObject {
     /// Last actual transcript event, so energy can't hold the send open forever.
     private var lastTranscriptAt: TimeInterval = 0
     private var lastAudioFrameAt: TimeInterval = 0
+    /// When capture last went down, so the up edge can report how long the mic
+    /// was genuinely dead. That gap IS the drop the user feels, and nothing
+    /// else in the app measures it.
+    private var micDownAt: TimeInterval = 0
+    /// Engine id carried as a plain string: `NativeSpeechProviding` is gated to
+    /// iOS 26 and the capture edges that log it are not, so the cast cannot
+    /// happen at the logging site.
+    private var sttProviderID = "unknown"
     /// True only while the engine is genuinely capturing. The window cannot
     /// expire while the mic is down (dropped socket, engine restart) — that gap
     /// is not the user being silent, and sending into it truncated the
@@ -180,6 +207,7 @@ public final class VoiceModeController: ObservableObject {
     init(transcriptionProvider: any NativeSpeechProviding, fallback: any NativeSpeechProviding) {
         sttProvider = transcriptionProvider
         sttFallback = fallback
+        sttProviderID = transcriptionProvider.id
     }
 
     // MARK: - Lifecycle
@@ -239,6 +267,7 @@ public final class VoiceModeController: ObservableObject {
         }
         sttProvider = NativeSpeechProviderFactory.dictation(tokenProvider: tokens, tokenRefresher: mintToken)
         sttFallback = AppleSpeechProvider()
+        sttProviderID = (sttProvider as? any NativeSpeechProviding)?.id ?? "unknown"
         ttsProvider = NativeSpeechProviderFactory.speaking(tokenProvider: tokens, tokenRefresher: mintToken)
         ttsFallback = AppleSpeechProvider()
 
@@ -249,7 +278,7 @@ public final class VoiceModeController: ObservableObject {
         sttFellBack = false
         micFailureCount = 0
         pendingReply = nil
-        setCaptureLive(false)
+        setCaptureLive(false, reason: "session-start")
         noiseFloor = Self.minSpeechRms
         noteTranscript()
 
@@ -295,7 +324,7 @@ public final class VoiceModeController: ObservableObject {
         }
         deactivateRemoteCommands()
         VoiceModeCoordinator.shared.endSession()
-        setCaptureLive(false)
+        setCaptureLive(false, reason: "stop")
         if #available(iOS 26.0, macOS 26.0, *) {
             VoiceAudioSession.end()
         }
@@ -413,7 +442,7 @@ public final class VoiceModeController: ObservableObject {
     public func pauseConversation() {
         switch phase {
         case .listening:
-            setCaptureLive(false)
+            setCaptureLive(false, reason: "pause")
             if #available(iOS 26.0, macOS 26.0, *) {
                 (sttProvider as? any NativeSpeechProviding)?.stopTranscription()
             }
@@ -474,7 +503,7 @@ public final class VoiceModeController: ObservableObject {
     public func submitTypedUtterance(_ text: String) {
         let typed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !typed.isEmpty, isActive, phase != .sending else { return }
-        setCaptureLive(false)
+        setCaptureLive(false, reason: "typed-utterance")
         noticeTask?.cancel()
         // Interrupt any in-flight readout — a typed command is an explicit
         // barge-in, same as tapping while it speaks.
@@ -531,7 +560,7 @@ public final class VoiceModeController: ObservableObject {
         // The mic is not up yet. Until it is, the send decision must not run —
         // and the clock restarts from capture, so a slow engine start doesn't
         // eat into the user's window.
-        setCaptureLive(false)
+        setCaptureLive(false, reason: "engine-start")
         lastAudioFrameAt = 0
         noteTranscript()
         Task { @MainActor [weak self] in
@@ -606,11 +635,23 @@ public final class VoiceModeController: ObservableObject {
             // preserving whatever the user already said. The mic is down for
             // the whole restart (a token mint plus a WS handshake, on
             // ElevenLabs), which is emphatically not the user falling silent.
-            setCaptureLive(false)
+            // Logged as a warning because this is the path that produces a
+            // "it dropped and came back a few seconds later" with nothing
+            // wrong on screen: no error, no notice, just a dead mic for a
+            // 300ms backoff plus a token mint and a WS handshake. It ran
+            // completely silently until now.
+            nwarn("[VOICE] STT engine ended on its own — restarting provider=\(sttProviderID) keptText=\(!(committedText.isEmpty && partialText.isEmpty))")
+            setCaptureLive(false, reason: "engine-ended")
             let endedID = listeningID
             Task { @MainActor [weak self] in
                 do { try await Task.sleep(nanoseconds: 300_000_000) } catch { return }
-                guard let self, self.phase == .listening, self.listeningID == endedID else { return }
+                guard let self, self.phase == .listening, self.listeningID == endedID else {
+                    // The attempt was superseded (a send, a stop, a newer
+                    // restart). Worth a line: it is the difference between
+                    // "restart never happened" and "restart was overtaken".
+                    nlog("[VOICE] STT restart abandoned — attempt superseded")
+                    return
+                }
                 self.beginListening(keepText: true)
             }
         }
@@ -618,7 +659,7 @@ public final class VoiceModeController: ObservableObject {
 
     @available(iOS 26.0, macOS 26.0, *)
     private func handleTranscriptionFailure(_ message: String) {
-        setCaptureLive(false)
+        setCaptureLive(false, reason: "stt-error")
         let failedProvider = sttProvider as? any NativeSpeechProviding
         nerror("[VOICE] STT error provider=\(failedProvider?.id ?? "unknown"): \(message)")
         micFailureCount += 1
@@ -633,6 +674,7 @@ public final class VoiceModeController: ObservableObject {
             }
             sttFellBack = true
             sttProvider = sttFallback ?? AppleSpeechProvider()
+            sttProviderID = (sttProvider as? any NativeSpeechProviding)?.id ?? "unknown"
             showNotice("Cloud transcription interrupted — using on-device dictation")
             nlog("[VOICE] STT recovery: switched to Apple on-device dictation")
         } else if micFailureCount >= 5 {
@@ -658,10 +700,24 @@ public final class VoiceModeController: ObservableObject {
     ///
     /// The false→true edge is the "you can talk now" moment, so it also fires
     /// a haptic: hands-free means not watching the screen for the cue.
-    private func setCaptureLive(_ live: Bool) {
+    private func setCaptureLive(_ live: Bool, reason: String = "unspecified") {
         guard captureLive != live else { return }
         captureLive = live
-        if live { announceMicLive() }
+        // Edge-gated, so this costs ~2 lines per turn — and it is the most
+        // useful pair in the buffer. The `after=` on the up edge is exactly
+        // the "dropped for a few seconds" number; `reason` on the down edge
+        // separates an expected mic close (sending, speaking, pause) from an
+        // engine that fell over. Provider is named because an ElevenLabs
+        // socket dying and Apple's engine restarting are indistinguishable
+        // from the UI.
+        if live {
+            let downMs = micDownAt > 0 ? Int((Self.now - micDownAt) * 1000) : 0
+            nlog("[VOICE] mic UP provider=\(sttProviderID) down=\(downMs)ms")
+            announceMicLive()
+        } else {
+            micDownAt = Self.now
+            nlog("[VOICE] mic DOWN provider=\(sttProviderID) reason=\(reason)")
+        }
     }
 
     /// The "you can talk now" cue, on both channels.
@@ -725,7 +781,7 @@ public final class VoiceModeController: ObservableObject {
         // command send removes its closing phrase; manual sends preserve text.
         let text = message ?? raw
         guard !text.isEmpty, let bridge else { return }
-        setCaptureLive(false)
+        setCaptureLive(false, reason: "send")
         // Invalidate capture callbacks before stopping the provider, which may
         // synchronously deliver a final result or .ended during shutdown.
         phase = .sending

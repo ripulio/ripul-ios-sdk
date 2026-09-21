@@ -225,6 +225,37 @@ public struct UnifiedSession: Identifiable, Codable {
         return !Set(mergeKeys).isDisjoint(with: keys)
     }
 
+    /// True when this row has no scan behind it and its tab now reports a
+    /// provider or model the row lacks or disagrees with. Only an orphan-local
+    /// row qualifies: a scanned row's provider and model come from the host
+    /// and the tab must not overrule them.
+    public func tabFactsDiffer(from tab: ChatSession) -> Bool {
+        guard !titleFromScan, machineId == nil else { return false }
+        if let p = tab.provider, p != provider { return true }
+        if let l = tab.providerLabel, l != providerLabel { return true }
+        if let m = tab.model, m != model { return true }
+        return false
+    }
+
+    /// Copy of this row taking provider, provider label and model from its tab
+    /// where the tab has an opinion. Nil on the tab means "don't know", never
+    /// "none", so a known value on the row is kept.
+    public func adoptingTabFacts(_ tab: ChatSession) -> UnifiedSession {
+        UnifiedSession(
+            id: id, title: title, lastUsed: lastUsed,
+            hasKnownActivity: hasKnownActivity, gitBranch: gitBranch,
+            messageCount: messageCount, projectName: projectName, projectPath: projectPath,
+            provider: tab.provider ?? provider,
+            providerLabel: tab.providerLabel ?? providerLabel,
+            model: tab.model ?? model,
+            machineName: machineName, machineId: machineId,
+            matchKeys: matchKeys, tags: tags, metadataKey: metadataKey,
+            cachedIsOpen: cachedIsOpen,
+            titleFromScan: titleFromScan,
+            ripulSession: ripulSession
+        )
+    }
+
     /// Copy of this row reporting a different model.
     public func withModel(_ newModel: String?) -> UnifiedSession {
         UnifiedSession(
@@ -346,6 +377,13 @@ public struct UnifiedSession: Identifiable, Codable {
 
     /// Whether this session belongs to any CLI provider (Claude Code, Codex, Antigravity, etc.).
     public var isCliSession: Bool { resolvedProvider?.isCli == true }
+
+    /// True for a chat reached only through someone else's accepted share
+    /// invitation. Such a row is always backed by an open local tab (there is
+    /// no host-machine scan for someone else's chat, so it can never surface
+    /// any other way) — drives Remove-chat/Leave-chat instead of
+    /// Archive/Delete in the session list.
+    public var isSharedGuest: Bool { ripulSession?.isSharedGuest == true }
 
     /// Human-readable model name for the session row, e.g. "Opus 4.6" from
     /// "claude-opus-4-6". Non-Claude ids (e.g. a Kimi alias) pass through
@@ -579,8 +617,8 @@ extension UnifiedSession: Equatable {
         lhs.projectName == rhs.projectName &&
         lhs.gitBranch == rhs.gitBranch &&
         lhs.tags == rhs.tags &&
-        // Both drive what the row shows: projectPath re-roots the folder tree,
-        // cachedIsOpen is half of `isOpenInRipul` (the green dot). Omitting
+        // Both affect session-list state: projectPath re-roots the folder tree,
+        // cachedIsOpen is half of `isOpenInRipul`. Omitting
         // them let a rebuild that ONLY corrects one of them be dropped by the
         // "nothing changed" gate, so the stale value stayed on screen.
         lhs.projectPath == rhs.projectPath &&

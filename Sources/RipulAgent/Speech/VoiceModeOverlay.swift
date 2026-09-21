@@ -69,6 +69,8 @@ struct VoiceModeOverlay: View {
     @FocusState private var typedFieldFocused: Bool
     #if os(iOS)
     @StateObject private var keyboard = KeyboardObserver()
+    @Environment(\.ripulBottomBarFrame) private var bottomBar
+    @State private var navigationClearance: CGFloat = 0
     #endif
 
     private var orbColor: Color {
@@ -286,9 +288,14 @@ struct VoiceModeOverlay: View {
                 // These labels already draw their circular controls. Suppress
                 // Catalyst's default button bezel, as in the compact panel.
                 .buttonStyle(.plain)
-                .padding(.bottom, bottomPadding)
+                .padding(.bottom, controlsBottomPadding)
             }
         }
+        #if os(iOS)
+        .background(SessionsScrollBoundsReader(bottomBar: bottomBar, gap: 0) {
+            navigationClearance = $0
+        })
+        #endif
         .onAppear { pulsing = true }
         .onChange(of: typedFieldFocused) { focused in
             // Keyboard dismissed (or focus stolen) without a submit: close
@@ -347,6 +354,17 @@ struct VoiceModeOverlay: View {
         return max(keyboard.height + 10, 20)
         #else
         return 36
+        #endif
+    }
+
+    private var controlsBottomPadding: CGFloat {
+        #if os(iOS)
+        // Measure the overlay's actual window bounds: some tab destinations
+        // consume the safe area already, others extend underneath the bar.
+        // Keyboard clearance and navigation overlap are alternatives, not sums.
+        return max(bottomPadding, navigationClearance + 36)
+        #else
+        return bottomPadding
         #endif
     }
 

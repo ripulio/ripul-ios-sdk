@@ -95,6 +95,7 @@ public struct GlassSessionsList: View {
     let openingUnifiedSessionId: String?
     let archivingUnifiedSessionId: String?
     let deletingUnifiedSessionId: String?
+    let leavingUnifiedSessionId: String?
     let deletingFromHost: Bool
     /// Resolved last-active times keyed by UnifiedSession.id — stable
     /// across restarts, used for cold-start sort and display.
@@ -103,6 +104,10 @@ public struct GlassSessionsList: View {
     let onArchiveUnifiedSession: (UnifiedSession) -> Void
     let onDeleteUnifiedSession: (UnifiedSession) -> Void
     let onRemoveFromRipulUnifiedSession: (UnifiedSession) -> Void
+    /// Invited chats only: hide it locally (membership untouched).
+    let onRemoveInvitedUnifiedSession: (UnifiedSession) -> Void
+    /// Invited chats only: end membership (needs a fresh invite to rejoin).
+    let onLeaveInvitedUnifiedSession: (UnifiedSession) -> Void
     let onMoveUnifiedSession: (UnifiedSession, RemoteMachine) -> Void
     let onBatchArchive: ([UnifiedSession]) -> Void
     let onBatchDelete: ([UnifiedSession]) -> Void
@@ -159,6 +164,7 @@ public struct GlassSessionsList: View {
     @State private var selectedTagFilter: String? = nil
     @State private var showBatchArchiveConfirm = false
     @State private var showBatchDeleteConfirm = false
+    @State private var leavingInvitedSession: UnifiedSession? = nil
     @State private var quickLaunchLoading: String?
     /// Bumped on QuickLaunchPreferences.didChangeNotification to force the
     /// shortcut strip to re-read the cache after a Settings edit.
@@ -181,12 +187,15 @@ public struct GlassSessionsList: View {
         openingUnifiedSessionId: String?,
         archivingUnifiedSessionId: String?,
         deletingUnifiedSessionId: String?,
+        leavingUnifiedSessionId: String?,
         deletingFromHost: Bool,
         lastActiveBySessionId: [String: Date],
         onOpenUnifiedSession: @escaping (UnifiedSession) -> Void,
         onArchiveUnifiedSession: @escaping (UnifiedSession) -> Void,
         onDeleteUnifiedSession: @escaping (UnifiedSession) -> Void,
         onRemoveFromRipulUnifiedSession: @escaping (UnifiedSession) -> Void,
+        onRemoveInvitedUnifiedSession: @escaping (UnifiedSession) -> Void,
+        onLeaveInvitedUnifiedSession: @escaping (UnifiedSession) -> Void,
         onMoveUnifiedSession: @escaping (UnifiedSession, RemoteMachine) -> Void,
         onBatchArchive: @escaping ([UnifiedSession]) -> Void,
         onBatchDelete: @escaping ([UnifiedSession]) -> Void,
@@ -221,12 +230,15 @@ public struct GlassSessionsList: View {
         self.openingUnifiedSessionId = openingUnifiedSessionId
         self.archivingUnifiedSessionId = archivingUnifiedSessionId
         self.deletingUnifiedSessionId = deletingUnifiedSessionId
+        self.leavingUnifiedSessionId = leavingUnifiedSessionId
         self.deletingFromHost = deletingFromHost
         self.lastActiveBySessionId = lastActiveBySessionId
         self.onOpenUnifiedSession = onOpenUnifiedSession
         self.onArchiveUnifiedSession = onArchiveUnifiedSession
         self.onDeleteUnifiedSession = onDeleteUnifiedSession
         self.onRemoveFromRipulUnifiedSession = onRemoveFromRipulUnifiedSession
+        self.onRemoveInvitedUnifiedSession = onRemoveInvitedUnifiedSession
+        self.onLeaveInvitedUnifiedSession = onLeaveInvitedUnifiedSession
         self.onMoveUnifiedSession = onMoveUnifiedSession
         self.onBatchArchive = onBatchArchive
         self.onBatchDelete = onBatchDelete
@@ -408,6 +420,11 @@ public struct GlassSessionsList: View {
         GlassSectionPanel(
             title: "Sessions",
             isExpanded: $sessionsExpanded,
+            // The sessions list IS this screen. Collapsing it left a header
+            // over empty space, which is a control that only ever costs you
+            // something.
+            collapsible: false,
+            followsContainerBottomCorners: true,
             center: {
                 if availableProjects.count > 1 || !availableTags.isEmpty {
                     projectFilterMenu
@@ -489,7 +506,15 @@ public struct GlassSessionsList: View {
                         )
                     },
                     swipe: { session in
-                        if cloudFeatures {
+                        if session.isSharedGuest {
+                        Button {
+                            onRemoveInvitedUnifiedSession(session)
+                        } label: {
+                            Label("Remove", systemImage: "minus.circle.fill")
+                        }
+                        .uiKitIdentifier("GlassSessionsList.sessions.swipeRemoveInvitedButton")
+                        .tint(.orange)
+                        } else if cloudFeatures {
                         Button {
                             onArchiveUnifiedSession(session)
                         } label: {
@@ -503,6 +528,7 @@ public struct GlassSessionsList: View {
                         sessionContextMenu(session)
                     }
                 )
+                .modifier(SessionsScrollClearance())
             }
         }
     }
@@ -525,6 +551,10 @@ public struct GlassSessionsList: View {
     private func activity(for session: UnifiedSession) -> GlassRowActivity {
         if deletingUnifiedSessionId == session.id { return .deleting }
         if archivingUnifiedSessionId == session.id { return .archiving }
+        // Leaving a shared chat is a network round trip like delete; no
+        // dedicated row state exists for it, and visually it's the same
+        // "this row is finishing something destructive" spinner.
+        if leavingUnifiedSessionId == session.id { return .deleting }
         if openingUnifiedSessionId == session.id { return .opening }
         return .idle
     }
@@ -538,7 +568,14 @@ public struct GlassSessionsList: View {
             Button("Open in New Window", systemImage: "rectangle.on.rectangle") { open(session.id) }
                 .accessibilityIdentifier("Workspace.openSessionWindow")
         }
-        if cloudFeatures {
+        if session.isSharedGuest {
+        Button {
+            onRemoveInvitedUnifiedSession(session)
+        } label: {
+            Label("Remove Chat", systemImage: "minus.circle")
+        }
+        .uiKitIdentifier("GlassSessionsList.contextMenu.removeInvitedButton")
+        } else if cloudFeatures {
         Button {
             onArchiveUnifiedSession(session)
         } label: {
@@ -593,7 +630,14 @@ public struct GlassSessionsList: View {
         .pickerStyle(.palette)
         .uiKitIdentifier("GlassSessionsList.contextMenu.thinkingPicker")
         Divider()
-        if cloudFeatures {
+        if session.isSharedGuest {
+        Button(role: .destructive) {
+            leavingInvitedSession = session
+        } label: {
+            Label("Leave Chat", systemImage: "rectangle.portrait.and.arrow.right")
+        }
+        .uiKitIdentifier("GlassSessionsList.contextMenu.leaveInvitedButton")
+        } else if cloudFeatures {
         Button {
             onRemoveFromRipulUnifiedSession(session)
         } label: {
@@ -922,34 +966,59 @@ public struct GlassSessionsList: View {
             && searchText.trimmingCharacters(in: .whitespaces).isEmpty
     }
 
+    /// The app-injected Invites panel, handed this list's own open/dismiss
+    /// actions so accepting an invite lands the user in the joined chat.
+    @ViewBuilder
+    private var invitesSlot: some View {
+        if let invitesSection {
+            invitesSection(InvitesSectionActions(
+                openChat: { callbacks.onFocusSession($0) },
+                dismissList: { onDismissSheet?() }
+            ))
+        }
+    }
+
     public var body: some View {
         // Share one filter/sort between rendering and host context. Publish at
         // this root, including when the list is empty or its panel is collapsed.
         let sessions = filteredSessions
         let listedSessions = sessions.prefix(3).map { RipulListedSession(id: $0.id, title: $0.title) }
         ZStack(alignment: .bottom) {
+            // The Invites panel is rendered in EVERY state below. An invited
+            // guest with no machine and no chats yet is exactly the account
+            // the onboarding/connecting branches describe, and the invite is
+            // the only way they have into the app — hiding it behind "No
+            // machines or sessions yet." left them with nothing to tap. The
+            // panel renders nothing (and keeps polling) when there are no
+            // invites, so it costs the first-run cards nothing.
             if showOnboarding {
-                if let emptyStateOverride {
-                    emptyStateOverride()
-                        .transition(.opacity)
-                        .uiKitIdentifier("GlassSessionsList.onboarding")
-                } else {
-                    Text("No machines or sessions yet.")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .uiKitIdentifier("GlassSessionsList.onboarding")
+                VStack(spacing: 16) {
+                    invitesSlot
+                    if let emptyStateOverride {
+                        emptyStateOverride()
+                            .transition(.opacity)
+                            .uiKitIdentifier("GlassSessionsList.onboarding")
+                    } else {
+                        Text("No machines or sessions yet.")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .uiKitIdentifier("GlassSessionsList.onboarding")
+                    }
                 }
             } else if showConnectingPlaceholder {
-                VStack(spacing: 12) {
-                    ProgressView()
-                    Text("Connecting…")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                VStack(spacing: 16) {
+                    invitesSlot
+                    VStack(spacing: 12) {
+                        ProgressView()
+                        Text("Connecting…")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .transition(.opacity)
+                    .uiKitIdentifier("GlassSessionsList.connecting")
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .transition(.opacity)
-                .uiKitIdentifier("GlassSessionsList.connecting")
             } else {
                 VStack(spacing: 16) {
                     if !chatHostMachines.isEmpty {
@@ -961,30 +1030,13 @@ public struct GlassSessionsList: View {
                             // opens as a sliver.
                             .layoutPriority(1)
                     }
-                    if let invitesSection {
-                        invitesSection(InvitesSectionActions(
-                            openChat: { callbacks.onFocusSession($0) },
-                            dismissList: { onDismissSheet?() }
-                        ))
-                    }
+                    invitesSlot
                     sessionsPanelSection(sessions: sessions)
-                        // Only greedy-fill while expanded (so a long session list
-                        // gets the remaining space to grow into) — collapsed, this
-                        // must NOT hold an infinite frame, or the panel's outer
-                        // frame stays full-height around its now-tiny header row:
-                        // a blank gap where the list used to be, with the panels
-                        // below it stuck there instead of sliding up to fill the
-                        // space GlassSectionPanel's own collapse
-                        // (`if isExpanded { content }`) already freed.
-                        .frame(maxHeight: sessionsExpanded ? .infinity : nil, alignment: .top)
+                        .frame(maxHeight: .infinity, alignment: .top)
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 8)
-                // Top-anchor the stack: with every disclosure collapsed,
-                // nothing in the VStack is greedy, so without this the short
-                // content centers in the offered height instead of hugging
-                // the top. Expanded Sessions still greedy-fills exactly as
-                // before (its own conditional frame above).
+                // Sessions fills the space below Machines and Invites.
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 // Measure the space the stack actually has, so the machines
                 // panel knows when it has to scroll rather than overflow (see
@@ -1002,17 +1054,10 @@ public struct GlassSessionsList: View {
                         )
                     }
                 )
-                // Sessions is the stack's LAST child now that Folders and
-                // Solution management have gone, and it is the greedy one — so
-                // its bottom edge is the stack's, and without an inset the list
-                // runs under the home indicator and off screen. Outside the
-                // frame on purpose: that way the .infinity above resolves to
-                // the height the stack may actually use, which is what the
-                // measurement feeds to machinePanelCap.
-                .padding(.bottom, 16)
-                // Adds only what the container hasn't already inset, so this is
-                // correct whether or not a host consumed the safe area first.
-                .safeAreaPadding(.bottom)
+                // The glass reaches the display's curve. Home-indicator and
+                // tab-bar clearance belongs INSIDE the sessions scroller.
+                .padding(.bottom, SessionsPanelLayout.bottomGap)
+                .ignoresSafeArea(.container, edges: .bottom)
                 .onPreferenceChange(SessionsPanelStackHeightKey.self) { height in
                     panelStackHeight = height
                 }
@@ -1069,6 +1114,18 @@ public struct GlassSessionsList: View {
                 onBatchDelete(sessions)
             }
             Button("Cancel", role: .cancel) {}
+        }
+        .confirmationDialog("Leave this chat?", isPresented: Binding(
+            get: { leavingInvitedSession != nil },
+            set: { if !$0 { leavingInvitedSession = nil } }
+        ), titleVisibility: .visible) {
+            Button("Leave Chat", role: .destructive) {
+                if let session = leavingInvitedSession { onLeaveInvitedUnifiedSession(session) }
+                leavingInvitedSession = nil
+            }
+            Button("Cancel", role: .cancel) { leavingInvitedSession = nil }
+        } message: {
+            Text("You will need a new invitation to join again.")
         }
         .sheet(isPresented: Binding(
             get: { presentedPlan != nil },

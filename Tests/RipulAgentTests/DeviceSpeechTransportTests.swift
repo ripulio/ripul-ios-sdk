@@ -18,6 +18,9 @@ private final class SpeechHTTPFixture: URLProtocol {
     override func stopLoading() {}
 }
 
+// The speech factory it exercises is iOS 26+; without this the whole test
+// bundle fails to compile on a 26-or-newer-only toolchain.
+@available(iOS 26.0, *)
 final class DeviceSpeechTransportTests: XCTestCase {
     #if canImport(UIKit)
     @MainActor func testSecureKeyFieldsAreRedactedFromInspection() {

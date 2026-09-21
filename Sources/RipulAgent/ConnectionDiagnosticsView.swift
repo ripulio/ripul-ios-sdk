@@ -168,7 +168,10 @@ struct ConnectionDiagnosticsView: View {
 
     private var clientSection: some View {
         section("This device", subtitle: nil) {
-            if let build = report.build { keyValue("Build", build) }
+            // The web bundle's stamp is a base-36 epoch (see RipulBuildNumber).
+            // Both halves earn their place here: the date is what tells you the
+            // page is stale, the stamp is what you paste into a bug report.
+            if let build = report.build { keyValue("Build", RipulBuildNumber.displayWithRaw(build)) }
             if let uptime = report.uptimeSec {
                 keyValue("Uptime", ConnectionDiagnosticsReport.durationText(seconds: uptime))
             }

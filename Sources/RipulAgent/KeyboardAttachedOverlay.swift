@@ -1,10 +1,22 @@
 import SwiftUI
+
+/// Coordinates are local to the composer container, not screen heights. This
+/// avoids subtracting the tab bar twice when UIKit resizes its destination.
+enum ComposerKeyboardLayout {
+    static func bottomInset(bounds: CGRect, safeBottom: CGFloat, keyboard: CGRect?, docked: Bool) -> CGFloat {
+        let resting = max(0, safeBottom)
+        guard docked, let keyboard,
+              !bounds.intersection(keyboard).isEmpty else { return resting }
+        return max(resting, bounds.maxY - max(bounds.minY, keyboard.minY))
+    }
+}
+
 #if os(iOS)
 import UIKit
 
-/// UIKit owns the vertical position so the overlay participates in the keyboard's
-/// own animation and interactive dismissal. Publishing a height to SwiftUI and
-/// starting a second spring cannot keep the two surfaces attached.
+/// UIKit owns positioning and uses the keyboard's frame, duration and curve.
+/// No per-frame SwiftUI state or second spring is involved. Keyboard layout
+/// guides were measured stuck at rest in the tab-hosted view hierarchy.
 @available(iOS 16.0, *)
 struct KeyboardAttachedOverlay<Content: View>: UIViewControllerRepresentable {
     let content: Content
@@ -27,6 +39,8 @@ struct KeyboardAttachedOverlay<Content: View>: UIViewControllerRepresentable {
 @available(iOS 16.0, *)
 final class KeyboardAttachedOverlayController: UIViewController {
     let host: UIHostingController<AnyView>
+    private var bottomConstraint: NSLayoutConstraint?
+    private var keyboardFrame: CGRect?
 
     init(content: AnyView) {
         host = UIHostingController(rootView: content)
@@ -45,20 +59,78 @@ final class KeyboardAttachedOverlayController: UIViewController {
         host.view.backgroundColor = .clear
         host.sizingOptions = .intrinsicContentSize
         if #available(iOS 16.4, *) {
-            // The guide owns avoidance; don't let the inner SwiftUI hierarchy
+            // This controller owns avoidance; don't let the inner SwiftUI hierarchy
             // add another keyboard/safe-area inset as its frame moves.
             host.safeAreaRegions = []
         }
         addChild(host)
         view.addSubview(host.view)
         host.view.translatesAutoresizingMaskIntoConstraints = false
+        let bottom = host.view.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -8)
+        bottomConstraint = bottom
         NSLayoutConstraint.activate([
-            host.view.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            host.view.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            host.view.bottomAnchor.constraint(equalTo: view.keyboardLayoutGuide.topAnchor, constant: -8),
+            // Local guides are zero-inset when the parent already avoided an
+            // edge, and protect the same composer in a full-window host.
+            host.view.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor),
+            host.view.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor),
+            bottom,
         ])
         host.didMove(toParent: self)
         (view as? KeyboardOverlayPassthroughView)?.contentView = host.view
+        for name in [UIResponder.keyboardWillChangeFrameNotification,
+                     UIResponder.keyboardDidChangeFrameNotification,
+                     UIResponder.keyboardWillHideNotification] {
+            NotificationCenter.default.addObserver(self, selector: #selector(keyboardChanged(_:)), name: name, object: nil)
+        }
+    }
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        // The tab container can change its frame/safe area during keyboard
+        // presentation. Reconvert the screen frame rather than retaining a height.
+        updateBottomConstraint()
+    }
+
+    override func viewSafeAreaInsetsDidChange() {
+        super.viewSafeAreaInsetsDidChange()
+        updateBottomConstraint()
+    }
+
+    @discardableResult
+    private func updateBottomConstraint() -> Bool {
+        guard let bottomConstraint else { return false }
+        var localKeyboard: CGRect?
+        var docked = false
+        if let window = view.window, let keyboardFrame {
+            localKeyboard = view.convert(keyboardFrame, from: window.screen.coordinateSpace)
+            let inWindow = window.convert(keyboardFrame, from: window.screen.coordinateSpace)
+            docked = inWindow.maxY >= window.bounds.maxY - 1
+        }
+        let inset = ComposerKeyboardLayout.bottomInset(
+            bounds: view.bounds, safeBottom: view.safeAreaInsets.bottom,
+            keyboard: localKeyboard, docked: docked)
+        let next = -(inset + 8)
+        guard abs(bottomConstraint.constant - next) > 0.01 else { return false }
+        bottomConstraint.constant = next
+        return true
+    }
+
+    @objc private func keyboardChanged(_ note: Notification) {
+        view.layoutIfNeeded()
+        keyboardFrame = note.name == UIResponder.keyboardWillHideNotification ? nil
+            : note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect
+        guard updateBottomConstraint() else { return }
+        let duration = note.name == UIResponder.keyboardDidChangeFrameNotification ? 0
+            : (note.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double ?? 0)
+        let curve = note.userInfo?[UIResponder.keyboardAnimationCurveUserInfoKey] as? UInt ?? 0
+        if duration > 0 {
+            UIView.animate(withDuration: duration, delay: 0,
+                           options: [UIView.AnimationOptions(rawValue: curve << 16), .beginFromCurrentState, .allowUserInteraction]) {
+                self.view.layoutIfNeeded()
+            }
+        } else {
+            UIView.performWithoutAnimation { self.view.layoutIfNeeded() }
+        }
     }
 }
 

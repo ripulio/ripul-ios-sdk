@@ -397,16 +397,16 @@ public struct AgentWebView: View {
         self.bridge = bridge
     }
 
-    /// Window-level top inset for the masthead, fed by `WindowSafeAreaTopReader`.
+    /// Where top chrome sits in this window, fed by `WindowTopChrome`.
     /// Never read `UIWindow.safeAreaInsets` inside `body` instead: it forces a
     /// status-bar preference query that re-enters the in-flight body evaluation
     /// and can overflow the stack in Debug builds (see
     /// RipulAgentScreen.topBarOverlay for the full mechanism).
-    @State private var safeAreaTop: CGFloat = 0
+    @State private var topChrome = WindowTopChromeClearance()
 
     public var body: some View {
         AgentWebViewRepresentable(configuration: configuration, bridge: bridge)
-            .background(WindowSafeAreaTopReader { safeAreaTop = $0 })
+            .background(WindowTopChrome { topChrome = $0 })
             .overlay(alignment: .top) {
                 if let config = bridge.mastheadConfig {
                     GlassMastheadView(config: config)
@@ -415,7 +415,8 @@ public struct AgentWebView: View {
                             bridge.wantsShowConsoleLogs = true
                         }
                         .padding(.horizontal, 12)
-                        .padding(.top, safeAreaTop + (config.topOffset ?? 4))
+                        .topChromeExclusion(topChrome)
+                        .padding(.top, topChrome.top + (config.topOffset ?? 4))
                         .transition(.opacity.combined(with: .move(edge: .top)))
                 }
             }
@@ -538,6 +539,9 @@ private struct AgentWebViewRepresentable: UIViewControllerRepresentable {
         controller.loadViewIfNeeded()
         webView.toolStripAccessibilityElements = { [weak bridge] in bridge?.toolStripAccessibilityElements ?? [] }
         webView.toolStripHitTest = { [weak bridge] point, event in bridge?.hitTestToolStrip(point, event: event) }
+        // Pose changes (fold, rotate, Split View) move the native bar's row;
+        // the web clearance under it follows without another page load.
+        webView.onTopClearanceChange = { [weak bridge] in bridge?.refreshNativeHeaderHeight() }
         // Thermal A/B (AgentBridge.opaqueWebView): a transparent web view must blend
         // every repaint against the layers behind it; opaque is a cheap copy. Default
         // false keeps the current transparent behaviour so glass shows through.
@@ -845,13 +849,12 @@ extension AgentWebView {
         }
 
         private static func injectSafeAreaInset(into webView: WKWebView) {
-            let insetTop: CGFloat
-            if let windowScene = webView.window?.windowScene {
-                insetTop = windowScene.keyWindow?.safeAreaInsets.top ?? 54
-            } else {
-                insetTop = 54
-            }
-            let totalHeight = Int(insetTop) + 44
+            // The row the native bar occupies in the OWNING window — a corner
+            // camera (iPhone Duo open) pulls it above the rectangular inset.
+            let clearance = webView.window.map { WindowTopChromeLayout.clearance(for: $0) }
+                ?? WindowTopChromeClearance(top: 54, safeTop: 54)
+            let insetTop = clearance.top
+            let totalHeight = Int(clearance.contentClearance(below: 44))
             let js = "document.documentElement.style.setProperty('--native-header-height', '\(totalHeight)px')"
             webView.evaluateJavaScript(js) { _, error in
                 if let error {
@@ -1070,10 +1073,9 @@ extension AgentWebView {
     static let compiledAt: String = {
         // __DATE__ has no Swift equivalent; the bundle's own executable
         // modification date is the closest honest answer and is fixed for the
-        // life of an installed build.
-        guard let url = Bundle.main.executableURL,
-              let modified = try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
-        else { return "unknown" }
+        // life of an installed build. RipulBuildNumber reads it too — to put a
+        // time on a build stamp that has none — so it owns the lookup.
+        guard let modified = RipulBuildNumber.compiledAt else { return "unknown" }
         let formatter = DateFormatter()
         formatter.dateFormat = "MMdd-HHmm"
         return formatter.string(from: modified)

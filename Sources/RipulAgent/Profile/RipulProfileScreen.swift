@@ -59,28 +59,15 @@ public struct RipulProfileScreen<PlanContent: View>: View {
 
     private var identitySection: some View {
         Section {
-            HStack(spacing: 12) {
-                Image(systemName: "person.circle.fill")
-                    .font(.system(size: 36))
-                    .foregroundStyle(.tint)
-                VStack(alignment: .leading, spacing: 2) {
-                    if let name = userName {
-                        Text(name)
-                            .font(.headline)
-                    }
-                    if let email = userEmail {
-                        Text(email)
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                    }
-                    if userName == nil && userEmail == nil {
-                        Text("Signed in")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                    }
+            RipulProfilePhotoEditor(name: userName, email: userEmail, baseURL: baseURL, tokenProvider: tokenProvider) {
+                Task {
+                    _ = try? await bridge.callAsyncJavaScript("""
+                        try { await window.Clerk?.user?.reload?.(); } catch {}
+                        window.dispatchEvent(new Event('ripul:membership-changed'));
+                        return true;
+                        """)
                 }
             }
-            .padding(.vertical, 4)
         }
     }
 

@@ -131,20 +131,24 @@ public struct RipulAgentScreen: View {
         canShowSessionSplit
         #endif
     }
-    @State private var preferredSessionWidth: CGFloat = 420
-    private var resizableSessionWidth: CGFloat? {
+    // Touch layouts keep their automatic proportion until the user drags the
+    // divider. Retain that choice while compact/folded without remounting chat.
+    @State private var preferredSessionWidth: CGFloat? = {
         #if targetEnvironment(macCatalyst)
-        preferredSessionWidth
+        return 420
         #else
-        nil
+        return nil
         #endif
+    }()
+    private var resizableSessionWidth: CGFloat? {
+        preferredSessionWidth
     }
     private var resizeSessionPane: ((CGFloat) -> Void)? {
-        #if targetEnvironment(macCatalyst)
-        { preferredSessionWidth = $0 }
-        #else
-        nil
-        #endif
+        { width in
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) { preferredSessionWidth = width }
+        }
     }
     private var sessionPaneWidth: CGFloat {
         WorkspaceColumns.sessionListWidth(in: chatAreaWidth, preferred: resizableSessionWidth)
@@ -255,10 +259,12 @@ public struct RipulAgentScreen: View {
     }
     @State private var commitViewInfo: CommitViewInfo?
     @State private var parentGlobalY: CGFloat = 0
-    /// Window-level top inset for the floating top bar, fed by
-    /// `WindowSafeAreaTopReader` — see topBarOverlay for why it can be neither
-    /// inherited from the hierarchy nor read from UIApplication during body.
-    @State private var safeAreaTop: CGFloat = 0
+    /// Where the floating top bar sits in its window, fed by `WindowTopChrome`
+    /// — see topBarOverlay for why it can be neither inherited from the
+    /// hierarchy nor read from UIApplication during body. `top` is the window's
+    /// safe inset except beside a corner camera (iPhone Duo open), where the
+    /// row joins the band next to it and `left`/`right` keep it clear.
+    @State private var topChrome = WindowTopChromeClearance()
 
     private var cache: RipulSessionCache { configuration.cache }
 
@@ -408,7 +414,9 @@ public struct RipulAgentScreen: View {
         // so chat can draw behind the glass. Restore the list's window clearance
         // explicitly, in addition to its app-header reservation. Local geometry
         // reports zero here because the column has already consumed the inset.
-        .padding(.top, safeAreaTop)
+        // The list's own 52pt reservation follows the bar's row; content still
+        // clears the rectangular safe area when the row sits beside a camera.
+        .padding(.top, topChrome.contentClearance(below: 52) - 52)
         .environment(\.createNewChat, slots.onNewChat)
         .environment(\.cloudSessionFeaturesEnabled, !configuration.standalone)
     }
@@ -433,10 +441,14 @@ public struct RipulAgentScreen: View {
             showingMetadata: showingMetadata,
             suppressEdgeSwipe: mirrorOwnsWebview,
             bridge: bridge,
-            isFileViewerOpen: bridge.fileViewerTitle != nil,
+            backGestureClosesOverlay: bridge.fileViewerTitle != nil || bridge.artefactPageTitle != nil,
             hasCommitView: commitViewInfo != nil,
             onCommitViewDismiss: dismissCommitView,
-            onFileViewerSwipeCommit: { bridge.requestFileViewerClose() },
+            onOverlayBackSwipe: {
+                // The file viewer wins the bar, so it wins the gesture too.
+                if bridge.fileViewerTitle != nil { bridge.requestFileViewerClose() }
+                else { bridge.requestArtefactPageClose() }
+            },
             sessionList: {
                 sessionListColumn(dismiss: {
                     withAnimation(.easeInOut(duration: 0.28)) {
@@ -449,7 +461,8 @@ public struct RipulAgentScreen: View {
                             onLeading: { slots.showingSidebar?.wrappedValue = true }) {
                             sessionListMenuItems
                         }
-                        .padding(.top, safeAreaTop)
+                        .topChromeExclusion(topChrome)
+                        .padding(.top, topChrome.top)
                     }
                 }
             },
@@ -504,7 +517,7 @@ public struct RipulAgentScreen: View {
             }
         }
         .onPreferenceChange(KeyboardStableYKey.self) { parentGlobalY = $0 }
-        .background(WindowSafeAreaTopReader { safeAreaTop = $0 })
+        .background(WindowTopChrome { topChrome = $0 })
         // Metadata panel — compact: slides in from the right edge; regular (iPad /
         // Mac Catalyst): docks as a trailing inspector column.
         .overlay {
@@ -667,6 +680,13 @@ public struct RipulAgentScreen: View {
                 Task { await model.refreshAfterAuth() }
             }
         }
+        // `onChange` fires only on a CHANGE. A token already in hand at first
+        // render (a relaunch with a cached session) never changed, so the
+        // authenticated refresh — machines, then the tab list — never ran.
+        // `refreshAfterAuth` is idempotent, so this is safe alongside it.
+        .task {
+            if tokenProvider() != nil { await model.refreshAfterAuth() }
+        }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
             Task { await model.refresh() }
             if !configuration.standalone { Task { await refreshFavoriteDirectories() } }
@@ -724,8 +744,9 @@ public struct RipulAgentScreen: View {
     // regular split it's overlaid on just the chat detail so the glass doesn't
     // run across the sidebar and metadata columns.
     /// Both mount points pin this with `.ignoresSafeArea(edges: .top)` and
-    /// `safeAreaTop` adds the **window's** inset back, so the bar's position is
-    /// stated, not inherited. Neither obvious source for that inset works:
+    /// `topChrome.top` adds the **window's** clearance back, so the bar's
+    /// position is stated, not inherited. Neither obvious source for that
+    /// inset works:
     ///
     /// - **Not the hierarchy** (a `GeometryReader`'s `safeAreaInsets`):
     ///   ancestors consume or zero the region — that was the original bug.
@@ -740,10 +761,12 @@ public struct RipulAgentScreen: View {
     ///   main-thread stack in Debug builds (deterministic launch crash,
     ///   ___chkstk_darwin SIGSEGV).
     ///
-    /// So `WindowSafeAreaTopReader` (mounted on `body`'s root) reads the window
-    /// inset from UIKit callbacks outside any SwiftUI update and feeds the
-    /// `safeAreaTop` state. Catalyst has no status bar, so its inset reports 0
-    /// and the bar sits flush as before.
+    /// So `WindowTopChrome` (mounted on `body`'s root) reads the window inset,
+    /// status bar and reserved regions from UIKit callbacks outside any SwiftUI
+    /// update and feeds the `topChrome` state. Catalyst has no status bar, so
+    /// its inset reports 0 and the bar sits flush as before. Beside a corner
+    /// camera the row moves up into the band and `topChromeExclusion` keeps
+    /// its controls out of the camera's reserved region.
     @ViewBuilder private var topBarOverlay: some View {
         if configuration.standalone || bridge.currentPageContext.showNativeHeader {
             // Hidden (not removed) while the host's root bar covers list
@@ -760,14 +783,19 @@ public struct RipulAgentScreen: View {
             ZStack(alignment: .top) {
                 safeAreaGlass
                 unifiedTopBar
-                    .padding(.top, safeAreaTop)
+                    .topChromeExclusion(topChrome)
+                    .padding(.top, topChrome.top)
+                    .opacity(titleLozengeExpandedNow ? 0 : 1)
+                    .allowsHitTesting(!titleLozengeExpandedNow)
+                    .accessibilityHidden(titleLozengeExpandedNow)
                 // The chat title morph, a SIBLING of the bar rather than its
-                // centre slot — see `chatTitleMorphOverlay`. Same placement
-                // maths as the slot it replaces: the bar's 12pt gutter plus
-                // the symmetric centre inset, and the bar's 4pt top padding.
+                // centre slot. Only the collapsed pill reserves the edge
+                // buttons' space; the open panel covers them, including the
+                // host's minimise button, within the bar's 12pt gutters.
                 chatTitleMorphOverlay
-                    .padding(.horizontal, 12 + centerLozengeInset)
-                    .padding(.top, safeAreaTop + 4)
+                    .padding(.horizontal, titleLozengeExpandedNow ? 12 : 12 + centerLozengeInset)
+                    .topChromeExclusion(topChrome)
+                    .padding(.top, topChrome.top + 4)
             }
             .offset(y: parentGlobalY < 0 ? -parentGlobalY : 0)
             .opacity(hiddenForHostBar ? 0 : 1)
@@ -788,6 +816,8 @@ public struct RipulAgentScreen: View {
         // File viewer overrides everything with its own bar
         if let fileTitle = bridge.fileViewerTitle {
             fileViewerTopBar(title: fileTitle)
+        } else if let artefactTitle = bridge.artefactPageTitle {
+            artefactPageTopBar(title: artefactTitle)
         } else {
             // NO glass container at this level. The lozenge morph's container
             // lives in `titleLozengeContent`, wrapped immediately around the
@@ -1164,12 +1194,11 @@ public struct RipulAgentScreen: View {
                 }
             }
             .frame(minHeight: 44)
-            // Pinned to the full width the bar allows when expanded, so the
-            // panel does not resize itself as its own metadata changes — a
-            // running tool call rewrites that text constantly. Collapsed hugs
-            // its content and the overlay's ZStack centres it, matching the
-            // bar pill it replaces.
-            .frame(maxWidth: expanded ? .infinity : nil, alignment: .leading)
+            // The panel gets the full bar width, independent of edge buttons.
+            // Keep a readable minimum, capped to fit even a narrow column.
+            // Collapsed still hugs its content in the original centre slot.
+            .frame(minWidth: expanded ? min(320, max(0, detailOverlayWidth - 24 - topChrome.left - topChrome.right)) : nil,
+                   maxWidth: expanded ? .infinity : nil, alignment: .leading)
             // 22 circular at the compact 44pt height IS a capsule, so the
             // contracted pill is geometrically unchanged; 16 continuous is
             // the app-wide panel radius. One shape type either way keeps the
@@ -1183,6 +1212,18 @@ public struct RipulAgentScreen: View {
                     NotificationCenter.default.post(name: .ripulShowDevTools, object: nil)
                 }
             )
+            #if os(iOS)
+            // The overview pull, mounted HERE as well as on the bar row. This
+            // pill is a sibling stacked over the bar, not a child of it, so a
+            // drag that begins on it never reaches the row's recogniser — the
+            // exact spot every other screen's lozenge invites you to pull from
+            // went dead in chat when the morphing pill took the slot over. The
+            // taps above are exclusive only against each other; a 3pt move
+            // fails them and the pull carries on. Off while the panel is
+            // disclosed, where a vertical drag reads as a stray touch on its
+            // controls rather than a request for the board.
+            .screenSwitcherPull(.down, enabled: !expanded, allowsHorizontal: true)
+            #endif
             .uiKitIdentifier("RipulAgentScreen.chatTitleMorphLozenge")
         }
     }
@@ -1242,6 +1283,7 @@ public struct RipulAgentScreen: View {
         guard !isListMode,
               !showingMetadata,
               bridge.fileViewerTitle == nil,
+              bridge.artefactPageTitle == nil,
               let session else { return nil }
         if let info = commitViewInfo, session.id == info.tabId { return nil }
         return model.unifiedSessions.first { $0.represents(session) }
@@ -1261,6 +1303,22 @@ public struct RipulAgentScreen: View {
             return info.shortSha
         }
         return isListMode ? nil : topBarSubtitle(session: session)
+    }
+
+    /// An artefact's full page borrows the file viewer's bar: ONE native back
+    /// button, so the web page draws none of its own. No menu — an artefact owns
+    /// everything else about its draw.
+    @ViewBuilder
+    private func artefactPageTopBar(title: String) -> some View {
+        GlassTopBar(
+            title: title,
+            subtitle: "Artefact",
+            onLeading: { bridge.requestArtefactPageClose() },
+            trailingOuter: agentHostAccessory,
+            centerInset: centerLozengeInset
+        ) {
+            EmptyView()
+        }
     }
 
     @ViewBuilder
@@ -1455,7 +1513,15 @@ public struct RipulAgentScreen: View {
         // two nested `Menu` trees, which meant the chat's model change was the
         // one place in the app you couldn't see what a model would cost or pin
         // the one you keep coming back to.
-        if let session, rawModeSessions.contains(session.id) || ProviderConstants.isCliProvider(session.provider) {
+        // A chat reached through someone else's invitation runs on THEIR host
+        // with THEIR model and effort. Now that a guest's row carries the real
+        // provider (so the CLI branches below would otherwise apply), offer no
+        // model or effort control at all — the relay refuses those commands
+        // from a guest, and a picker that silently does nothing is worse than
+        // none.
+        if let session, session.isSharedGuest == true {
+            EmptyView()
+        } else if let session, rawModeSessions.contains(session.id) || ProviderConstants.isCliProvider(session.provider) {
             let rawModels = rawModelsForSession(session)
             let currentModelId = currentRawModelId(for: session)
             let currentModelName = rawModels.first(where: { $0.id == currentModelId }).map { shortModelName($0.name) } ?? "Default"
@@ -1475,7 +1541,8 @@ public struct RipulAgentScreen: View {
         }
 
         // Reasoning effort (orthogonal to the model) — CLI sessions.
-        if let session, rawModeSessions.contains(session.id) || ProviderConstants.isCliProvider(session.provider) {
+        if let session, session.isSharedGuest != true,
+           rawModeSessions.contains(session.id) || ProviderConstants.isCliProvider(session.provider) {
             Menu {
                 Button { Task { await bridge.setEffort(nil) } } label: {
                     HStack {
@@ -2113,7 +2180,7 @@ public struct RipulAgentScreen: View {
     /// Extracted to the public TopSafeAreaGlass so the shell's root bar draws
     /// the same strip.
     private var safeAreaGlass: some View {
-        TopSafeAreaGlass(topInset: safeAreaTop)
+        TopSafeAreaGlass(topInset: topChrome.top)
     }
 }
 
@@ -2134,10 +2201,10 @@ private struct AgentChatDragContainer<SessionList: View, Chat: View>: View {
     /// does not observe the bridge (by design — see the init comment).
     let suppressEdgeSwipe: Bool
     let bridge: AgentBridge
-    let isFileViewerOpen: Bool
+    let backGestureClosesOverlay: Bool
     let hasCommitView: Bool
     let onCommitViewDismiss: () -> Void
-    let onFileViewerSwipeCommit: () -> Void
+    let onOverlayBackSwipe: () -> Void
     // Stored view VALUES, resolved once in init — NOT closures re-invoked in body.
     // This is the whole point: during finger tracking, the container's @State
     // changes (dragOffset/gestureActive) must not re-run the session-list or chat
@@ -2179,10 +2246,10 @@ private struct AgentChatDragContainer<SessionList: View, Chat: View>: View {
         showingMetadata: Bool,
         suppressEdgeSwipe: Bool = false,
         bridge: AgentBridge,
-        isFileViewerOpen: Bool,
+        backGestureClosesOverlay: Bool,
         hasCommitView: Bool,
         onCommitViewDismiss: @escaping () -> Void,
-        onFileViewerSwipeCommit: @escaping () -> Void,
+        onOverlayBackSwipe: @escaping () -> Void,
         @ViewBuilder sessionList: () -> SessionList,
         @ViewBuilder chat: () -> Chat
     ) {
@@ -2194,10 +2261,10 @@ private struct AgentChatDragContainer<SessionList: View, Chat: View>: View {
         self.showingMetadata = showingMetadata
         self.suppressEdgeSwipe = suppressEdgeSwipe
         self.bridge = bridge
-        self.isFileViewerOpen = isFileViewerOpen
+        self.backGestureClosesOverlay = backGestureClosesOverlay
         self.hasCommitView = hasCommitView
         self.onCommitViewDismiss = onCommitViewDismiss
-        self.onFileViewerSwipeCommit = onFileViewerSwipeCommit
+        self.onOverlayBackSwipe = onOverlayBackSwipe
         self.sessionList = sessionList()
         self.chat = chat()
     }
@@ -2230,6 +2297,22 @@ private struct AgentChatDragContainer<SessionList: View, Chat: View>: View {
             // matches the container and the slide never snaps.
             gestureSettling = false
         }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
+            settleAfterInterruption()
+        }
+    }
+
+    /// A finger-tracked slide the system took the touch from — backgrounded
+    /// mid-swipe, a call, Control Centre — can come back with `gestureActive`
+    /// still latched on a partial `dragOffset` (the recogniser's cancel never
+    /// reached us) and the web view still non-interactive behind it
+    /// (`beginDrag`). The chat then sits part-way across the screen, dead to
+    /// touch, until the next edge swipe. Treat it as the cancel it was; a
+    /// container at rest is untouched.
+    private func settleAfterInterruption() {
+        guard gestureActive else { return }
+        NSLog("[FGSETTLE] chat slide settled from offset=\(Int(dragOffset))/\(Int(screenWidth)) list=\(showingSessionList)")
+        handleCancelled()
     }
 
     /// Mark a gesture's spring-back-to-rest so `slideAnimation` uses the spring
@@ -2240,7 +2323,7 @@ private struct AgentChatDragContainer<SessionList: View, Chat: View>: View {
     }
 
     private func handleChanged(_ offset: CGFloat) {
-        guard !isFileViewerOpen else { return }
+        guard !backGestureClosesOverlay else { return }
         bridge.beginDrag()
         var t = Transaction()
         t.disablesAnimations = true
@@ -2252,10 +2335,10 @@ private struct AgentChatDragContainer<SessionList: View, Chat: View>: View {
 
     private func handleEnded(offset: CGFloat, velocity: CGFloat) {
         beginGestureSettle()
-        if isFileViewerOpen {
+        if backGestureClosesOverlay {
             bridge.endDrag()
             withAnimation(chatSlideSpring) { gestureActive = false }
-            if offset > 40 { onFileViewerSwipeCommit() }
+            if offset > 40 { onOverlayBackSwipe() }
             return
         }
 

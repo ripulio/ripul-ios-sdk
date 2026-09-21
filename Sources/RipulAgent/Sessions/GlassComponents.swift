@@ -25,11 +25,18 @@ public struct GlassSectionPanel<Content: View, Trailing: View, Center: View, Col
     /// tapping it doesn't toggle the panel.
     let collapsedAccessory: CollapsedAccessory
     let content: Content
+    /// A panel that is the screen's whole point has nothing to collapse FOR:
+    /// closing it leaves a header and an empty screen. Such a panel keeps the
+    /// glass and loses the chevron and the tap.
+    var collapsible: Bool = true
+    var followsContainerBottomCorners: Bool = false
 
     public init(
         title: String,
         subtitle: String? = nil,
         isExpanded: Binding<Bool>,
+        collapsible: Bool = true,
+        followsContainerBottomCorners: Bool = false,
         @ViewBuilder center: () -> Center = { EmptyView() },
         @ViewBuilder trailing: () -> Trailing = { EmptyView() },
         @ViewBuilder collapsedAccessory: () -> CollapsedAccessory = { EmptyView() },
@@ -38,6 +45,8 @@ public struct GlassSectionPanel<Content: View, Trailing: View, Center: View, Col
         self.title = title
         self.subtitle = subtitle
         self._isExpanded = isExpanded
+        self.collapsible = collapsible
+        self.followsContainerBottomCorners = followsContainerBottomCorners
         self.center = center()
         self.trailing = trailing()
         self.collapsedAccessory = collapsedAccessory()
@@ -47,11 +56,13 @@ public struct GlassSectionPanel<Content: View, Trailing: View, Center: View, Col
     public var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
-                Image(systemName: "chevron.right")
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                    .rotationEffect(.degrees(isExpanded ? 90 : 0))
-                    .animation(.easeInOut(duration: 0.2), value: isExpanded)
+                if collapsible {
+                    Image(systemName: "chevron.right")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                        .animation(.easeInOut(duration: 0.2), value: isExpanded)
+                }
                 Text(title)
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.secondary)
@@ -72,24 +83,25 @@ public struct GlassSectionPanel<Content: View, Trailing: View, Center: View, Col
             .padding(.vertical, 10)
             .contentShape(Rectangle())
             .onTapGesture {
+                guard collapsible else { return }
                 #if os(iOS)
                 UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
                 #endif
                 withAnimation(.easeInOut(duration: 0.2)) { isExpanded.toggle() }
             }
 
-            if !isExpanded {
+            if !isExpanded && collapsible {
                 collapsedAccessory
             }
 
-            if isExpanded {
+            if isExpanded || !collapsible {
                 VStack(spacing: 0) {
                     content
                 }
                 .padding(.bottom, 8)
             }
         }
-        .modifier(GlassPanelBackground())
+        .modifier(GlassPanelBackground(followsContainerBottomCorners: followsContainerBottomCorners))
     }
 }
 
@@ -168,11 +180,23 @@ public struct GlassSelectButton: View {
 // MARK: - Background modifiers
 
 public struct GlassPanelBackground: ViewModifier {
-    public init() {}
+    var followsContainerBottomCorners: Bool
+
+    public init(followsContainerBottomCorners: Bool = false) {
+        self.followsContainerBottomCorners = followsContainerBottomCorners
+    }
     public func body(content: Content) -> some View {
         #if os(iOS)
         if #available(iOS 26.0, *) {
-            content.glassEffect(.clear, in: .rect(cornerRadius: 16))
+            if followsContainerBottomCorners {
+                // Only the screen-bottom panel follows the display. Its top
+                // stays rounded, and corners away from a display edge (split
+                // columns, sheets) retain a 16pt minimum instead of squaring off.
+                let shape = SessionsPanelLayout.shape
+                content.clipShape(shape).glassEffect(.clear, in: shape)
+            } else {
+                content.glassEffect(.clear, in: .rect(cornerRadius: 16))
+            }
         } else {
             content
                 .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))

@@ -92,7 +92,8 @@ public struct StandaloneFileViewer: View {
             // already painted its own (dark) canvas. See
             // docs/runbooks/file-viewer-entry-flash-handover.md for the diagnosis.
             AgentWebView(configuration: configuration, bridge: viewerBridge)
-                .ignoresSafeArea()
+                .ignoresSafeArea(.container, edges: .vertical)
+                .ignoresSafeArea(.keyboard)
                 .opacity(viewerBridge.didFinishFirstNavigation ? 1 : 0)
                 .animation(.easeIn(duration: 0.15), value: viewerBridge.didFinishFirstNavigation)
 

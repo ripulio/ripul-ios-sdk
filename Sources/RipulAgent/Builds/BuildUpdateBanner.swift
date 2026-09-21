@@ -51,7 +51,7 @@ public struct RipulBuildUpdateBanner: View {
             Section {
                 bar(for: build)
                     .alert(
-                        "Install build \(pendingInstall?.build ?? "")?",
+                        "Install the build from \(RipulBuildNumber.display(pendingInstall?.build ?? "", relative: false))?",
                         isPresented: Binding(
                             get: { pendingInstall != nil },
                             set: { if !$0 { pendingInstall = nil } }
@@ -123,12 +123,15 @@ public struct RipulBuildUpdateBanner: View {
         .onTapGesture { onOpenBuilds() }
     }
 
+    /// Build numbers are timestamps, so say so — "Built Today at 9:59 AM"
+    /// answers "is this worth installing?" in a way "Build 202609190959" never
+    /// did. See `RipulBuildNumber`.
     private func subtitle(for build: RipulBuild) -> String {
-        var parts = ["Build \(build.build)"]
+        var parts = ["Built \(RipulBuildNumber.display(build.build))"]
         if let notes = build.notes, !notes.isEmpty {
             parts.append(notes)
         } else {
-            parts.append("you're on \(RipulBuildFeedStore.runningBuild)")
+            parts.append("you're on \(RipulBuildNumber.displayRunning(RipulBuildFeedStore.runningBuild))")
         }
         return parts.joined(separator: " · ")
     }

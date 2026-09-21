@@ -224,6 +224,28 @@ public struct ScreenSwitcherPullModifier: ViewModifier {
             .onChange(of: touching) { active in
                 if !active, axis == .undecided { cancelWarmup() }
             }
+            .onChange(of: tracking) { active in
+                // `tracking` reverts on cancellation AND on completion, and its
+                // order against `onEnded` is not defined. Give `onEnded` the
+                // rest of this run-loop turn: if the axis is still latched
+                // after it, nothing ended this drag — the system took the touch
+                // (a backgrounding, a call, Control Centre) — and the store
+                // would otherwise sit mid-ramp or mid-slide until the next one.
+                guard !active, axis != .undecided else { return }
+                DispatchQueue.main.async { settleInterruptedDrag() }
+            }
+    }
+
+    private func settleInterruptedDrag() {
+        switch axis {
+        case .vertical: switcher?.cancelInteractive()
+        case .horizontal: switcher?.cancelSlide()
+        case .undecided: return
+        }
+        axis = .undecided
+        origin = .zero
+        prepared = nil
+        cancelWarmup()
     }
 
     private func cancelWarmup() {

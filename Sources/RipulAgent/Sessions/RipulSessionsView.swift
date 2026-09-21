@@ -98,7 +98,20 @@ public struct RipulSessionsView: View {
 
     private var callbacks: SessionsListCallbacks {
         SessionsListCallbacks(
-            onFocusSession: { session in Task { await onSelectSession(session) } },
+            onFocusSession: { session in
+                // A tab handed in from outside the list (an accepted invite,
+                // a machine-panel open) goes through the SAME path a row tap
+                // takes when its row exists: spinner, latest-tap-wins
+                // cancellation and the persistent error notice all live in
+                // `openSession`. Only a tab with no row yet falls back to a
+                // bare focus.
+                if onPickUnifiedSession == nil,
+                   let row = model.unifiedSessions.first(where: { $0.represents(session) }) {
+                    model.openSession(row, onSelect: onSelectSession, onDismiss: onDismiss)
+                } else {
+                    Task { await onSelectSession(session) }
+                }
+            },
             onConnect: { machine in
                 if model.usesDirectConnections { createNewChat?(machine.machineId); return }
                 Task { await model.connect(to: machine, onSelect: onSelectSession, onDismiss: onDismiss) }
@@ -182,6 +195,7 @@ public struct RipulSessionsView: View {
             openingUnifiedSessionId: model.openingUnifiedSessionId,
             archivingUnifiedSessionId: model.archivingUnifiedSessionId,
             deletingUnifiedSessionId: model.deletingUnifiedSessionId,
+            leavingUnifiedSessionId: model.leavingUnifiedSessionId,
             deletingFromHost: model.deletingFromHost,
             lastActiveBySessionId: model.lastActiveBySessionId,
             onOpenUnifiedSession: { session in
@@ -194,6 +208,8 @@ public struct RipulSessionsView: View {
             onArchiveUnifiedSession: { session in model.archiveSession(session) },
             onDeleteUnifiedSession: { session in model.deleteSession(session) },
             onRemoveFromRipulUnifiedSession: { session in model.deleteSession(session, keepRemote: true) },
+            onRemoveInvitedUnifiedSession: { session in model.removeInvitedSession(session) },
+            onLeaveInvitedUnifiedSession: { session in model.leaveInvitedSession(session) },
             onMoveUnifiedSession: { session, target in model.moveSession(session, to: target) },
             onBatchArchive: { sessions in model.batchArchiveSessions(sessions) },
             onBatchDelete: { sessions in model.batchDeleteSessions(sessions) },

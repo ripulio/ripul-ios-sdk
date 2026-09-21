@@ -24,6 +24,7 @@ targets:
       - ../RipulAgentTests/SessionOpenFailureTests.swift
       - ../RipulAgentTests/SessionDataSourceTests.swift
       - ../RipulAgentTests/SessionDeletionTests.swift
+      - ../RipulAgentTests/GuestSessionListTests.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: io.ripul.tests.session-navigation

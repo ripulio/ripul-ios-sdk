@@ -8,6 +8,7 @@ struct NativeToolStripItem: Decodable, Equatable, Identifiable {
     let rendererName: String?
     let symbol: String?
     var defaultAction: ToolDefaultAction? = nil
+    var status: String? = nil
 }
 
 struct NativeToolStripSnapshot: Decodable, Equatable {
@@ -135,6 +136,7 @@ public final class NativeToolStripStore: ObservableObject {
         guard let latest else { return }
         // A summary cannot simplify a single lozenge, even with many calls.
         // Also reopen a previously collapsed row if grouping reduces it to one.
+        guard !latest.tools.contains(where: { ToolTaskStatus.isBusy($0.status) }) else { setCollapsed(false); return }
         guard latest.tools.count > 1 else { setCollapsed(false); return }
         guard revealedActivity != latest.updatedAt else { return }
         let remaining = max(0, min(20_000, latest.updatedAt + 20_000 - now))
@@ -187,9 +189,10 @@ struct NativeToolStripContent: View {
                                         defaultAction: tool.defaultAction.map { action in { store.performDefault(tool.id, actionId: action.id) } },
                                         defaultActionTitle: tool.defaultAction?.title) {
                                         HStack(spacing: 6) {
+                                            if let status = tool.status { ToolTaskStatus(status: status) }
                                             Image(systemName: tool.symbol ?? ToolIconMap.symbol(for: tool.rendererName ?? "tool"))
                                                 .foregroundStyle(.secondary)
-                                            Text(tool.label).lineLimit(1)
+                                            Text(tool.label).lineLimit(1).frame(maxWidth: tool.status == nil ? nil : 240)
                                             if tool.count > 1 {
                                                 Text("\(tool.count)")
                                                     .font(.caption2.weight(.semibold))
@@ -199,7 +202,7 @@ struct NativeToolStripContent: View {
                                             }
                                         }
                                     }
-                                    .accessibilityLabel("\(tool.label), \(tool.count) \(tool.count == 1 ? "call" : "calls")")
+                                    .accessibilityLabel("\(tool.label)\(tool.status.map { ", " + ToolTaskStatus.title($0) } ?? ""), \(tool.count) \(tool.count == 1 ? "call" : "calls")")
                                     .accessibilityHint(tool.defaultAction.map { "Open tool details. Touch and hold to \($0.title)." } ?? "Open tool details")
                                     .accessibilityIdentifier("NativeToolStrip.tool.\(tool.id)")
                                     .accessibilityAction { store.select(tool.id) }
@@ -212,7 +215,7 @@ struct NativeToolStripContent: View {
                         }
                         .padding(.horizontal, 2)
                         .frame(height: 44)
-                        .animation(reduceMotion ? nil : .smooth(duration: 0.3), value: snapshot.tools)
+                        .animation(reduceMotion ? nil : .smooth(duration: 0.3), value: snapshot.tools.map(\.id))
                         .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: store.collapsed)
                     }
                     .scrollIndicators(.hidden)
@@ -361,7 +364,10 @@ private struct ToolStripButtonFrames: PreferenceKey {
 private struct ToolStripButtonStyle: ViewModifier {
     func body(content: Content) -> some View {
         if #available(iOS 26.0, macOS 26.0, *) {
-            content.font(.caption.weight(.medium)).buttonStyle(.glass).controlSize(.regular)
+            // Glass defaults to a rounded rectangle with Catalyst's Mac idiom.
+            // Request the same capsule on every platform, retaining native sizing.
+            content.font(.caption.weight(.medium)).buttonStyle(.glass)
+                .buttonBorderShape(.capsule).controlSize(.regular)
         } else {
             content.font(.caption.weight(.medium)).buttonStyle(.bordered).buttonBorderShape(.capsule)
         }

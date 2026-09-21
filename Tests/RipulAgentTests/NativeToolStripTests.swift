@@ -6,6 +6,22 @@ import WebKit
 @testable import RipulAgent
 
 final class NativeToolStripTests: XCTestCase {
+    @MainActor func testBusyTasksStayVisibleAfterIdleAndTerminalStatusReleasesTheRow() {
+        let store = NativeToolStripStore()
+        let tools: [[String: Any]] = [["id": "a", "label": "Run tests", "count": 1, "status": "running"],
+                                     ["id": "b", "label": "Read", "count": 1]]
+        store.receive(message(time: 1000, tools: tools), now: 100_000)
+        XCTAssertFalse(store.collapsed, "Long running work must remain individually visible")
+        XCTAssertEqual(store.display?.tools.first?.status, "running")
+        var completed = tools
+        completed[0]["status"] = "completed"
+        store.receive(message(time: 1000, tools: completed), now: 100_000)
+        XCTAssertTrue(store.collapsed)
+        XCTAssertEqual(store.display?.tools.first?.status, "completed")
+        XCTAssertFalse(ToolTaskStatus.isBusy("orphaned"))
+        XCTAssertFalse(ToolTaskStatus.isBusy("paused"))
+    }
+
     @MainActor func testDefaultActionsAreGenericOwnedAndRejectChangedOrRemovedActions() {
         let store = NativeToolStripStore()
         var events: [[String: Any]] = []

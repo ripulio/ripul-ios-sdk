@@ -10,19 +10,68 @@ import Combine
 @MainActor
 public final class RipulChatLauncher {
     private let overlay: RipulDevAssistantOverlay
+    private let cache: RipulSessionCache
+    private let morph = HostedChatMorph()
+    public var isTransitioning: Bool { morph.isAnimating }
 
     public init(cache: RipulSessionCache, onRestore: @escaping () -> Void) {
+        self.cache = cache
         overlay = RipulDevAssistantOverlay()
         overlay.configuration = RipulSessionsConfiguration(cache: cache)
-        overlay.restoreHostedChat = onRestore
+        overlay.restoreHostedChat = { [weak self] in
+            onRestore()
+            // A morph retires the real FAB once its cover is displayed. Hosts
+            // using a simple restore callback still dismiss it immediately.
+            if self?.isTransitioning != true { self?.overlay.dismiss() }
+        }
     }
 
-    public func show() {
-        overlay.present()
+    public func show(in scene: UIWindowScene? = nil) {
+        guard !isTransitioning else { return }
+        overlay.present(in: scene)
         overlay.collapse()
     }
 
-    public func dismiss() { overlay.dismiss() }
+    public func dismiss() {
+        morph.cancel()
+        overlay.dismiss()
+    }
+
+    /// Keep the host's chat mounted; only its presentation changes beneath the
+    /// snapshot. Completion reveals the real FAB once the glass reaches it.
+    public func minimize(in window: UIWindow, updateChat: @escaping () -> Void,
+                         completion: @escaping () -> Void) {
+        morph.run(expanding: false, in: window,
+                  bubbleFrame: Self.restingFrame(cache: cache, in: window),
+                  updateChat: updateChat, completion: completion)
+    }
+
+    public func restore(in window: UIWindow, updateChat: @escaping () -> Void) {
+        morph.run(expanding: true, in: window,
+                  bubbleFrame: Self.restingFrame(cache: cache, in: window),
+                  updateChat: { [weak self] in
+                      self?.overlay.dismiss()
+                      updateChat()
+                  }, completion: {})
+    }
+
+    /// Where the bubble will sit when next shown, in `window`'s coordinates.
+    ///
+    /// For a host that animates something INTO the bubble — a chat card folding
+    /// away — and needs to land on the exact circle the FAB then appears on.
+    /// The same arithmetic the bubble uses to place itself: the remembered
+    /// position from `cache`, or the bottom-trailing corner, clamped into the
+    /// window's safe area with the bubble's own margin. The overlay window
+    /// covers the scene, so its safe area is the app window's.
+    public static func restingFrame(cache: RipulSessionCache, in window: UIWindow) -> CGRect {
+        let size = RipulDevOverlayRootVC.bubbleDiameter
+        let safe = window.bounds.inset(by: window.safeAreaInsets)
+        let half = size / 2
+        let preferred = RipulDevAssistantOverlay.savedBubblePosition(in: cache)
+            ?? CGPoint(x: safe.maxX - half - 16, y: safe.maxY - half - 24)
+        let centre = RipulDevOverlayRootVC.clampedBubbleCentre(preferred, half: half, in: safe)
+        return CGRect(x: centre.x - half, y: centre.y - half, width: size, height: size)
+    }
 }
 
 /// Floating dev-assistant overlay: a draggable, edge-snapping bubble that
@@ -170,8 +219,9 @@ public final class RipulDevAssistantOverlay {
         collapse()
     }
 
-    fileprivate func present() {
-        guard window == nil, let configuration, let scene = Self.activeWindowScene() else { return }
+    fileprivate func present(in requestedScene: UIWindowScene? = nil) {
+        guard window == nil, let configuration,
+              let scene = requestedScene ?? Self.activeWindowScene() else { return }
         let win = RipulDevOverlayWindow(windowScene: scene)
         // Minimized controls sit below the explorer and receive their own taps.
         // Expanding raises the whole assistant above it via isExpanded.
@@ -205,10 +255,17 @@ public final class RipulDevAssistantOverlay {
     }
 
     fileprivate func savedBubblePosition() -> CGPoint? {
-        guard let cache, cache.object(forKey: Self.bubbleXKey) != nil else { return nil }
-        let y = (cache.object(forKey: Self.restingYKey) as? Double)
-            ?? (cache.object(forKey: Self.bubbleYKey) as? Double ?? 0)
-        return CGPoint(x: cache.object(forKey: Self.bubbleXKey) as? Double ?? 0, y: y)
+        guard let cache else { return nil }
+        return Self.savedBubblePosition(in: cache)
+    }
+
+    /// The remembered bubble centre, if one was ever saved. Static so a host
+    /// can ask where the bubble WOULD land before any overlay window exists.
+    fileprivate static func savedBubblePosition(in cache: RipulSessionCache) -> CGPoint? {
+        guard cache.object(forKey: bubbleXKey) != nil else { return nil }
+        let y = (cache.object(forKey: restingYKey) as? Double)
+            ?? (cache.object(forKey: bubbleYKey) as? Double ?? 0)
+        return CGPoint(x: cache.object(forKey: bubbleXKey) as? Double ?? 0, y: y)
     }
 
     private static func activeWindowScene() -> UIWindowScene? {
@@ -307,11 +364,12 @@ final class RipulDevOverlayRootVC: UIViewController {
 
     /// The compact bar's frame: bottom-docked by default (mini-player idiom),
     /// or the user's dragged-to Y (persisted per host in the cache suite).
-    private var compactFrame: CGRect {
-        let bottom = view.safeAreaInsets.bottom
-        let defaultY = view.bounds.height - bottom - 72
+    var compactFrame: CGRect {
+        let safe = view.safeAreaLayoutGuide.layoutFrame
+        let defaultY = safe.maxY - 72
         let y = overlay?.savedCompactY(in: view) ?? defaultY
-        return CGRect(x: 12, y: y, width: view.bounds.width - 24, height: 64)
+        return CGRect(x: safe.minX + 12, y: max(safe.minY + 8, y),
+                      width: max(0, safe.width - 24), height: 64)
     }
 
     override func viewDidLoad() {
@@ -357,8 +415,12 @@ final class RipulDevOverlayRootVC: UIViewController {
         updateInteractiveFrame()
     }
 
+    /// The circle's diameter. Also the size a host folds its own content down
+    /// to when handing off to the bubble (`RipulChatLauncher.restingFrame`).
+    static let bubbleDiameter: CGFloat = 56
+
     private func setupBubble() {
-        let size: CGFloat = 56
+        let size = Self.bubbleDiameter
         let b = UIView(frame: CGRect(x: 0, y: 0, width: size, height: size))
         b.backgroundColor = .clear
         b.layer.shadowColor = UIColor.black.cgColor
@@ -395,22 +457,13 @@ final class RipulDevOverlayRootVC: UIViewController {
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
-        if !didPositionBubble, bubble != nil {
-            didPositionBubble = true
+        if bubble != nil, !compactMorphInFlight {
+            let safe = view.safeAreaLayoutGuide.layoutFrame
             let half = bubble.bounds.width / 2
-            if let saved = overlay?.savedBubblePosition() {
-                let minY = view.safeAreaInsets.top + half + 16
-                let maxY = view.bounds.height - view.safeAreaInsets.bottom - half - 16
-                bubble.center = CGPoint(
-                    x: min(max(saved.x, half + 16), view.bounds.width - half - 16),
-                    y: min(max(saved.y, minY), maxY)
-                )
-            } else {
-                bubble.center = CGPoint(
-                    x: view.bounds.width - half - 16,
-                    y: view.bounds.height - view.safeAreaInsets.bottom - half - 24
-                )
-            }
+            let preferred = didPositionBubble ? bubble.center : (overlay?.savedBubblePosition()
+                ?? CGPoint(x: safe.maxX - half - 16, y: safe.maxY - half - 24))
+            bubble.center = clampedBubbleCenter(preferred)
+            didPositionBubble = true
         }
         panelHost?.view.frame = view.bounds
         hostPreview?.view.frame = view.bounds
@@ -423,10 +476,14 @@ final class RipulDevOverlayRootVC: UIViewController {
         updateInteractiveFrame()
     }
 
+    override func viewSafeAreaInsetsDidChange() {
+        super.viewSafeAreaInsetsDidChange()
+        view.setNeedsLayout()
+    }
+
     /// bubble tap → compact bar (the two-state model: circle ⇄ bar ⇄ panel).
     @objc private func bubbleTapped() {
         if let restore = overlay?.restoreHostedChat {
-            overlay?.dismiss()
             restore()
         } else {
             showCompact()
@@ -435,20 +492,32 @@ final class RipulDevOverlayRootVC: UIViewController {
 
     @objc private func bubblePanned(_ g: UIPanGestureRecognizer) {
         let t = g.translation(in: view)
-        bubble.center = CGPoint(x: bubble.center.x + t.x, y: bubble.center.y + t.y)
+        bubble.center = clampedBubbleCenter(CGPoint(x: bubble.center.x + t.x, y: bubble.center.y + t.y))
         g.setTranslation(.zero, in: view)
         updateInteractiveFrame()
-        if g.state == .ended { snapBubbleToEdge() }
+        if g.state == .ended || g.state == .cancelled { snapBubbleToEdge() }
+    }
+
+    private func clampedBubbleCenter(_ point: CGPoint) -> CGPoint {
+        Self.clampedBubbleCentre(point, half: bubble.bounds.width / 2, in: view.safeAreaLayoutGuide.layoutFrame)
+    }
+
+    /// Keep a bubble centre inside `safe` with the circle's own 16pt margin.
+    /// Static so `RipulChatLauncher.restingFrame` places the fold target with
+    /// exactly the arithmetic the bubble will use to place itself.
+    static func clampedBubbleCentre(_ point: CGPoint, half radius: CGFloat, in safe: CGRect) -> CGPoint {
+        let half = radius + 16
+        func clamp(_ value: CGFloat, _ low: CGFloat, _ high: CGFloat) -> CGFloat {
+            high < low ? (low + high) / 2 : min(max(value, low), high)
+        }
+        return CGPoint(x: clamp(point.x, safe.minX + half, safe.maxX - half),
+                       y: clamp(point.y, safe.minY + half, safe.maxY - half))
     }
 
     private func snapBubbleToEdge() {
-        let half = bubble.bounds.width / 2
-        let margin: CGFloat = 16
-        let x = bubble.center.x < view.bounds.midX ? half + margin : view.bounds.width - half - margin
-        let minY = view.safeAreaInsets.top + half + margin
-        let maxY = view.bounds.height - view.safeAreaInsets.bottom - half - margin
-        let y = min(max(bubble.center.y, minY), maxY)
-        let target = CGPoint(x: x, y: y)
+        let safe = view.safeAreaLayoutGuide.layoutFrame
+        let x = bubble.center.x < safe.midX ? safe.minX : safe.maxX
+        let target = clampedBubbleCenter(CGPoint(x: x, y: bubble.center.y))
         overlay?.saveBubblePosition(target)
         UIView.animate(withDuration: 0.25, delay: 0, usingSpringWithDamping: 0.8, initialSpringVelocity: 0, options: [.allowUserInteraction]) {
             self.bubble.center = target
@@ -557,8 +626,10 @@ final class RipulDevOverlayRootVC: UIViewController {
         let ts = collapseTimeScale
         // The circle lands at the BAR's current Y (one shared resting Y —
         // collapsing must not jump vertically), keeping its edge X.
-        let target = CGRect(origin: CGPoint(x: bubble.frame.minX, y: barView.frame.minY),
-                            size: bubble.frame.size)
+        let center = clampedBubbleCenter(CGPoint(x: bubble.center.x,
+                                                y: barView.frame.minY + bubble.bounds.height / 2))
+        let target = CGRect(x: center.x - bubble.bounds.width / 2, y: center.y - bubble.bounds.height / 2,
+                            width: bubble.bounds.width, height: bubble.bounds.height)
         bubble.center = CGPoint(x: target.midX, y: target.midY)
         bubble.isHidden = false
         bubble.alpha = 0
@@ -584,6 +655,7 @@ final class RipulDevOverlayRootVC: UIViewController {
             barView.layer.cornerRadius = 0
             self.overlay?.saveBubblePosition(self.bubble.center)
             self.compactMorphInFlight = false
+            self.view.setNeedsLayout()
             // Interactive region now falls back to the bubble's frame — the
             // start-of-morph update left it on the bar's old strip, which is
             // what made the bubble untappable/undraggable after collapse.

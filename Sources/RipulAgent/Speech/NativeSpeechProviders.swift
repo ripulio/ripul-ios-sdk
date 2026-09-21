@@ -109,36 +109,49 @@ public final class ElevenLabsNativeSpeechProvider: NSObject, NativeSpeechProvidi
         private static let maxChunks = 200
 
         private let lock = NSLock()
+        /// Every `send` on the task goes through here, one at a time.
+        ///
+        /// `attach` used to drain up to 200 backlog chunks outside the lock
+        /// while the audio tap was already pushing live chunks — two threads
+        /// calling `URLSessionWebSocketTask.send` concurrently, which Apple
+        /// nowhere documents as safe and which corrupts the TLS record stream
+        /// when it interleaves. The failure that produces is `OSStatus -9820`,
+        /// `errSSLBadRecordMac`, observed on device killing a live session.
+        ///
+        /// Note the drain is enqueued right after `resume()`, before the
+        /// handshake completes, so the overlap lands whenever the socket
+        /// actually opens — not at a moment the timeline can pin down. The
+        /// race is unconditional either way; the -9820 is consistent with it
+        /// rather than proof of it.
+        ///
+        /// The `async` hop also keeps the real-time audio thread off the send
+        /// path entirely: it now enqueues and returns rather than waiting.
+        private let sendQueue = DispatchQueue(label: "io.ripul.speech.ws-send")
         private var socket: URLSessionWebSocketTask?
         private var pending: [String] = []
         private var closed = false
 
         func push(_ text: String) {
             lock.lock()
-            if closed {
-                lock.unlock()
-                return
-            }
+            defer { lock.unlock() }
+            if closed { return }
             if let socket {
-                lock.unlock()
-                socket.send(.string(text)) { _ in }
+                // Enqueued under the lock so dispatch order matches lock order:
+                // a push racing `attach` must not jump ahead of the backlog.
+                sendQueue.async { socket.send(.string(text)) { _ in } }
                 return
             }
             if pending.count < Self.maxChunks { pending.append(text) }
-            lock.unlock()
         }
 
         func attach(_ socket: URLSessionWebSocketTask) {
             lock.lock()
-            guard !closed else {
-                lock.unlock()
-                return
-            }
+            defer { lock.unlock() }
+            guard !closed else { return }
             self.socket = socket
             let backlog = pending
             pending = []
-            lock.unlock()
-            for text in backlog { socket.send(.string(text)) { _ in } }
+            sendQueue.async { for text in backlog { socket.send(.string(text)) { _ in } } }
         }
 
         func close() {

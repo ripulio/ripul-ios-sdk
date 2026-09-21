@@ -187,6 +187,8 @@ public struct MachineRowExpandable: View {
         return status.loggedIn ? .green : .orange
     }
 
+    @State private var showCodexAccounts = false
+
     private func refreshHostAuthStatus() {
         guard let hostAuthBridge, machine.isOnline, !isMachineDisabled else { return }
         Task {
@@ -227,6 +229,12 @@ public struct MachineRowExpandable: View {
                 currentIcon: machineIcon
             ) { icon in
                 onSetIcon?(icon)
+            }
+        }
+        .sheet(isPresented: $showCodexAccounts) {
+            if let hostAuthBridge {
+                CodexAccountSwitcherSheet(machineId: machine.machineId, machineName: machine.displayName,
+                    direct: machine.meta?["connection"] == "direct", bridge: hostAuthBridge)
             }
         }
         .sheet(isPresented: $showSignInSheet, onDismiss: { refreshHostAuthStatus() }) {
@@ -426,7 +434,8 @@ public struct MachineRowExpandable: View {
             isLaunching: loadingTile != nil || isConnecting,
             // Long-press the New Session pill → the account switcher. Same
             // sheet as the expanded row's Claude account row.
-            onSwitchAccount: hostAuthBridge != nil ? { showSignInSheet = true } : nil
+            onSwitchAccount: hostAuthBridge != nil ? { showSignInSheet = true } : nil,
+            onSwitchCodexAccount: hostAuthBridge != nil ? { showCodexAccounts = true } : nil
         )
     }
 
@@ -570,6 +579,12 @@ public struct MachineRowExpandable: View {
                         tint: claudeAccountTint
                     ) {
                         showSignInSheet = true
+                    }
+                }
+
+                if machine.isOnline && !isMachineDisabled && hostAuthBridge != nil {
+                    MachineActionRow(icon: "person.2", label: "Codex accounts", tint: .secondary) {
+                        showCodexAccounts = true
                     }
                 }
 

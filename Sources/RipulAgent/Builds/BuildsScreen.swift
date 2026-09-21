@@ -58,7 +58,7 @@ public struct RipulBuildsScreen: View {
         .refreshable { await store.refresh() }
         .task { await store.refresh() }
         .alert(
-            "Install build \(pendingInstall?.build ?? "")?",
+            "Install the build from \(RipulBuildNumber.display(pendingInstall?.build ?? "", relative: false))?",
             isPresented: Binding(
                 get: { pendingInstall != nil },
                 set: { if !$0 { pendingInstall = nil } }
@@ -80,13 +80,27 @@ public struct RipulBuildsScreen: View {
     private var runningBuildSection: some View {
         Section {
             LabeledContent("Version", value: RipulBuildFeedStore.runningVersion)
-            LabeledContent("Build", value: RipulBuildFeedStore.runningBuild)
+            runningBuildRow(RipulBuildFeedStore.runningBuild)
             statusRow
         } header: {
             Text("This app")
         } footer: {
             if store.ownChannel == nil && store.feed != nil {
                 Text("No published channel matches this app's bundle id (\(RipulBuildFeedStore.runningBundleId)), so there is nothing to compare against.")
+            }
+        }
+    }
+
+    /// The running build, decoded to a date, with the exact stamp kept beneath
+    /// it — this is the screen people are sent to when a number needs quoting.
+    @ViewBuilder
+    private func runningBuildRow(_ build: String) -> some View {
+        LabeledContent("Build") {
+            VStack(alignment: .trailing, spacing: 1) {
+                Text(RipulBuildNumber.displayRunning(build))
+                Text(build)
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.tertiary)
             }
         }
     }
@@ -109,7 +123,10 @@ public struct RipulBuildsScreen: View {
             }
         case .updateAvailable(let build):
             LabeledContent("Status") {
-                Label("Build \(build.build) available", systemImage: "arrow.down.circle.fill")
+                Label(
+                    "Build from \(RipulBuildNumber.display(build.build, relative: false)) available",
+                    systemImage: "arrow.down.circle.fill"
+                )
                     .foregroundStyle(.orange)
             }
             // The whole point of the status check is acting on it — make the
@@ -119,7 +136,10 @@ public struct RipulBuildsScreen: View {
                 Button {
                     pendingInstall = build
                 } label: {
-                    Label("Install build \(build.build)", systemImage: "arrow.down.circle")
+                    Label(
+                        "Install the build from \(RipulBuildNumber.display(build.build, relative: false))",
+                        systemImage: "arrow.down.circle"
+                    )
                 }
             }
         }
@@ -150,8 +170,8 @@ public struct RipulBuildsScreen: View {
     private func buildRow(_ build: RipulBuild, in channel: RipulBuildChannel) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .firstTextBaseline) {
-                Text(build.build)
-                    .font(.body.monospacedDigit())
+                Text(RipulBuildNumber.display(build.build))
+                    .font(.body)
                 if isRunning(build, in: channel) {
                     Text("RUNNING")
                         .font(.caption2.weight(.bold))
@@ -171,6 +191,10 @@ public struct RipulBuildsScreen: View {
 
             HStack(spacing: 8) {
                 Text("v\(build.version)")
+                Text("·")
+                // The raw stamp: the row title reads as a date now, but this is
+                // still the number the build logs and the API speak in.
+                Text(build.build).monospacedDigit()
                 Text("·")
                 Text(build.formattedSize)
                 if let date = build.builtAtDate {

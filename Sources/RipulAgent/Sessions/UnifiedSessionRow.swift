@@ -284,7 +284,9 @@ public struct UnifiedSessionRow: View {
 
     private var iconSize: CGFloat { presentation.isLozenge ? 13 : 16 }
     private var iconWidth: CGFloat { presentation.isLozenge ? 20 : 28 }
-    private var titleFont: Font { presentation.isLozenge ? .caption.weight(.semibold) : .body }
+    private var titleFont: Font {
+        presentation.isLozenge ? .caption.weight(.semibold) : .body.weight(isUnread ? .bold : .regular)
+    }
     private var detailFont: Font { presentation.isLozenge ? .caption2 : .caption }
 
     /// Text for the leading slot of the idle detail row: the model in use
@@ -349,15 +351,16 @@ public struct UnifiedSessionRow: View {
                             .uiKitIdentifier("UnifiedSessionRow.leadingIcon")
                     }
 
-                    // Green dot = already open in Ripul. Meaningless in the
-                    // top bar, where the session on screen is open by
-                    // definition.
-                    if session.isOpenInRipul && toolIcon == nil && !presentation.isLozenge {
-                        Circle()
-                            .fill(.green)
-                            .frame(width: 8, height: 8)
+                    // Unread reply badge, using the same read state as the
+                    // bold title. The top-bar pill is the chat being read.
+                    if isUnread && !presentation.isLozenge {
+                        Image(systemName: "envelope")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(.white)
+                            .background(.background, in: RoundedRectangle(cornerRadius: 2))
                             .offset(x: 4, y: 4)
-                            .uiKitIdentifier("UnifiedSessionRow.openIndicatorDot")
+                            .accessibilityLabel("Unread reply")
+                            .uiKitIdentifier("UnifiedSessionRow.unreadIndicatorEnvelope")
                     }
                 }
                 .animation(.easeInOut(duration: 0.175), value: toolIcon)
@@ -415,10 +418,7 @@ public struct UnifiedSessionRow: View {
 
                 let subtitleKey = subtitleState.subtitleKey(inlineToolActivity: inlineToolActivity)
 
-                // Title row: name only (truncates). Unread is carried by the
-                // row's shading, not by the title — the title is how you find
-                // a session, and re-weighting it made the list read as two
-                // different typographic ranks rather than one list.
+                // Unread replies use a bold title alongside the envelope.
                 Text(session.title)
                     .font(titleFont)
                     .lineLimit(titleLineLimit)
@@ -539,25 +539,7 @@ public struct UnifiedSessionRow: View {
             }
         }
         .padding(.vertical, presentation.isLozenge ? 0 : 2)
-        .background(unreadShading)
         .uiKitIdentifier("UnifiedSessionRow.container")
-    }
-
-    /// Unread, as a band behind the whole row.
-    ///
-    /// Bled past the content on both axes so it reads as the ROW being tinted
-    /// rather than a box drawn around the text. Kept faint (and skipped in the
-    /// lozenge presentation, which is a top-bar pill rather than a list row)
-    /// so it layers under selection and hover instead of fighting them.
-    @ViewBuilder
-    private var unreadShading: some View {
-        if isUnread && !presentation.isLozenge {
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Color.accentColor.opacity(0.12))
-                .padding(.horizontal, -10)
-                .padding(.vertical, -4)
-                .uiKitIdentifier("UnifiedSessionRow.unreadShading")
-        }
     }
 
     /// The busy indicator, parked UNDER the timestamp instead of beside it.
@@ -572,9 +554,8 @@ public struct UnifiedSessionRow: View {
     /// starting or ending must not resize the row, or a list of live sessions
     /// twitches every time one of them changes state.
     ///
-    /// ("Waiting on you" gets nothing here — the unread shading behind the row
-    /// says it, and says it better, since it also distinguishes a reply you
-    /// have not read from one you have.)
+    /// Unread replies are indicated by the bold title and envelope; a chat
+    /// awaiting input may already have been read.
     @ViewBuilder
     private var runningIndicatorSlot: some View {
         ZStack {

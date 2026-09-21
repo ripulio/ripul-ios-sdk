@@ -99,7 +99,7 @@ private struct ToolDetailsHarnessSurface: View {
                     ("Inspect the final changes", "git diff --stat"),
                     ("Review recent commits", "git log -5 --oneline"),
                 ]
-                let message: [String: Any] = [
+                var message: [String: Any] = [
                     "initialCallId": ProcessInfo.processInfo.arguments.first { $0.hasPrefix("--initial-call=") }?.replacingOccurrences(of: "--initial-call=", with: "") ?? NSNull(),
                     "requestId": "ui-fixture", "title": (fixture["commandPresentation"] as? [String: Any])?["label"] ?? ToolValue.title((fixture["toolName"] as! String).replacingOccurrences(of: "^mcp__ripul_tools_+", with: "", options: .regularExpression)),
                     "calls": (1...count).map { number in [
@@ -113,6 +113,22 @@ private struct ToolDetailsHarnessSurface: View {
                         "diagnostics": text(["toolName": fixture["toolName"]!, "arguments": fixture["args"]!, "status": "success", "duration": 42.5, "background": false, "error": NSNull()]),
                     ] as [String: Any] },
                 ]
+                if ProcessInfo.processInfo.arguments.contains("--task-activity") {
+                    var calls = message["calls"] as! [[String: Any]]
+                    calls = [calls[0]]
+                    calls[0]["status"] = "running"
+                    calls[0]["rendererName"] = "Agent"
+                    calls[0]["toolName"] = "Agent"
+                    calls[0]["commandPresentation"] = NSNull()
+                    calls[0]["task"] = ["id": "task-checks", "type": "local_agent", "title": "Check background task rendering",
+                        "status": "running", "variant": "Explore", "synthetic": false, "totalCount": 14,
+                        "usage": "1,234 tokens · 8 tool uses · 42s",
+                        "entries": [["kind": "tool", "label": "Read", "detail": "src/logging/components/chat/v2/useChatItems.ts"],
+                                    ["kind": "tool", "label": "Grep", "detail": "Locate task status updates and their rendering path"],
+                                    ["kind": "text", "detail": "The launching call has completed; the background task is still working."]]] as [String: Any]
+                    message["calls"] = calls
+                    message["title"] = "Tool calls"
+                }
                 store.receive(message, opening: true)
                 if ProcessInfo.processInfo.arguments.contains("--live-calls") {
                     liveUpdates = Task { @MainActor in
@@ -204,6 +220,7 @@ private struct NativeToolStripHarnessSurface: View {
     @StateObject private var strip = NativeToolStripStore()
     @StateObject private var details = ToolCallDetailsStore()
     @State private var count = 2
+    @State private var busy = false
     @State private var group = "row-a"
     @State private var events = ""
     @State private var draft = ""
@@ -216,6 +233,7 @@ private struct NativeToolStripHarnessSurface: View {
             let id: String = "call-\(n)"
             let label: String = labels[(n - 1) % 5]
             let uses: Int = n == 1 ? 2 : 1
+            if busy && n == 1 { return ["id": id, "label": "Check background tasks", "count": 1, "rendererName": "Agent", "status": "running"] }
             return ["id": id, "label": label, "count": uses]
         }
         let updatedAt: Double = Date().timeIntervalSince1970 * 1000 - (idle ? 20_001 : 0)
@@ -226,7 +244,9 @@ private struct NativeToolStripHarnessSurface: View {
 
     var body: some View {
         VStack {
-            Button("Start tools") { count = 2; update() }
+            Button("Start tools") { busy = false; count = 2; update() }
+            Button("Start tasks") { busy = true; count = 2; update() }
+            Button("Finish tasks") { busy = false; update(idle: true) }
             Button("Burst tools") {
                 Task { for n in 3...10 { count = n; update(); try? await Task.sleep(nanoseconds: 40_000_000) } }
             }

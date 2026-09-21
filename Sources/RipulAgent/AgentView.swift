@@ -71,10 +71,6 @@ public struct AgentView<TopBar: View>: View {
     /// composer mic — typed text in the composer goes in as the first
     /// utterance). Availability-free class; speech is gated internally.
     @StateObject private var voiceMode = VoiceModeController()
-    /// When false, the web view respects safe areas so it stays confined to its
-    /// container (e.g. a NavigationSplitView detail column) instead of full-bleeding
-    /// to the window. Defaults true to preserve the full-screen iPhone behaviour.
-    private var fillsSafeArea: Bool = true
 
     @StateObject private var bridge: AgentBridge
     private let skipBridgeSetup: Bool
@@ -160,11 +156,13 @@ public struct AgentView<TopBar: View>: View {
 
     /// Creates an AgentView using an externally-managed bridge.
     /// The caller is responsible for registering tools and setting delegates on the bridge.
+    /// `fillsSafeArea` is retained for source compatibility; both modes now
+    /// extend vertically and preserve horizontal safe bounds.
     public init(
         configuration: AgentConfiguration,
         bridge: AgentBridge,
         onMinimize: (() -> Void)? = nil,
-        fillsSafeArea: Bool = true,
+        fillsSafeArea _: Bool = true,
         tokenProvider: (() -> String?)? = nil,
         @ViewBuilder topBar: @escaping (AgentBridge) -> TopBar
     ) {
@@ -175,7 +173,6 @@ public struct AgentView<TopBar: View>: View {
         self.topBar = topBar
         self._bridge = StateObject(wrappedValue: bridge)
         self.skipBridgeSetup = true
-        self.fillsSafeArea = fillsSafeArea
         self.tokenProvider = tokenProvider
     }
 
@@ -236,11 +233,12 @@ public struct AgentView<TopBar: View>: View {
             if let config = readyConfig {
                 AgentWebView(configuration: config, bridge: bridge)
                 #if os(iOS)
-                    // fillsSafeArea: ignore all edges (full-bleed iPhone). Otherwise
-                    // ignore only the vertical edges — the web view fills to the top
-                    // (no black gap above the chat top bar) but respects the leading/
-                    // trailing insets so it stays confined to its split column.
-                    .ignoresSafeArea(.all, edges: fillsSafeArea ? .all : .vertical)
+                    // Native layout owns horizontal avoidance for both full-screen
+                    // and split chat, including embedded native rows. Only extend
+                    // vertically beneath the title/composer glass; CSS must not
+                    // add a second side inset to this already-safe viewport.
+                    .ignoresSafeArea(.container, edges: .vertical)
+                    .ignoresSafeArea(.keyboard)
                     // Slide the entire WKWebView up by the full keyboard frame height.
                     // Only applies when the native chat input is active — on sign-in and
                     // other non-chat pages the web view handles keyboard avoidance itself
@@ -288,7 +286,7 @@ public struct AgentView<TopBar: View>: View {
             if on { bridge.evaluateJavaScript("window.__ripulSetNativeChatForwarding?.(true, 'debug')") }
         }
         .overlay(alignment: .bottom) {
-            if !bridge.fileViewerExpanded && bridge.currentPageContext.showNativeChatInput && !bridge.suppressNativeChatInput {
+            if !bridge.fileViewerExpanded && !bridge.artefactPageExpanded && bridge.currentPageContext.showNativeChatInput && !bridge.suppressNativeChatInput {
                 // Leaf-isolated composer: owns the chat text state so typing
                 // re-renders ONLY this child, never AgentView.body (which hosts the
                 // WKWebView, the top bar, and reads many bridge.* properties).
@@ -766,6 +764,11 @@ private struct ChatComposer: View {
             onSubmit: handleSubmit,
             onSubmitNote: BundledAgentRuntime.isEnabled || isGroupMode ? nil : handleNoteSubmit,
             conversationMode: isGroupMode ? "group" : "agent",
+            replyTarget: bridge.replyTarget(for: bridge.currentSourceChatId),
+            onCancelReply: {
+                guard let chatId = bridge.currentSourceChatId else { return }
+                Task { await bridge.clearReplyTarget(chatId: chatId) }
+            },
             runningSendLabel: isGroupMode ? "Send" : composerActionStore.runningSendLabel(for: bridge.currentSourceChatId),
             composerActions: isGroupMode ? [] : composerActionStore.actions(for: bridge.currentSourceChatId),
             composerActionPending: composerActionPending,
@@ -804,6 +807,18 @@ private struct ChatComposer: View {
                     let group = dict["group"] as? String
                     return ParticipantSuggestion(id: id, name: name, group: group)
                 }
+            },
+            onQueryTeammates: {
+                let dicts = await bridge.queryAutocomplete(category: "team", query: "")
+                return dicts.compactMap { dict in
+                    guard let id = dict["id"] as? String,
+                          let name = dict["name"] as? String,
+                          let email = dict["email"] as? String else { return nil }
+                    return TeammateSuggestion(id: id, name: name, email: email, description: dict["description"] as? String)
+                }
+            },
+            onInviteTeammate: { teammate in
+                await bridge.inviteTeammate(email: teammate.email)
             },
             onQueryBranches: { query in
                 let dicts = await bridge.queryAutocomplete(category: "branches", query: query)
@@ -859,6 +874,11 @@ private struct ChatComposer: View {
             onSubmit: handleSubmit,
             onSubmitNote: BundledAgentRuntime.isEnabled || isGroupMode ? nil : handleNoteSubmit,
             conversationMode: isGroupMode ? "group" : "agent",
+            replyTarget: bridge.replyTarget(for: bridge.currentSourceChatId),
+            onCancelReply: {
+                guard let chatId = bridge.currentSourceChatId else { return }
+                Task { await bridge.clearReplyTarget(chatId: chatId) }
+            },
             runningSendLabel: isGroupMode ? "Send" : composerActionStore.runningSendLabel(for: bridge.currentSourceChatId),
             composerActions: isGroupMode ? [] : composerActionStore.actions(for: bridge.currentSourceChatId),
             composerActionPending: composerActionPending,
@@ -897,6 +917,18 @@ private struct ChatComposer: View {
                     let group = dict["group"] as? String
                     return ParticipantSuggestion(id: id, name: name, group: group)
                 }
+            },
+            onQueryTeammates: {
+                let dicts = await bridge.queryAutocomplete(category: "team", query: "")
+                return dicts.compactMap { dict in
+                    guard let id = dict["id"] as? String,
+                          let name = dict["name"] as? String,
+                          let email = dict["email"] as? String else { return nil }
+                    return TeammateSuggestion(id: id, name: name, email: email, description: dict["description"] as? String)
+                }
+            },
+            onInviteTeammate: { teammate in
+                await bridge.inviteTeammate(email: teammate.email)
             },
             onQueryBranches: { query in
                 let dicts = await bridge.queryAutocomplete(category: "branches", query: query)
