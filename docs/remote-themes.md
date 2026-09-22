@@ -103,8 +103,11 @@ validates it through the host's existing full-document callback before previewin
 Both routes feed one local draft. Drafts, including temporarily invalid JSON, survive
 closing the editor or a failed publish, isolated per app and theme URL. Foreground
 refresh is paused while this editor is open so it cannot replace an in-progress
-preview. Closing resumes ordinary server refresh; the unpublished draft remains
-available when the editor is reopened.
+preview. Valid saved drafts are restored at launch, before any server fetch, and
+remain visible after closing the editor. The published baseline and ETag stay
+separate for conflict checks. Invalid source edits remain on disk for repair but
+are not applied at launch. Publishing or explicitly restoring the server theme
+releases the local preview.
 
 **Review & Publish** opens a native before-and-after review, grouped into text,
 colours, styles and other settings. Names come from the app's existing vocabulary

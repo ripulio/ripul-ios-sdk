@@ -1,6 +1,5 @@
 #if os(iOS)
 import SwiftUI
-import CryptoKit
 
 @MainActor
 final class ThemeManagementModel: ObservableObject {
@@ -22,7 +21,7 @@ final class ThemeManagementModel: ObservableObject {
     private let draftURL: URL
     private var started = false
     private let capture: @MainActor (Data?) throws -> Data
-    private struct Draft: Codable { let text: String; let baseline: Data; let etag: String? }
+    private typealias Draft = RipulThemeDraft
 
     convenience init(baseURL: URL, tokenProvider: @escaping () -> String?) {
         self.init(baseURL: baseURL, tokenProvider: tokenProvider, remote: RipulThemeEngine.remoteTheme,
@@ -37,13 +36,7 @@ final class ThemeManagementModel: ObservableObject {
         self.publisher = publisher ?? RipulThemePublisher(baseURL: baseURL, tokenProvider: tokenProvider)
         let url = remote?.url
         themeID = url?.deletingLastPathComponent().path == "/v1/app-themes" ? url?.lastPathComponent : nil
-        self.draftURL = draftURL ?? Self.draftLocation(for: url)
-    }
-
-    private static func draftLocation(for url: URL?) -> URL {
-        let key = SHA256.hash(data: Data((url?.absoluteString ?? "local-theme").utf8)).map { String(format: "%02x", $0) }.joined()
-        return FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("Ripul/ThemeDrafts/" + key + ".json")
+        self.draftURL = draftURL ?? remote?.draftURL ?? RipulThemeDraft.location(for: url)
     }
 
     /// Read the same durable draft used by both editors without opening an editor,
@@ -52,12 +45,13 @@ final class ThemeManagementModel: ObservableObject {
                              capture: (Data?) throws -> Data) -> RipulThemeDraftSummary {
         guard let remote else { return .unavailable }
         do {
-            let location = draftURL ?? draftLocation(for: remote.url)
+            let location = draftURL ?? remote.draftURL
             let saved = FileManager.default.fileExists(atPath: location.path)
                 ? try JSONDecoder().decode(Draft.self, from: Data(contentsOf: location)) : nil
             if let saved, canonical(Data(saved.text.utf8)) == nil { return .needsAttention }
             let baseline = saved?.baseline ?? remote.authoritativeDocument
-            let draft = try capture(saved.map { Data($0.text.utf8) })
+            // A saved draft is the review source, even before it has been restored live.
+            let draft = try saved?.data ?? capture(nil)
             return .changes(ThemeDocumentChanges.compare(baseline, draft).count)
         } catch { return .needsAttention }
     }
@@ -73,7 +67,7 @@ final class ThemeManagementModel: ObservableObject {
     static func saveTextMutation(_ edit: (inout NativeTextTheme) throws -> Void,
                                 remote: RipulRemoteThemeClient? = nil, draftURL: URL? = nil) throws {
         guard let remote = remote ?? RipulThemeEngine.remoteTheme else { throw NativeTextDraftError.noRemoteTheme }
-        let destination = draftURL ?? draftLocation(for: remote.url)
+        let destination = draftURL ?? remote.draftURL
         let existing: Draft?
         if FileManager.default.fileExists(atPath: destination.path) {
             existing = try JSONDecoder().decode(Draft.self, from: Data(contentsOf: destination))

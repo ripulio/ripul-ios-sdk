@@ -79,6 +79,23 @@ final class ThemeManagementTests: XCTestCase {
         XCTAssertEqual(ThemeManagementModel.draftSummary(remote: nil, capture: { _ in self.original }), .unavailable)
     }
 
+    func testSummaryDoesNotReplaceSavedTextWithUnrestoredLiveValues() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let remote = RipulRemoteThemeClient(url: base.appendingPathComponent("v1/app-themes/app"),
+            fallback: original, cacheDirectory: folder, validateAndApply: { _ in },
+            fetch: { _ in throw URLError(.notConnectedToInternet) })
+        let path = folder.appendingPathComponent("draft.json")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try JSONEncoder().encode(RipulThemeDraft(text: String(decoding: edited, as: UTF8.self),
+            baseline: original, etag: "v1")).write(to: path)
+        let summary = ThemeManagementModel.draftSummary(remote: remote, draftURL: path, capture: { _ in
+            XCTFail("Saved drafts must be inspected independently of live state")
+            return self.original
+        })
+        XCTAssertEqual(summary, .changes(1))
+    }
+
     func testFailedPublishAndInvalidSourceSurviveClosingAndReopening() async throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: folder) }

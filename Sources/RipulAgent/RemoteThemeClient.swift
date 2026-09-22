@@ -2,7 +2,8 @@ import Foundation
 import CryptoKit
 
 /// Loads a public theme without delaying launch. The last accepted server document is
-/// authoritative; the bundled document is used until one is available. The host validates
+/// the publication baseline; a saved local draft is restored over it for preview.
+/// The bundled document is used until a server version is available. The host validates
 /// and applies the WHOLE document, including fields outside the SDK's theme vocabulary.
 @MainActor
 public final class RipulRemoteThemeClient {
@@ -23,6 +24,7 @@ public final class RipulRemoteThemeClient {
     }
 
     private let fallback: Data
+    let draftURL: URL
     private let cacheFile: URL
     private let apply: (Data) throws -> Void
     private let fetch: (URLRequest) async throws -> (Data, URLResponse)
@@ -64,9 +66,10 @@ public final class RipulRemoteThemeClient {
         accepted = value; origin = .server; lastError = nil
         hasLocalPreview = false
         do {
+            try removeSavedDraft()
             try FileManager.default.createDirectory(at: cacheFile.deletingLastPathComponent(), withIntermediateDirectories: true)
             try JSONEncoder().encode(value).write(to: cacheFile, options: .atomic)
-        } catch { lastError = "Theme published, but could not cache it: \(error.localizedDescription)" }
+        } catch { lastError = "Theme published, but could not update local theme storage: \(error.localizedDescription)" }
     }
 
     public convenience init(url: URL, fallback: Data,
@@ -77,10 +80,11 @@ public final class RipulRemoteThemeClient {
                   fetch: { try await URLSession.shared.data(for: $0) })
     }
 
-    init(url: URL, fallback: Data, cacheDirectory: URL? = nil,
+    init(url: URL, fallback: Data, cacheDirectory: URL? = nil, draftURL: URL? = nil,
          validateAndApply: @escaping (Data) throws -> Void,
          fetch: @escaping (URLRequest) async throws -> (Data, URLResponse)) {
         self.url = url
+        self.draftURL = draftURL ?? RipulThemeDraft.location(for: url)
         self.fallback = fallback
         self.apply = validateAndApply
         self.fetch = fetch
@@ -107,13 +111,33 @@ public final class RipulRemoteThemeClient {
             try accept(fallback)
             origin = .bundled
         }
+        // Saved editor changes are a local preview, never the server baseline.
+        // Restore before scheduling a fetch so launch/foreground cannot erase them.
+        if FileManager.default.fileExists(atPath: draftURL.path) {
+            do {
+                let draft = try JSONDecoder().decode(RipulThemeDraft.self, from: Data(contentsOf: draftURL))
+                if try canonical(draft.data) != canonical(draft.baseline) {
+                    try preview(draft.data)
+                }
+            } catch {
+                // Keep invalid source edits available for repair in Theme Management.
+                lastError = "Could not restore the saved theme draft: \(error.localizedDescription)"
+            }
+        }
         refreshInBackground()
     }
 
     /// Restores the server's last accepted document after a local editor preview.
     public func restoreAuthoritativeTheme() throws {
         try accept(accepted?.data ?? fallback)
+        try removeSavedDraft()
         hasLocalPreview = false
+    }
+
+    private func removeSavedDraft() throws {
+        if FileManager.default.fileExists(atPath: draftURL.path) {
+            try FileManager.default.removeItem(at: draftURL)
+        }
     }
 
     public func stop() {
