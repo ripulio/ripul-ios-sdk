@@ -74,6 +74,38 @@ public struct RipulSolutionsScreen: View {
         self.onClose = onClose
     }
 
+    /// What the SERVER says this account may do, from `GET /v1/me`.
+    ///
+    /// The rows below are not uniform: Tool Collections and Macros sit on
+    /// ordinary `/v1/` routes any signed-in developer may call, while Solution
+    /// Contexts, View Contexts, Site Keys, Models, Voice Profiles and Users sit
+    /// on `/admin/` routes that demand a permission only the admin roles hold.
+    /// While Solutions was reachable only from the first-party app's
+    /// admin-gated sidebar, one gate on the whole screen covered that. It is
+    /// reachable from the SDK sessions menu now, on the developer audience, so
+    /// each row carries the gate its own API enforces.
+    ///
+    /// `/v1/me` rather than the token's `role` claim or the subscription tier:
+    /// it returns the very `AuthContext` the router built, so the row is
+    /// offered exactly when the request behind it would succeed. nil — still
+    /// loading, or offline — hides the admin rows. A gate that fails closed
+    /// costs an admin one late-appearing row; failing open offers every other
+    /// developer a screen of 403s.
+    @State private var me: RipulMe?
+
+    private func can(_ permission: String) -> Bool {
+        me?.permissions.contains(permission) ?? false
+    }
+
+    /// Gates the `/admin/` routes behind site keys, contexts, models and voice
+    /// profiles. Held by `admin:standard` and `admin:super` only.
+    private var canManageSiteKeys: Bool { can("admin:manage_site_keys") }
+    /// `GET /admin/users` — the Ripul account directory.
+    private var canManageUsers: Bool { can("admin:manage_users") }
+    /// Row Billing reaches `/admin/cms-definitions`, whose `canManageCms`
+    /// accepts either permission.
+    private var canManageCms: Bool { canManageSiteKeys || can("cms:manage") }
+
     @State private var showingCollections = false
     @State private var showingContexts = false
     @State private var showingViewContexts = false
@@ -143,6 +175,16 @@ public struct RipulSolutionsScreen: View {
                         }
                     }
                 )
+            }
+            .task(id: RipulAccountIdentity.subject(ofJWT: management.tokenProvider())) {
+                // Keyed on the account, so a sign-out/sign-in inside the app
+                // re-resolves instead of leaving the previous account's rows
+                // on screen. A failure leaves `me` nil, which hides the admin
+                // rows — see the note on the property.
+                me = try? await RipulTeamsClient(
+                    baseURL: management.baseURL,
+                    tokenProvider: management.tokenProvider
+                ).me()
             }
             .onAppear { consumeMacroDeepLink() }
             .onReceive(NotificationCenter.default.publisher(for: .ripulOpenMacroEditor)) { _ in
@@ -368,22 +410,25 @@ public struct RipulSolutionsScreen: View {
                     }
                 }
 
-                Divider().padding(.leading, 44)
+                // Both sit on /admin/ routes demanding admin:manage_site_keys.
+                if canManageSiteKeys {
+                    Divider().padding(.leading, 44)
 
-                row(
-                    title: "Solution Contexts",
-                    subtitle: "What a session can do — tools and prompt",
-                    icon: "square.stack.3d.up",
-                    identifier: "SolutionManagement.contexts"
-                ) { showingContexts = true }
+                    row(
+                        title: "Solution Contexts",
+                        subtitle: "What a session can do — tools and prompt",
+                        icon: "square.stack.3d.up",
+                        identifier: "SolutionManagement.contexts"
+                    ) { showingContexts = true }
 
-                Divider().padding(.leading, 44)
-                row(
-                    title: "View Contexts",
-                    subtitle: "Tabs, chat features, and appearance",
-                    icon: "rectangle.3.group",
-                    identifier: "SolutionManagement.viewContexts"
-                ) { showingViewContexts = true }
+                    Divider().padding(.leading, 44)
+                    row(
+                        title: "View Contexts",
+                        subtitle: "Tabs, chat features, and appearance",
+                        icon: "rectangle.3.group",
+                        identifier: "SolutionManagement.viewContexts"
+                    ) { showingViewContexts = true }
+                }
 
                 if management.buildsApp != nil {
                     Divider().padding(.leading, 44)
@@ -395,7 +440,10 @@ public struct RipulSolutionsScreen: View {
                     ) { showingBuilds = true }
                 }
 
-                if management.showsSiteKeyAdmin {
+                // `showsSiteKeyAdmin` is the host's answer (an ordinary SDK
+                // host leaves the platform's own workbench off its surface
+                // entirely); the permission is the server's. Both must hold.
+                if management.showsSiteKeyAdmin && canManageSiteKeys {
                     Divider().padding(.leading, 44)
                     row(
                         title: "Site Keys",
@@ -412,13 +460,15 @@ public struct RipulSolutionsScreen: View {
                         identifier: "SolutionManagement.models"
                     ) { showingModels = true }
 
-                    Divider().padding(.leading, 44)
-                    row(
-                        title: "Users",
-                        subtitle: "Ripul accounts from Clerk — role, tier, usage",
-                        icon: "person.2",
-                        identifier: "SolutionManagement.users"
-                    ) { showingUsers = true }
+                    if canManageUsers {
+                        Divider().padding(.leading, 44)
+                        row(
+                            title: "Users",
+                            subtitle: "Ripul accounts from Clerk — role, tier, usage",
+                            icon: "person.2",
+                            identifier: "SolutionManagement.users"
+                        ) { showingUsers = true }
+                    }
 
                     Divider().padding(.leading, 44)
                     row(
@@ -428,13 +478,15 @@ public struct RipulSolutionsScreen: View {
                         identifier: "SolutionManagement.voiceProfiles"
                     ) { showingVoiceProfiles = true }
 
-                    Divider().padding(.leading, 44)
-                    row(
-                        title: "Row Billing",
-                        subtitle: "Bill CRM rows via Stripe — account, rules, prices",
-                        icon: "creditcard",
-                        identifier: "SolutionManagement.billing"
-                    ) { showingBilling = true }
+                    if canManageCms {
+                        Divider().padding(.leading, 44)
+                        row(
+                            title: "Row Billing",
+                            subtitle: "Bill CRM rows via Stripe — account, rules, prices",
+                            icon: "creditcard",
+                            identifier: "SolutionManagement.billing"
+                        ) { showingBilling = true }
+                    }
                 }
 
                 if bridge.audience == .developer {
