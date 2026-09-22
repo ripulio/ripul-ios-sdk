@@ -136,6 +136,9 @@ public struct GlassSessionsList: View {
     /// Handed this list's own open/dismiss actions so accepting an invite can
     /// land the user in the joined chat.
     var invitesSection: ((InvitesSectionActions) -> AnyView)? = nil
+    /// Backs the SDK's own invites panel, rendered on iOS when no
+    /// `invitesSection` is injected. Nil (with no injected section) = no panel.
+    var inviteManager: RipulInviteManager? = nil
     /// Optional empty-state override, rendered instead of the built-in empty text.
     var emptyStateOverride: (() -> AnyView)? = nil
     /// Optional universal-link opener (was DeepLinkHandler.shared).
@@ -210,6 +213,7 @@ public struct GlassSessionsList: View {
         remoteActionsByMachine: [String: [RemoteActionDescriptor]] = [:],
         onExecuteAction: ((RemoteMachine, RemoteActionDescriptor, [String: Any]) async -> [String: Any])? = nil,
         invitesSection: ((InvitesSectionActions) -> AnyView)? = nil,
+        inviteManager: RipulInviteManager? = nil,
         emptyStateOverride: (() -> AnyView)? = nil,
         onListedSessionsChanged: (([RipulListedSession]) -> Void)? = nil,
         onOpenUniversalLink: ((URL) -> Void)? = nil,
@@ -253,6 +257,7 @@ public struct GlassSessionsList: View {
         self.remoteActionsByMachine = remoteActionsByMachine
         self.onExecuteAction = onExecuteAction
         self.invitesSection = invitesSection
+        self.inviteManager = inviteManager
         self.emptyStateOverride = emptyStateOverride
         self.onOpenUniversalLink = onOpenUniversalLink
         self._searchText = searchText
@@ -966,15 +971,21 @@ public struct GlassSessionsList: View {
             && searchText.trimmingCharacters(in: .whitespaces).isEmpty
     }
 
-    /// The app-injected Invites panel, handed this list's own open/dismiss
-    /// actions so accepting an invite lands the user in the joined chat.
+    /// The Invites panel — the host's injected one, else the SDK's own —
+    /// handed this list's own open/dismiss actions so accepting an invite
+    /// lands the user in the joined chat.
     @ViewBuilder
     private var invitesSlot: some View {
+        let actions = InvitesSectionActions(
+            openChat: { callbacks.onFocusSession($0) },
+            dismissList: { onDismissSheet?() }
+        )
         if let invitesSection {
-            invitesSection(InvitesSectionActions(
-                openChat: { callbacks.onFocusSession($0) },
-                dismissList: { onDismissSheet?() }
-            ))
+            invitesSection(actions)
+        } else if let inviteManager {
+            #if os(iOS)
+            RipulInvitesPanel(bridge: bridge, actions: actions, inviteManager: inviteManager)
+            #endif
         }
     }
 

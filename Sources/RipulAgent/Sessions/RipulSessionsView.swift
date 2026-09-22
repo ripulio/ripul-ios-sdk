@@ -13,9 +13,10 @@ import Combine
 ///   opened / a machine is connected,
 /// - `onDismiss` — invoked to dismiss the list (e.g. hand back to the chat view).
 ///
-/// Invites / folders / onboarding are optional injected slots; a host that does
-/// not provide them simply doesn't render them (a built-in empty state is used
-/// when `emptyStateOverride` is nil).
+/// Folders / onboarding are optional injected slots; a host that does not
+/// provide them simply doesn't render them (a built-in empty state is used
+/// when `emptyStateOverride` is nil). Invites render from `invitesSection` if
+/// injected, else — on iOS — from `inviteManager`'s SDK panel.
 ///
 /// Embedded mode (`RipulAgentScreen`): pass `model:` to share an externally-owned
 /// list model, `showsTitleLozenge: false` when the screen's unified top bar owns
@@ -31,6 +32,7 @@ public struct RipulSessionsView: View {
     private let onDismiss: () -> Void
     private let allowRipulAgents: Bool
     private let invitesSection: ((InvitesSectionActions) -> AnyView)?
+    private let inviteManager: RipulInviteManager?
     private let emptyStateOverride: (() -> AnyView)?
     private let chooseMode: RipulChooseMode?
     private let showsTitleLozenge: Bool
@@ -65,6 +67,7 @@ public struct RipulSessionsView: View {
         onDismiss: @escaping () -> Void = {},
         allowRipulAgents: Bool = false,
         invitesSection: ((InvitesSectionActions) -> AnyView)? = nil,
+        inviteManager: RipulInviteManager? = nil,
         emptyStateOverride: (() -> AnyView)? = nil,
         model: RipulSessionListModel? = nil,
         chooseMode: RipulChooseMode? = nil,
@@ -81,6 +84,7 @@ public struct RipulSessionsView: View {
         self.onDismiss = onDismiss
         self.allowRipulAgents = allowRipulAgents
         self.invitesSection = invitesSection
+        self.inviteManager = inviteManager
         self.emptyStateOverride = emptyStateOverride
         self.chooseMode = chooseMode
         self.showsTitleLozenge = showsTitleLozenge
@@ -235,6 +239,8 @@ public struct RipulSessionsView: View {
                 await bridge.executeRemoteAction(machineId: machine.machineId, actionId: action.id, params: params)
             } : nil,
             invitesSection: invitesSection,
+            // A picker lists sessions to choose from; invites aren't choices.
+            inviteManager: onPickUnifiedSession == nil ? inviteManager : nil,
             emptyStateOverride: emptyStateOverride,
             onListedSessionsChanged: onListedSessionsChanged,
             searchText: $searchText,

@@ -69,10 +69,16 @@ public struct RipulSessionsConfiguration {
     /// WAC registers `WACNativeTools.endUser` as `.endUser` and its theme dev
     /// tools as `.developer`.
     public var registry: RipulToolRegistry
-    /// Optional app-injected panels (nil = omitted). The invites panel is
-    /// handed the list's own open/dismiss actions — accepting an invite has to
-    /// land the user in the joined chat, which only the list can do.
+    /// Optional app-injected panels. An injected invites panel replaces the
+    /// SDK's own; it is handed the list's own open/dismiss actions — accepting
+    /// an invite has to land the user in the joined chat, which only the list
+    /// can do.
     public var invitesSection: ((InvitesSectionActions) -> AnyView)?
+    /// The invites source for the SDK's own invites panel, which renders when
+    /// `invitesSection` is nil. Pass a host-owned manager when something else
+    /// must refresh the same inbox (e.g. an invite push); leave nil and the
+    /// agent screen runs its own from its token provider.
+    public var inviteManager: RipulInviteManager?
     public var emptyStateOverride: (() -> AnyView)?
 
     public init(
@@ -86,6 +92,7 @@ public struct RipulSessionsConfiguration {
         quickActionsEnabled: Bool = false,
         registry: RipulToolRegistry = RipulToolRegistry(),
         invitesSection: ((InvitesSectionActions) -> AnyView)? = nil,
+        inviteManager: RipulInviteManager? = nil,
         emptyStateOverride: (() -> AnyView)? = nil
     ) {
         self.cache = cache
@@ -98,6 +105,7 @@ public struct RipulSessionsConfiguration {
         self.quickActionsEnabled = quickActionsEnabled
         self.registry = registry
         self.invitesSection = invitesSection
+        self.inviteManager = inviteManager
         self.emptyStateOverride = emptyStateOverride
     }
 }

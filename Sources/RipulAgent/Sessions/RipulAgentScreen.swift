@@ -268,6 +268,14 @@ public struct RipulAgentScreen: View {
 
     private var cache: RipulSessionCache { configuration.cache }
 
+    /// Runs the invites panel when the host brings no manager of its own. It
+    /// is inert until configured below, so a host that does bring one pays
+    /// nothing for it.
+    @StateObject private var fallbackInviteManager: RipulInviteManager
+    private var inviteManager: RipulInviteManager {
+        configuration.inviteManager ?? fallbackInviteManager
+    }
+
     public init(
         bridge: AgentBridge,
         model: RipulSessionListModel,
@@ -282,6 +290,10 @@ public struct RipulAgentScreen: View {
         self.tokenProvider = tokenProvider
         self.slots = slots
         self.externalShowingSessionList = showingSessionList
+        _fallbackInviteManager = StateObject(wrappedValue: RipulInviteManager(
+            baseURL: configuration.baseURL,
+            cache: configuration.cache
+        ))
     }
 
     // MARK: - Shared content (used by both the compact slide-over and the regular split)
@@ -396,6 +408,7 @@ public struct RipulAgentScreen: View {
             onDismiss: { dismiss() },
             allowRipulAgents: configuration.allowRipulAgents,
             invitesSection: configuration.invitesSection,
+            inviteManager: inviteManager,
             emptyStateOverride: configuration.emptyStateOverride,
             model: model,
             chooseMode: slots.chooseMode,
@@ -678,6 +691,9 @@ public struct RipulAgentScreen: View {
         .onChange(of: tokenProvider()) { newToken in
             if newToken != nil {
                 Task { await model.refreshAfterAuth() }
+                if configuration.inviteManager == nil {
+                    Task { await fallbackInviteManager.fetchInvites() }
+                }
             }
         }
         // `onChange` fires only on a CHANGE. A token already in hand at first
@@ -685,6 +701,9 @@ public struct RipulAgentScreen: View {
         // authenticated refresh — machines, then the tab list — never ran.
         // `refreshAfterAuth` is idempotent, so this is safe alongside it.
         .task {
+            if configuration.inviteManager == nil {
+                fallbackInviteManager.configure(tokenProvider: tokenProvider)
+            }
             if tokenProvider() != nil { await model.refreshAfterAuth() }
         }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
