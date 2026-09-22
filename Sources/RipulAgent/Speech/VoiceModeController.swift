@@ -52,7 +52,7 @@ public final class VoiceModeController: ObservableObject {
             // One line per genuine transition. `didSet` fires on same-value
             // assignment too, hence the guard. This is the spine of any
             // "what happened during that drop?" read of the buffer.
-            if phase != oldValue { nlog("[VOICE] phase \(Self.phaseLabel(oldValue)) -> \(Self.phaseLabel(phase))") }
+            if phase != oldValue { voiceDiagnostic("[VOICE] phase \(Self.phaseLabel(oldValue)) -> \(Self.phaseLabel(phase))") }
         }
     }
 
@@ -96,6 +96,19 @@ public final class VoiceModeController: ObservableObject {
         sendMode == .sendCommand ? "Listening — say \"Send command\"" : "Listening — pause to send"
     }
 
+    public var listeningStatus: String {
+        if let transcriptionRecovery {
+            return isFinalizingTranscription
+                ? transcriptionRecovery.replacingOccurrences(of: "still recording", with: "audio saved")
+                : transcriptionRecovery
+        }
+        if isFinalizingTranscription { return "Finishing transcription…" }
+        return captureLive ? listeningHint : "Starting mic…"
+    }
+
+    @Published public private(set) var transcriptionRecovery: String?
+    @Published public private(set) var isFinalizingTranscription = false
+
     /// Absolute noise gate — below this, a frame is silence regardless of what
     /// the adaptive floor has drifted to.
     private static let minSpeechRms: Float = 0.012
@@ -107,6 +120,7 @@ public final class VoiceModeController: ObservableObject {
     private static let noiseAdaptDelay: TimeInterval = 2.0
 
     private weak var bridge: AgentBridge?
+    private var submitVoiceMessage: ((String) async -> Bool)?
     private var sttProvider: Any?
     private var sttFallback: Any?
     /// Events and startup completions belong to one capture attempt. A stopped
@@ -182,6 +196,9 @@ public final class VoiceModeController: ObservableObject {
     private var narratedThisTurn: Bool { !narratedMessageIds.isEmpty }
     /// One automatic ElevenLabs→Apple swap per activation.
     private var sttFellBack = false
+    /// Never reset between utterances. Apple is eligible only before the first
+    /// successful cloud connection in this voice activation.
+    private var cloudConnectedThisConversation = false
     /// Consecutive mic failures with nothing transcribed; bounded so a mic
     /// that can never start doesn't loop notices forever.
     private var micFailureCount = 0
@@ -204,10 +221,12 @@ public final class VoiceModeController: ObservableObject {
     public init() {}
 
     @available(iOS 26.0, macOS 26.0, *)
-    init(transcriptionProvider: any NativeSpeechProviding, fallback: any NativeSpeechProviding) {
+    init(transcriptionProvider: any NativeSpeechProviding, fallback: any NativeSpeechProviding,
+         submit: ((String) async -> Bool)? = nil) {
         sttProvider = transcriptionProvider
         sttFallback = fallback
         sttProviderID = transcriptionProvider.id
+        submitVoiceMessage = submit
     }
 
     // MARK: - Lifecycle
@@ -266,6 +285,7 @@ public final class VoiceModeController: ObservableObject {
             return minted.isEmpty ? nil : minted
         }
         sttProvider = NativeSpeechProviderFactory.dictation(tokenProvider: tokens, tokenRefresher: mintToken)
+        (sttProvider as? any BufferedConversationSpeechProviding)?.bufferedConversationTranscription = true
         sttFallback = AppleSpeechProvider()
         sttProviderID = (sttProvider as? any NativeSpeechProviding)?.id ?? "unknown"
         ttsProvider = NativeSpeechProviderFactory.speaking(tokenProvider: tokens, tokenRefresher: mintToken)
@@ -276,6 +296,7 @@ public final class VoiceModeController: ObservableObject {
         bridge.evaluateJavaScript("window.__ripulSetNativeChatForwarding?.(true, 'voice')")
 
         sttFellBack = false
+        cloudConnectedThisConversation = false
         micFailureCount = 0
         pendingReply = nil
         setCaptureLive(false, reason: "session-start")
@@ -310,11 +331,15 @@ public final class VoiceModeController: ObservableObject {
             // overlay shows what was "said" and sendUtterance's modality:
             // "voice" submit marks the turn for the speak-back rider.
             committedText = typed
-            sendUtterance()
+            sendUtterance(flushSpeech: false)
         }
     }
 
     public func stop() {
+        // Invalidate callbacks BEFORE providers synchronously emit .ended.
+        phase = .inactive
+        isFinalizingTranscription = false
+        transcriptionRecovery = nil
         cancelTasks()
         runningSink = nil
         stopAllSpeech()
@@ -408,7 +433,8 @@ public final class VoiceModeController: ObservableObject {
     /// send button. Anything other than listening already has a turn in
     /// flight, and an empty transcript would submit nothing.
     public var canSendNow: Bool {
-        guard phase == .listening else { return false }
+        guard phase == .listening, !isFinalizingTranscription else { return false }
+        if transcriptionRecovery != nil { return true }
         return !(committedText + " " + partialText)
             .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
@@ -442,12 +468,34 @@ public final class VoiceModeController: ObservableObject {
     public func pauseConversation() {
         switch phase {
         case .listening:
+            if #available(iOS 26.0, macOS 26.0, *),
+               let provider = sttProvider as? any BufferedConversationSpeechProviding {
+                guard !isFinalizingTranscription else { return }
+                let attempt = listeningID
+                isFinalizingTranscription = true
+                setCaptureLive(false, reason: "pause-drain")
+                Task { @MainActor [weak self] in
+                    do {
+                        try await provider.finishBufferedTranscription()
+                        guard let self, self.phase == .listening, self.listeningID == attempt else { return }
+                        self.isFinalizingTranscription = false
+                        self.transcriptionRecovery = nil
+                        self.pausedFrom = .listening
+                        self.phase = .paused
+                        provider.stopTranscription()
+                    } catch {
+                        guard let self, self.phase == .listening, self.listeningID == attempt else { return }
+                        self.handleTranscriptionFailure(error.localizedDescription)
+                    }
+                }
+                return
+            }
             setCaptureLive(false, reason: "pause")
+            pausedFrom = .listening
+            phase = .paused
             if #available(iOS 26.0, macOS 26.0, *) {
                 (sttProvider as? any NativeSpeechProviding)?.stopTranscription()
             }
-            pausedFrom = .listening
-            phase = .paused
         case .speaking:
             pauseAllSpeech()
             pausedFrom = .speaking
@@ -503,6 +551,9 @@ public final class VoiceModeController: ObservableObject {
     public func submitTypedUtterance(_ text: String) {
         let typed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !typed.isEmpty, isActive, phase != .sending else { return }
+        listeningID = nil
+        isFinalizingTranscription = false
+        transcriptionRecovery = nil
         setCaptureLive(false, reason: "typed-utterance")
         noticeTask?.cancel()
         // Interrupt any in-flight readout — a typed command is an explicit
@@ -514,7 +565,7 @@ public final class VoiceModeController: ObservableObject {
         // submits with modality "voice", marking the turn for speak-back.
         partialText = ""
         committedText = typed
-        sendUtterance()
+        sendUtterance(flushSpeech: false)
     }
 
     private func cancelTasks() {
@@ -550,6 +601,8 @@ public final class VoiceModeController: ObservableObject {
             partialText = ""
             committedText = ""
         }
+        isFinalizingTranscription = false
+        transcriptionRecovery = nil
         phase = .listening
         let attemptID = UUID()
         listeningID = attemptID
@@ -570,12 +623,17 @@ public final class VoiceModeController: ObservableObject {
                     self.handleTranscription(event)
                 }
                 guard let self, self.phase == .listening, self.listeningID == attemptID else { return }
-                self.setCaptureLive(true)
+                if !self.isFinalizingTranscription { self.setCaptureLive(true) }
                 self.noteTranscript()
             } catch {
                 guard let self, self.phase == .listening, self.listeningID == attemptID else { return }
                 if error is SpeechPrivacyRequirements.MissingUsageDescription {
                     self.handleMicrophoneSetupFailure(error)
+                } else if stt is any BufferedConversationSpeechProviding {
+                    // Network setup is managed asynchronously by the buffered
+                    // stream. A thrown start here is a capture/setup failure,
+                    // not evidence that ElevenLabs is unavailable.
+                    self.handleTranscriptionFailure(error.localizedDescription, allowStartupFallback: false)
                 } else {
                     self.handleTranscriptionFailure(error.localizedDescription)
                 }
@@ -587,20 +645,28 @@ public final class VoiceModeController: ObservableObject {
     private func handleTranscription(_ event: SpeechService.TranscriptionEvent) {
         guard phase == .listening else { return }
         switch event {
+        case .connectionReady:
+            if sttProviderID == "elevenlabs" { cloudConnectedThisConversation = true }
+        case .recovery(let message):
+            transcriptionRecovery = message
+            noteTranscript()
         case .partial(let text):
+            if sttProviderID == "elevenlabs", !text.isEmpty { cloudConnectedThisConversation = true }
             micFailureCount = 0
-            setCaptureLive(true)
+            if !isFinalizingTranscription { setCaptureLive(true) }
             partialText = text
             noteTranscript()
         case .committed(let text):
+            if sttProviderID == "elevenlabs" { cloudConnectedThisConversation = true }
             micFailureCount = 0
-            setCaptureLive(true)
+            if !isFinalizingTranscription { setCaptureLive(true) }
             if !text.isEmpty {
                 committedText = committedText.isEmpty ? text : committedText + " " + text
             }
             partialText = ""
             noteTranscript()
         case .audioLevel(let rms):
+            guard !isFinalizingTranscription else { return }
             lastAudioFrameAt = Self.now
             // Audio is flowing, so the engine is genuinely up — this is the
             // most reliable proof of that we get.
@@ -630,7 +696,14 @@ public final class VoiceModeController: ObservableObject {
             }
         case .error(let message):
             handleTranscriptionFailure(message)
+        case .audioGap(let message):
+            handleTranscriptionFailure(message, allowStartupFallback: false)
         case .ended:
+            guard !isFinalizingTranscription else { return }
+            if sttProvider is any BufferedConversationSpeechProviding {
+                handleTranscriptionFailure("Recording stopped before all audio was transcribed. Some speech may be missing.", allowStartupFallback: false)
+                return
+            }
             // Engine ended on its own while we still want the mic — restart,
             // preserving whatever the user already said. The mic is down for
             // the whole restart (a token mint plus a WS handshake, on
@@ -640,7 +713,7 @@ public final class VoiceModeController: ObservableObject {
             // wrong on screen: no error, no notice, just a dead mic for a
             // 300ms backoff plus a token mint and a WS handshake. It ran
             // completely silently until now.
-            nwarn("[VOICE] STT engine ended on its own — restarting provider=\(sttProviderID) keptText=\(!(committedText.isEmpty && partialText.isEmpty))")
+            voiceDiagnostic("[VOICE] STT engine ended on its own — restarting provider=\(sttProviderID) keptText=\(!(committedText.isEmpty && partialText.isEmpty))", level: .warn)
             setCaptureLive(false, reason: "engine-ended")
             let endedID = listeningID
             Task { @MainActor [weak self] in
@@ -649,7 +722,7 @@ public final class VoiceModeController: ObservableObject {
                     // The attempt was superseded (a send, a stop, a newer
                     // restart). Worth a line: it is the difference between
                     // "restart never happened" and "restart was overtaken".
-                    nlog("[VOICE] STT restart abandoned — attempt superseded")
+                    voiceDiagnostic("[VOICE] STT restart abandoned — attempt superseded")
                     return
                 }
                 self.beginListening(keepText: true)
@@ -658,16 +731,15 @@ public final class VoiceModeController: ObservableObject {
     }
 
     @available(iOS 26.0, macOS 26.0, *)
-    private func handleTranscriptionFailure(_ message: String) {
+    private func handleTranscriptionFailure(_ message: String, allowStartupFallback: Bool = true) {
+        isFinalizingTranscription = false
+        transcriptionRecovery = nil
         setCaptureLive(false, reason: "stt-error")
         let failedProvider = sttProvider as? any NativeSpeechProviding
+        voiceDiagnostic("[VOICE] STT failure provider=\(failedProvider?.id ?? "unknown") cloudConnected=\(cloudConnectedThisConversation) audioGap=\(!allowStartupFallback)", level: .error)
         nerror("[VOICE] STT error provider=\(failedProvider?.id ?? "unknown"): \(message)")
         micFailureCount += 1
-        if !sttFellBack, failedProvider?.id == "elevenlabs" {
-            // A TLS/socket failure can happen after minutes of successful
-            // transcription. Keep Apple for the rest of this conversation.
-            // Its partial results start afresh, so retain the cloud's last
-            // uncommitted words before the first Apple partial replaces them.
+        if allowStartupFallback, !sttFellBack, !cloudConnectedThisConversation, failedProvider?.id == "elevenlabs" {
             if !partialText.isEmpty {
                 committedText = committedText.isEmpty ? partialText : committedText + " " + partialText
                 partialText = ""
@@ -675,8 +747,20 @@ public final class VoiceModeController: ObservableObject {
             sttFellBack = true
             sttProvider = sttFallback ?? AppleSpeechProvider()
             sttProviderID = (sttProvider as? any NativeSpeechProviding)?.id ?? "unknown"
-            showNotice("Cloud transcription interrupted — using on-device dictation")
-            nlog("[VOICE] STT recovery: switched to Apple on-device dictation")
+            microphoneWarning = "ElevenLabs could not start. Using Apple dictation for this conversation. Please repeat anything said while connecting."
+            showNotice("ElevenLabs unavailable at startup — using Apple dictation")
+            voiceDiagnostic("[VOICE] STT startup fallback: Apple on-device dictation")
+        } else if failedProvider?.id == "elevenlabs" {
+            // The provider has exhausted buffered recovery or lost capture.
+            // Pause explicitly; never swap engines or auto-send partial text.
+            if !partialText.isEmpty {
+                committedText = committedText.isEmpty ? partialText : committedText + " " + partialText
+                partialText = ""
+            }
+            pausedFrom = .listening
+            phase = .paused
+            microphoneWarning = message + " Transcription is paused. Review the saved text, then resume and repeat anything missing."
+            voiceDiagnostic("[VOICE] STT recovery exhausted — paused without changing provider", level: .warn)
         } else if micFailureCount >= 5 {
             stop()
         } else {
@@ -712,11 +796,11 @@ public final class VoiceModeController: ObservableObject {
         // from the UI.
         if live {
             let downMs = micDownAt > 0 ? Int((Self.now - micDownAt) * 1000) : 0
-            nlog("[VOICE] mic UP provider=\(sttProviderID) down=\(downMs)ms")
+            voiceDiagnostic("[VOICE] mic UP provider=\(sttProviderID) down=\(downMs)ms")
             announceMicLive()
         } else {
             micDownAt = Self.now
-            nlog("[VOICE] mic DOWN provider=\(sttProviderID) reason=\(reason)")
+            voiceDiagnostic("[VOICE] mic DOWN provider=\(sttProviderID) reason=\(reason)")
         }
     }
 
@@ -760,7 +844,8 @@ public final class VoiceModeController: ObservableObject {
     /// Auto-send once the user has actually stopped talking. Every guard here
     /// is a state that previously looked like silence and sent mid-sentence.
     private func evaluateSilence() {
-        guard phase == .listening, captureLive, !ambientBusy else { return }
+        guard phase == .listening, captureLive, !ambientBusy,
+              !isFinalizingTranscription, transcriptionRecovery == nil else { return }
         let text = (committedText + " " + partialText).trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         let stamp = Self.now
@@ -775,12 +860,59 @@ public final class VoiceModeController: ObservableObject {
 
     // MARK: - Sending + thinking
 
-    private func sendUtterance(message: String? = nil) {
+    private func sendUtterance(message: String? = nil, flushSpeech: Bool = true) {
+        guard !isFinalizingTranscription else { return }
         let raw = (committedText + " " + partialText).trimmingCharacters(in: .whitespacesAndNewlines)
         // Explicit taps still work without the command. Only an automatic
         // command send removes its closing phrase; manual sends preserve text.
         let text = message ?? raw
-        guard !text.isEmpty, let bridge else { return }
+        guard !text.isEmpty || (flushSpeech && transcriptionRecovery != nil),
+              bridge != nil || submitVoiceMessage != nil else { return }
+        if flushSpeech, #available(iOS 26.0, macOS 26.0, *),
+           let provider = sttProvider as? any BufferedConversationSpeechProviding {
+            let attempt = listeningID
+            let stripCommand = message != nil && sendMode == .sendCommand
+            isFinalizingTranscription = true
+            setCaptureLive(false, reason: "send-drain")
+            Task { @MainActor [weak self] in
+                do {
+                    try await provider.finishBufferedTranscription()
+                    guard let self, self.phase == .listening, self.listeningID == attempt else { return }
+                    self.isFinalizingTranscription = false
+                    self.transcriptionRecovery = nil
+                    let finalText = (self.committedText + " " + self.partialText).trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !finalText.isEmpty else {
+                        self.pausedFrom = .listening
+                        self.phase = .paused
+                        provider.stopTranscription()
+                        self.microphoneWarning = "No speech was recognised. Tap to resume and try again."
+                        return
+                    }
+                    if stripCommand {
+                        guard let body = VoiceSendPolicy.messageBeforeCommand(finalText) else {
+                            // A partial may have guessed "send command". The
+                            // final result is authoritative; keep listening.
+                            self.listeningID = nil
+                            provider.stopTranscription()
+                            self.beginListening(keepText: true)
+                            return
+                        }
+                        self.submitFinalUtterance(body)
+                    } else {
+                        self.submitFinalUtterance(finalText)
+                    }
+                } catch {
+                    guard let self, self.phase == .listening, self.listeningID == attempt else { return }
+                    self.handleTranscriptionFailure(error.localizedDescription)
+                }
+            }
+            return
+        }
+        submitFinalUtterance(text)
+    }
+
+    private func submitFinalUtterance(_ text: String) {
+        guard !text.isEmpty, bridge != nil || submitVoiceMessage != nil else { return }
         setCaptureLive(false, reason: "send")
         // Invalidate capture callbacks before stopping the provider, which may
         // synchronously deliver a final result or .ended during shutdown.
@@ -788,10 +920,12 @@ public final class VoiceModeController: ObservableObject {
         if #available(iOS 26.0, macOS 26.0, *) {
             (sttProvider as? any NativeSpeechProviding)?.stopTranscription()
         }
-        baselineIds = Set(bridge.nativeChat.messages.map(\.id))
+        baselineIds = Set(bridge?.nativeChat.messages.map(\.id) ?? [])
         Task { @MainActor [weak self] in
-            guard let self, let bridge = self.bridge else { return }
-            let ok = await bridge.submitMessage(text, modality: "voice")
+            guard let self, self.phase == .sending else { return }
+            let ok: Bool
+            if let submit = self.submitVoiceMessage { ok = await submit(text) }
+            else { ok = await self.bridge?.submitMessage(text, modality: "voice") ?? false }
             guard self.phase == .sending else { return }
             if ok {
                 self.enterThinking()

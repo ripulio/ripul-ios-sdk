@@ -274,7 +274,7 @@ final class UnifiedInspectorTests: XCTestCase {
         XCTAssertNotNil(session.error)
     }
 
-    func testWebContextFreezesSelectedElementAndMasksEditableDescendants() async throws {
+    func testWebContextFreezesSelectedElementAndAllowsEditableFields() async throws {
         let (window, web, _, inspector, session) = try await fixture()
         defer { session.close(); window.isHidden = true }
         _ = inspector.probe(atWindowPoint: CGPoint(x: 90, y: 165), fire: false)
@@ -288,15 +288,16 @@ final class UnifiedInspectorTests: XCTestCase {
         let privateID = try await web.evaluateJavaScript("window.__ripulInspector.pick(30,85).id") as! String
         session.selectWeb(id: privateID)
         try await Task.sleep(nanoseconds: 200_000_000)
-        do {
-            _ = try await session.captureWeb(configuration: .init(available: [.instrumentedText]))
-            XCTFail("Editable element must not be captured")
-        } catch { XCTAssertTrue(error.localizedDescription.contains("excluded")) }
+        let field = try await session.captureWeb(configuration: .init(available: [.instrumentedText]))
+        XCTAssertTrue(field.canAttach)
+        XCTAssertFalse(try XCTUnwrap(session.web).private)
+        XCTAssertTrue(try XCTUnwrap(session.web).privateRects.isEmpty)
     }
 
-    func testWebScreenshotMasksPrivateDescendants() async throws {
+    func testWebScreenshotMasksExplicitlyExcludedDescendants() async throws {
         let (window, web, _, inspector, session) = try await fixture()
         defer { session.close(); window.isHidden = true }
+        _ = try await web.evaluateJavaScript("document.querySelector('input').setAttribute('data-ripul-context-excluded', '')")
         _ = inspector.probe(atWindowPoint: CGPoint(x: 90, y: 165), fire: false)
         try await waitForWeb(session)
         session.up()

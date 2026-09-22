@@ -383,6 +383,9 @@ final class RipulTeamDetailModel: ObservableObject {
     @Published var errorMessage: String?
     @Published private(set) var isActiveForChats = false
     @Published var busyMemberId: String?
+    @Published private(set) var hosts: [RipulDepartmentHost] = []
+    @Published private(set) var availableHosts: [RemoteMachine] = []
+    @Published var changingHost = false
 
     let client: RipulTeamsClient
     let teamId: String
@@ -425,6 +428,13 @@ final class RipulTeamDetailModel: ObservableObject {
         errorMessage = nil
         do {
             detail = try await client.team(teamId)
+            if myRole != nil {
+                hosts = try await client.departmentHosts(teamId: teamId)
+                let machines = try await client.availableHostMachines()
+                availableHosts = machines.filter { machine in
+                    machine.userId == me?.userId && machine.teamId == nil && machine.can("cli")
+                }
+            }
             if canManage {
                 // Addresses are manager-only server-side; a member gets a 403
                 // here, which is the ordinary case, not a fault.
@@ -445,6 +455,24 @@ final class RipulTeamDetailModel: ObservableObject {
         guard let activeTeam else { return }
         await activeTeam.set(on ? teamId : nil)
         isActiveForChats = on
+    }
+
+    func shareHost(_ machine: RemoteMachine) async {
+        changingHost = true
+        defer { changingHost = false }
+        do {
+            try await client.shareHost(teamId: teamId, machineId: machine.machineId)
+            await load()
+        } catch { errorMessage = error.localizedDescription }
+    }
+
+    func removeHost(_ host: RipulDepartmentHost) async {
+        changingHost = true
+        defer { changingHost = false }
+        do {
+            try await client.removeHost(teamId: teamId, host: host)
+            await load()
+        } catch { errorMessage = error.localizedDescription }
     }
 
     func invite(email: String?, userId: String?, role: RipulTeamRole) async -> Bool {
@@ -551,6 +579,7 @@ struct RipulTeamDetailScreen: View {
     var body: some View {
         List {
             aboutSection
+            hostsSection
             membersSection
             if model.canManage {
                 invitationsSection
@@ -634,9 +663,48 @@ struct RipulTeamDetailScreen: View {
                 }
             }
         } message: { _ in
-            Text("They'll lose access to this team's tools, prompts and artefacts.")
+            Text("They'll lose access to this team's hosts, chats, tools, prompts and artefacts. Jobs already accepted by a host can finish.")
         }
         .ripulTeamsErrorAlert($model.errorMessage)
+    }
+
+    private var hostsSection: some View {
+        Section {
+            ForEach(model.hosts) { host in
+                NavigationLink {
+                    RipulDepartmentActivityScreen(client: model.client, host: host)
+                } label: {
+                    Label(host.displayName, systemImage: "desktopcomputer")
+                }
+                .swipeActions {
+                    if model.myRole?.canManage == true {
+                        Button("Stop Sharing", role: .destructive) { Task { await model.removeHost(host) } }
+                    }
+                }
+                .uiKitIdentifier("TeamDetail.sharedHost")
+            }
+            if model.hosts.isEmpty {
+                Text("No Macs shared with this team.").foregroundStyle(.secondary)
+            }
+            if model.myRole?.canManage == true {
+                Menu {
+                    ForEach(model.availableHosts) { machine in
+                        Button(machine.displayName) { Task { await model.shareHost(machine) } }
+                    }
+                } label: {
+                    Label("Share one of my Macs", systemImage: "plus.circle")
+                }
+                .disabled(model.changingHost || model.availableHosts.isEmpty)
+                .uiKitIdentifier("TeamDetail.addHost")
+                if model.availableHosts.isEmpty {
+                    Text("Bring an unshared Mac online under your account to add it here.").font(.caption).foregroundStyle(.secondary)
+                }
+            }
+        } header: {
+            Text("Shared Hosts")
+        } footer: {
+            Text("Accepted team members can start and continue chats using each Mac's files, tools and coding account. Find shared Macs in Agents. Stopping sharing ends command and chat access within 30 seconds; accepted jobs can finish.")
+        }
     }
 
     private var aboutSection: some View {
@@ -1025,6 +1093,47 @@ extension View {
     /// team" is better wording than anything the client would invent.
     func ripulTeamsErrorAlert(_ message: Binding<String?>) -> some View {
         modifier(RipulTeamsErrorAlert(message: message))
+    }
+}
+@available(iOS 17.0, *)
+private struct RipulDepartmentActivityScreen: View {
+    let client: RipulTeamsClient
+    let host: RipulDepartmentHost
+    @State private var activity: [RipulDepartmentActivity] = []
+    @State private var errorMessage: String?
+    @State private var loading = false
+
+    var body: some View {
+        List {
+            Section {
+                Text("Shared with \(host.teamName)")
+                Text("Runs on the Mac's configured coding account. Team members' requests are recorded below.")
+                    .font(.subheadline).foregroundStyle(.secondary)
+            }
+            Section("Recent Activity") {
+                if loading { ProgressView() }
+                else if activity.isEmpty { Text("No team activity yet.").foregroundStyle(.secondary) }
+                ForEach(Array(activity.enumerated()), id: \.offset) { _, item in
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(item.actorName).font(.headline)
+                        Text(item.title).font(.subheadline)
+                        if let date = item.date {
+                            Text(date, style: .relative).font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
+        }
+        .navigationTitle(host.displayName)
+        .task { await load() }
+        .refreshable { await load() }
+        .ripulTeamsErrorAlert($errorMessage)
+    }
+    private func load() async {
+        loading = true
+        defer { loading = false }
+        do { activity = try await client.hostActivity(host) }
+        catch { errorMessage = error.localizedDescription }
     }
 }
 #endif

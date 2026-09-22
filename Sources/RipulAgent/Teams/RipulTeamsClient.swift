@@ -17,6 +17,39 @@ import Foundation
 // account, and it still works for someone who signs up later.
 // ---------------------------------------------------------------------------
 
+public struct RipulDepartmentHost: Identifiable, Codable, Hashable {
+    public let ownerId: String
+    public let machineId: String
+    public let displayName: String
+    public let teamId: String
+    public let teamName: String
+    public let role: String
+    public var id: String { ownerId + ":" + machineId }
+}
+
+public struct RipulDepartmentActivity: Codable, Hashable {
+    public let actorId: String
+    public let actorName: String
+    public let command: String
+    public let chatId: String?
+    public let createdAt: String
+    public var date: Date? {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.date(from: createdAt) ?? ISO8601DateFormatter().date(from: createdAt)
+    }
+    public var title: String {
+        switch command {
+        case "agent:init": return "Created a chat"
+        case "agent:start": return "Started a turn"
+        case "agent:interrupt": return "Interrupted a turn"
+        case "agent:execCommand": return "Ran a command"
+        case "agent:setWorkingDirectory": return "Changed working folder"
+        default: return "Updated the host"
+        }
+    }
+}
+
 public enum RipulTeamsError: LocalizedError {
     case notSignedIn
     case malformedResponse
@@ -243,6 +276,29 @@ public final class RipulTeamsClient {
     }
 
     // MARK: Teams
+
+    public func departmentHosts(teamId: String) async throws -> [RipulDepartmentHost] {
+        let json = try await send("GET", "api/v1/teams/\(encode(teamId))/hosts")
+        return try JSONDecoder().decode([RipulDepartmentHost].self, from: JSONSerialization.data(withJSONObject: json["hosts"] ?? []))
+    }
+
+    public func availableHostMachines() async throws -> [RemoteMachine] {
+        let json = try await send("GET", "api/v1/relay/machines")
+        return try JSONDecoder().decode([RemoteMachine].self, from: JSONSerialization.data(withJSONObject: json["machines"] ?? []))
+    }
+
+    public func shareHost(teamId: String, machineId: String) async throws {
+        _ = try await send("POST", "api/v1/teams/\(encode(teamId))/hosts", body: ["machineId": machineId])
+    }
+
+    public func removeHost(teamId: String, host: RipulDepartmentHost) async throws {
+        _ = try await send("DELETE", "api/v1/teams/\(encode(teamId))/hosts", body: ["machineId": host.machineId, "ownerId": host.ownerId])
+    }
+
+    public func hostActivity(_ host: RipulDepartmentHost) async throws -> [RipulDepartmentActivity] {
+        let json = try await send("GET", "api/v1/department-hosts/\(encode(host.ownerId))/\(encode(host.machineId))/activity")
+        return try JSONDecoder().decode([RipulDepartmentActivity].self, from: JSONSerialization.data(withJSONObject: json["activity"] ?? []))
+    }
 
     /// The caller's memberships, with the role held in each.
     public func myMemberships() async throws -> [RipulTeamMembership] {

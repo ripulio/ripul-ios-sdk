@@ -10,8 +10,12 @@ public struct NewChatMachine: Identifiable, Equatable {
     public let name: String
     public let connection: NewChatConnection
     public let unavailableReason: String?
-    public init(id: String, name: String, connection: NewChatConnection, unavailableReason: String? = nil) {
+    public let teamName: String?
+    public let canManageAccounts: Bool
+    public init(id: String, name: String, connection: NewChatConnection, unavailableReason: String? = nil,
+                teamName: String? = nil, canManageAccounts: Bool = true) {
         self.id = id; self.name = name; self.connection = connection; self.unavailableReason = unavailableReason
+        self.teamName = teamName; self.canManageAccounts = canManageAccounts
     }
 }
 

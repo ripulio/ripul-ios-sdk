@@ -160,6 +160,11 @@ public struct GlassSessionsList: View {
     @State private var sessionsExpanded = true
     @State private var isSelecting = false
     @State private var selectedSessionIds: Set<String> = []
+    #if os(iOS)
+    @Environment(\.ripulBottomBarFrame) private var bottomBar
+    @State private var actionBarNavigationClearance: CGFloat = 0
+    #endif
+    @State private var actionBarHeight: CGFloat = 0
     // NOTE: the optimistic active-row override now lives inside GlassRichList,
     // which owns the tap that sets it and the `activeToken` change that clears
     // it. Keeping a copy here would have meant two sources for one highlight.
@@ -533,7 +538,7 @@ public struct GlassSessionsList: View {
                         sessionContextMenu(session)
                     }
                 )
-                .modifier(SessionsScrollClearance())
+                .modifier(SessionsScrollClearance(actionBarHeight: hasBatchSelection ? actionBarHeight : 0))
             }
         }
     }
@@ -896,9 +901,11 @@ public struct GlassSessionsList: View {
         !searchText.trimmingCharacters(in: .whitespaces).isEmpty
     }
 
+    private var hasBatchSelection: Bool { isSelecting && !selectedSessionIds.isEmpty }
+
     @ViewBuilder
     private var floatingActionBars: some View {
-        if isSelecting && !selectedSessionIds.isEmpty {
+        if hasBatchSelection {
             HStack(spacing: 12) {
                 Button {
                     showBatchArchiveConfirm = true
@@ -939,6 +946,12 @@ public struct GlassSessionsList: View {
                 .glassEffect(.clear.interactive(), in: .capsule)
             }
             .padding(.bottom, 16)
+            #if os(iOS)
+            // Reserve the buttons and their visual gap inside the List, but
+            // count the navigation obstruction separately and only once.
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { actionBarHeight = $0 }
+            .padding(.bottom, actionBarNavigationClearance)
+            #endif
             .transition(.move(edge: .bottom).combined(with: .opacity))
         }
     }
@@ -1080,6 +1093,13 @@ public struct GlassSessionsList: View {
 
             floatingActionBars
         }
+        #if os(iOS)
+        // Measure the unpadded host, not the moving buttons. This also works
+        // when a native tab host or a sheet has already consumed the inset.
+        .background(SessionsScrollBoundsReader(bottomBar: bottomBar, gap: 0) {
+            actionBarNavigationClearance = $0
+        })
+        #endif
         .animation(.easeInOut(duration: 0.25), value: showOnboarding)
         .animation(.easeInOut(duration: 0.25), value: showConnectingPlaceholder)
         .animation(.easeInOut(duration: 0.25), value: isSelecting)

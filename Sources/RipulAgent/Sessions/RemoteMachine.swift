@@ -14,6 +14,14 @@ public struct RemoteMachine: Identifiable, Codable, Equatable {
     public let registeredAt: String
     public let lastSeenAt: String
     public let meta: [String: String]?
+    public var teamId: String? = nil
+    public var teamName: String? = nil
+    public var teamRole: String? = nil
+    public var shared: Bool? = nil
+
+    public var destinationName: String {
+        teamName.map { "\(displayName) · \($0)" } ?? displayName
+    }
 
     public var id: String { machineId }
 

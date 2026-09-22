@@ -7,7 +7,7 @@
   let serial = 0;
   let highlighted = null;
   let savedOutline = null;
-  const privateSelector = 'input,textarea,iframe,[contenteditable]:not([contenteditable="false"]),[data-ripul-context-excluded]';
+  const privateSelector = '[data-ripul-context-excluded]';
   const isPrivate = el => {
     for (let current = el; current; current = current.parentElement || current.getRootNode().host) {
       if (current.matches(privateSelector)) return true;

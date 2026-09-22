@@ -40,7 +40,7 @@ struct ScrollToBottomOverlay: View {
         // hosting bounds; drawing above a zero-height overlay puts it outside.
         // The input remains bottom-aligned, and only this child observes the model.
         Color.clear
-            .frame(height: 64)
+            .frame(height: ComposerContentLayout.scrollButtonHeight)
             .overlay(alignment: .bottom) {
                 if model.show {
                     ScrollToBottomButton(unreadCount: model.unreadCount, action: onTap)
@@ -127,6 +127,8 @@ public struct AgentView<TopBar: View>: View {
         }
     }
     @State private var chatInputMeasuredHeight: CGFloat = 0
+    @State private var chatNavigationInset: CGFloat = 0
+    @Environment(\.ripulComposerChrome) private var composerChrome
 
     @StateObject private var messageHistory = MessageHistory()
 
@@ -313,19 +315,9 @@ public struct AgentView<TopBar: View>: View {
                     onQuickCommands: { showingQuickCommands = true },
                     onDebugCommands: { showingDebugCommands = true },
                     onShowConsoleLogs: { showingConsoleLogs = true },
-                    onHeightChange: { height in
-                        chatInputMeasuredHeight = height
-                        #if os(iOS)
-                        // Skip web padding updates while the keyboard is active — the
-                        // native .offset() handles avoidance. Firing here during the
-                        // keyboard animation causes a delayed JS bridge call that
-                        // scrolls Virtuoso.
-                        guard keyboard.rawHeight == 0 else { return }
-                        #endif
-                        updateWebBottomPadding()
-                    }
+                    onHeightChange: updateComposerHeight
                 )
-                .modifier(KeyboardAttachedOverlayModifier())
+                .modifier(KeyboardAttachedOverlayModifier(onHeightChange: updateComposerHeight))
             }
         }
         // Hands-free voice mode — attached AFTER the composer overlay so it
@@ -375,6 +367,7 @@ public struct AgentView<TopBar: View>: View {
                 updateWebBottomPadding()
             }
         }
+        .onReceive(composerClearancePublisher, perform: updateComposerClearance)
         .onChange(of: colorScheme) { newScheme in
             let theme: AgentTheme = newScheme == .dark ? .dark : .light
             bridge.setTheme(theme)
@@ -502,14 +495,32 @@ public struct AgentView<TopBar: View>: View {
         #endif
     }
 
-    /// The debug native scroller still needs the composer's occupied bottom area.
-    /// The composer itself is positioned independently by UIKit's keyboard guide.
-    private var composerBottomInset: CGFloat {
+    /// Observe only structural clearance, never the shared animation frames.
+    /// A new chrome owner must republish even when the editor's height is unchanged.
+    private var composerClearancePublisher: AnyPublisher<CGFloat, Never> {
+        composerChrome?.$contentBottomInset.removeDuplicates().eraseToAnyPublisher()
+            ?? Just(CGFloat.zero).eraseToAnyPublisher()
+    }
+
+    private func updateComposerClearance(_ inset: CGFloat) {
+        guard chatNavigationInset != inset else { return }
+        chatNavigationInset = inset
         #if os(iOS)
-        return keyboard.height + 8
-        #else
-        return 8
+        guard keyboard.rawHeight == 0 else { return }
         #endif
+        if bridge.currentPageContext.showNativeChatInput && !bridge.suppressNativeChatInput {
+            updateWebBottomPadding(navigationInset: inset)
+        }
+    }
+
+    private func updateComposerHeight(_ height: CGFloat) {
+        guard height > 0 else { return }
+        chatInputMeasuredHeight = height
+        #if os(iOS)
+        // Retain the measurement while typing; refresh the web after dismissal.
+        guard keyboard.rawHeight == 0 else { return }
+        #endif
+        updateWebBottomPadding(inputHeight: height)
     }
 
     /// Bottom inset for the native scroller so its last message clears the reused
@@ -518,9 +529,11 @@ public struct AgentView<TopBar: View>: View {
     private var nativeScrollerBottomInset: CGFloat {
         #if os(iOS)
         let safeBottom = bridge.hostingWindow?.safeAreaInsets.bottom ?? 0
-        return chatInputMeasuredHeight + composerBottomInset + safeBottom + 8
+        return ComposerContentLayout.bottomClearance(inputHeight: chatInputMeasuredHeight,
+            navigationInset: chatNavigationInset, safeBottom: safeBottom, keyboardHeight: keyboard.height)
         #else
-        return chatInputMeasuredHeight + composerBottomInset + 8
+        return ComposerContentLayout.bottomClearance(inputHeight: chatInputMeasuredHeight,
+            navigationInset: chatNavigationInset, safeBottom: 0)
         #endif
     }
 
@@ -534,17 +547,21 @@ public struct AgentView<TopBar: View>: View {
         #endif
     }
 
-    private func updateWebBottomPadding() {
-        guard chatInputMeasuredHeight > 0 else { return }
-        let bottomPad: CGFloat
+    private func updateWebBottomPadding(inputHeight: CGFloat? = nil, navigationInset: CGFloat? = nil) {
+        let measuredHeight = inputHeight ?? chatInputMeasuredHeight
+        guard measuredHeight > 0 else { return }
+        let safeBottom: CGFloat
         #if os(iOS)
-        let safeBottom = bridge.hostingWindow?.safeAreaInsets.bottom ?? 0
+        safeBottom = bridge.hostingWindow?.safeAreaInsets.bottom ?? 0
         // Resting padding only — keyboard shift is handled natively via WKWebView offset
-        bottomPad = 8 + safeBottom
         #else
-        bottomPad = 8
+        safeBottom = 0
         #endif
-        let totalHeight = Int(chatInputMeasuredHeight + bottomPad + 8)
+        let totalHeight = Int(ceil(ComposerContentLayout.bottomClearance(inputHeight: measuredHeight,
+            navigationInset: navigationInset ?? chatNavigationInset, safeBottom: safeBottom)))
+        #if DEBUG
+        bridge.handleConsoleLog("LOG: [ComposerInset] body=\(measuredHeight) navigation=\(navigationInset ?? chatNavigationInset) safeBottom=\(safeBottom) total=\(totalHeight)")
+        #endif
         bridge.setNativeChatInputHeight(totalHeight)
     }
 
@@ -599,6 +616,7 @@ public extension AgentView where TopBar == EmptyView {
 // spiking CPU. Same pattern AgentView already uses for the scroll button.
 @available(iOS 16.0, macOS 14.0, *)
 private struct ChatComposer: View {
+    @Environment(\.composerCollapse) private var composerCollapse
     @Environment(\.ripulWindowContext) private var workspace
     @Environment(\.scenePhase) private var scenePhase
     @State private var draftChatID: String?
@@ -661,9 +679,12 @@ private struct ChatComposer: View {
                 bridge.scrollToBottom()
             }
 
-            VStack(spacing: 8) {
+            VStack(spacing: 8 * (1 - composerCollapse)) {
                 NativeToolStrip(store: bridge.toolStrip) { [weak bridge] event in bridge?.send(event) }
-                if !BundledAgentRuntime.isEnabled && bridge.showsConversationMode(for: bridge.currentSourceChatId) { conversationModeControl }
+                    .modifier(ComposerFold())
+                if !BundledAgentRuntime.isEnabled && bridge.showsConversationMode(for: bridge.currentSourceChatId) {
+                    conversationModeControl.modifier(ComposerFold())
+                }
                 chatInput
             }
                 .task(id: bridge.currentSourceChatId) {
@@ -679,19 +700,26 @@ private struct ChatComposer: View {
                     get: { composerActionError != nil }, set: { if !$0 { composerActionError = nil } }
                 )) { Button("OK", role: .cancel) { composerActionError = nil } }
                 message: { Text(composerActionError ?? "") }
+                #if !os(iOS)
                 .background(
                     GeometryReader { geo in
                         Color.clear.preference(key: ChatInputHeightKey.self, value: geo.size.height)
                     }
                 )
+                #endif
                 .padding(.horizontal, 12)
                 // NativeChatInput owns the rounded glass surface. Keep its
                 // surrounding gutters and home-indicator gap transparent.
         }
         .padding(.bottom, bottomInset)
+        #if !os(iOS)
         .onPreferenceChange(ChatInputHeightKey.self) { height in
+            // Keep expanded scroll clearance constant throughout the morph.
+            // Otherwise shrinking the composer moves the very edge we observe.
+            guard composerCollapse == 0 else { return }
             onHeightChange(height)
         }
+        #endif
         .onChange(of: selectedPhotos) { newItems in
             guard !newItems.isEmpty else { return }
             let chatID = bridge.currentSourceChatId

@@ -232,6 +232,13 @@ private enum AtClassToggles {
 #if os(iOS)
 @available(iOS 16.0, *)
 public struct NativeChatInput: View {
+    @Environment(\.ripulComposerChrome) private var composerChrome
+    @Environment(\.composerCollapse) private var composerCollapse
+    @State private var composerFocused = false
+    private var chromeInteraction: Bool {
+        composerFocused || isDictating || showPhotoPicker || showCamera || showTodoPicker || showHistorySheet
+            || showAtSuggestions || showSlashMenu
+    }
     @Binding var text: String
     @Binding var imageAttachments: [NativeImageAttachment]
     @Binding var selectedPhotos: [PhotosPickerItem]
@@ -471,9 +478,9 @@ public struct NativeChatInput: View {
                     case .committed(let segment):
                         dictationBase = dictationBase.isEmpty ? segment : dictationBase + " " + segment
                         text = dictationBase
-                    case .audioLevel:
+                    case .audioLevel, .connectionReady, .recovery:
                         break
-                    case .error:
+                    case .error, .audioGap:
                         break
                     case .ended:
                         isDictating = false
@@ -568,8 +575,16 @@ public struct NativeChatInput: View {
             .buttonStyle(.plain)
             #endif
         }
-        .animation(.easeInOut(duration: 0.15), value: textHeight)
+        .animation(composerChrome == nil ? .easeInOut(duration: 0.15) : nil, value: textHeight)
         .animation(.easeInOut(duration: 0.2), value: imageAttachments.count)
+        .onChange(of: chromeInteraction) { active in
+            composerChrome?.setInteraction("input", active: active)
+        }
+        .onAppear { composerChrome?.setInteraction("input", active: chromeInteraction) }
+        .onChange(of: composerChrome != nil) { _ in
+            composerChrome?.setInteraction("input", active: chromeInteraction)
+        }
+        .onDisappear { composerChrome?.setInteraction("input", active: false) }
         .onChange(of: text) { newValue in
             if isDictating && newValue.isEmpty {
                 dictationBase = ""
@@ -1390,32 +1405,33 @@ public struct NativeChatInput: View {
 
     private var singleRowBody: some View {
         ChatInputGlassGroup {
-            HStack(alignment: .bottom, spacing: 8) {
-                if !BundledAgentRuntime.isEnabled { plusMenuButton }
+            HStack(alignment: .bottom, spacing: 8 * (1 - composerCollapse)) {
+                if !BundledAgentRuntime.isEnabled { plusMenuButton.modifier(ComposerFold(horizontal: true)) }
 
                 // Group adjacent glass surfaces so they share the same sampling region.
                 VStack(spacing: 0) {
-                    ComposerContextChips(store: contextStore, session: contextSessionID)
-                    if let replyTarget {
-                        ReplyTargetStrip(target: replyTarget, onCancel: onCancelReply)
-                    }
-                    if !imageAttachments.isEmpty {
-                        imageThumbsRow
-                    }
-                    HStack(spacing: 4) {
+                    VStack(spacing: 0) {
+                        ComposerContextChips(store: contextStore, session: contextSessionID)
+                        if let replyTarget {
+                            ReplyTargetStrip(target: replyTarget, onCancel: onCancelReply)
+                        }
+                        if !imageAttachments.isEmpty { imageThumbsRow }
+                    }.modifier(ComposerFold())
+                    HStack(spacing: 4 * (1 - composerCollapse)) {
 
                         textInputView
-                        if !BundledAgentRuntime.isEnabled { ComposerContextButton(store: contextStore, session: contextSessionID, options: contextOptions, size: 36) }
+                        if !BundledAgentRuntime.isEnabled { ComposerContextButton(store: contextStore, session: contextSessionID, options: contextOptions, size: 36).modifier(ComposerFold(horizontal: true)) }
                         if dictationAvailable {
-                            micButton(size: 36)
+                            micButton(size: 36).modifier(ComposerFold(horizontal: true))
                         }
-                        actionButton
+                        actionButton.modifier(ComposerFold(horizontal: true))
                     }
                 }
+                .padding(.vertical, 6 * composerCollapse)
                 .modifier(GlassChatInputBackground(glassStyle: resolvedChatInputGlassStyle))
                 .modifier(WaitingGlowModifier(isActive: agentWaiting, glowPhase: glowPhase))
 
-                historyMenuButton
+                historyMenuButton.modifier(ComposerFold(horizontal: true))
             }
         }
         .onChange(of: agentWaiting) { waiting in
@@ -1435,16 +1451,16 @@ public struct NativeChatInput: View {
 
     private var twoRowBody: some View {
         ChatInputGlassGroup {
-            VStack(spacing: 6) {
+            VStack(spacing: 6 * (1 - composerCollapse)) {
                 // Full-width text area
                 VStack(spacing: 0) {
-                    ComposerContextChips(store: contextStore, session: contextSessionID)
-                    if let replyTarget {
-                        ReplyTargetStrip(target: replyTarget, onCancel: onCancelReply)
-                    }
-                    if !imageAttachments.isEmpty {
-                        imageThumbsRow
-                    }
+                    VStack(spacing: 0) {
+                        ComposerContextChips(store: contextStore, session: contextSessionID)
+                        if let replyTarget {
+                            ReplyTargetStrip(target: replyTarget, onCancel: onCancelReply)
+                        }
+                        if !imageAttachments.isEmpty { imageThumbsRow }
+                    }.modifier(ComposerFold())
                     textInputView
                         .padding(.trailing, 8)
                 }
@@ -1463,7 +1479,9 @@ public struct NativeChatInput: View {
                 }
                 .padding(.horizontal, 8)
                 .padding(.bottom, 6)
+                .modifier(ComposerFold())
             }
+            .padding(.vertical, 6 * composerCollapse)
             .modifier(GlassChatInputBackground(glassStyle: resolvedChatInputGlassStyle))
             .modifier(WaitingGlowModifier(isActive: agentWaiting, glowPhase: glowPhase))
         }
@@ -1588,15 +1606,20 @@ public struct NativeChatInput: View {
                     handleSlashDetection(newText)
                 }
             },
-            onFocusChanged: onFocusChanged,
+            onFocusChanged: { focused in
+                composerFocused = focused
+                if focused { composerChrome?.requestExpand?() }
+                onFocusChanged?(focused)
+            },
             onPasteImages: { images in
                 let attachments = images.compactMap { PhotoAttachmentHelper.makeAttachment(from: $0) }
                 guard !attachments.isEmpty else { return false }
                 imageAttachments.append(contentsOf: attachments)
                 return true
-            }
+            },
+            freezesHeight: composerCollapse > 0
         )
-        .frame(maxWidth: .infinity, minHeight: textHeight, maxHeight: textHeight, alignment: .leading)
+        .frame(maxWidth: .infinity, minHeight: textHeight + (36 - textHeight) * composerCollapse, maxHeight: textHeight + (36 - textHeight) * composerCollapse, alignment: .leading)
         .overlay(alignment: .topLeading) {
             if agentWaiting && text.isEmpty {
                 Text("Waiting on agent…")
@@ -2660,9 +2683,9 @@ public struct NativeChatInput: View {
                     case .committed(let segment):
                         dictationBase = dictationBase.isEmpty ? segment : dictationBase + " " + segment
                         text = dictationBase
-                    case .audioLevel:
+                    case .audioLevel, .connectionReady, .recovery:
                         break
-                    case .error:
+                    case .error, .audioGap:
                         break
                     case .ended:
                         isDictating = false
@@ -3551,6 +3574,7 @@ struct NoAutofillTextView: UIViewRepresentable {
     var onTextChange: ((String) -> Void)?
     var onFocusChanged: ((Bool) -> Void)?
     var onPasteImages: (([UIImage]) -> Bool)?
+    var freezesHeight = false
 
     private let minHeight: CGFloat = 36
     private let maxHeight: CGFloat = 120
@@ -3608,7 +3632,9 @@ struct NoAutofillTextView: UIViewRepresentable {
     }
 
     func updateUIView(_ textView: ChatTextView, context: Context) {
+        let wasFrozen = context.coordinator.parent.freezesHeight
         context.coordinator.parent = self
+        if wasFrozen && !freezesHeight { context.coordinator.recalcHeight(textView) }
         textView.onPasteImages = onPasteImages
         textView.onReturnKey = onSubmit
         // Keep placeholder text in sync with SwiftUI state
@@ -3637,6 +3663,7 @@ struct NoAutofillTextView: UIViewRepresentable {
         }
 
         func recalcHeight(_ textView: UITextView) {
+            guard !parent.freezesHeight else { return }
             let width = textView.bounds.width
             // Before the first layout the wrap width is unknown — any measure
             // would be garbage (one giant line). Skip; the width-change hook
@@ -3653,6 +3680,7 @@ struct NoAutofillTextView: UIViewRepresentable {
                       parent.maxHeight)
             if target != parent.height {
                 DispatchQueue.main.async {
+                    guard !self.parent.freezesHeight else { return }
                     self.parent.height = target
                 }
             }

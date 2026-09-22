@@ -82,6 +82,9 @@ struct SessionChatColumns<List: View, Chat: View>: View {
                 .accessibilityHidden(!showsBoth && !showingList)
             chat
                 .frame(width: showsBoth ? max(1, width - listWidth - 1) : width)
+                // Window-anchored controls belong to this pane, including while
+                // its retained chat slides offscreen behind the session list.
+                .clipped()
                 .modifier(SlideEffect(offset: showsBoth ? listWidth + 1 : chatOffset))
                 .allowsHitTesting((showsBoth || !showingList) && canInteractWithChat)
                 .accessibilityHidden(!showsBoth && showingList)

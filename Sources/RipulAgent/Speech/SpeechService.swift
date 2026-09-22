@@ -26,6 +26,13 @@ public final class SpeechService: NSObject, ObservableObject {
         /// recognizer emits nothing in either case. Consumers that only care
         /// about text can ignore it.
         case audioLevel(Float)
+        /// The service accepted a transcription session, not merely a mic tap.
+        case connectionReady
+        /// Nonfatal network recovery. Capture continues; nil means caught up.
+        case recovery(String?)
+        /// Recording or retention failed; retrying a different recognizer
+        /// cannot recover the missing audio.
+        case audioGap(String)
         case error(String)
         case ended
     }

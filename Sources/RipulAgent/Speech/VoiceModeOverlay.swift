@@ -91,7 +91,7 @@ struct VoiceModeOverlay: View {
         // Never claim to be listening before the mic is actually capturing —
         // speech in that gap is dropped, and the old copy invited it.
         case .listening:
-            return controller.captureLive ? controller.listeningHint : "Starting mic…"
+            return controller.listeningStatus
         case .sending: return "Sending…"
         case .thinking: return "Working… \(formattedElapsed)"
         // Likewise never claim to be speaking during the synthesis round-trip —
@@ -477,7 +477,7 @@ struct VoiceModeCompactPanel: View {
 
     private var statusText: String {
         switch controller.phase {
-        case .listening: return controller.captureLive ? controller.listeningHint : "Starting mic…"
+        case .listening: return controller.listeningStatus
         case .sending: return "Sending…"
         case .thinking:
             let minutes = controller.thinkingSeconds / 60

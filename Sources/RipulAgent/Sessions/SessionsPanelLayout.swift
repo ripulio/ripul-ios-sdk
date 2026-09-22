@@ -39,14 +39,15 @@ enum SessionsPanelLayout {
 /// by a sheet or a host is not applied a second time.
 @available(iOS 17.0, macOS 14.0, *)
 struct SessionsScrollClearance: ViewModifier {
+    var actionBarHeight: CGFloat = 0
     @Environment(\.ripulBottomBarFrame) private var bottomBar
     @State private var bottomInset: CGFloat = SessionsPanelLayout.bottomGap
 
     func body(content: Content) -> some View {
         #if os(iOS)
         content
-            .contentMargins(.bottom, bottomInset, for: .scrollContent)
-            .contentMargins(.bottom, bottomInset, for: .scrollIndicators)
+            .contentMargins(.bottom, bottomInset + actionBarHeight, for: .scrollContent)
+            .contentMargins(.bottom, bottomInset + actionBarHeight, for: .scrollIndicators)
             .background(SessionsScrollBoundsReader(bottomBar: bottomBar) { bottomInset = $0 })
         #else
         content

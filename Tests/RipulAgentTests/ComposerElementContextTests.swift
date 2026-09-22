@@ -180,7 +180,7 @@ final class ComposerElementContextTests: XCTestCase {
         XCTAssertFalse(attachment.screen!.canAttach)
     }
 
-    func testSecureFieldCannotBeCapturedEvenWhenInstrumented() async throws {
+    func testSecureFieldCanBeExplicitlyAttachedWhenInstrumented() async throws {
         let (window, button, inspector) = fixture()
         defer { window.isHidden = true }
         let field = UITextField(frame: button.frame)
@@ -189,8 +189,8 @@ final class ComposerElementContextTests: XCTestCase {
         field.ripulAIContext = .init(id: "password", label: "Password", value: field.text, role: .value)
         window.rootViewController?.view.insertSubview(field, belowSubview: inspector)
         _ = inspector.probe(atWindowPoint: CGPoint(x: 100, y: 140), fire: false)
-        do { _ = try await RipulComposerContext.selectedElement.makeAttachment(); XCTFail("Secure selection must fail") }
-        catch { XCTAssertTrue(error.localizedDescription.contains("excluded")) }
+        let attachment = try await RipulComposerContext.selectedElement.makeAttachment()
+        XCTAssertTrue(attachment.selectedContent.contains("secret-password"))
     }
 
     func testPrivateDescendantsAreMaskedAndAggregateLabelIsOmitted() async throws {

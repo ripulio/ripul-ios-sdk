@@ -3,7 +3,7 @@ import Combine
 
 // MARK: - RipulLog — host-owned native log buffer
 //
-// A process-lifetime ring buffer that exists from the moment the module loads,
+// A process-lifetime buffer, plus bounded persistent voice diagnostics,
 // owned by nobody and depending on nothing. This is the answer to "I want to read
 // the logs BEFORE anything has mounted": an `AgentBridge` only exists once a host
 // brings agent UI up, so a bridge-owned buffer structurally cannot hold the
@@ -56,19 +56,37 @@ public final class RipulLog: @unchecked Sendable {
     public let changed = PassthroughSubject<Void, Never>()
     private var notifyScheduled = false
 
-    private init() {}
+    private let voiceLog: PersistentVoiceLog
+    private let runID = UUID().uuidString
+
+    private convenience init() {
+        self.init(voiceLog: PersistentVoiceLog(url: PersistentVoiceLog.defaultURL))
+        appendVoiceDiagnostic("[VOICE-DIAG] launch build=\(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown")")
+    }
+
+    // Injectable disk store for restart/rotation tests without touching app data.
+    init(voiceLog: PersistentVoiceLog) { self.voiceLog = voiceLog }
+
+    private func snapshot() -> [ConsoleLogEntry] {
+        var result = storage + voiceLog.entries()
+        if voiceLog.writeFailed {
+            result.append(ConsoleLogEntry(timestamp: Date(), level: "ERROR",
+                message: "[VOICE-DIAG] Disk write failed; voice history may not survive restart."))
+        }
+        return result.sorted { $0.timestamp < $1.timestamp }
+    }
 
     // MARK: Reading
 
-    /// Snapshot of the buffer, oldest first.
+    /// Current native logs and saved voice history, oldest first.
     public var entries: [ConsoleLogEntry] {
         lock.lock(); defer { lock.unlock() }
-        return storage
+        return snapshot()
     }
 
     public var count: Int {
         lock.lock(); defer { lock.unlock() }
-        return storage.count
+        return snapshot().count
     }
 
     /// The native buffer interleaved with a bridge's web logs, oldest first — the
@@ -82,12 +100,24 @@ public final class RipulLog: @unchecked Sendable {
     /// Append a line. Safe from any thread and synchronous, so a log emitted
     /// microseconds before a crash is already in the buffer.
     public func append(_ message: String, level: RipulLogLevel = .log, stack: String? = nil) {
+        append(message, level: level, stack: stack, persistent: false)
+    }
+
+    func appendVoiceDiagnostic(_ message: String, level: RipulLogLevel = .log) {
+        append("[native] \(String(message.prefix(1024))) run=\(runID)", level: level, stack: nil, persistent: true)
+    }
+
+    private func append(_ message: String, level: RipulLogLevel, stack: String?, persistent: Bool) {
         guard Self.isCaptureEnabled else { return }
         let entry = ConsoleLogEntry(timestamp: Date(), level: level.rawValue,
                                     message: message, stack: stack)
         lock.lock()
-        if storage.count >= Self.maxEntries { storage.removeAll(keepingCapacity: true) }
-        storage.append(entry)
+        if persistent {
+            voiceLog.append(entry)
+        } else {
+            if storage.count >= Self.maxEntries { storage.removeAll(keepingCapacity: true) }
+            storage.append(entry)
+        }
         let shouldSchedule = !notifyScheduled
         if shouldSchedule { notifyScheduled = true }
         lock.unlock()
@@ -101,7 +131,7 @@ public final class RipulLog: @unchecked Sendable {
     }
 
     public func clear() {
-        lock.lock(); storage.removeAll(); lock.unlock()
+        lock.lock(); storage.removeAll(); voiceLog.clear(); lock.unlock()
         DispatchQueue.main.async { [weak self] in self?.changed.send(()) }
     }
 

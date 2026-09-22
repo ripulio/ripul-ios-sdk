@@ -110,6 +110,7 @@ public struct RipulAgentScreenSlots {
 @available(iOS 26.0, *)
 public struct RipulAgentScreen: View {
     @Environment(\.ripulWindowContext) private var workspace
+    @Environment(\.ripulComposerChrome) private var composerChrome
     @Environment(\.supportsMultipleWindows) private var supportsMultipleWindows
     @ObservedObject var bridge: AgentBridge
     @ObservedObject var model: RipulSessionListModel
@@ -345,6 +346,13 @@ public struct RipulAgentScreen: View {
         // The native scroller is rendered INSIDE AgentView (over the web view, under
         // the reused ChatComposer) — we just sync the debug flag onto the bridge.
         AgentView(configuration: agentConfig, bridge: bridge, fillsSafeArea: fillsSafeArea, tokenProvider: tokenProvider) { _ in EmptyView() }
+            // The retained, offscreen chat must not anchor its composer back to
+            // the window's navigation button while the session list scrolls.
+            // Keep the editor mounted; only the visible chat coordinates chrome.
+            .environment(\.ripulComposerChrome, isListMode ? nil : composerChrome)
+            .onChange(of: isListMode) { _, showingList in
+                if showingList { composerChrome?.setInteraction("input", active: false) }
+            }
             .onAppear { bridge.nativeChatScrollerEnabled = showNativeChatScroller }
             .onChange(of: showNativeChatScroller) { bridge.nativeChatScrollerEnabled = $0 }
     }

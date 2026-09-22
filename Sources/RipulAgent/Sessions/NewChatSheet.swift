@@ -102,7 +102,7 @@ public struct NewChatSheet: View {
                             Text(machine.name + (machine.unavailableReason == nil ? "" : " · unavailable")).tag(machine.id)
                         }
                     }.accessibilityIdentifier("NewChat.machine")
-                    if let onManageCodexAccounts, let machine = candidates.first(where: { $0.id == draft.machineID }) {
+                    if let onManageCodexAccounts, let machine = candidates.first(where: { $0.id == draft.machineID }), machine.canManageAccounts {
                         Button { onManageCodexAccounts(machine) } label: { Label("Codex accounts", systemImage: "person.2") }
                             .disabled(machine.unavailableReason != nil).accessibilityIdentifier("NewChat.codexAccounts")
                     }
@@ -117,6 +117,9 @@ public struct NewChatSheet: View {
                             .accessibilityIdentifier("NewChat.folder")
                     }
                 } footer: {
+                    if let machine = candidates.first(where: { $0.id == draft.machineID }), let team = machine.teamName {
+                        Text("Shared with \(team). Chats use this Mac's coding account and are visible to the team. Choose a separate working copy for independent edits. Mac-local history is available through Direct pairing.")
+                    }
                     Text(usingCustomFolder
                          ? (draft.connection == .direct ? "Work uses your chosen folder. History stays on the Mac." : "Work uses your chosen folder. History stays in Ripul cloud.")
                          : (draft.connection == .direct

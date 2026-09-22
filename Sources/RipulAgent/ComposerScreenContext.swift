@@ -101,8 +101,7 @@ enum ComposerScreenContext {
         for start in [selection.view, selection.highlightView] {
             var ancestor: UIView? = start
             while let view = ancestor {
-                if view.ripulAIContext?.isExcluded == true || (view as? UITextField)?.isSecureTextEntry == true
-                    || ((view is UITextField || view is UITextView) && view.ripulAIContext == nil) {
+                if view.ripulAIContext?.isExcluded == true {
                     throw ElementUnavailable(message: "This element is excluded from context capture by the app.")
                 }
                 ancestor = view.superview
@@ -214,9 +213,7 @@ enum ComposerScreenContext {
             }
             let frame = normalized(rect, in: bounds)
             let context = view.ripulAIContext
-            let privateField = (view as? UITextField)?.isSecureTextEntry == true
-                || ((view is UITextField || view is UITextView) && context == nil)
-            if context?.isExcluded == true || privateField {
+            if context?.isExcluded == true {
                 result.excluded.append(frame); return
             }
             if let context { result.semantics.append(.init(context: context, frame: frame)) }
@@ -229,7 +226,7 @@ enum ComposerScreenContext {
             for child in view.subviews { walk(child, clip: nextClip) }
         }
         walk(hostWindow == nil ? (controller?.viewIfLoaded ?? window) : window, clip: bounds)
-        // Capture ONLY the host window, never SDK overlay windows. Mask private regions
+        // Capture ONLY the host window, never SDK overlay windows. Mask host-excluded regions
         // in pixels before OCR, then also filter observations as defence against edge overlap.
         guard includeImage, count < 2000 else { return result }
         let hiddenStates = chrome.map { ($0, $0.isHidden) }
@@ -266,8 +263,7 @@ enum ComposerScreenContext {
             guard !rect.isNull, !rect.isEmpty else { return }
             let frame = topLeft(rect)
             let context = view.ripulAIContext
-            let privateField = view is NSSecureTextField || (context == nil && (view is NSTextView || (view as? NSTextField)?.isEditable == true))
-            if context?.isExcluded == true || privateField { result.excluded.append(frame); return }
+            if context?.isExcluded == true { result.excluded.append(frame); return }
             if let context { result.semantics.append(.init(context: context, frame: frame)) }
             let label = view.accessibilityLabel() ?? (view as? NSTextField)?.stringValue ?? (view as? NSButton)?.title
             let value = view.accessibilityValue() as? String

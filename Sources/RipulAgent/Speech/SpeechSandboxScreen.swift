@@ -186,9 +186,9 @@ public struct SpeechSandboxScreen: View {
                     case .committed(let text):
                         committedSegments.append(text)
                         partialTranscript = ""
-                    case .audioLevel:
+                    case .audioLevel, .connectionReady, .recovery:
                         break
-                    case .error(let message):
+                    case .error(let message), .audioGap(let message):
                         errorMessage = message
                     case .ended:
                         isTranscribing = false

@@ -67,7 +67,7 @@ cropped **Screenshot**, and optional recognized text using the same controls as
 Current screen. The description includes current labels, values, available AI
 annotations, identifier, type, owning controller/property when known, and its bounds
 in host-window points. The screenshot includes only those bounds, with Explorer
-chrome removed and private regions masked.
+chrome removed and explicitly excluded regions masked.
 
 Capture reads the existing selection without moving the crosshair or activating the
 control. It reads live values and bounds when selected, then freezes that draft.
@@ -124,10 +124,12 @@ Do not label an entire section as `.value` if its children need fallback capture
 Use `.ripulAIContextExcluded()` on a SwiftUI component or
 `view.ripulAIContext = .excluded` on a UIKit/AppKit view to exclude its whole visible
 region. Exclusions override annotations and accessible text, and are painted out of
-the captured pixels before recognition. Secure native fields are always excluded;
-other native editable fields are excluded unless explicitly instrumented. Web/custom
-editors do not expose the same native field types: hosts must mark sensitive regions
-with this API. Screen-level annotations should only describe the screen's purpose.
+the captured pixels before recognition. Fields are not automatically excluded based
+on their type or whether they have instrumentation, including editable and secure
+fields. Screenshots retain the field's on-screen appearance (including password dots);
+the SDK adds no automatic black boxes. To exclude a web element and its descendants
+from Selected element attachments, set `data-ripul-context-excluded`. Screen-level
+annotations should only describe the screen's purpose.
 
 Capture excludes SDK overlay windows on iOS, so the embedded assistant's own chat is
 not captured. Native macOS captures the app's main window. Very large view trees omit the screenshot when the bounded traversal cannot check

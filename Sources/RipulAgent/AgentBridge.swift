@@ -6604,7 +6604,11 @@ public final class AgentBridge: NSObject, ObservableObject {
                     roomId: roomId,
                     registeredAt: item["registeredAt"] as? String ?? lastSeenAt,
                     lastSeenAt: lastSeenAt,
-                    meta: item["meta"] as? [String: String]
+                    meta: item["meta"] as? [String: String],
+                    teamId: item["teamId"] as? String,
+                    teamName: item["teamName"] as? String,
+                    teamRole: item["teamRole"] as? String,
+                    shared: item["shared"] as? Bool
                 )
             }
             NSLog("[AgentBridge] listMachines: %d machines from web registry", parsed.count)

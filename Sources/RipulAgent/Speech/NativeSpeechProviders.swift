@@ -24,6 +24,13 @@ public protocol NativeSpeechProviding: AnyObject {
     func stopTranscription()
 }
 
+@available(iOS 26.0, macOS 26.0, *)
+@MainActor
+protocol BufferedConversationSpeechProviding: NativeSpeechProviding {
+    var bufferedConversationTranscription: Bool { get set }
+    func finishBufferedTranscription() async throws
+}
+
 // MARK: - Apple (on-device)
 
 /// Thin adapter over the shared SpeechService engine.
@@ -74,7 +81,7 @@ public final class AppleSpeechProvider: NativeSpeechProviding {
 /// ElevenLabs WebSocket — the same wire protocol the web provider uses.
 @available(iOS 26.0, macOS 26.0, *)
 @MainActor
-public final class ElevenLabsNativeSpeechProvider: NSObject, NativeSpeechProviding, AVAudioPlayerDelegate {
+public final class ElevenLabsNativeSpeechProvider: NSObject, NativeSpeechProviding, BufferedConversationSpeechProviding, AVAudioPlayerDelegate {
     public let id = "elevenlabs"
     public let label = "ElevenLabs"
 
@@ -249,6 +256,10 @@ public final class ElevenLabsNativeSpeechProvider: NSObject, NativeSpeechProvidi
     }()
     private var audioEngine: AVAudioEngine?
     private var audioSink: PendingAudioSink?
+    var bufferedConversationTranscription = false
+    private var bufferedAudio: BufferedSpeechAudio?
+    private var transcriptionStream: ElevenLabsTranscriptionStream?
+    private var cloudPreviouslyConnected = false
     private var onEvent: (@MainActor (SpeechService.TranscriptionEvent) -> Void)?
     private var transcriptionID: UUID?
     private var transcribing: Bool { transcriptionID != nil }
@@ -540,6 +551,8 @@ public final class ElevenLabsNativeSpeechProvider: NSObject, NativeSpeechProvidi
             let sink = PendingAudioSink()
             audioSink = sink
             audioEngine = engine
+            let retainedAudio = bufferedConversationTranscription ? BufferedSpeechAudio(sampleRate: sampleRate) : nil
+            bufferedAudio = retainedAudio
 
             input.installTap(onBus: 0, bufferSize: 4096, format: format) { [weak self] buffer, _ in
                 guard let channel = buffer.floatChannelData?[0] else { return }
@@ -561,6 +574,10 @@ public final class ElevenLabsNativeSpeechProvider: NSObject, NativeSpeechProvidi
                     }
                 }
                 let payloadData = pcm.withUnsafeBufferPointer { Data(buffer: $0) }
+                if let retainedAudio {
+                    retainedAudio.append(payloadData, voiced: frames > 0 && (energy / Float(frames)).squareRoot() > 0.012)
+                    return
+                }
                 let payload: [String: Any] = [
                     "message_type": "input_audio_chunk",
                     "audio_base_64": payloadData.base64EncodedString(),
@@ -573,6 +590,28 @@ public final class ElevenLabsNativeSpeechProvider: NSObject, NativeSpeechProvidi
             }
             engine.prepare()
             try engine.start()
+
+            if let retainedAudio {
+                let stream = ElevenLabsTranscriptionStream(
+                    audio: retainedAudio, previouslyConnected: cloudPreviouslyConnected,
+                    connect: { [weak self] in
+                        guard let self, self.transcriptionID == captureID else { throw CancellationError() }
+                        return try await self.makeBufferedSocket(sampleRate: sampleRate, captureID: captureID)
+                    }, event: { [weak self] event in
+                        guard let self, self.transcriptionID == captureID else { return }
+                        switch event {
+                        case .connectionReady:
+                            self.cloudPreviouslyConnected = true
+                            self.onEvent?(event)
+                        case .error(let message): self.finish(error: message)
+                        case .audioGap(let message): self.finish(error: message, audioGap: true)
+                        default: self.onEvent?(event)
+                        }
+                    })
+                transcriptionStream = stream
+                stream.start()
+                return
+            }
 
             // Mic is hot from here — the handshake below no longer costs the user
             // the start of their sentence.
@@ -606,9 +645,38 @@ public final class ElevenLabsNativeSpeechProvider: NSObject, NativeSpeechProvidi
             // A cancelled attempt may fail after another attempt has started.
             // Its failure must never tear down that newer microphone/socket.
             guard transcriptionID == captureID else { return }
+            voiceDiagnostic("[VOICE-STT] capture setup failed \(voiceErrorMetadata(error))", level: .error)
             teardownCapture()
             throw error
         }
+    }
+
+    private func makeBufferedSocket(sampleRate: Int, captureID: UUID) async throws -> any RealtimeSpeechSocket {
+        struct TokenResponse: Decodable { let token: String }
+        let data = try await send(path: "api/v1/speech/realtime-token", method: "POST")
+        let token = try JSONDecoder().decode(TokenResponse.self, from: data).token
+        guard transcriptionID == captureID else { throw CancellationError() }
+        var url = URLComponents(string: "wss://api.elevenlabs.io/v1/speech-to-text/realtime")!
+        var query = [URLQueryItem(name: "token", value: token),
+                     URLQueryItem(name: "model_id", value: "scribe_v2_realtime"),
+                     URLQueryItem(name: "audio_format", value: "pcm_\(sampleRate)"),
+                     URLQueryItem(name: "commit_strategy", value: "manual")]
+        let language = SpeechPreferences.speechLanguage
+        if language != "auto", !language.isEmpty { query.append(URLQueryItem(name: "language_code", value: language)) }
+        for term in SpeechPreferences.speechKeyterms { query.append(URLQueryItem(name: "keyterms", value: term)) }
+        url.queryItems = query
+        return URLSessionSpeechSocket((directAPI == nil ? URLSession.shared : directSocketSession).webSocketTask(with: url.url!))
+    }
+
+    func finishBufferedTranscription() async throws {
+        guard let stream = transcriptionStream, let audio = bufferedAudio else { return }
+        // Stop accepting new audio, but keep the stream alive until every
+        // recorded frame has a final transcript. No partial message is sent.
+        audio.finishCapture()
+        audioEngine?.stop()
+        audioEngine?.inputNode.removeTap(onBus: 0)
+        audioEngine = nil
+        try await stream.finish()
     }
 
     /// Tears the mic down without emitting `.ended` — used when start-up fails
@@ -616,6 +684,10 @@ public final class ElevenLabsNativeSpeechProvider: NSObject, NativeSpeechProvidi
     /// controller answers `.ended` by scheduling a restart.
     private func teardownCapture() {
         transcriptionID = nil
+        transcriptionStream?.stop()
+        transcriptionStream = nil
+        bufferedAudio?.clear()
+        bufferedAudio = nil
         audioEngine?.stop()
         audioEngine?.inputNode.removeTap(onBus: 0)
         audioEngine = nil
@@ -686,11 +758,11 @@ public final class ElevenLabsNativeSpeechProvider: NSObject, NativeSpeechProvidi
         }
     }
 
-    private func finish(error: String?) {
+    private func finish(error: String?, audioGap: Bool = false) {
         guard transcribing else { return }
         let callback = onEvent
         teardownCapture()
-        if let error { callback?(.error(error)) }
+        if let error { callback?(audioGap ? .audioGap(error) : .error(error)) }
         callback?(.ended)
     }
 }
