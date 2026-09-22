@@ -4,6 +4,11 @@ public extension Notification.Name {
     /// Scoped to the originating bridge so another embedded console cannot
     /// present or sign out the wrong account.
     static let ripulShowProfile = Notification.Name("ripulShowProfile")
+    /// Asks the host to present `RipulSolutionsScreen`. Scoped to the
+    /// originating bridge, same as the above. `SolutionsSheet` is the SDK's
+    /// own listener; a host that wants its own presentation can observe this
+    /// instead.
+    static let ripulShowSolutions = Notification.Name("ripulShowSolutions")
 }
 
 /// The session list's overflow menu: new CLI sessions on the default machine,
@@ -32,6 +37,17 @@ public struct SessionListMenu: View {
     /// for it. Nil ⇒ the entry is omitted.
     let onShowModelPicker: (() -> Void)?
     let usesUnifiedCreation: Bool
+    /// Offers the "Solutions" row, which asks the host to present
+    /// `RipulSolutionsScreen` (see `SolutionsSheet`).
+    ///
+    /// Opt-in, and off by default, because the two menu hosts want opposite
+    /// answers. The first-party app reaches Solutions from its sidebar, so a
+    /// menu row there would be a second door to a screen that already has one.
+    /// An SDK host has no sidebar and — since `f291beca3` moved Solutions out
+    /// of the sessions list — no route at all; this is it. The agent screen
+    /// turns it on exactly when the host supplied a
+    /// `RipulSessionsConfiguration.solutionManagement`.
+    let showsSolutions: Bool
 
     public init(
         bridge: AgentBridge,
@@ -39,7 +55,8 @@ public struct SessionListMenu: View {
         cache: RipulSessionCache,
         showingSessionList: Binding<Bool>,
         onShowModelPicker: (() -> Void)? = nil,
-        usesUnifiedCreation: Bool = false
+        usesUnifiedCreation: Bool = false,
+        showsSolutions: Bool = false
     ) {
         self.bridge = bridge
         self.model = model
@@ -47,6 +64,7 @@ public struct SessionListMenu: View {
         self.showingSessionList = showingSessionList
         self.onShowModelPicker = onShowModelPicker
         self.usesUnifiedCreation = usesUnifiedCreation
+        self.showsSolutions = showsSolutions
     }
 
     private var defaultMachine: RemoteMachine? {
@@ -103,6 +121,21 @@ public struct SessionListMenu: View {
                 Label("Profile", systemImage: "person.crop.circle")
             }
             .uiKitIdentifier("AgentScreen.listMenu.profile")
+
+            Divider()
+        }
+
+        // Beside Profile: both are host-presented destinations rather than
+        // session verbs. Gated on the developer audience like Profile is —
+        // Solutions is the workbench behind a solution (collections, contexts,
+        // the model catalog), and an end-user surface has no business in it.
+        if showsSolutions && bridge.audience == .developer {
+            Button {
+                NotificationCenter.default.post(name: .ripulShowSolutions, object: bridge)
+            } label: {
+                Label("Solutions", systemImage: "slider.horizontal.3")
+            }
+            .uiKitIdentifier("AgentScreen.listMenu.solutions")
 
             Divider()
         }

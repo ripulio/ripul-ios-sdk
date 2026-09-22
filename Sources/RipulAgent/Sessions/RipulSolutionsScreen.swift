@@ -53,17 +53,25 @@ public struct RipulSolutionsScreen: View {
     /// `RipulAgentScreenSlots.showingSidebar`.
     var showingSidebar: Binding<Bool>?
     var screenTip: ((String) -> AnyView)?
+    /// Set when the screen is PRESENTED rather than navigated to — the SDK
+    /// sessions menu's route, where there is no sidebar behind it to go back
+    /// to. The bar's leading button becomes a dismiss, and the screen opts out
+    /// of the swipe-down switcher: it is a modal detail, not a destination the
+    /// overview can return to.
+    var onClose: (() -> Void)?
 
     public init(
         management: RipulSolutionManagement,
         bridge: AgentBridge,
         showingSidebar: Binding<Bool>? = nil,
-        screenTip: ((String) -> AnyView)? = nil
+        screenTip: ((String) -> AnyView)? = nil,
+        onClose: (() -> Void)? = nil
     ) {
         self.management = management
         self.bridge = bridge
         self.showingSidebar = showingSidebar
         self.screenTip = screenTip
+        self.onClose = onClose
     }
 
     @State private var showingCollections = false
@@ -92,15 +100,17 @@ public struct RipulSolutionsScreen: View {
             .ripulTopBarInset {
                 GlassTopBar(
                     title: "Solutions",
-                    leadingIcon: "line.3.horizontal",
-                    showLeading: showingSidebar != nil,
+                    leadingIcon: onClose != nil ? "chevron.down" : "line.3.horizontal",
+                    showLeading: showingSidebar != nil || onClose != nil,
                     screenKey: "solutions",
                     screenTip: screenTip,
                     onLeading: {
+                        if let onClose { onClose(); return }
                         withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
                             showingSidebar?.wrappedValue = true
                         }
                     },
+                    switcherEnabled: onClose == nil,
                     menu: { EmptyView() }
                 )
             }
@@ -503,6 +513,56 @@ public struct RipulSolutionsScreen: View {
         }
         .buttonStyle(.plain)
         .uiKitIdentifier(identifier)
+    }
+}
+
+// MARK: - Presented route (SDK hosts)
+
+/// Presents `RipulSolutionsScreen` when the sessions menu asks for it.
+///
+/// The first-party app reaches Solutions through its sidebar
+/// (`SidebarTab.solutions`), so it does not use this. An SDK host has no such
+/// sidebar: when `f291beca3` moved Solutions out of the sessions list and into
+/// a sidebar destination, embedders were left with no route to it at all. The
+/// menu row plus this modifier are that route.
+///
+/// A ViewModifier rather than a `.sheet` on the agent screen's body because
+/// that body's modifier chain is already at the type checker's limit — one
+/// more inline closure there fails the iOS build outright. Same shape as
+/// `AppWorkingDirectorySheet`.
+@available(iOS 26.0, *)
+public struct SolutionsSheet: ViewModifier {
+    let bridge: AgentBridge
+    /// nil ⇒ the host offers no Solutions route, and this is inert.
+    let management: RipulSolutionManagement?
+    @State private var isPresented = false
+
+    public init(bridge: AgentBridge, management: RipulSolutionManagement?) {
+        self.bridge = bridge
+        self.management = management
+    }
+
+    public func body(content: Content) -> some View {
+        content
+            .onReceive(NotificationCenter.default.publisher(for: .ripulShowSolutions)) { notification in
+                // Scoped to the originating bridge, so a second embedded
+                // console cannot raise this one's screen.
+                guard let source = notification.object as? AgentBridge, source === bridge else { return }
+                guard management != nil else { return }
+                isPresented = true
+            }
+            .sheet(isPresented: $isPresented) {
+                if let management {
+                    RipulSolutionsScreen(
+                        management: management,
+                        bridge: bridge,
+                        // No sidebar behind a sheet — `onClose` turns the bar's
+                        // leading button into the dismiss instead.
+                        onClose: { isPresented = false }
+                    )
+                    .ripulSheet(.page)
+                }
+            }
     }
 }
 #endif

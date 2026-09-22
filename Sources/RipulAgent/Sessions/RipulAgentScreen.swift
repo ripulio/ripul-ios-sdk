@@ -630,6 +630,7 @@ public struct RipulAgentScreen: View {
         }
         .modifier(workingDirectoryPickerSheet)
         .modifier(AppWorkingDirectorySheet(bridge: bridge))
+        .modifier(SolutionsSheet(bridge: bridge, management: solutionManagement))
         .onChange(of: showingSessionList.wrappedValue) { showing in
             if showing {
                 Task { await model.loadMachinesFromAPI() }
@@ -1417,6 +1418,13 @@ public struct RipulAgentScreen: View {
         return session.remoteMachineName
     }
 
+    /// The host's Solutions route, resolved against this screen's token
+    /// provider. nil ⇒ no row and an inert sheet — see
+    /// `RipulSessionsConfiguration.solutionManagement`.
+    private var solutionManagement: RipulSolutionManagement? {
+        configuration.solutionManagement?(tokenProvider)
+    }
+
     // MARK: - Menu Items
 
     /// Extracted to the public SessionListMenu so the first-party shell's
@@ -1432,7 +1440,8 @@ public struct RipulAgentScreen: View {
                 if let newChat = slots.onNewChat { newChat(nil) }
                 else { modelPickerTarget = .newSession }
             },
-            usesUnifiedCreation: slots.onNewChat != nil
+            usesUnifiedCreation: slots.onNewChat != nil,
+            showsSolutions: solutionManagement != nil
         )
     }
 

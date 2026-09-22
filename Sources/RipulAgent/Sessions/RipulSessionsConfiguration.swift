@@ -80,6 +80,23 @@ public struct RipulSessionsConfiguration {
     /// agent screen runs its own from its token provider.
     public var inviteManager: RipulInviteManager?
     public var emptyStateOverride: (() -> AnyView)?
+    /// Supplying this puts a "Solutions" row in the sessions overflow menu,
+    /// which presents `RipulSolutionsScreen` (collections, contexts, the model
+    /// catalog, macros, …) over the agent screen.
+    ///
+    /// nil — the default — omits the row, which is what the first-party app
+    /// wants: it reaches Solutions from its own sidebar. An SDK host has no
+    /// sidebar, and has had no route to the screen since `f291beca3` moved it
+    /// off the sessions list; this is that route. The row additionally
+    /// requires the developer audience, so passing this on an end-user surface
+    /// still shows nothing.
+    ///
+    /// A builder rather than a value because the one thing a host cannot supply
+    /// up front is the token: `RipulAgentConsole` creates the Clerk auth store
+    /// itself, so a `RipulSessionsConfiguration` built as a static `let` — which
+    /// is how an embedder writes one — has nothing to read a token from. The
+    /// screen's own provider is handed back here instead.
+    public var solutionManagement: ((_ tokenProvider: @escaping () -> String?) -> RipulSolutionManagement)?
 
     public init(
         cache: RipulSessionCache,
@@ -93,7 +110,8 @@ public struct RipulSessionsConfiguration {
         registry: RipulToolRegistry = RipulToolRegistry(),
         invitesSection: ((InvitesSectionActions) -> AnyView)? = nil,
         inviteManager: RipulInviteManager? = nil,
-        emptyStateOverride: (() -> AnyView)? = nil
+        emptyStateOverride: (() -> AnyView)? = nil,
+        solutionManagement: ((_ tokenProvider: @escaping () -> String?) -> RipulSolutionManagement)? = nil
     ) {
         self.cache = cache
         self.baseURL = baseURL
@@ -107,5 +125,6 @@ public struct RipulSessionsConfiguration {
         self.invitesSection = invitesSection
         self.inviteManager = inviteManager
         self.emptyStateOverride = emptyStateOverride
+        self.solutionManagement = solutionManagement
     }
 }
