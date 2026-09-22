@@ -302,14 +302,11 @@ public final class RipulInviteManager: ObservableObject {
 
     /// The `sub` claim of a Clerk JWT — the user id — without verifying it.
     /// Used only to tell one signed-in account from another.
+    ///
+    /// The session list needs the same answer for the same reason, so the
+    /// parser lives in `RipulAccountIdentity`; this stays as the name the
+    /// manager and its tests already call.
     nonisolated static func subject(ofJWT token: String?) -> String? {
-        guard let token else { return nil }
-        let parts = token.split(separator: ".")
-        guard parts.count >= 2 else { return nil }
-        var payload = parts[1].replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
-        payload += String(repeating: "=", count: (4 - payload.count % 4) % 4)
-        guard let data = Data(base64Encoded: payload),
-              let claims = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
-        return claims["sub"] as? String
+        RipulAccountIdentity.subject(ofJWT: token)
     }
 }

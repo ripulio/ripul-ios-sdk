@@ -131,6 +131,10 @@ public final class RipulClerkAuthStore: ObservableObject {
         cache.set(false, forKey: Self.wasSignedInKey)
         cache.removeObject(forKey: Self.cachedNameKey)
         cache.removeObject(forKey: Self.cachedEmailKey)
+        // The machines and sessions on screen belong to the account just
+        // signed out of. Without this they stay visible through the sign-in
+        // screen and into the next account's list — see RipulAccountScopedCache.
+        RipulAccountScopedCache.purge(cache: cache)
     }
 
     private func extractToken() async {

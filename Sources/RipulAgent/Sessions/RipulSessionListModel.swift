@@ -537,7 +537,38 @@ public final class RipulSessionListModel: ObservableObject {
 
     // MARK: - Machines
 
+    /// Drop everything derived from the PREVIOUS account when the token now
+    /// belongs to someone else.
+    ///
+    /// The cache purge alone is not enough: `init` copied those caches into
+    /// `machines`, `unifiedSessions` and the remote-scan map, and this model
+    /// survives a sign-out. Both the store and the copies have to go.
+    private func discardStateIfAccountChanged() {
+        let subject = RipulAccountIdentity.subject(ofJWT: tokenProvider())
+        guard RipulAccountScopedCache.reconcile(subject: subject, cache: cache) else { return }
+        log("account changed — discarding \(machines.count) machines and \(unifiedSessions.count) sessions")
+        bridge.logSessionStartMarker("ios.sessions_account_switch",
+                                     extra: "machines=\(machines.count) sessions=\(unifiedSessions.count)")
+        machines = []
+        unifiedSessions = []
+        remoteSessionsByMachineId = [:]
+        remoteSessions = []
+        archivedSessions = []
+        hasSuccessfulMachinesResponse = false
+        lastActiveBySessionId = [:]
+        savedLastActiveTimes = nil
+        bridge.sessionList.lastActiveTimeByChatId = [:]
+    }
+
     public func loadMachinesFromAPI() async {
+        // Whose data is this? Every refresh funnels through here, so this is
+        // the one place that sees both a cold launch and an in-place account
+        // switch. See `RipulAccountScopedCache` for why nothing else catches
+        // the switch: sign-out clears only the token/name/email, the model is a
+        // `@StateObject` that outlives it, and the empty-response guard below
+        // would otherwise preserve the previous account's machines forever.
+        discardStateIfAccountChanged()
+
         if dataSource != nil { await loadDirectSessions(); return }
         guard let token = tokenProvider() else {
             log("loadMachinesFromAPI: no auth token — skipped")
