@@ -465,7 +465,7 @@ extension ScreenElementFinder {
     static func staleHandleError(_ handle: String) -> [String: Any] {
         if ScreenSnapshotStore.shared.contains(handle) {
             return ["success": false,
-                    "error": "Handle '\(handle)' is stale — the screen changed since this snapshot. Run inspect_screen for fresh handles, or wait_for_element to observe this exact element."]
+                    "error": "Handle '\(handle)' is stale — its element moved, changed or left the screen since this snapshot. Run inspect_screen for fresh handles, or wait_for_element to observe this exact element."]
         }
         return ["success": false,
                 "error": "Unknown handle '\(handle)'. Handles come from the most recent inspect_screen result (older ones go stale)."]
@@ -536,7 +536,37 @@ extension ScreenElementFinder {
                                      id: identifier(of: view), text: InspectedView.textContent(of: view)))
             }
         }
-        return collapseToOutermost(matches)
+        // A SwiftUI anchor's text and controls live in its accessibility tree, not in
+        // subviews, so `within={id:bar}, text:"Done"` found nothing although the bar
+        // itself carries "Done". When the subtree has no match, the anchor is the
+        // match — the tap ladder then picks the element inside it by text.
+        if matches.isEmpty, let anchor, viewMatches(anchor, query) {
+            return [Match(view: anchor, window: window,
+                          id: identifier(of: anchor), text: InspectedView.textContent(of: anchor))]
+        }
+        let collapsed = collapseToOutermost(matches)
+        guard let wanted = query.id, !wanted.isEmpty else { return collapsed }
+        return collapsed.map { preferStampHost($0, among: matches, id: wanted) }
+    }
+
+    /// SwiftUI propagates a `.uiKitIdentifier` UP onto hosting scaffolding as well as
+    /// down, so the OUTERMOST view carrying an id can be a whole-bar `_UIInheritedView`
+    /// (408×100) while the button it names is 33×18 inside it — and a tap aimed at the
+    /// container's centre lands on whatever sits there (a hint label, in the case that
+    /// prompted this). The stamp's own host view is registered with exactly the stamped
+    /// view's frame whichever way the id propagated, so when one nests inside the
+    /// outermost match it is the element; the ladder resolves the control at its point.
+    static func preferStampHost(_ outer: Match, among all: [Match], id: String) -> Match {
+        let registry = UIKitIdentifierRegistry.shared
+        if registry.identifier(for: outer.view) != nil { return outer }
+        func area(_ m: Match) -> CGFloat { m.effectiveFrame.width * m.effectiveFrame.height }
+        let stamps = all.filter { m in
+            m.view !== outer.view && m.view.isDescendant(of: outer.view)
+                && registry.identifier(for: m.view).map { $0.caseInsensitiveCompare(id) == .orderedSame } == true
+        }
+        guard let stamp = stamps.max(by: { area($0) < area($1) }),
+              area(stamp) > 0, area(stamp) < area(outer) * 0.9 else { return outer }
+        return stamp
     }
 
     /// UIView → `ElementFacts`, then delegates to the ungated `matches(_:_:)`
@@ -1603,7 +1633,9 @@ public struct TapElementTool: NativeTool {
         + "id/text/role/class, optionally scoped by 'within'. Example: within={text:\"Alice\"}, role=\"button\" "
         + "taps the button inside Alice's row. Ambiguous queries (several disjoint matches) FAIL with a "
         + "candidate list — refine with within/role/id, or pass nth. Nested duplicates (button + its label) "
-        + "collapse to the container. Handles go stale on any screen change; follow with wait_for_element."
+        + "collapse to the container, except that a SwiftUI element's own stamp beats a larger container "
+        + "that adopted its id. A handle stays valid after other taps while its element hasn't moved or "
+        + "changed. text also presses a system alert's button (e.g. text=\"Cancel\")."
     public let inputSchema: [String: Any] = ToolSchema.object(
         .string("handle", "Handle from the last inspect_screen (e.g. \"e7\") — taps exactly that element (preferred)"),
         .selector("within", "Anchor container: search only inside its subtree, e.g. {text:\"Alice\"} for the row containing Alice"),
@@ -1619,6 +1651,7 @@ public struct TapElementTool: NativeTool {
 
     @MainActor
     public func execute(args: [String: Any]) async throws -> Any {
+        if let alertResult = Self.pressAlertAction(args: args) { return alertResult }
         let target: ScreenElementFinder.Match
         let matchCount: Int
         switch ScreenElementFinder.resolveTarget(args: args) {
@@ -1643,6 +1676,54 @@ public struct TapElementTool: NativeTool {
         }
         return ["success": false, "matched": matchCount, "element": ScreenElementFinder.describe(target),
                 "trace": outcome.trace, "error": outcome.error as Any]
+    }
+
+    /// A system alert's buttons are private action views with no target/action, no
+    /// gesture and no activatable accessibility element the ladder can reach — every
+    /// path reported "found but not tappable", so a flow behind a `UIAlertController`
+    /// could not be driven at all. When one is on screen and `text` names one of its
+    /// actions, press it the way UIKit does: dismiss, then run the action's handler.
+    /// nil = not an alert press; the normal ladder runs.
+    @MainActor
+    static func pressAlertAction(args: [String: Any]) -> [String: Any]? {
+        guard args["handle"] == nil, args["id"] == nil,
+              let text = (args["text"] as? String)?.trimmingCharacters(in: .whitespaces), !text.isEmpty,
+              let alert = topPresentedAlert() else { return nil }
+        let titled = alert.actions.filter { $0.isEnabled && $0.title != nil }
+        var hits = titled.filter { $0.title!.caseInsensitiveCompare(text) == .orderedSame }
+        if hits.isEmpty { hits = titled.filter { $0.title!.range(of: text, options: .caseInsensitive) != nil } }
+        if hits.isEmpty { return nil }   // the text is elsewhere (e.g. the alert's message) — fall through
+        let nth = args["nth"] as? Int ?? (hits.count == 1 ? 0 : -1)
+        guard hits.indices.contains(nth) else {
+            return ["success": false, "matched": hits.count,
+                    "error": "Several alert buttons match '\(text)': \(hits.compactMap(\.title)). Pass the exact title or nth.",
+                    "candidates": hits.compactMap(\.title)]
+        }
+        let action = hits[nth]
+        // The handler is private (`_handler`). KVC on a missing key raises an ObjC
+        // exception Swift can't catch, so check the ivar exists before asking for it.
+        typealias Handler = @convention(block) (UIAlertAction) -> Void
+        let handlerKnown = class_getInstanceVariable(UIAlertAction.self, "_handler") != nil
+        let handler = handlerKnown
+            ? (action.value(forKey: "handler") as AnyObject?).map { unsafeBitCast($0, to: Handler.self) }
+            : nil
+        alert.dismiss(animated: true) { handler?(action) }
+        ScreenSnapshotStore.shared.invalidate()
+        if !handlerKnown {
+            return ["success": false, "via": "alertAction",
+                    "error": "Dismissed the alert, but this iOS version hides alert handlers — '\(action.title ?? "")' did not run its action."]
+        }
+        return ["success": true, "via": "alertAction", "activated": action.title as Any,
+                "element": ["class": "UIAlertAction", "role": "button", "text": action.title as Any,
+                            "alert": alert.title as Any]]
+    }
+
+    /// The alert at the top of the host window's presentation chain, if that's what is showing.
+    @MainActor
+    static func topPresentedAlert() -> UIAlertController? {
+        var top = ScreenElementFinder.hostWindow()?.rootViewController
+        while let next = top?.presentedViewController, !next.isBeingDismissed { top = next }
+        return top as? UIAlertController
     }
 
     /// Walk the accessibility tree under `view` (elements array / container
@@ -1814,8 +1895,22 @@ public struct TypeTextTool: NativeTool {
                 self.view = tv
                 currentText = tv.text ?? ""
                 setText = { new in
-                    tv.text = new
-                    NotificationCenter.default.post(name: UITextView.textDidChangeNotification, object: tv)
+                    // Through UIKeyInput, not `.text =`: assigning the property skips the
+                    // delegate, and a multi-line SwiftUI TextField (`axis: .vertical`, a
+                    // UITextView) binds through its delegate — the field showed the new
+                    // text while the binding kept the old. insertText runs
+                    // shouldChangeText/textViewDidChange exactly as typing does.
+                    tv.selectedRange = NSRange(location: 0, length: (tv.text as NSString? ?? "").length)
+                    if new.isEmpty {
+                        if tv.selectedRange.length > 0 { tv.deleteBackward() }
+                    } else {
+                        tv.insertText(new)
+                    }
+                    if tv.text != new {   // a delegate refused or rewrote it — set it, and say so the old way
+                        tv.text = new
+                        tv.delegate?.textViewDidChange?(tv)
+                        NotificationCenter.default.post(name: UITextView.textDidChangeNotification, object: tv)
+                    }
                 }
                 return
             }

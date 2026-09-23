@@ -116,7 +116,8 @@ struct ClaudeAccountSection: View {
         }
         .onChange(of: scenePhase) { phase in if phase == .active { Task { await refresh() } } }
         .sheet(item: $signInProfile) { profile in
-            HostSignInSheet(machine: machine, bridge: bridge, profile: profile.slug, profileName: profile.name)
+            HostSignInSheet(machine: machine, bridge: bridge, profile: profile.slug, profileName: profile.name,
+                            startSignInImmediately: profile.loggedIn)
         }
         .confirmationDialog(
             "Remove \(deleteCandidate?.name ?? "account")?",
@@ -177,6 +178,11 @@ struct ClaudeAccountSection: View {
         .buttonStyle(.plain)
         .disabled(loading || switchingTo != nil)
         .uiKitIdentifier("ClaudeAccountSwitcherSheet.accountRow.\(account.slug)")
+        .contextMenu {
+            if account.loggedIn {
+                Button("Sign in again", systemImage: "arrow.clockwise") { signInProfile = account }
+            }
+        }
         // The default profile is the Mac's own login — removing it would sign the Mac
         // out of Claude entirely, so only extra profiles offer removal.
         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
@@ -188,6 +194,12 @@ struct ClaudeAccountSection: View {
                 }
                 .uiKitIdentifier("ClaudeAccountSwitcherSheet.accountRow.\(account.slug).delete")
             }
+        }
+        if account.loggedIn, account.usage?.error != nil {
+            Button("Sign in again") { signInProfile = account }
+                .font(.subheadline)
+                .disabled(loading || switchingTo != nil)
+                .uiKitIdentifier("ClaudeAccountSwitcherSheet.accountRow.\(account.slug).signInAgain")
         }
     }
 

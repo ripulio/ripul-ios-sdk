@@ -28,13 +28,16 @@ public struct HostSignInSheet: View {
     /// host's ACTIVE profile — the pre-switcher behavior.
     let profile: String?
     let profileName: String?
+    let startSignInImmediately: Bool
     @Environment(\.dismiss) private var dismiss
 
-    public init(machine: RemoteMachine, bridge: AgentBridge, profile: String? = nil, profileName: String? = nil) {
+    public init(machine: RemoteMachine, bridge: AgentBridge, profile: String? = nil, profileName: String? = nil,
+                startSignInImmediately: Bool = false) {
         self.machine = machine
         self.bridge = bridge
         self.profile = profile
         self.profileName = profileName
+        self.startSignInImmediately = startSignInImmediately
     }
 
     private enum Phase {
@@ -79,7 +82,10 @@ public struct HostSignInSheet: View {
             }
         }
         .ripulSheet(.page, detents: [.medium, .large])
-        .task { await refreshStatus() }
+        .task {
+            if startSignInImmediately { await begin() }
+            else { await refreshStatus() }
+        }
     }
 
     // MARK: - Phases

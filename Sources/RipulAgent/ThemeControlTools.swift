@@ -282,6 +282,10 @@ public struct RipulGetAppDiagnosticsTool: NativeTool {
                 "version": info["CFBundleShortVersionString"] as? String ?? "unknown",
                 "build": info["CFBundleVersion"] as? String ?? "unknown",
             ]
+            // Why the last tool call may not have been answered: main-thread stalls,
+            // background / lock-screen transitions (AppResponsiveness).
+            AppResponsiveness.shared.start()
+            out["responsiveness"] = AppResponsiveness.shared.report()
             for (k, v) in RipulDevThemeTools.diagnosticsExtras?() ?? [:] { out[k] = v }
             return out
         }
@@ -298,6 +302,7 @@ public enum RipulDevThemeTools {
     /// when its debug-tools flag is on). Returns [] when `isEnabled()` is false.
     public static func all(isEnabled: () -> Bool) -> [NativeTool] {
         guard isEnabled() else { return [] }
+        AppResponsiveness.shared.start()   // so get_app_diagnostics has history, not just "now"
         return [
             RipulListThemeScopesTool(),
             RipulGetThemeStyleTool(),
