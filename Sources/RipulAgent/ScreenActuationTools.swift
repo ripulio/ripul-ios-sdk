@@ -580,9 +580,14 @@ extension ScreenElementFinder {
         // ".label")` on its label) gets NO geometry of its own: its id lives only on the
         // island's full-width container, and the label's stamp is the one real frame.
         // The largest part inside the container stands for the element.
-        let stamp = largest(inside(registry.views(withIdentifier: id)))
-            ?? largest(inside(registry.views(withIdentifierPrefix: id)))
-        guard let stamp, stamp.frame.width * stamp.frame.height < outerArea * 0.9 else { return outer }
+        // Only stamps TIGHTER than the container count: a Button's own stamp can be as
+        // wide as the bar it sits in (the explorer showed `bar.add` stacked between
+        // `bar.add.label` and `bar`), and picking it first meant never reaching the part.
+        func tighter(_ stamps: [(view: UIView, frame: CGRect)]) -> [(view: UIView, frame: CGRect)] {
+            stamps.filter { $0.frame.width * $0.frame.height < outerArea * 0.9 }
+        }
+        guard let stamp = largest(tighter(inside(registry.views(withIdentifier: id))))
+                ?? largest(tighter(inside(registry.views(withIdentifierPrefix: id)))) else { return outer }
         return Match(view: stamp.view, window: outer.window, id: id, text: InspectedView.textContent(of: stamp.view))
     }
 

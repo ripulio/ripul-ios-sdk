@@ -97,6 +97,16 @@ public struct RipulProfileScreen<PlanContent: View>: View {
                         )
                     }
                 )
+                if secrets.status(for: ProviderKeyRow.elevenLabs.id)?.configured == true {
+                    NavigationLink {
+                        ElevenLabsUsageScreen { [baseURL, tokenProvider] in
+                            try await UserSecretsClient(baseURL: baseURL, tokenProvider: tokenProvider).elevenLabsUsage()
+                        }
+                    } label: {
+                        Label("ElevenLabs usage & billing", systemImage: "chart.bar")
+                    }
+                    .uiKitIdentifier("RipulProfileScreen.elevenLabsUsage")
+                }
             }
 
             if let secretsError {
