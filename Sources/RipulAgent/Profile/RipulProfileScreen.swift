@@ -97,6 +97,26 @@ public struct RipulProfileScreen<PlanContent: View>: View {
                         )
                     }
                 )
+                if secrets.status(for: ProviderKeyRow.elevenLabs.id)?.configured == true {
+                    NavigationLink {
+                        ElevenLabsUsageScreen { [baseURL, tokenProvider] in
+                            try await UserSecretsClient(baseURL: baseURL, tokenProvider: tokenProvider).elevenLabsUsage()
+                        }
+                    } label: {
+                        Label("ElevenLabs usage & billing", systemImage: "chart.bar")
+                    }
+                    .uiKitIdentifier("RipulProfileScreen.elevenLabsUsage")
+                }
+                if secrets.status(for: ProviderKeyRow.elevenLabs.id)?.platformUsageAvailable == true {
+                    NavigationLink {
+                        ElevenLabsUsageScreen(title: "Ripul ElevenLabs Account") { [baseURL, tokenProvider] in
+                            try await UserSecretsClient(baseURL: baseURL, tokenProvider: tokenProvider).platformElevenLabsUsage()
+                        }
+                    } label: {
+                        Label("Ripul ElevenLabs account", systemImage: "building.2")
+                    }
+                    .uiKitIdentifier("RipulProfileScreen.platformElevenLabsUsage")
+                }
             }
 
             if let secretsError {

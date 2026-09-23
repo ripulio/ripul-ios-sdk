@@ -13,6 +13,9 @@ struct UserSecretStatus: Codable, Identifiable, Equatable {
     /// True when RIPUL has a shared key to fall back on. Drives the difference
     /// between "using the shared key" and "speech is off".
     let platformFallbackAvailable: Bool
+    /// True for an admin when RIPUL has a shared key: the shared account's
+    /// usage and billing may be shown. Optional so older workers still decode.
+    let platformUsageAvailable: Bool?
 
     var id: String { provider }
 }
@@ -89,6 +92,26 @@ final class UserSecretsClient {
         struct SecretResponse: Codable { let secret: UserSecretStatus }
         let data = try await send(path: "api/v1/user-secrets/\(provider)", method: "DELETE")
         return try JSONDecoder().decode(SecretResponse.self, from: data).secret
+    }
+
+    /// The account key's plan, credits and billing — ElevenLabs' own JSON,
+    /// passed through by the worker so it shares the device-key parser.
+    func elevenLabsUsage() async throws -> ElevenLabsUsage {
+        try Self.usage(from: await send(path: "api/v1/user-secrets/elevenlabs/usage", method: "GET"))
+    }
+
+    /// RIPUL's shared key — the account everyone without their own key
+    /// speaks through. The worker answers admins only.
+    func platformElevenLabsUsage() async throws -> ElevenLabsUsage {
+        try Self.usage(from: await send(path: "api/v1/admin/elevenlabs/usage", method: "GET"))
+    }
+
+    private static func usage(from data: Data) throws -> ElevenLabsUsage {
+        guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let subscription = object["subscription"] as? [String: Any] else {
+            throw ClientError.server("ElevenLabs returned an unexpected response.")
+        }
+        return ElevenLabsUsage.parse(subscription: subscription, characterStats: object["characterStats"] as? [String: Any])
     }
 
     private func send(path: String, method: String, body: Data? = nil) async throws -> Data {
