@@ -10,7 +10,7 @@ let ripulViewExplorerOverlayTag = 0x5249_5055   // "RIPU"
 
 /// Marketing version of the RipulAgent SDK, surfaced in the inspector's copy output as `sdk: …`
 /// so we can always tell which build is actually running on the device. Bump on every release.
-let ripulSDKVersion = "0.7.148"
+let ripulSDKVersion = "0.7.149"
 
 // MARK: - View Inspector Overlay
 //
@@ -982,6 +982,25 @@ class ViewInspectorController: UIView {
         guard let highlight = currentHighlightView, let host = highlight.window else { return nil }
         return highlight.convert(selectionLocalPoint, to: host)
     }
+    /// The current native selection as the payload host actions receive — a
+    /// double-tap and a Design-mode shortcut hand over the same thing.
+    var currentElementTap: RipulElementTap? {
+        guard let element = currentTokenAnchor ?? currentTarget else { return nil }
+        // The RETICULE, not the finger. The crosshair is a relative,
+        // accelerated cursor (touchesMoved integrates the delta), so the touch
+        // is wherever the hand happens to rest and has no relation to what is
+        // being pointed at — it can be off the target entirely. `element` was
+        // resolved from `cursorPos`, so the point reported alongside it has to
+        // be `cursorPos` too or the payload describes two different places.
+        //
+        // In the HOST window's space: the explorer lives in its own overlay
+        // window, and every consumer (macro recording, the actuation engine's
+        // point path) resolves this against host views.
+        return RipulElementTap(view: element,
+                               targetView: currentTarget ?? element,
+                               point: selectedPointInHost ?? cursorPos,
+                               actionableView: currentActionable)
+    }
     /// The engine's resolution for the current pick — ONE object that the
     /// readout, the teal outline AND the fire all consume, so the prediction
     /// cannot drift from the behaviour (the "two places encoding one policy"
@@ -1167,26 +1186,9 @@ class ViewInspectorController: UIView {
                 collectFromReticule()
                 return
             }
-            if let element = currentTokenAnchor ?? currentTarget {
-                // The RETICULE, not the finger. The crosshair is a relative,
-                // accelerated cursor (touchesMoved integrates the delta), so
-                // `loc` is wherever the hand happens to rest and has no
-                // relation to what is being pointed at — it can be off the
-                // target entirely. `element` was resolved from `cursorPos`, so
-                // the point reported alongside it has to be `cursorPos` too or
-                // the payload describes two different places.
-                //
-                // In the HOST window's space: the explorer lives in its own
-                // overlay window, and every consumer (macro recording, the
-                // actuation engine's point path) resolves this against host
-                // views.
-                let hostPoint = selectedPointInHost ?? cursorPos
-                let tap = RipulElementTap(view: element,
-                                          targetView: currentTarget ?? element,
-                                          point: hostPoint,
-                                          actionableView: currentActionable)
+            if let tap = currentElementTap {
                 NSLog("[RipulViewExplorer] element tap anchor=%@ target=%@ action=%d",
-                      String(describing: type(of: element)),
+                      String(describing: type(of: tap.view)),
                       String(describing: type(of: tap.targetView)), onElementTap != nil)
                 UISelectionFeedbackGenerator().selectionChanged()
                 onElementTap?(tap)
@@ -3114,13 +3116,22 @@ struct InspectorHUD: View {
     let onStopAndSave: () -> Void
     /// Shared with the touch layer so tab selection also selects the input mode.
     @Binding var tab: InspectorTab
+    /// Design (theme-first, the default) or Advanced (every developer tool).
+    @Binding var mode: InspectorMode
+    /// Host shortcut buttons for Design mode. Nil reads
+    /// `RipulViewExplorer.designShortcuts` live.
+    let shortcuts: [RipulExplorerShortcut]?
+    /// Bumped after a shortcut tap or a host reload so `isOn` is re-read.
+    @State private var shortcutRefresh = 0
+
+    private var isDesign: Bool { mode == .design }
 
     init(session: InspectorSession, inspected: InspectedView?, history: [UIView], folded: Binding<Bool>, showRulers: Binding<Bool>,
          consoleAction: (() -> Void)?, onUp: @escaping () -> Void, onBack: @escaping () -> Void,
          onExit: @escaping () -> Void, onSelectView: @escaping (UIView) -> Void, size: CGSize,
          isRecording: Binding<Bool>, autoPauseSeconds: Binding<Double>, recordedSteps: [MacroStep],
          onDeleteStep: @escaping (IndexSet) -> Void, onStopAndSave: @escaping () -> Void,
-         tab: Binding<InspectorTab>) {
+         tab: Binding<InspectorTab>, mode: Binding<InspectorMode>, shortcuts: [RipulExplorerShortcut]?) {
         self.session = session
         self.inspected = inspected
         self.history = history
@@ -3138,6 +3149,8 @@ struct InspectorHUD: View {
         self.onDeleteStep = onDeleteStep
         self.onStopAndSave = onStopAndSave
         self._tab = tab
+        self._mode = mode
+        self.shortcuts = shortcuts
     }
 
     /// Declaration order is tab order.
@@ -3169,8 +3182,13 @@ struct InspectorHUD: View {
 
             if !folded {
                 selectionToolbar
-                // Tab bar
-                tabBar
+                // Design mode has one job (Appearance), so no tab bar — the
+                // host's shortcuts take that row instead.
+                if isDesign {
+                    shortcutBar
+                } else {
+                    tabBar
+                }
 
                 // Body
                 ScrollView {
@@ -3209,41 +3227,88 @@ struct InspectorHUD: View {
     private var selectionToolbar: some View {
         VStack(alignment: .leading, spacing: 6) {
             InspectorIdentityLozenge(session: session)
-            HStack(spacing: 7) {
-                if tab != .edit {
-                    hudIconButton(session.pinned ? "pin.fill" : "pin", label: "Pin selection", disabled: !session.hasSelection,
-                        tone: .pink, active: session.pinned) { session.pinned.toggle() }
-                        .uiKitIdentifier("Inspector.pin")
-                }
-                hudIconButton("doc.on.doc", label: "Copy reference", disabled: !session.hasSelection) { session.copy() }
-                    .uiKitIdentifier("Inspector.copy")
-                if tab != .edit {
-                    hudButton("Activate", disabled: !session.hasSelection) { session.activate() }
-                        .uiKitIdentifier("Inspector.activate")
-                }
-                hudButton(capturingContext ? "Capturing…" : "Attach element", disabled: !session.hasSelection || capturingContext) {
-                    capturingContext = true
-                    session.error = nil
-                    session.pinned = true
-                    captureContextTask = Task { @MainActor in
-                        defer { capturingContext = false }
-                        do { contextPreview = try await RipulViewExplorer.prepareSelectedElementAttachment() }
-                        catch is CancellationError { }
-                        catch { if !Task.isCancelled { session.error = error.localizedDescription } }
-                    }
-                }.uiKitIdentifier("Inspector.attachElement")
-                Spacer(minLength: 0)
-                hudIconButton("hand.point.up.left", label: session.interacting ? "Resume inspecting" : "Interact with app",
-                    tone: .cyan, active: session.interacting) {
-                    session.interacting.toggle()
-                    if !session.interacting { session.refresh() }
-                }.uiKitIdentifier("Inspector.interact")
-            }
+            if !isDesign { developerActions }
             if let error = session.error { Text(error).foregroundStyle(.orange).textSelection(.enabled) }
             if session.interacting { Text("Interact with the app. Tap the hand to resume inspecting.").foregroundStyle(.cyan) }
         }
         .font(.system(size: 10, design: .monospaced))
         .padding(.horizontal, 10).padding(.vertical, 6)
+    }
+
+    /// Host shortcuts, one tap each. Toggle shortcuts render active while on.
+    @ViewBuilder private var shortcutBar: some View {
+        let _ = shortcutRefresh
+        let items = shortcuts ?? RipulViewExplorer.designShortcuts
+        if !items.isEmpty {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(items) { shortcut in
+                        Button {
+                            shortcut.action(RipulExplorerShortcutContext(
+                                element: session.web == nil && session.hasSelection ? session.controller?.currentElementTap : nil,
+                                identity: session.identity,
+                                isWeb: session.web != nil))
+                            shortcutRefresh += 1
+                        } label: {
+                            HStack(spacing: 4) {
+                                Image(systemName: shortcut.systemImage)
+                                Text(shortcut.title).lineLimit(1)
+                            }
+                            .font(.system(size: 11, design: .monospaced))
+                            .modifier(HudButtonChrome(disabled: false, tone: .pink, active: shortcut.isOn?() ?? false))
+                        }
+                        .buttonStyle(.plain)
+                        .uiKitIdentifier("Inspector.shortcut.\(shortcut.id)")
+                    }
+                }
+                .padding(.horizontal, 10).padding(.vertical, 6)
+            }
+            .background(.white.opacity(0.04))
+            .overlay(alignment: .bottom) {
+                Rectangle().fill(.white.opacity(0.1)).frame(height: 1)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .ripulExplorerShortcutsDidChange)) { _ in
+                shortcutRefresh += 1
+            }
+        } else {
+            Rectangle().fill(.white.opacity(0.1)).frame(height: 1)
+                .onReceive(NotificationCenter.default.publisher(for: .ripulExplorerShortcutsDidChange)) { _ in
+                    shortcutRefresh += 1
+                }
+        }
+    }
+
+    private var developerActions: some View {
+        HStack(spacing: 7) {
+            if tab != .edit {
+                hudIconButton(session.pinned ? "pin.fill" : "pin", label: "Pin selection", disabled: !session.hasSelection,
+                    tone: .pink, active: session.pinned) { session.pinned.toggle() }
+                    .uiKitIdentifier("Inspector.pin")
+            }
+            hudIconButton("doc.on.doc", label: "Copy reference", disabled: !session.hasSelection) { session.copy() }
+                .uiKitIdentifier("Inspector.copy")
+            if tab != .edit {
+                hudButton("Activate", disabled: !session.hasSelection) { session.activate() }
+                    .uiKitIdentifier("Inspector.activate")
+            }
+            hudButton(capturingContext ? "Capturing…" : "Attach element", disabled: !session.hasSelection || capturingContext) {
+                capturingContext = true
+                session.error = nil
+                session.pinned = true
+                captureContextTask = Task { @MainActor in
+                    defer { capturingContext = false }
+                    do { contextPreview = try await RipulViewExplorer.prepareSelectedElementAttachment() }
+                    catch is CancellationError { }
+                    catch { if !Task.isCancelled { session.error = error.localizedDescription } }
+                }
+            }.uiKitIdentifier("Inspector.attachElement")
+            Spacer(minLength: 0)
+            hudIconButton("hand.point.up.left", label: session.interacting ? "Resume inspecting" : "Interact with app",
+                tone: .cyan, active: session.interacting) {
+                session.interacting.toggle()
+                if !session.interacting { session.refresh() }
+            }.uiKitIdentifier("Inspector.interact")
+        }
     }
 
     private var header: some View {
@@ -3255,10 +3320,10 @@ struct InspectorHUD: View {
                 HStack(spacing: 4) {
                     Text(folded ? "▸" : "▾")
                     // Compact, consistent identity for both native and web targets.
-                    Image(systemName: "scope")
+                    Image(systemName: isDesign ? "paintbrush.pointed" : "scope")
                         .font(.system(size: 12, weight: .bold))
-                        .accessibilityLabel("Inspector")
-                    Text(folded && session.hasSelection ? session.label : "Inspector")
+                        .accessibilityLabel(isDesign ? "Design" : "Inspector")
+                    Text(folded && session.hasSelection ? session.label : (isDesign ? "Design" : "Inspector"))
                         .layoutPriority(1).lineLimit(1).foregroundStyle(.white)
                     if folded, !session.collected.isEmpty {
                         HStack(spacing: 2) {
@@ -3298,21 +3363,33 @@ struct InspectorHUD: View {
                 .onChange(of: session.collected) { _ in foldedCopied = false }
             }
 
-            if let consoleAction {
-                hudIconButton("terminal", label: "Console", tone: .cyan, action: consoleAction)
-                    .uiKitIdentifier("InspectorHUD.consoleButton")
-            }
-            if tab != .edit {
-                hudIconButton("record.circle", label: isRecording ? "Stop Recording" : "Record Macro", disabled: session.web != nil,
-                              tone: .red, active: isRecording) {
-                    if isRecording { onStopAndSave() } else { isRecording = true; tab = .macro; folded = false }
+            if isDesign {
+                hudButton("Advanced") {
+                    withAnimation(.easeInOut(duration: 0.2)) { mode = .developer; folded = false }
                 }
-                .uiKitIdentifier("InspectorHUD.recordButton")
+                .accessibilityHint("Shows the developer tools")
+                .uiKitIdentifier("InspectorHUD.advancedButton")
+            } else {
+                hudIconButton("paintbrush.pointed", label: "Design mode", tone: .pink) {
+                    withAnimation(.easeInOut(duration: 0.2)) { mode = .design }
+                }
+                .uiKitIdentifier("InspectorHUD.designButton")
+                if let consoleAction {
+                    hudIconButton("terminal", label: "Console", tone: .cyan, action: consoleAction)
+                        .uiKitIdentifier("InspectorHUD.consoleButton")
+                }
+                if tab != .edit {
+                    hudIconButton("record.circle", label: isRecording ? "Stop Recording" : "Record Macro", disabled: session.web != nil,
+                                  tone: .red, active: isRecording) {
+                        if isRecording { onStopAndSave() } else { isRecording = true; tab = .macro; folded = false }
+                    }
+                    .uiKitIdentifier("InspectorHUD.recordButton")
+                }
+                hudIconButton("ruler", label: "Ruler", tone: .cyan, active: showRulers) { showRulers.toggle() }
+                    .uiKitIdentifier("InspectorHUD.rulersButton")
+                hudIconButton("arrow.uturn.backward", label: "Back", disabled: session.historyCount == 0, action: onBack)
+                    .uiKitIdentifier("InspectorHUD.backButton")
             }
-            hudIconButton("ruler", label: "Ruler", tone: .cyan, active: showRulers) { showRulers.toggle() }
-                .uiKitIdentifier("InspectorHUD.rulersButton")
-            hudIconButton("arrow.uturn.backward", label: "Back", disabled: session.historyCount == 0, action: onBack)
-                .uiKitIdentifier("InspectorHUD.backButton")
             hudIconButton("arrow.up", label: "Parent element", disabled: !session.canGoUp, action: onUp)
                 .uiKitIdentifier("InspectorHUD.upButton")
             hudIconButton("xmark", label: "Close Inspector", tone: .red, action: onExit)
@@ -3390,7 +3467,9 @@ struct InspectorHUD: View {
                 EmptyView()   // handled above
             }
         } else {
-            Text(tab == .edit
+            Text(isDesign
+                 ? "Tap anything on screen to change how it looks. Fold the panel to use the app."
+                 : tab == .edit
                  ? "Tap an element to edit its appearance. Drag anywhere to move the reticule precisely. Fold the panel to interact with the app."
                  : "Drag to inspect native or web elements. Tap to pin; use Activate to press. Fold the panel to interact with the app.")
                 .font(.system(size: 11, design: .monospaced))
@@ -3422,6 +3501,14 @@ struct InspectorHUD: View {
         .buttonStyle(.plain)
         .disabled(disabled)
     }
+}
+
+/// Which face the explorer shows. Design is theme-first — selection plus
+/// Appearance and the host's shortcuts; Advanced (`developer`) adds the tabs,
+/// macro recording and inspection tools. Persisted as "viewInspector.mode".
+enum InspectorMode: String {
+    case design
+    case developer
 }
 
 /// Shared chrome for the HUD header buttons — the only difference between the text
@@ -3492,6 +3579,10 @@ public struct ViewInspectorOverlay: View {
     /// Phone-wide alignment rulers — two thin lines crossing at the cursor,
     /// extending to the screen edges. Persists across sessions like `folded`.
     @AppStorage("viewInspector.rulers") private var showRulers = false
+    /// Design until the user picks Advanced; remembered across launches.
+    @AppStorage("viewInspector.mode") private var mode: InspectorMode = .design
+    /// Design-mode shortcut buttons; nil uses `RipulViewExplorer.designShortcuts`.
+    let designShortcuts: [RipulExplorerShortcut]?
 
     // MARK: Macro recording state (docs/plans/automation-macros/phase-2-recording-ui.md)
     //
@@ -3525,8 +3616,10 @@ public struct ViewInspectorOverlay: View {
 
     public init(isActive: Binding<Bool>, elementTapAction: ((RipulElementTap) -> Void)? = nil,
                consoleAction: (() -> Void)? = nil, macroRecordedAction: ((RipulMacro) -> Void)? = nil,
-               startRecording: Bool = false, hostWindow: UIWindow? = nil) {
+               startRecording: Bool = false, hostWindow: UIWindow? = nil,
+               designShortcuts: [RipulExplorerShortcut]? = nil) {
         self._isActive = isActive
+        self.designShortcuts = designShortcuts
         self.elementTapAction = elementTapAction
         self.consoleAction = consoleAction
         self.macroRecordedAction = macroRecordedAction
@@ -3639,7 +3732,9 @@ public struct ViewInspectorOverlay: View {
                         recordedSteps: recordedSteps,
                         onDeleteStep: { offsets in recordedSteps.remove(atOffsets: offsets) },
                         onStopAndSave: { isRecording = false; showSaveSheet = true },
-                        tab: $selectedTab
+                        tab: $selectedTab,
+                        mode: $mode,
+                        shortcuts: designShortcuts
                     )
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -3653,6 +3748,8 @@ public struct ViewInspectorOverlay: View {
             }
             .transition(.opacity)
             .onAppear {
+                // Recording lives in Advanced, so a record launch opens there.
+                if startRecording { mode = .developer }
                 selectedTab = startRecording ? .macro : .edit
                 folded = false
                 if selectedTab == .edit { enterAppearanceMode() }
@@ -3660,6 +3757,11 @@ public struct ViewInspectorOverlay: View {
             .onDisappear { session.close() }
             .onChange(of: selectedTab) { tab in
                 if tab == .edit { enterAppearanceMode() }
+            }
+            .onChange(of: mode) { mode in
+                // Design shows Appearance only. Entering it pauses recording
+                // and keeps the draft, same as choosing the Appearance tab.
+                if mode == .design, selectedTab != .edit { selectedTab = .edit }
             }
             .onChange(of: folded) { value in
                 if value { session.clearWebHighlight() } else { session.refresh() }

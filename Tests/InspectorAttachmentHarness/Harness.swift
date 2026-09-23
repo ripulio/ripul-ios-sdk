@@ -51,6 +51,7 @@ private final class InspectorAttachmentModel: ObservableObject {
         let candidate: UIView? = isWeb ? web : native
         guard let target = candidate, let window = target.window else { return }
         UserDefaults.standard.set(false, forKey: "viewInspector.folded")
+        UserDefaults.standard.set("developer", forKey: "viewInspector.mode")
         UserDefaults.standard.set(8, forKey: "viewInspector.posX")
         UserDefaults.standard.set(80, forKey: "viewInspector.posY")
         UserDefaults.standard.set(360, forKey: "viewInspector.w")

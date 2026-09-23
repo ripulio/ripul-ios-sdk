@@ -40,6 +40,52 @@ public struct RipulElementTap {
     }
 }
 
+// MARK: - Design shortcuts
+
+/// What a design shortcut is invoked with: the explorer's current selection,
+/// if any. Native selections carry the same `RipulElementTap` payload a
+/// double-tap delivers; web selections carry only their identity.
+public struct RipulExplorerShortcutContext {
+    /// The selected native element, or nil when nothing native is selected.
+    public let element: RipulElementTap?
+    /// The selection's identity as the identity lozenge shows it (native or web).
+    public let identity: String?
+    /// Whether the selection is a DOM element inside a web view.
+    public let isWeb: Bool
+}
+
+/// A host-supplied button shown in the View Explorer's Design mode — a
+/// shortcut into whatever the host means by it (open a palette, switch a
+/// theme preset, jump to a brand screen, …). Same principle as
+/// `elementTapAction`: the SDK draws the button and reports the selection;
+/// what it does is the host's call.
+///
+/// Supply `isOn` to make it a toggle ("mode") shortcut: the button renders
+/// highlighted while `isOn()` is true. The explorer re-reads it after every
+/// tap; call `RipulViewExplorer.reloadShortcuts()` when the host changes that
+/// state from elsewhere.
+public struct RipulExplorerShortcut: Identifiable {
+    public let id: String
+    public let title: String
+    public let systemImage: String
+    public let isOn: (@MainActor () -> Bool)?
+    public let action: @MainActor (RipulExplorerShortcutContext) -> Void
+
+    public init(id: String, title: String, systemImage: String,
+                isOn: (@MainActor () -> Bool)? = nil,
+                action: @escaping @MainActor (RipulExplorerShortcutContext) -> Void) {
+        self.id = id
+        self.title = title
+        self.systemImage = systemImage
+        self.isOn = isOn
+        self.action = action
+    }
+}
+
+extension Notification.Name {
+    static let ripulExplorerShortcutsDidChange = Notification.Name("ripulExplorerShortcutsDidChange")
+}
+
 // MARK: - RipulViewExplorer
 //
 // Host-agnostic launcher for the native View Explorer (`ViewInspectorOverlay`).
@@ -189,12 +235,27 @@ public enum RipulViewExplorer {
     /// works — Save is a no-op with an on-screen "not configured" notice.
     public static var macroRecordedAction: ((RipulMacro) -> Void)?
 
+    /// Host-supplied shortcut buttons shown under the selection in Design mode
+    /// (the explorer's default, theme-first mode). Empty hides the row. Safe
+    /// to change while the explorer is up — the row refreshes.
+    public static var designShortcuts: [RipulExplorerShortcut] = [] {
+        didSet { reloadShortcuts() }
+    }
+
+    /// Re-read every shortcut's `isOn` state, for when the host changes it
+    /// outside a shortcut tap.
+    public static func reloadShortcuts() {
+        NotificationCenter.default.post(name: .ripulExplorerShortcutsDidChange, object: nil)
+    }
+
     /// Present the View Explorer over the given host window (defaults to the app
     /// window), minimizing the embedded assistant. Reuses an existing explorer.
     /// Returns `false` only if no
     /// suitable window/view controller could be found to host it.
     /// `recording: true` opens it already in macro-record mode (the Macro
     /// tab armed) — used by the macro library's "Record new" entry point.
+    /// Otherwise it opens in the mode last used: Design (theme-first) until
+    /// the user chooses Advanced.
     @discardableResult
     public static func present(in window: UIWindow? = nil, recording: Bool = false, bridge: AgentBridge? = nil) -> Bool {
         guard let requested = window ?? RipulChrome.appWindow(),
