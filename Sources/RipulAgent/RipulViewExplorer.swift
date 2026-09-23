@@ -65,18 +65,30 @@ public struct RipulExplorerShortcutContext {
 /// tap; call `RipulViewExplorer.reloadShortcuts()` when the host changes that
 /// state from elsewhere.
 public struct RipulExplorerShortcut: Identifiable {
+    /// What the explorer does once the action has run. A shortcut that opens
+    /// an interactive host screen (an in-place editor, say) should `fold`:
+    /// an open panel captures touches, so the screen could not be used.
+    public enum AfterAction {
+        case stay
+        case fold
+        case close
+    }
+
     public let id: String
     public let title: String
     public let systemImage: String
+    public let afterAction: AfterAction
     public let isOn: (@MainActor () -> Bool)?
     public let action: @MainActor (RipulExplorerShortcutContext) -> Void
 
     public init(id: String, title: String, systemImage: String,
+                afterAction: AfterAction = .stay,
                 isOn: (@MainActor () -> Bool)? = nil,
                 action: @escaping @MainActor (RipulExplorerShortcutContext) -> Void) {
         self.id = id
         self.title = title
         self.systemImage = systemImage
+        self.afterAction = afterAction
         self.isOn = isOn
         self.action = action
     }

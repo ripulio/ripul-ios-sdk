@@ -10,7 +10,7 @@ let ripulViewExplorerOverlayTag = 0x5249_5055   // "RIPU"
 
 /// Marketing version of the RipulAgent SDK, surfaced in the inspector's copy output as `sdk: …`
 /// so we can always tell which build is actually running on the device. Bump on every release.
-let ripulSDKVersion = "0.7.149"
+let ripulSDKVersion = "0.7.150"
 
 // MARK: - View Inspector Overlay
 //
@@ -3249,6 +3249,11 @@ struct InspectorHUD: View {
                                 identity: session.identity,
                                 isWeb: session.web != nil))
                             shortcutRefresh += 1
+                            switch shortcut.afterAction {
+                            case .stay: break
+                            case .fold: withAnimation(.easeInOut(duration: 0.2)) { folded = true }
+                            case .close: onExit()
+                            }
                         } label: {
                             HStack(spacing: 4) {
                                 Image(systemName: shortcut.systemImage)
