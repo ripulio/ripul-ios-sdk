@@ -10,7 +10,7 @@ let ripulViewExplorerOverlayTag = 0x5249_5055   // "RIPU"
 
 /// Marketing version of the RipulAgent SDK, surfaced in the inspector's copy output as `sdk: …`
 /// so we can always tell which build is actually running on the device. Bump on every release.
-let ripulSDKVersion = "0.7.150"
+let ripulSDKVersion = "0.7.151"
 
 // MARK: - View Inspector Overlay
 //
@@ -1028,6 +1028,11 @@ class ViewInspectorController: UIView {
     private var pendingPinToggle: DispatchWorkItem?
     private var suppressNextPinToggle = false
     private let pinDelay: TimeInterval = 0.46
+    /// Where the reticule last picked a native element, in that host window's
+    /// space. Down drills through this point, so Parent and Back — which
+    /// reselect without moving the reticule — don't change what it reaches.
+    private var lastPickPoint: CGPoint?
+    private weak var lastPickWindow: UIWindow?
     private let tapMaxDuration: TimeInterval = 0.3
 
     override init(frame: CGRect) {
@@ -1562,6 +1567,68 @@ class ViewInspectorController: UIView {
         onInspect?(info)
     }
 
+    /// Select the next element BEHIND the current one under the reticule,
+    /// wrapping to the front — the way to reach an element that others cover
+    /// completely, which no amount of reticule movement can pick.
+    ///
+    /// Skips the current element's ancestors (Parent's job, and they are all
+    /// behind it) and anything with exactly its frame: SwiftUI nests several
+    /// same-size wrappers per element, and a step that moves the outline
+    /// nowhere looks like a dead button. Within a same-frame run the
+    /// `.uiKitIdentifier` stamp wins, since that is what Appearance reads.
+    func drillDown() {
+        guard let current = currentTarget, let host = current.window, RipulViewExplorer.canInspect(host),
+              let point = lastPickWindow === host ? lastPickPoint : selectedPointInHost else { return }
+        let stack = layers(at: point, in: host)
+        let registry = UIKitIdentifierRegistry.shared
+        func frame(_ v: UIView) -> CGRect { v.convert(v.bounds, to: host) }
+        func sameFrame(_ a: CGRect, _ b: CGRect) -> Bool {
+            abs(a.minX - b.minX) < 0.5 && abs(a.minY - b.minY) < 0.5
+                && abs(a.width - b.width) < 0.5 && abs(a.height - b.height) < 0.5
+        }
+        let currentFrame = frame(currentHighlightView ?? current)
+        let selected: [UIView?] = [current, currentHighlightView, currentTokenAnchor]
+        func distinct(_ v: UIView) -> Bool {
+            !selected.contains { $0 === v } && !current.isDescendant(of: v) && !sameFrame(frame(v), currentFrame)
+        }
+        // Count from the selected element itself. Not the token anchor: after a
+        // pick that can be an unrelated stamp far behind (the first stamp at the
+        // point), and starting there skips everything in between.
+        let start = stack.firstIndex { $0 === current }
+            ?? stack.lastIndex { $0.isDescendant(of: current) }
+            ?? currentHighlightView.flatMap { highlight in stack.firstIndex { $0 === highlight } } ?? -1
+        guard let next = stack.indices.first(where: { $0 > start && distinct(stack[$0]) })
+                ?? stack.indices.first(where: { distinct(stack[$0]) }) else { return }
+        let runFrame = frame(stack[next])
+        let run = stack[next...].prefix { sameFrame(frame($0), runFrame) }
+        let chosen = run.first { registry.identifier(for: $0) != nil } ?? stack[next]
+        let info = InspectedView.inspect(chosen, registryMatchView: registry.identifier(for: chosen) != nil ? chosen : nil)
+        lastPickPoint = point; lastPickWindow = host
+        restoreNativeSelection(InspectorNativeSelection(info: info, highlight: chosen,
+            localPoint: chosen.convert(point, from: host)), remembering: true)
+    }
+
+    /// Every view under `windowPoint`, front to back: painter's order reversed,
+    /// so subviews precede their parent and later siblings precede earlier
+    /// ones. Covered views are included — that is the point. Identifier stamps
+    /// count despite their 0.01 alpha; a web view is one layer (its DOM has its
+    /// own Down); zero-area scaffolding is walked through, never listed.
+    private func layers(at windowPoint: CGPoint, in window: UIWindow) -> [UIView] {
+        var painted: [UIView] = []
+        func walk(_ v: UIView) {
+            for sub in v.subviews {
+                let isStamp = UIKitIdentifierRegistry.shared.identifier(for: sub) != nil
+                guard !sub.isHidden, sub.alpha > 0.01 || isStamp, !isInspectorOwnView(sub) else { continue }
+                let contains = sub.bounds.contains(sub.convert(windowPoint, from: window))
+                guard contains || sub.bounds.width < 1 || sub.bounds.height < 1 else { continue }
+                if contains { painted.append(sub) }
+                if !(sub is WKWebView) { walk(sub) }
+            }
+        }
+        walk(window)
+        return painted.reversed()
+    }
+
     func activateSelection() {
         guard let target = currentTarget, let host = target.window,
               RipulViewExplorer.canInspect(host) else { session?.invalidate(); return }
@@ -1621,6 +1688,7 @@ class ViewInspectorController: UIView {
             }
         }
         hostWindow = window
+        lastPickPoint = windowPoint; lastPickWindow = window
         overlayRoot?.isUserInteractionEnabled = savedRootInteraction
         isHidden = false
         isUserInteractionEnabled = true
@@ -3099,6 +3167,8 @@ struct InspectorHUD: View {
     @Binding var showRulers: Bool
     let consoleAction: (() -> Void)?
     let onUp: () -> Void
+    /// Next element behind the selection under the reticule (z-order, not tree).
+    let onDown: () -> Void
     let onBack: () -> Void
     let onExit: () -> Void
     let onSelectView: (UIView) -> Void
@@ -3127,7 +3197,7 @@ struct InspectorHUD: View {
     private var isDesign: Bool { mode == .design }
 
     init(session: InspectorSession, inspected: InspectedView?, history: [UIView], folded: Binding<Bool>, showRulers: Binding<Bool>,
-         consoleAction: (() -> Void)?, onUp: @escaping () -> Void, onBack: @escaping () -> Void,
+         consoleAction: (() -> Void)?, onUp: @escaping () -> Void, onDown: @escaping () -> Void, onBack: @escaping () -> Void,
          onExit: @escaping () -> Void, onSelectView: @escaping (UIView) -> Void, size: CGSize,
          isRecording: Binding<Bool>, autoPauseSeconds: Binding<Double>, recordedSteps: [MacroStep],
          onDeleteStep: @escaping (IndexSet) -> Void, onStopAndSave: @escaping () -> Void,
@@ -3139,6 +3209,7 @@ struct InspectorHUD: View {
         self._showRulers = showRulers
         self.consoleAction = consoleAction
         self.onUp = onUp
+        self.onDown = onDown
         self.onBack = onBack
         self.onExit = onExit
         self.onSelectView = onSelectView
@@ -3397,6 +3468,8 @@ struct InspectorHUD: View {
             }
             hudIconButton("arrow.up", label: "Parent element", disabled: !session.canGoUp, action: onUp)
                 .uiKitIdentifier("InspectorHUD.upButton")
+            hudIconButton("arrow.down", label: "Element behind", disabled: !session.hasSelection, action: onDown)
+                .uiKitIdentifier("InspectorHUD.downButton")
             hudIconButton("xmark", label: "Close Inspector", tone: .red, action: onExit)
                 .uiKitIdentifier("InspectorHUD.exitButton")
         }
@@ -3728,6 +3801,7 @@ public struct ViewInspectorOverlay: View {
                         showRulers: $showRulers,
                         consoleAction: consoleAction,
                         onUp: navigateUp,
+                        onDown: { session.down() },
                         onBack: navigateBack,
                         onExit: { isActive = false },
                         onSelectView: selectView,

@@ -7,6 +7,8 @@
   let serial = 0;
   let highlighted = null;
   let savedOutline = null;
+  // Where the last pick was, in page coordinates — the point `below` drills through.
+  let lastPoint = null;
   const privateSelector = '[data-ripul-context-excluded]';
   const isPrivate = el => {
     for (let current = el; current; current = current.parentElement || current.getRootNode().host) {
@@ -106,6 +108,7 @@
       return this.pick(x * scale + v.offsetLeft, y * scale + v.offsetTop);
     },
     pick(x, y) {
+      lastPoint = { x, y };
       let el = document.elementFromPoint(x, y);
       while (el?.shadowRoot?.elementFromPoint) {
         const next = el.shadowRoot.elementFromPoint(x, y);
@@ -114,6 +117,17 @@
       }
       if (!el) { clear(); return null; }
       return show(el);
+    },
+    // The next element behind `id` at the last pick point, wrapping to the front.
+    // Ancestors are skipped: they are what Parent is for, and every element's
+    // ancestors sit behind it in the stack.
+    below(id) {
+      if (!lastPoint) throw new Error('Pick an element with the reticule first.');
+      const current = get(id);
+      const stack = document.elementsFromPoint(lastPoint.x, lastPoint.y);
+      const behind = stack.slice(stack.indexOf(current) + 1).find(el => !el.contains(current));
+      const next = behind || (stack[0] !== current && !stack[0]?.contains(current) ? stack[0] : null);
+      return next ? show(next) : null;
     },
     select: id => show(get(id)),
     read: id => inspect(get(id)),

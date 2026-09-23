@@ -350,6 +350,20 @@ final class InspectorSession: ObservableObject {
         else if let parent = native?.view.superview { selectView(parent) }
     }
 
+    /// The element behind the current one under the reticule — reaches
+    /// elements that others cover completely. Wraps back to the front.
+    func down() {
+        guard let view = webView, let id = web?.id else { controller?.drillDown(); return }
+        guard let window = view.window, RipulViewExplorer.canInspect(window) else { invalidate(); return }
+        generation += 1; let ticket = generation
+        Task {
+            do {
+                guard let info = try Self.decode(try await Self.call(view, "below", [id])), ticket == generation else { return }
+                adoptWeb(info, view: view)
+            } catch { if ticket == generation { self.error = error.localizedDescription } }
+        }
+    }
+
     func back() {
         while let previous = history.popLast() {
             historyCount = history.count
