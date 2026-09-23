@@ -556,9 +556,15 @@ extension ScreenElementFinder {
     /// prompted this). The stamp's own host view is registered with exactly the stamped
     /// view's frame whichever way the id propagated, so when one nests inside the
     /// outermost match it is the element; the ladder resolves the control at its point.
+    /// What the last id lookup decided about stamps — appended to tap_element's trace so a
+    /// wrong target explains itself instead of needing another build to diagnose.
+    static var lastStampDecision: String?
+
     static func preferStampHost(_ outer: Match, among all: [Match], id: String) -> Match {
         let registry = UIKitIdentifierRegistry.shared
-        if registry.identifier(for: outer.view) != nil { return outer }
+        // NOT an early return when the container is itself a registered stamp: the
+        // button's own stamp can BE the bar-wide view (the probe listed `bar.add` at the
+        // point), and returning it meant the tighter `.label` part was never considered.
         let outerFrame = outer.effectiveFrame
         let outerArea = outerFrame.width * outerFrame.height
         // By FRAME, not ancestry: the stamp host is a sibling of the scaffolding that
@@ -586,8 +592,17 @@ extension ScreenElementFinder {
         func tighter(_ stamps: [(view: UIView, frame: CGRect)]) -> [(view: UIView, frame: CGRect)] {
             stamps.filter { $0.frame.width * $0.frame.height < outerArea * 0.9 }
         }
-        guard let stamp = largest(tighter(inside(registry.views(withIdentifier: id))))
-                ?? largest(tighter(inside(registry.views(withIdentifierPrefix: id)))) else { return outer }
+        let own = inside(registry.views(withIdentifier: id))
+        let parts = inside(registry.views(withIdentifierPrefix: id))
+        func size(_ f: CGRect) -> String { "\(Int(f.width))x\(Int(f.height))" }
+        let summary = "outer=\(type(of: outer.view))\(size(outerFrame))\(registry.identifier(for: outer.view) != nil ? "(stamp)" : "")"
+            + " own=[\(own.map { size($0.frame) }.joined(separator: ","))]"
+            + " parts=[\(parts.map { size($0.frame) }.joined(separator: ","))]"
+        guard let stamp = largest(tighter(own)) ?? largest(tighter(parts)) else {
+            lastStampDecision = "stamp:kept(\(summary))"
+            return outer
+        }
+        lastStampDecision = "stamp:swapped→\(size(stamp.frame))(\(summary))"
         return Match(view: stamp.view, window: outer.window, id: id, text: InspectedView.textContent(of: stamp.view))
     }
 
@@ -1735,6 +1750,7 @@ public struct TapElementTool: NativeTool {
         if let alertResult = Self.pressAlertAction(args: args) { return alertResult }
         let target: ScreenElementFinder.Match
         let matchCount: Int
+        ScreenElementFinder.lastStampDecision = nil
         switch ScreenElementFinder.resolveTarget(args: args) {
         case .failure(let error): return error
         case .target(let m, let count): target = m; matchCount = count
@@ -1751,12 +1767,14 @@ public struct TapElementTool: NativeTool {
             var result: [String: Any] = ["success": true, "via": outcome.via as Any, "matched": matchCount,
                                          "element": ScreenElementFinder.describe(target),
                                          "trace": outcome.trace]
+            if let stamp = ScreenElementFinder.lastStampDecision { result["stamp"] = stamp }
             if let a = outcome.activatedLabel { result["activated"] = a }
             if let a = outcome.activatedIdentifier { result["activatedId"] = a }
             return result
         }
         return ["success": false, "matched": matchCount, "element": ScreenElementFinder.describe(target),
-                "trace": outcome.trace, "error": outcome.error as Any]
+                "trace": outcome.trace, "error": outcome.error as Any,
+                "stamp": ScreenElementFinder.lastStampDecision as Any]
     }
 
     /// A system alert's buttons are private action views with no target/action, no
