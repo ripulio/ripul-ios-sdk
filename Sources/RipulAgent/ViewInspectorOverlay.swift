@@ -10,7 +10,7 @@ let ripulViewExplorerOverlayTag = 0x5249_5055   // "RIPU"
 
 /// Marketing version of the RipulAgent SDK, surfaced in the inspector's copy output as `sdk: …`
 /// so we can always tell which build is actually running on the device. Bump on every release.
-let ripulSDKVersion = "0.7.146"
+let ripulSDKVersion = "0.7.147"
 
 // MARK: - View Inspector Overlay
 //
@@ -61,7 +61,10 @@ public final class UIKitIdentifierRegistry {
         var found: [UIView] = []
         let enumerator = map.keyEnumerator()
         while let view = enumerator.nextObject() as? UIView {
-            guard let window = view.window, !view.isHidden, view.alpha > 0.01,
+            // No alpha test: a stamp is an invisible marker view, so "visible" filtering
+            // discarded every one of them (0.7.146's trace: own=[] parts=[]). Hidden and
+            // occluded are the same tests `matches(at:)` applies.
+            guard let window = view.window, !view.isHidden,
                   window.accessibilityIdentifier != RipulInspection.excludedOverlayWindowIdentifier,
                   !(window is RipulChromeWindow),
                   let id = map.object(forKey: view) as String?, matches(id),
