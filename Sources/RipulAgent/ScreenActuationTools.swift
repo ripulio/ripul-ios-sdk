@@ -967,8 +967,16 @@ enum ScreenActuationEngine {
         // 2c-bis. The tightest focusable text input under the point — a text
         //     view is not a control and activates nothing, but tapping one
         //     MEANS focusing it.
+        //     Not a field vastly larger than what was aimed at: a 34x19 Done button
+        //     "resolved" to focusing a field that merely contained its point.
         if let field = Self.textInput(in: hostRoot, containing: screenPoint) {
-            addFocus(field, token: "focusAtPoint(\(type(of: field)))", pointDerived: true)
+            let fieldArea = field.bounds.width * field.bounds.height
+            let targetArea = max(view.bounds.width * view.bounds.height, 1)
+            if fieldArea <= targetArea * 8 || view is UITextInput {
+                addFocus(field, token: "focusAtPoint(\(type(of: field)))", pointDerived: true)
+            } else {
+                trace.append("focusAtPoint:skipped(\(type(of: field)) \(Int(fieldArea))pt² vs target \(Int(targetArea))pt²)")
+            }
         }
 
         // 2d. The lone element the enclosing island publishes — still level
@@ -1194,7 +1202,36 @@ enum ScreenActuationEngine {
     /// entirely inside `resolveTap` and never crosses into actuation.
     static func performTap(on view: UIView, matchId: String?, matchText: String?,
                            at windowPoint: CGPoint? = nil) -> TapOutcome {
-        actuate(resolveTap(on: view, matchId: matchId, matchText: matchText, at: windowPoint))
+        let endedEditing = endEditingElsewhere(than: view)
+        let outcome = actuate(resolveTap(on: view, matchId: matchId, matchText: matchText, at: windowPoint))
+        guard endedEditing else { return outcome }
+        var marked = TapOutcome(success: outcome.success, via: outcome.via, error: outcome.error,
+                                trace: "endedEditing " + outcome.trace)
+        marked.activatedIdentifier = outcome.activatedIdentifier
+        marked.activatedLabel = outcome.activatedLabel
+        return marked
+    }
+
+    /// While a text field is being edited, a SwiftUI sheet published NO accessibility
+    /// elements at the point of its own Done button (`seen=0`), so the ladder fell
+    /// through to focusing a text field and reported that as the tap. A person tapping
+    /// a button elsewhere takes focus out of the field, so do that first — unless the
+    /// target IS the field being edited (or contains it, or sits inside it).
+    private static func endEditingElsewhere(than target: UIView) -> Bool {
+        guard let window = target.window ?? ScreenElementFinder.hostWindow(),
+              let editing = firstResponderInput(in: window) else { return false }
+        if editing === target || editing.isDescendant(of: target) || target.isDescendant(of: editing) { return false }
+        window.endEditing(true)
+        window.layoutIfNeeded()
+        return true
+    }
+
+    private static func firstResponderInput(in root: UIView) -> UIView? {
+        if root.isFirstResponder, root is UITextInput { return root }
+        for sub in root.subviews {
+            if let hit = firstResponderInput(in: sub) { return hit }
+        }
+        return nil
     }
 
     /// Where the tap lands, in SCREEN coordinates — the space accessibility
@@ -1586,16 +1623,38 @@ enum ScreenActuationEngine {
         // within the same hosting view. The tap ladder already reaches it that
         // way (the focus path); typing refused instead, which made "type into
         // this field" fail on a field the explorer had selected correctly.
-        let input = TypeTextTool.textInput(in: view)
-            ?? Self.hostingAncestor(of: view).flatMap { TypeTextTool.textInput(in: $0) }
+        let input = TypeTextTool.textInput(in: view) ?? Self.islandInput(for: view)
         guard let input else {
-            return (false, "Element found but no text input at or below it, nor anywhere in its SwiftUI island. Match the field itself (role=\"field\", or its accessibility id).")
+            return (false, "Element found but no text input at or below it, and none under it in its SwiftUI island (or several, none under it). Match the field itself (role=\"field\", or its accessibility id).")
         }
         _ = input.view.becomeFirstResponder()
         let newText = append ? (input.currentText + text) : text
         input.setText(newText)
         ScreenSnapshotStore.shared.invalidate()
         return (true, nil)
+    }
+
+    /// The text field a SwiftUI element names, found in its island. The FIELD UNDER
+    /// the element, not the island's first field: a `.uiKitIdentifier` stamp sits over
+    /// the field it names with no input beneath it, and "the first input in the
+    /// island" typed a card's body text into its title field, the sheet's first field.
+    /// Falls back to the island's only field when there is exactly one; never guesses
+    /// between several.
+    private static func islandInput(for view: UIView) -> TypeTextTool.TextInputBox? {
+        guard let island = hostingAncestor(of: view) else { return nil }
+        if let hit = textInput(in: island, containing: screenPoint(for: view, windowPoint: nil)),
+           let box = TypeTextTool.TextInputBox(hit) {
+            return box
+        }
+        var inputs: [UIView] = []
+        func collect(_ v: UIView, depth: Int) {
+            guard depth < 60, inputs.count < 2 else { return }
+            for sub in v.subviews where !sub.isHidden && sub.alpha > 0.01 {
+                if TypeTextTool.TextInputBox(sub) != nil { inputs.append(sub) } else { collect(sub, depth: depth + 1) }
+            }
+        }
+        collect(island, depth: 0)
+        return inputs.count == 1 ? TypeTextTool.TextInputBox(inputs[0]) : nil
     }
 
     /// Scroll by a fraction of the visible size in one direction, clamped to
