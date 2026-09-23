@@ -68,14 +68,6 @@ final class ElevenLabsDirectAPI {
         guard (200..<300).contains(status) else { throw Failure.http(status) }
         return data
     }
-    /// The device key's plan, credits and billing. Daily stats are optional —
-    /// a key without usage access still has a plan worth showing.
-    func usage() async throws -> ElevenLabsUsage {
-        async let subscription = data(request(path: "/v1/user/subscription", method: "GET"))
-        async let stats = try? data(request(path: "/v1/usage/character-stats", method: "GET",
-                                            query: ElevenLabsUsage.characterStatsQuery()))
-        return try ElevenLabsUsage.parse(subscription: await subscription, characterStats: await stats)
-    }
     /// Adapts the existing native speech protocol; no change to capture/playback.
     func send(path: String, method: String, jsonBody: [String: Any]?) async throws -> Data {
         switch (path, method) {

@@ -16,8 +16,6 @@ public enum StandaloneNetworkPolicy {
               url.port == nil || url.port == 443, url.user == nil, url.password == nil else { return false }
         if url.path == "/v2/voices" { return request.httpMethod == "GET" }
         if url.path == "/v1/single-use-token/realtime_scribe" { return request.httpMethod == "POST" }
-        // Read-only account usage for the device key's owner (Settings → Voice).
-        if url.path == "/v1/user/subscription" || url.path == "/v1/usage/character-stats" { return request.httpMethod == "GET" }
         let parts = url.pathComponents
         guard parts.count == 5, parts[1] == "v1", parts[2] == "text-to-speech", parts[4] == "stream", request.httpMethod == "POST" else { return false }
         return !parts[3].isEmpty && parts[3].utf8.allSatisfy { (48...57).contains($0) || (65...90).contains($0) || (97...122).contains($0) || $0 == 45 || $0 == 95 }

@@ -91,17 +91,6 @@ final class UserSecretsClient {
         return try JSONDecoder().decode(SecretResponse.self, from: data).secret
     }
 
-    /// The account key's plan, credits and billing — ElevenLabs' own JSON,
-    /// passed through by the worker so it shares the device-key parser.
-    func elevenLabsUsage() async throws -> ElevenLabsUsage {
-        let data = try await send(path: "api/v1/user-secrets/elevenlabs/usage", method: "GET")
-        guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let subscription = object["subscription"] as? [String: Any] else {
-            throw ClientError.server("ElevenLabs returned an unexpected response.")
-        }
-        return ElevenLabsUsage.parse(subscription: subscription, characterStats: object["characterStats"] as? [String: Any])
-    }
-
     private func send(path: String, method: String, body: Data? = nil) async throws -> Data {
         guard let token = tokenProvider() else { throw ClientError.notAuthenticated }
         var request = URLRequest(url: baseURL.appendingPathComponent(path))

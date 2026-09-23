@@ -37,12 +37,6 @@ struct DeviceSpeechKeySection: View {
                     }.uiKitIdentifier("VoiceSettings.deviceKey.voice")
                 }
                 Button("Refresh voices") { Task { await refresh() } }.disabled(busy)
-                NavigationLink {
-                    ElevenLabsUsageScreen { try await ElevenLabsDirectAPI(apiKey: { try DeviceSpeechCredentials.read() }).usage() }
-                } label: {
-                    Label("Usage & billing", systemImage: "chart.bar")
-                }
-                .uiKitIdentifier("VoiceSettings.deviceKey.usage")
             }
             if let error { Text(error).foregroundStyle(.red).uiKitIdentifier("VoiceSettings.deviceKey.error") }
         } header: {
