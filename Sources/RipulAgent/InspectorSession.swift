@@ -350,8 +350,8 @@ final class InspectorSession: ObservableObject {
         else if let parent = native?.view.superview { selectView(parent) }
     }
 
-    /// The element behind the current one under the reticule — reaches
-    /// elements that others cover completely. Wraps back to the front.
+    /// The next layer behind the current one under the reticule — reaches
+    /// elements that others cover completely, parents included. Wraps to the front.
     func down() {
         guard let view = webView, let id = web?.id else { controller?.drillDown(); return }
         guard let window = view.window, RipulViewExplorer.canInspect(window) else { invalidate(); return }

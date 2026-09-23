@@ -118,16 +118,15 @@
       if (!el) { clear(); return null; }
       return show(el);
     },
-    // The next element behind `id` at the last pick point, wrapping to the front.
-    // Ancestors are skipped: they are what Parent is for, and every element's
-    // ancestors sit behind it in the stack.
+    // The next element behind `id` at the last pick point, wrapping to the
+    // front. Every element in the stack is a step, ancestors included.
     below(id) {
       if (!lastPoint) throw new Error('Pick an element with the reticule first.');
       const current = get(id);
       const stack = document.elementsFromPoint(lastPoint.x, lastPoint.y);
-      const behind = stack.slice(stack.indexOf(current) + 1).find(el => !el.contains(current));
-      const next = behind || (stack[0] !== current && !stack[0]?.contains(current) ? stack[0] : null);
-      return next ? show(next) : null;
+      if (!stack.length) return null;
+      const next = stack[(stack.indexOf(current) + 1) % stack.length];
+      return next === current ? null : show(next);
     },
     select: id => show(get(id)),
     read: id => inspect(get(id)),

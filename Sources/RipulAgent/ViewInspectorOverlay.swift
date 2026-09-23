@@ -10,7 +10,7 @@ let ripulViewExplorerOverlayTag = 0x5249_5055   // "RIPU"
 
 /// Marketing version of the RipulAgent SDK, surfaced in the inspector's copy output as `sdk: …`
 /// so we can always tell which build is actually running on the device. Bump on every release.
-let ripulSDKVersion = "0.7.151"
+let ripulSDKVersion = "0.7.152"
 
 // MARK: - View Inspector Overlay
 //
@@ -1567,62 +1567,41 @@ class ViewInspectorController: UIView {
         onInspect?(info)
     }
 
-    /// Select the next element BEHIND the current one under the reticule,
+    /// Select the next layer BEHIND the current one under the reticule,
     /// wrapping to the front — the way to reach an element that others cover
-    /// completely, which no amount of reticule movement can pick.
-    ///
-    /// Skips the current element's ancestors (Parent's job, and they are all
-    /// behind it) and anything with exactly its frame: SwiftUI nests several
-    /// same-size wrappers per element, and a step that moves the outline
-    /// nowhere looks like a dead button. Within a same-frame run the
-    /// `.uiKitIdentifier` stamp wins, since that is what Appearance reads.
+    /// completely, which no amount of reticule movement can pick. A plain walk:
+    /// every layer at the point is one step, parents and same-size wrappers
+    /// included, so nothing painted there is unreachable.
     func drillDown() {
         guard let current = currentTarget, let host = current.window, RipulViewExplorer.canInspect(host),
               let point = lastPickWindow === host ? lastPickPoint : selectedPointInHost else { return }
         let stack = layers(at: point, in: host)
+        let index = stack.firstIndex { $0 === current }
+            ?? currentHighlightView.flatMap { highlight in stack.firstIndex { $0 === highlight } }
+        guard !stack.isEmpty else { return }
+        let next = stack[((index ?? -1) + 1) % stack.count]
+        guard next !== current else { return }
         let registry = UIKitIdentifierRegistry.shared
-        func frame(_ v: UIView) -> CGRect { v.convert(v.bounds, to: host) }
-        func sameFrame(_ a: CGRect, _ b: CGRect) -> Bool {
-            abs(a.minX - b.minX) < 0.5 && abs(a.minY - b.minY) < 0.5
-                && abs(a.width - b.width) < 0.5 && abs(a.height - b.height) < 0.5
-        }
-        let currentFrame = frame(currentHighlightView ?? current)
-        let selected: [UIView?] = [current, currentHighlightView, currentTokenAnchor]
-        func distinct(_ v: UIView) -> Bool {
-            !selected.contains { $0 === v } && !current.isDescendant(of: v) && !sameFrame(frame(v), currentFrame)
-        }
-        // Count from the selected element itself. Not the token anchor: after a
-        // pick that can be an unrelated stamp far behind (the first stamp at the
-        // point), and starting there skips everything in between.
-        let start = stack.firstIndex { $0 === current }
-            ?? stack.lastIndex { $0.isDescendant(of: current) }
-            ?? currentHighlightView.flatMap { highlight in stack.firstIndex { $0 === highlight } } ?? -1
-        guard let next = stack.indices.first(where: { $0 > start && distinct(stack[$0]) })
-                ?? stack.indices.first(where: { distinct(stack[$0]) }) else { return }
-        let runFrame = frame(stack[next])
-        let run = stack[next...].prefix { sameFrame(frame($0), runFrame) }
-        let chosen = run.first { registry.identifier(for: $0) != nil } ?? stack[next]
-        let info = InspectedView.inspect(chosen, registryMatchView: registry.identifier(for: chosen) != nil ? chosen : nil)
+        let info = InspectedView.inspect(next, registryMatchView: registry.identifier(for: next) != nil ? next : nil)
         lastPickPoint = point; lastPickWindow = host
-        restoreNativeSelection(InspectorNativeSelection(info: info, highlight: chosen,
-            localPoint: chosen.convert(point, from: host)), remembering: true)
+        restoreNativeSelection(InspectorNativeSelection(info: info, highlight: next,
+            localPoint: next.convert(point, from: host)), remembering: true)
     }
 
     /// Every view under `windowPoint`, front to back: painter's order reversed,
     /// so subviews precede their parent and later siblings precede earlier
-    /// ones. Covered views are included — that is the point. Identifier stamps
-    /// count despite their 0.01 alpha; a web view is one layer (its DOM has its
-    /// own Down); zero-area scaffolding is walked through, never listed.
+    /// ones. Covered and transparent views are included — that is the point.
+    /// Only views that are not drawn at all (hidden) and the inspector's own
+    /// are left out; zero-area scaffolding is walked through, never listed.
     private func layers(at windowPoint: CGPoint, in window: UIWindow) -> [UIView] {
         var painted: [UIView] = []
         func walk(_ v: UIView) {
             for sub in v.subviews {
-                let isStamp = UIKitIdentifierRegistry.shared.identifier(for: sub) != nil
-                guard !sub.isHidden, sub.alpha > 0.01 || isStamp, !isInspectorOwnView(sub) else { continue }
+                guard !sub.isHidden, !isInspectorOwnView(sub) else { continue }
                 let contains = sub.bounds.contains(sub.convert(windowPoint, from: window))
                 guard contains || sub.bounds.width < 1 || sub.bounds.height < 1 else { continue }
                 if contains { painted.append(sub) }
-                if !(sub is WKWebView) { walk(sub) }
+                walk(sub)
             }
         }
         walk(window)
