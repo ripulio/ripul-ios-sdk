@@ -559,14 +559,20 @@ extension ScreenElementFinder {
     static func preferStampHost(_ outer: Match, among all: [Match], id: String) -> Match {
         let registry = UIKitIdentifierRegistry.shared
         if registry.identifier(for: outer.view) != nil { return outer }
-        func area(_ m: Match) -> CGFloat { m.effectiveFrame.width * m.effectiveFrame.height }
-        let stamps = all.filter { m in
-            m.view !== outer.view && m.view.isDescendant(of: outer.view)
-                && registry.identifier(for: m.view).map { $0.caseInsensitiveCompare(id) == .orderedSame } == true
+        let outerFrame = outer.effectiveFrame
+        let outerArea = outerFrame.width * outerFrame.height
+        // By FRAME, not ancestry: the stamp host is a sibling of the scaffolding that
+        // adopted its id, so `isDescendant` never found it (0.7.140 shipped that way and
+        // still tapped the middle of the bar).
+        let bounds = outerFrame.insetBy(dx: -1, dy: -1)
+        let stamps = registry.views(withIdentifier: id).compactMap { view -> (view: UIView, frame: CGRect)? in
+            guard view !== outer.view, view.window === outer.window else { return nil }
+            let frame = view.convert(view.bounds, to: nil)
+            return bounds.contains(frame) && frame.width > 0 && frame.height > 0 ? (view, frame) : nil
         }
-        guard let stamp = stamps.max(by: { area($0) < area($1) }),
-              area(stamp) > 0, area(stamp) < area(outer) * 0.9 else { return outer }
-        return stamp
+        guard let stamp = stamps.max(by: { $0.frame.width * $0.frame.height < $1.frame.width * $1.frame.height }),
+              stamp.frame.width * stamp.frame.height < outerArea * 0.9 else { return outer }
+        return Match(view: stamp.view, window: outer.window, id: id, text: InspectedView.textContent(of: stamp.view))
     }
 
     /// UIView → `ElementFacts`, then delegates to the ungated `matches(_:_:)`
@@ -1840,7 +1846,21 @@ public struct TapElementTool: NativeTool {
             }
         }
         visit(view, depth: 0)
-        let candidates = matched.isEmpty && !strict && all.count == 1 ? all : matched
+        // Exact before substring, buttons before prose: text="Done" matched a hint
+        // reading "Done keeps changes on this phone…" ahead of the Done button, and the
+        // ladder declined the hint and never pressed the button. Tree order breaks ties.
+        func rank(_ el: NSObject) -> Int {
+            if let id, !id.isEmpty, let eid = InspectedView.objectAccessibilityIdentifier(el),
+               eid.caseInsensitiveCompare(id) == .orderedSame { return 0 }
+            if let text, !text.isEmpty,
+               let label = el.accessibilityLabel?.trimmingCharacters(in: .whitespacesAndNewlines),
+               label.caseInsensitiveCompare(text.trimmingCharacters(in: .whitespacesAndNewlines)) == .orderedSame { return 0 }
+            return el.accessibilityTraits.contains(.button) ? 1 : 2
+        }
+        let ranked = matched.enumerated()
+            .sorted { rank($0.element) != rank($1.element) ? rank($0.element) < rank($1.element) : $0.offset < $1.offset }
+            .map(\.element)
+        let candidates = ranked.isEmpty && !strict && all.count == 1 ? all : ranked
         return candidates.first(where: { accept?($0) ?? true })
     }
 

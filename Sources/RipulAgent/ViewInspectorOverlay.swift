@@ -10,7 +10,7 @@ let ripulViewExplorerOverlayTag = 0x5249_5055   // "RIPU"
 
 /// Marketing version of the RipulAgent SDK, surfaced in the inspector's copy output as `sdk: …`
 /// so we can always tell which build is actually running on the device. Bump on every release.
-let ripulSDKVersion = "0.7.141"
+let ripulSDKVersion = "0.7.142"
 
 // MARK: - View Inspector Overlay
 //
@@ -41,6 +41,25 @@ public final class UIKitIdentifierRegistry {
 
     public func identifier(for view: UIView) -> String? {
         map.object(forKey: view) as String?
+    }
+
+    /// Every live, visible stamp registered under `identifier` (case-insensitive), in the
+    /// host's windows only — never the SDK's own chrome. SwiftUI places a stamp's host
+    /// view as a SIBLING of the scaffolding that adopted the same id, not beneath it, so
+    /// finding "the stamp for this id" has to ask the registry rather than walk down.
+    func views(withIdentifier identifier: String) -> [UIView] {
+        var found: [UIView] = []
+        let enumerator = map.keyEnumerator()
+        while let view = enumerator.nextObject() as? UIView {
+            guard let window = view.window, !view.isHidden, view.alpha > 0.01,
+                  window.accessibilityIdentifier != RipulInspection.excludedOverlayWindowIdentifier,
+                  !(window is RipulChromeWindow),
+                  let id = map.object(forKey: view) as String?,
+                  id.caseInsensitiveCompare(identifier) == .orderedSame,
+                  !Self.isOccludedByAncestor(view) else { continue }
+            found.append(view)
+        }
+        return found
     }
 
     /// Find the identifier whose registered view best matches `windowPoint`.
