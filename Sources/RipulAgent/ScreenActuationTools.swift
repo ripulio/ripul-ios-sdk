@@ -565,13 +565,24 @@ extension ScreenElementFinder {
         // adopted its id, so `isDescendant` never found it (0.7.140 shipped that way and
         // still tapped the middle of the bar).
         let bounds = outerFrame.insetBy(dx: -1, dy: -1)
-        let stamps = registry.views(withIdentifier: id).compactMap { view -> (view: UIView, frame: CGRect)? in
-            guard view !== outer.view, view.window === outer.window else { return nil }
-            let frame = view.convert(view.bounds, to: nil)
-            return bounds.contains(frame) && frame.width > 0 && frame.height > 0 ? (view, frame) : nil
+        func inside(_ views: [UIView]) -> [(view: UIView, frame: CGRect)] {
+            views.compactMap { view in
+                guard view !== outer.view, view.window === outer.window else { return nil }
+                let frame = view.convert(view.bounds, to: nil)
+                return bounds.contains(frame) && frame.width > 0 && frame.height > 0 ? (view, frame) : nil
+            }
         }
-        guard let stamp = stamps.max(by: { $0.frame.width * $0.frame.height < $1.frame.width * $1.frame.height }),
-              stamp.frame.width * stamp.frame.height < outerArea * 0.9 else { return outer }
+        func largest(_ stamps: [(view: UIView, frame: CGRect)]) -> (view: UIView, frame: CGRect)? {
+            stamps.max { $0.frame.width * $0.frame.height < $1.frame.width * $1.frame.height }
+        }
+        // The element's own stamp — or, failing that, its PART stamps. A SwiftUI Button
+        // styled the prescribed way (`.uiKitIdentifier(id)` on the button, `.wacText(id +
+        // ".label")` on its label) gets NO geometry of its own: its id lives only on the
+        // island's full-width container, and the label's stamp is the one real frame.
+        // The largest part inside the container stands for the element.
+        let stamp = largest(inside(registry.views(withIdentifier: id)))
+            ?? largest(inside(registry.views(withIdentifierPrefix: id)))
+        guard let stamp, stamp.frame.width * stamp.frame.height < outerArea * 0.9 else { return outer }
         return Match(view: stamp.view, window: outer.window, id: id, text: InspectedView.textContent(of: stamp.view))
     }
 

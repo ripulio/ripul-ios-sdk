@@ -10,7 +10,7 @@ let ripulViewExplorerOverlayTag = 0x5249_5055   // "RIPU"
 
 /// Marketing version of the RipulAgent SDK, surfaced in the inspector's copy output as `sdk: …`
 /// so we can always tell which build is actually running on the device. Bump on every release.
-let ripulSDKVersion = "0.7.142"
+let ripulSDKVersion = "0.7.143"
 
 // MARK: - View Inspector Overlay
 //
@@ -48,14 +48,23 @@ public final class UIKitIdentifierRegistry {
     /// view as a SIBLING of the scaffolding that adopted the same id, not beneath it, so
     /// finding "the stamp for this id" has to ask the registry rather than walk down.
     func views(withIdentifier identifier: String) -> [UIView] {
+        views { $0.caseInsensitiveCompare(identifier) == .orderedSame }
+    }
+
+    /// Stamps whose id names a PART of `identifier` (`<identifier>.label`, `.title`, …).
+    func views(withIdentifierPrefix identifier: String) -> [UIView] {
+        let prefix = identifier.lowercased() + "."
+        return views { $0.lowercased().hasPrefix(prefix) }
+    }
+
+    private func views(where matches: (String) -> Bool) -> [UIView] {
         var found: [UIView] = []
         let enumerator = map.keyEnumerator()
         while let view = enumerator.nextObject() as? UIView {
             guard let window = view.window, !view.isHidden, view.alpha > 0.01,
                   window.accessibilityIdentifier != RipulInspection.excludedOverlayWindowIdentifier,
                   !(window is RipulChromeWindow),
-                  let id = map.object(forKey: view) as String?,
-                  id.caseInsensitiveCompare(identifier) == .orderedSame,
+                  let id = map.object(forKey: view) as String?, matches(id),
                   !Self.isOccludedByAncestor(view) else { continue }
             found.append(view)
         }
