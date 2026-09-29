@@ -15,10 +15,13 @@
     let viewport: NativeContentRect?
     let contentHeight: CGFloat?
     let viewportWidth: CGFloat?
+    let layered: Bool?
   }
 
-  /// Generic content-coordinate attachment. WebKit's internal overflow hierarchy
-  /// is not a DOM API; failed matching deliberately leaves the web fallback visible.
+  /// Renderer-neutral native content in web slots, mounted via
+  /// `NativeSlotAttachment` (the slot's own WebKit view when it has one, else the
+  /// chat scroller). WebKit's internal hierarchy is not a DOM API; failed
+  /// matching deliberately leaves the web fallback visible.
   @MainActor final class NativeEmbedController {
     private struct Key: Hashable {
       let owner: String
@@ -37,7 +40,14 @@
       var snapshot: [String: Any]
       var geometry: NativeEmbedGeometry?
       var renderer: (any NativeEmbeddedRenderer)?
-      weak var scroller: UIScrollView?
+      var attachment: NativeSlotAttachment?
+      var slotGeometry: NativeSlotGeometry? {
+        geometry.flatMap {
+          NativeSlotGeometry(anchor: $0.anchor, viewport: $0.viewport,
+                             contentHeight: $0.contentHeight, viewportWidth: $0.viewportWidth,
+                             layered: $0.layered ?? false)
+        }
+      }
       var retries = 0
       var lastHeight: CGFloat?
       var visible = false
@@ -54,6 +64,13 @@
     private var entries: [Key: Entry] = [:]
     private var pending: Set<Key> = []
     private var timer: Timer?
+    /// Renderers kept alive off screen, oldest first. Releasing an embed when
+    /// it scrolled away rebuilt it on return (a map reloading its tiles) and
+    /// showed the web fallback meanwhile; a kept one re-attaches at once.
+    private var parked: [Key] = []
+    private static let parkedLimit = 5
+    private var lastAttachAt: CFTimeInterval = 0
+    private static let fadeKey = "NativeEmbed.appear"
     var entryCount: Int { entries.count }
     var attachmentCount: Int { entries.values.filter { $0.visible }.count }
     init(webView: WKWebView, registry: NativeEmbedRegistry, send: @escaping ([String: Any]) -> Void)
@@ -64,6 +81,7 @@
       self.send = send
     }
     var isScrollIdle: Bool {
+      MainThreadSampler.count("embed.idleWalk")
       func moving(_ view: UIView) -> Bool {
         if let scroll = view as? UIScrollView,
           scroll.isTracking || scroll.isDragging || scroll.isDecelerating
@@ -109,7 +127,21 @@
       else { return }
       entry.geometry = geometry
       entry.retries = 0
+      // A visible embed whose slot only moved takes its new position now, even
+      // mid-scroll. Creation, reparenting and size negotiation wait below.
+      if reposition(entry) { return }
       schedule(key)
+    }
+
+    /// Same-parent position fix for a visible, settled embed: the report's
+    /// size must match what is mounted (else it is a size negotiation).
+    private func reposition(_ entry: Entry) -> Bool {
+      guard entry.visible, entry.renderer != nil, let attachment = entry.attachment, attachment.isMounted,
+        let g = entry.slotGeometry, let target = attachment.scroller, let mounted = attachment.frameInScroller,
+        let placed = attachment.placement(in: target, for: g),
+        abs(placed.rect.width - mounted.width) <= 1, abs(placed.rect.height - mounted.height) <= 1
+      else { return false }
+      return attachment.reposition(geometry: g) { $0.rect }
     }
     private func schedule(_ key: Key, delay: TimeInterval = 0.032) {
       pending.insert(key)
@@ -121,22 +153,38 @@
           }
         }
         self.timer = timer
-        RunLoop.main.add(timer, forMode: .default)
+        // Common modes: re-attaching kept renderers proceeds during touch
+        // tracking, within the one-per-frame budget below.
+        RunLoop.main.add(timer, forMode: .common)
       }
     }
+    /// Whether an embed may be attached now. Re-attaching a kept renderer is
+    /// cheap and lands correctly mid-scroll (it rides its slot's view), so it
+    /// goes one per frame while scrolling; creating a renderer (a map, a form)
+    /// still waits for the scroll to stop.
+    private func mayAttach(_ entry: Entry) -> Bool {
+      let idle = isScrollIdle
+      guard entry.renderer != nil else { return idle }
+      if idle { return true }
+      let now = CACurrentMediaTime()
+      guard now - lastAttachAt >= 1.0 / 60 else { return false }
+      lastAttachAt = now
+      return true
+    }
     private func flush() {
+      MainThreadSampler.count("embed.flush")
       let work = pending
       pending.removeAll()
       for key in work {
         guard let entry = entries[key] else { continue }
-        guard isScrollIdle else {
-          schedule(key, delay: 0.08)
-          continue
-        }
         guard entry.geometry?.anchor != nil else {
           // The renderer signals editing completion through onSizeChange.
           // Keep the responder alive without an idle polling loop.
-          if entry.renderer?.isEditing != true { detach(key, entry: entry) }
+          if entry.renderer?.isEditing != true { park(key, entry: entry) }
+          continue
+        }
+        guard mayAttach(entry) else {
+          schedule(key, delay: entry.renderer == nil ? 0.08 : 1.0 / 60)
           continue
         }
         if !place(key, entry: entry) {
@@ -149,58 +197,8 @@
         }
       }
     }
-    private func placement(_ geometry: NativeEmbedGeometry, existing: UIScrollView?) -> (UIScrollView, CGRect, CGFloat)? {
-      guard let webView, let a = geometry.anchor, a.isValid,
-        let v = geometry.viewport, v.isValid,
-        let height = geometry.contentHeight, height.isFinite, height > 0,
-        let width = geometry.viewportWidth, width.isFinite, width > 0
-      else { return nil }
-      let scale = webView.bounds.width / width
-      let expected = CGRect(
-        x: v.x * scale, y: v.y * scale, width: v.width * scale, height: v.height * scale)
-      var candidates: [(UIScrollView, CGFloat)] = []
-      func visit(_ view: UIView) {
-        // Renderer-owned scroll views must never be mistaken for WebKit content.
-        if entries.values.contains(where: { $0.renderer?.viewController.viewIfLoaded === view }) {
-          return
-        }
-        if let scroll = view as? UIScrollView, scroll !== webView.scrollView, !scroll.isHidden {
-          let actual = scroll.convert(scroll.bounds, to: webView)
-          let error =
-            abs(actual.minX - expected.minX) + abs(actual.minY - expected.minY)
-            + abs(actual.width - expected.width) + abs(actual.height - expected.height)
-          let contentScale = scroll.bounds.width / v.width
-          // Once matched, streaming can advance native content size before
-          // the asynchronous DOM report. That does not change scroll ownership.
-          if error < 8,
-            scroll === existing || abs(scroll.contentSize.height - height * contentScale)
-              < max(8, height * contentScale * 0.01)
-          {
-            candidates.append((scroll, error))
-          }
-        }
-        view.subviews.forEach(visit)
-      }
-      visit(webView.scrollView)
-      if let scroll = candidates.min(by: { $0.1 < $1.1 })?.0 {
-        let contentScale = scroll.bounds.width / v.width
-        return (
-          scroll,
-          CGRect(
-            x: a.x * contentScale, y: a.y * contentScale, width: a.width * contentScale,
-            height: a.height * contentScale), scale
-        )
-      }
-      guard height <= v.height + 1 else { return nil }
-      let frame = CGRect(
-        x: expected.minX + a.x * scale, y: expected.minY + a.y * scale, width: a.width * scale,
-        height: a.height * scale)
-      return (webView.scrollView, webView.scrollView.convert(frame, from: webView), scale)
-    }
     private func place(_ key: Key, entry: Entry) -> Bool {
-      guard let webView, let geometry = entry.geometry,
-        let (target, frame, scale) = placement(geometry, existing: entry.scroller)
-      else { return false }
+      guard let webView, let g = entry.slotGeometry else { return false }
       if entry.renderer == nil {
         guard let renderer = registry.make(entry.kind) else { return false }
         do { try renderer.update(snapshot: entry.snapshot) } catch {
@@ -221,29 +219,27 @@
         entry.renderer = renderer
       }
       guard let renderer = entry.renderer else { return false }
-    let controller = renderer.viewController
-    controller.view.backgroundColor = .clear
-    controller.view.isHidden = !entry.visible
-      if controller.parent == nil {
-        var responder: UIResponder? = webView
-        while let current = responder {
-          if let parent = current as? UIViewController {
-            parent.addChild(controller)
-            target.addSubview(controller.view)
-            controller.didMove(toParent: parent)
-            break
-          }
-          responder = current.next
+      let controller = renderer.viewController
+      controller.view.backgroundColor = .clear
+      controller.view.isHidden = !entry.visible
+      let attachment = entry.attachment ?? {
+        let made = NativeSlotAttachment(webView: webView, label: "embed \(entry.kind) \(key.element)")
+        made.onDropped = { [weak self, weak entry] in
+          guard let self, let entry, self.entries[key] === entry else { return }
+          self.schedule(key)
         }
-      }
-      if controller.view.superview !== target { target.addSubview(controller.view) }
-      entry.scroller = target
-      controller.view.frame = frame
+        entry.attachment = made
+        return made
+      }()
+      guard let placed = attachment.place(content: controller.view, controller: controller, geometry: g,
+                                          frame: { $0.rect })
+      else { return false }
+      let frame = placed.rect
       let desired =
         ceil(renderer.sizeThatFits(width: frame.width).height * max(1, webView.traitCollection.displayScale))
         / max(1, webView.traitCollection.displayScale)
       guard desired.isFinite, desired > 0, desired <= 20000 else { return false }
-      let height = desired / scale
+      let height = desired / placed.pageScale
       // DOM space must be committed before showing an initially attached view.
       // Existing focused controls keep their identity while their slot grows.
       if abs(frame.height - desired) > 1 {
@@ -251,9 +247,21 @@
         acknowledge(key, entry: entry, visible: entry.visible, height: height)
         return true
       }
-      controller.view.frame.size.height = desired
+      attachment.setFrame(CGRect(x: frame.minX, y: frame.minY, width: frame.width, height: desired))
+      let appearing = !entry.visible || controller.view.isHidden
       controller.view.isHidden = false
       controller.view.layoutIfNeeded()
+      parked.removeAll { $0 == key }
+      if appearing && !UIAccessibility.isReduceMotionEnabled {
+        // Fades in over the web fallback as that fades out (180ms each): a
+        // crossfade, rather than two different renderings swapping in a frame.
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.fromValue = 0
+        fade.toValue = 1
+        fade.duration = 0.18
+        fade.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        attachment.container.layer.add(fade, forKey: Self.fadeKey)
+      }
       acknowledge(key, entry: entry, visible: true, height: height)
       entry.retries = 0
       return true
@@ -271,19 +279,37 @@
       if let height = entry.lastHeight { message["height"] = height }
       send(message)
     }
+    /// Takes an embed off screen but keeps its renderer for a quick return.
+    /// Beyond `parkedLimit`, the longest-parked is released.
+    private func park(_ key: Key, entry: Entry) {
+      guard let renderer = entry.renderer else { return }
+      MainThreadSampler.count("embed.park")
+      let controller = renderer.viewController
+      controller.view.endEditing(true)
+      entry.attachment?.container.layer.removeAnimation(forKey: Self.fadeKey)
+      entry.attachment?.unmount(removing: controller)
+      entry.attachment = nil
+      acknowledge(key, entry: entry, visible: false)
+      parked.removeAll { $0 == key }
+      parked.append(key)
+      while parked.count > Self.parkedLimit {
+        let oldest = parked.removeFirst()
+        if let old = entries[oldest], old.attachment == nil { detach(oldest, entry: old) }
+      }
+    }
     private func detach(_ key: Key, entry: Entry, resetSize: Bool = false) {
+      parked.removeAll { $0 == key }
       let controller = entry.renderer?.viewController
       if let view = controller?.view {
         NativeComposerFocusTrace.shared.record("nativeEmbed.detach", view: view)
       }
       controller?.view.endEditing(true)
-      controller?.willMove(toParent: nil)
+      entry.attachment?.unmount(removing: controller)
       controller?.view.removeFromSuperview()
-      controller?.removeFromParent()
+      entry.attachment = nil
       entry.renderer?.onEvent = nil
       entry.renderer?.onSizeChange = nil
       entry.renderer = nil
-      entry.scroller = nil
       // Releasing an offscreen native view must not change document height.
       // Only an invalid renderer snapshot invalidates the reserved size.
       if !resetSize {
@@ -309,11 +335,12 @@
       for (key, entry) in entries { detach(key, entry: entry) }
       entries.removeAll()
       pending.removeAll()
+      parked.removeAll()
     }
     func hitTest(_ point: CGPoint, event: UIEvent?) -> UIView? {
       guard let webView, webView.bounds.contains(point) else { return nil }
       for entry in entries.values where entry.visible {
-        guard let view = entry.renderer?.viewController.view, let scroll = entry.scroller,
+        guard let view = entry.renderer?.viewController.view, let scroll = entry.attachment?.scroller,
           scroll.convert(scroll.bounds, to: webView).contains(point)
         else { continue }
         let local = view.convert(point, from: webView)
@@ -328,7 +355,7 @@
       guard let webView else { return [] }
       return entries.values.filter { entry in
         guard entry.visible, let view = entry.renderer?.viewController.view,
-          let scroll = entry.scroller
+          let scroll = entry.attachment?.scroller
         else { return false }
         return view.convert(view.bounds, to: webView).intersects(
           scroll.convert(scroll.bounds, to: webView))

@@ -67,6 +67,12 @@ public struct AgentConfiguration {
     /// preventing duplicate bridges across multiple web views.
     public var relayHost: Bool = false
 
+    /// When true, the page is a host with nobody looking at it: the web app
+    /// runs the relay, CLI sessions and tool calls, and mounts no chat, header
+    /// or pages. Read by the web app once, as it boots, so changing it means
+    /// loading the page again.
+    public var headlessHost: Bool = false
+
     /// When set, the web app boots in a minimal "file viewer only" mode that
     /// auto-opens this path in the Monaco viewer and hides the rest of the UI.
     /// Intended for standalone sheet-hosted viewers that share localStorage
@@ -226,6 +232,10 @@ public struct AgentConfiguration {
 
         if relayHost {
             hashParams.append("relayHost=true")
+        }
+
+        if headlessHost {
+            hashParams.append("hostMode=headless")
         }
 
         if let fileViewerPath,

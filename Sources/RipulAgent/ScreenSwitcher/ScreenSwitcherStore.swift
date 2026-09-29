@@ -1445,6 +1445,9 @@ public enum ScreenSnapshotter {
               window.bounds.width > 0, window.bounds.height > 0 else { return nil }
         let format = UIGraphicsImageRendererFormat(for: window.traitCollection)
         format.preferredRange = .standard
+        // A card thumbnail, not a screenshot: 2x is sharp at card size and
+        // draws 44% of the pixels a 3x capture does — on the main thread.
+        format.scale = min(format.scale, 2)
         let renderer = UIGraphicsImageRenderer(bounds: window.bounds, format: format)
         return renderer.image { _ in
             window.drawHierarchy(in: window.bounds, afterScreenUpdates: false)

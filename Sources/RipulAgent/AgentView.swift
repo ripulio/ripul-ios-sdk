@@ -72,8 +72,16 @@ public struct AgentView<TopBar: View>: View {
     /// utterance). Availability-free class; speech is gated internally.
     @StateObject private var voiceMode = VoiceModeController()
 
-    @StateObject private var bridge: AgentBridge
+    /// Owned once, not observed: views track the bridge's reads via Observation.
+
+    @StateObject private var bridgeOwner: UnobservedOwner<AgentBridge>
+
+    private var bridge: AgentBridge { bridgeOwner.value }
     private let skipBridgeSetup: Bool
+    #if os(macOS)
+    /// Set when the page belongs to the app and this view only shows it.
+    private var page: AgentPage?
+    #endif
     private var simulatorPreviewAction: ((SimulatorTarget, String, String) -> Void)? {
         #if os(iOS)
         if #available(iOS 26.0, *) {
@@ -84,6 +92,13 @@ public struct AgentView<TopBar: View>: View {
         }
         #endif
         return nil
+    }
+    private var showsOwnedPage: Bool {
+        #if os(macOS)
+        return page != nil
+        #else
+        return false
+        #endif
     }
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.dismiss) private var dismiss
@@ -129,6 +144,7 @@ public struct AgentView<TopBar: View>: View {
     @State private var chatInputMeasuredHeight: CGFloat = 0
     @State private var chatNavigationInset: CGFloat = 0
     @Environment(\.ripulComposerChrome) private var composerChrome
+    @Environment(\.composerClearanceChrome) private var clearanceChrome
 
     @StateObject private var messageHistory = MessageHistory()
 
@@ -152,7 +168,7 @@ public struct AgentView<TopBar: View>: View {
         self.linkOpenDelegate = linkOpenDelegate
         self.onMinimize = onMinimize
         self.topBar = topBar
-        self._bridge = StateObject(wrappedValue: AgentBridge(registry: registry ?? RipulToolRegistry()))
+        self._bridgeOwner = StateObject(wrappedValue: UnobservedOwner(AgentBridge(registry: registry ?? RipulToolRegistry())))
         self.skipBridgeSetup = false
     }
 
@@ -173,10 +189,27 @@ public struct AgentView<TopBar: View>: View {
         self.linkOpenDelegate = nil
         self.onMinimize = onMinimize
         self.topBar = topBar
-        self._bridge = StateObject(wrappedValue: bridge)
+        self._bridgeOwner = StateObject(wrappedValue: UnobservedOwner(bridge))
         self.skipBridgeSetup = true
         self.tokenProvider = tokenProvider
     }
+
+    #if os(macOS)
+    /// Shows a page the app owns (`AgentPage`), with the same chrome as any
+    /// other agent view. This view neither builds the page nor shuts it down,
+    /// so SwiftUI rebuilding the view leaves the page as it was.
+    public init(
+        page: AgentPage,
+        bridge: AgentBridge,
+        onMinimize: (() -> Void)? = nil,
+        tokenProvider: (() -> String?)? = nil,
+        @ViewBuilder topBar: @escaping (AgentBridge) -> TopBar
+    ) {
+        self.init(configuration: page.configuration, bridge: bridge, onMinimize: onMinimize,
+                  tokenProvider: tokenProvider, topBar: topBar)
+        self.page = page
+    }
+    #endif
 
     /// Enters hands-free mode on behalf of Siri's "Talk to Ripul" intent —
     /// the same thing the mic long-press does, minus the finger.
@@ -224,6 +257,7 @@ public struct AgentView<TopBar: View>: View {
     }
 
     public var body: some View {
+        let _ = ChatSlideProbe.markBody("AgentView") { Self._printChanges() }
         ZStack(alignment: .top) {
             #if os(iOS)
             (colorScheme == .dark ? Color(uiColor: .black) : Color(uiColor: .white))
@@ -232,7 +266,10 @@ public struct AgentView<TopBar: View>: View {
             Color.clear
             #endif
 
-            if let config = readyConfig {
+            #if os(macOS)
+            if let page { AgentPageView(page: page) }
+            #endif
+            if let config = readyConfig, !showsOwnedPage {
                 AgentWebView(configuration: config, bridge: bridge)
                 #if os(iOS)
                     // Native layout owns horizontal avoidance for both full-screen
@@ -295,6 +332,7 @@ public struct AgentView<TopBar: View>: View {
                 ChatComposer(
                     bridge: bridge,
                     composerActionStore: bridge.composerActions,
+                    turnState: bridge.turnState,
                     contextOptions: configuration.composerContexts,
                     tokenProvider: tokenProvider,
                     onEnterVoiceMode: { [weak bridge] utterance in
@@ -420,7 +458,7 @@ public struct AgentView<TopBar: View>: View {
             }
         }
         #endif
-        .sheet(item: $bridge.pendingFileView) { request in
+        .sheet(item: Binding(get: { bridge.pendingFileView }, set: { bridge.pendingFileView = $0 })) { request in
             FileViewerSheet(request: request)
         }
         .modifier(ToolCallDetailsPresenter(store: bridge.toolCallDetails, onDismiss: { requestId in
@@ -437,6 +475,11 @@ public struct AgentView<TopBar: View>: View {
                 bridge.linkOpenDelegate = linkOpenDelegate
             }
 
+            // An owned page was configured by whoever built it.
+            if showsOwnedPage {
+                readyConfig = configuration
+                return
+            }
             var config = configuration
             if config.standalone {
                 do {
@@ -498,7 +541,7 @@ public struct AgentView<TopBar: View>: View {
     /// Observe only structural clearance, never the shared animation frames.
     /// A new chrome owner must republish even when the editor's height is unchanged.
     private var composerClearancePublisher: AnyPublisher<CGFloat, Never> {
-        composerChrome?.$contentBottomInset.removeDuplicates().eraseToAnyPublisher()
+        (clearanceChrome ?? composerChrome)?.$contentBottomInset.removeDuplicates().eraseToAnyPublisher()
             ?? Just(CGFloat.zero).eraseToAnyPublisher()
     }
 
@@ -586,7 +629,7 @@ public extension AgentView where TopBar == EmptyView {
         self.linkOpenDelegate = linkOpenDelegate
         self.onMinimize = onMinimize
         self.topBar = nil
-        self._bridge = StateObject(wrappedValue: AgentBridge(registry: registry ?? RipulToolRegistry()))
+        self._bridgeOwner = StateObject(wrappedValue: UnobservedOwner(AgentBridge(registry: registry ?? RipulToolRegistry())))
         self.skipBridgeSetup = false
     }
 
@@ -601,7 +644,7 @@ public extension AgentView where TopBar == EmptyView {
         self.linkOpenDelegate = nil
         self.onMinimize = onMinimize
         self.topBar = nil
-        self._bridge = StateObject(wrappedValue: bridge)
+        self._bridgeOwner = StateObject(wrappedValue: UnobservedOwner(bridge))
         self.skipBridgeSetup = true
     }
 }
@@ -620,8 +663,9 @@ private struct ChatComposer: View {
     @Environment(\.ripulWindowContext) private var workspace
     @Environment(\.scenePhase) private var scenePhase
     @State private var draftChatID: String?
-    @ObservedObject var bridge: AgentBridge
+    var bridge: AgentBridge
     @ObservedObject var composerActionStore: RipulComposerActionStore
+    @ObservedObject var turnState: RipulAgentTurnState
     var contextOptions: [RipulComposerContext]
     var tokenProvider: (() -> String?)?
     /// Mic long-press. Receives the composer's current text (empty when the
@@ -669,7 +713,7 @@ private struct ChatComposer: View {
     /// appear so a changed dictation-provider preference takes effect when
     /// the user returns to the chat.
     @State private var speechProvider: Any? = nil
-    @AppStorage(SpeechPreferences.dictationProviderKey, store: SpeechPreferences.store) private var dictationProviderPreference = "apple"
+    @StoredDefault(SpeechPreferences.dictationProviderKey, store: SpeechPreferences.store) private var dictationProviderPreference = "apple"
 
     var body: some View {
         VStack(spacing: 0) {
@@ -787,8 +831,8 @@ private struct ChatComposer: View {
             text: $chatMessage,
             imageAttachments: $imageAttachments,
             selectedPhotos: $selectedPhotos,
-            isAgentRunning: bridge.isAgentRunning,
-            isAgentPaused: bridge.isAgentPaused && !isGroupMode,
+            isAgentRunning: turnState.isRunning,
+            isAgentPaused: turnState.isPaused && !isGroupMode,
             onSubmit: handleSubmit,
             onSubmitNote: BundledAgentRuntime.isEnabled || isGroupMode ? nil : handleNoteSubmit,
             conversationMode: isGroupMode ? "group" : "agent",
@@ -864,7 +908,7 @@ private struct ChatComposer: View {
             },
             addressedParticipants: $addressedParticipants,
             onFocusChanged: { focused in
-                bridge.nativeChatInputFocused = focused
+                bridge.setIfChanged(\.nativeChatInputFocused, focused)
             },
             onPlusLongPress: { onShowConsoleLogs() },
             onQuerySlashCommands: bridge.chatInputShowQuickCommands ? { await bridge.getSlashCommands() } : nil,
@@ -897,8 +941,8 @@ private struct ChatComposer: View {
             text: $chatMessage,
             imageAttachments: $imageAttachments,
             selectedPhotos: $selectedPhotos,
-            isAgentRunning: bridge.isAgentRunning,
-            isAgentPaused: bridge.isAgentPaused && !isGroupMode,
+            isAgentRunning: turnState.isRunning,
+            isAgentPaused: turnState.isPaused && !isGroupMode,
             onSubmit: handleSubmit,
             onSubmitNote: BundledAgentRuntime.isEnabled || isGroupMode ? nil : handleNoteSubmit,
             conversationMode: isGroupMode ? "group" : "agent",

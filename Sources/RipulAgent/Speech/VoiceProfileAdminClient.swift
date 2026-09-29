@@ -35,6 +35,8 @@ struct VoiceProfileInput: Codable {
     var description: String?
     var ttsProviderId: String?
     var voiceId: String?
+    /// "" clears a model chosen earlier; nil leaves it untouched.
+    var ttsModelId: String?
     var pace: Double?
     var expressiveness: Double?
     var sttProviderId: String?

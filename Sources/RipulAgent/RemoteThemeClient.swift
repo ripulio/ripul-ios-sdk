@@ -180,9 +180,12 @@ public final class RipulRemoteThemeClient {
             let (data, response) = try await fetch(request)
             guard generation == requestedGeneration, !Task.isCancelled else { return }
             guard let http = response as? HTTPURLResponse else { throw ThemeError.invalidResponse }
-            if http.statusCode == 304, let accepted {
-                // Even an unchanged server version supersedes local editor previews.
-                try accept(accepted.data)
+            if http.statusCode == 304, accepted != nil {
+                // Unchanged, and already applied: refreshInBackground never runs
+                // with a differing local preview (hasLocalPreview) or an open
+                // editor, so the live theme IS `accepted`. Re-applying it bumped
+                // NativeTextUpdates and posted .ripulThemeDidChange, re-rendering
+                // the app root on every foreground for nothing.
             } else {
                 guard http.statusCode == 200 else { throw ThemeError.http(http.statusCode) }
                 try accept(data)

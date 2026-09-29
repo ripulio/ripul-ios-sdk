@@ -39,7 +39,8 @@ public struct NewChatSheet: View {
     @FocusState private var editingFolder: Bool
 
     public init(machines: [NewChatMachine], relayModels: [ModelInfo], directModels: [ModelInfo],
-                cache: RipulSessionCache, allowsRelay: Bool = true, preferredRelayID: String? = nil, preferredDirectID: String? = nil,
+                cache: RipulSessionCache, allowsRelay: Bool = true, requestedRelayID: String? = nil,
+                preferredRelayID: String? = nil, preferredDirectID: String? = nil,
                 directCatalogs: [String: NewChatModelCatalog]? = nil,
                 loadDirectModels: ((String) async -> Void)? = nil,
                 modelsLoading: Bool = false, modelsError: String? = nil,
@@ -57,6 +58,7 @@ public struct NewChatSheet: View {
             initial.select(machines.first(where: { $0.connection == .direct && $0.id == preferredDirectID })
                 ?? NewChatMachine(id: preferredDirectID, name: "The selected Mac", connection: .direct))
         }
+        if let requestedRelayID, allowsRelay { initial.selectRequested(relayID: requestedRelayID, from: machines) }
         initial.selectInitial(from: machines, preferredRelayID: preferredRelayID)
         _draft = State(initialValue: initial)
     }

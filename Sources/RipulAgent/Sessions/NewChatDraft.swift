@@ -50,6 +50,14 @@ public struct NewChatDraft: Codable, Equatable {
         machines[connection.rawValue] = machine.id
         machineNames[connection.rawValue] = machine.name
     }
+    /// The sheet was opened from a machine row: that Mac is the destination,
+    /// whatever was remembered. Remembering only seeds a sheet opened from
+    /// nowhere in particular. An unlisted id still selects, so validation names
+    /// it unavailable rather than launching on the remembered Mac.
+    public mutating func selectRequested(relayID: String, from available: [NewChatMachine]) {
+        select(available.first(where: { $0.connection == .relay && $0.id == relayID })
+            ?? NewChatMachine(id: relayID, name: "The selected Mac", connection: .relay))
+    }
     public mutating func selectInitial(from available: [NewChatMachine], preferredRelayID: String? = nil) {
         // A removed/offline remembered host must remain visibly unavailable.
         guard machineID == nil else { return }

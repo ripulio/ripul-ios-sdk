@@ -48,7 +48,7 @@ struct QuickLaunchPickerButton: View {
     var modelsError: String? = nil
     var onRetryModels: (() -> Void)? = nil
     var onNewCliSession: ((RemoteMachine, String, String?) -> Void)?
-    var onNewApiSession: ((String) -> Void)?
+    var onNewApiSession: ((RemoteMachine?, String) -> Void)?
     /// Presentation of the trigger. False is the trailing ellipsis circle that
     /// follows the pinned-model circles; true is the standalone "New Session"
     /// pill that IS the strip when the circles are gated off — same popover,
@@ -157,7 +157,7 @@ struct QuickLaunchPickerButton: View {
         } else {
             guard let onNewApiSession else { return }
             loadingId = target.id
-            onNewApiSession(target.model.id)
+            onNewApiSession(machine, target.model.id)
         }
         isPresented = false
     }

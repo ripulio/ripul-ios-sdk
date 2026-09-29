@@ -24,6 +24,9 @@ extension InspectScreenTool: RipulDeveloperOnlyTool {}
 
 #if canImport(UIKit)
 extension TapElementTool: RipulDeveloperOnlyTool {}
+extension TouchTool: RipulDeveloperOnlyTool {}
+extension ScreenFrameTool: RipulDeveloperOnlyTool {}
+extension LiveStreamOfferTool: RipulDeveloperOnlyTool {}
 extension TypeTextTool: RipulDeveloperOnlyTool {}
 extension ScrollElementTool: RipulDeveloperOnlyTool {}
 extension WaitForElementTool: RipulDeveloperOnlyTool {}
@@ -32,6 +35,7 @@ extension ScreenAuditTool: RipulDeveloperOnlyTool {}
 extension ShareSheetTool: RipulDeveloperOnlyTool {}
 extension ExplorerConformanceTool: RipulDeveloperOnlyTool {}
 extension SetValueTool: RipulDeveloperOnlyTool {}
+extension OpenAppURLTool: RipulDeveloperOnlyTool {}
 #endif
 
 // MARK: - Theme control (ThemeControlTools.swift is #if os(iOS) — mirror that here)

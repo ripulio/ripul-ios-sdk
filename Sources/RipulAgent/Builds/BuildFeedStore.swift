@@ -183,7 +183,7 @@ public final class RipulBuildFeedStore: ObservableObject {
         // owns its own access control and may legitimately need none.
         if case .ripulHosted = source, token == nil {
             RipulLog.error("[Builds] no credential available — the hosted feed requires a signed-in session")
-            lastError = "Sign in to Ripul to see builds"
+            if lastError != "Sign in to Ripul to see builds" { lastError = "Sign in to Ripul to see builds" }
             return
         }
 
@@ -196,13 +196,15 @@ public final class RipulBuildFeedStore: ObservableObject {
         guard let fetched else {
             // Keep any previously loaded feed on screen — a stale list with an
             // error note beats blanking the screen on one failed poll.
-            lastError = "Couldn't reach the build service"
+            if lastError != "Couldn't reach the build service" { lastError = "Couldn't reach the build service" }
             return
         }
 
-        lastError = nil
+        // Polled every 5 minutes; publish only what changed.
+        if lastError != nil { lastError = nil }
         feed = fetched
-        status = Self.status(for: fetched, runningBuild: Self.runningBuild, bundleId: Self.runningBundleId)
+        let next = Self.status(for: fetched, runningBuild: Self.runningBuild, bundleId: Self.runningBundleId)
+        if status != next { status = next }
         logStatus()
     }
 

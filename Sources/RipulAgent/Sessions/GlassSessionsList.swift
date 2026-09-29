@@ -36,7 +36,7 @@ public struct SessionsListCallbacks {
     var onNewCliSession: ((RemoteMachine, String, String?) -> Void)?
     /// Start a non-CLI API chat pinned to the given catalog model id
     /// (e.g. "backend-claude-fable-5"). No machine required.
-    var onNewApiSession: ((String) -> Void)?
+    var onNewApiSession: ((RemoteMachine?, String) -> Void)?
     var onRestart: ((RemoteMachine) -> Void)?
     var onToggleMachineDisabled: ((RemoteMachine) -> Void)?
 
@@ -44,7 +44,7 @@ public struct SessionsListCallbacks {
         onFocusSession: @escaping (ChatSession) -> Void = { _ in },
         onConnect: @escaping (RemoteMachine) -> Void = { _ in },
         onNewCliSession: ((RemoteMachine, String, String?) -> Void)? = nil,
-        onNewApiSession: ((String) -> Void)? = nil,
+        onNewApiSession: ((RemoteMachine?, String) -> Void)? = nil,
         onRestart: ((RemoteMachine) -> Void)? = nil,
         onToggleMachineDisabled: ((RemoteMachine) -> Void)? = nil
     ) {
@@ -71,10 +71,10 @@ public struct GlassSessionsList: View {
     @Environment(\.ripulWindowContext) private var workspace
     @Environment(\.supportsMultipleWindows) private var supportsMultipleWindows
     @Environment(\.cloudSessionFeaturesEnabled) private var cloudFeatures
-    @ObservedObject var bridge: AgentBridge
+    var bridge: AgentBridge
     /// Per-chat activity/phase/action maps, observed so the list re-sorts and
     /// updates live without re-rendering the WKWebView host.
-    @ObservedObject var sessionStore: SessionListStore
+    var sessionStore: SessionListStore
     /// Navigation + thinking-mode state on its own leaf so writes don't fire
     /// bridge.objectWillChange and re-render the whole list container.
     @ObservedObject var navigationStore: NavigationStore
@@ -149,9 +149,9 @@ public struct GlassSessionsList: View {
     @Binding var renamingSession: ChatSession?
     @Binding var renameText: String
 
-    @AppStorage("ripulMachinesPanelExpanded") private var storedMachinesExpanded = true
-    @AppStorage("ripulDefaultMachineId") private var defaultMachineId = ""
-    @AppStorage("ripul.embeddedOnboardingDismissed") private var embeddedOnboardingDismissed = false
+    @StoredDefault("ripulMachinesPanelExpanded") private var storedMachinesExpanded = true
+    @StoredDefault("ripulDefaultMachineId") private var defaultMachineId = ""
+    @StoredDefault("ripul.embeddedOnboardingDismissed") private var embeddedOnboardingDismissed = false
     @State private var machinesExpanded = true
     @State private var expandedMachineId: String? = nil
     /// Height of the panel stack, measured from its own frame. Feeds the
@@ -271,9 +271,9 @@ public struct GlassSessionsList: View {
         self.onListedSessionsChanged = onListedSessionsChanged
         // Bind the @AppStorage stores to the injected cache so persisted keys
         // live in the host-chosen suite. Defaults + key strings preserved.
-        _storedMachinesExpanded = AppStorage(wrappedValue: true, "ripulMachinesPanelExpanded", store: cache.userDefaults)
-        _defaultMachineId = AppStorage(wrappedValue: "", "ripulDefaultMachineId", store: cache.userDefaults)
-        _embeddedOnboardingDismissed = AppStorage(wrappedValue: false, "ripul.embeddedOnboardingDismissed", store: cache.userDefaults)
+        _storedMachinesExpanded = StoredDefault(wrappedValue: true, "ripulMachinesPanelExpanded", store: cache.userDefaults)
+        _defaultMachineId = StoredDefault(wrappedValue: "", "ripulDefaultMachineId", store: cache.userDefaults)
+        _embeddedOnboardingDismissed = StoredDefault(wrappedValue: false, "ripul.embeddedOnboardingDismissed", store: cache.userDefaults)
     }
 
     private func machineExpandedBinding(for machine: RemoteMachine) -> Binding<Bool> {
@@ -578,6 +578,28 @@ public struct GlassSessionsList: View {
             Button("Open in New Window", systemImage: "rectangle.on.rectangle") { open(session.id) }
                 .accessibilityIdentifier("Workspace.openSessionWindow")
         }
+        if sessionStore.isUnread(anyOf: session.readStateKeys) {
+            Button {
+                bridge.markSessionRead(session)
+            } label: {
+                Label("Mark as Read", systemImage: "envelope.open")
+            }
+            .uiKitIdentifier("GlassSessionsList.contextMenu.markReadButton")
+        } else {
+            Button {
+                bridge.markSessionUnread(session)
+            } label: {
+                Label("Mark as Unread", systemImage: "envelope.badge")
+            }
+            .uiKitIdentifier("GlassSessionsList.contextMenu.markUnreadButton")
+        }
+        let isPinned = sessionStore.isPinned(anyOf: session.readStateKeys)
+        Button {
+            bridge.setSessionPinned(!isPinned, session)
+        } label: {
+            Label(isPinned ? "Unpin" : "Pin", systemImage: isPinned ? "pin.slash" : "pin")
+        }
+        .uiKitIdentifier("GlassSessionsList.contextMenu.pinButton")
         if session.isSharedGuest {
         Button {
             onRemoveInvitedUnifiedSession(session)
@@ -609,8 +631,11 @@ public struct GlassSessionsList: View {
             Label("Tags…", systemImage: "tag")
         }
         .uiKitIdentifier("GlassSessionsList.contextMenu.tagsButton")
-        let moveTargets = machines.filter { m in
-            m.isOnline && m.displayName != session.machineName
+        // Only Claude Code transcripts can be exported and resumed elsewhere.
+        // The source is excluded by machineId; the name is a fallback for rows
+        // that carry none (display names collide — "Mac").
+        let moveTargets = session.provider != "claude-cli" ? [] : machines.filter { m in
+            m.isOnline && (session.machineId.map { $0 != m.machineId } ?? (m.displayName != session.machineName))
         }
         if !moveTargets.isEmpty {
             Menu {
@@ -694,6 +719,7 @@ public struct GlassSessionsList: View {
     /// check is needed here.
     @ViewBuilder
     private var machinesPanelTrailing: some View {
+        ModelLoadingReader(bridge.modelLoading) { modelsLoading in
         QuickLaunchStrip(
             targets: quickLaunchTargets,
             machine: quickLaunchMachine,
@@ -703,11 +729,12 @@ public struct GlassSessionsList: View {
             onNewApiSession: callbacks.onNewApiSession,
             allTargets: offerableQuickLaunchTargets,
             cache: cache,
-            modelsLoading: bridge.isLoadingModels,
+            modelsLoading: modelsLoading,
             modelsError: bridge.lastModelsError,
             onRetryModels: { Task { await bridge.fetchModels() } },
             showCircles: quickLaunchShowCircles
         )
+        }
         .padding(.horizontal, 16)
         .padding(.bottom, 10)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -865,7 +892,11 @@ public struct GlassSessionsList: View {
         // Re-sort incorporating live activity timestamps from the bridge.
         // Uses quantized time (30s buckets) so two concurrently active
         // sessions don't swap on every alternating tool call.
+        // Pinned rows first, each group in recency order.
+        let pinned = Set(base.filter { sessionStore.isPinned(anyOf: $0.readStateKeys) }.map(\.id))
         return base.sorted { a, b in
+            let pa = pinned.contains(a.id), pb = pinned.contains(b.id)
+            if pa != pb { return pa }
             let ta = sortBucket(for: a)
             let tb = sortBucket(for: b)
             if ta != tb { return ta > tb }
@@ -879,6 +910,11 @@ public struct GlassSessionsList: View {
     /// 2. Resolved session-id cache — survives cold start
     /// 3. Scanner file mtime (session.lastUsed) — fallback
     private func effectiveLastActive(for session: UnifiedSession) -> Date {
+        // The map is unobserved storage: reading it here would otherwise make
+        // every running chat's heartbeat re-sort (and re-render) the whole
+        // list. Subscribe only to changes that can reorder it; rows track their
+        // own time labels through per-chat cells.
+        _ = sessionStore.recencyRevision
         var best = session.lastUsed
         if let ripul = session.ripulSession {
             if let t = sessionStore.lastActiveTimeByChatId[ripul.id] { best = max(best, t) }
@@ -1003,6 +1039,7 @@ public struct GlassSessionsList: View {
     }
 
     public var body: some View {
+        let _ = ChatSlideProbe.markBody("GlassSessionsList") { Self._printChanges() }
         // Share one filter/sort between rendering and host context. Publish at
         // this root, including when the list is empty or its panel is collapsed.
         let sessions = filteredSessions

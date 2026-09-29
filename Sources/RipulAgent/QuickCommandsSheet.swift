@@ -6,7 +6,7 @@ import SwiftUI
 /// Pass `debugMode: true` to show hidden debug commands (triggered by `/rr.`).
 @available(iOS 16.0, macOS 13.0, *)
 public struct QuickCommandsSheet: View {
-    @ObservedObject var bridge: AgentBridge
+    var bridge: AgentBridge
     var debugMode: Bool = false
     @Environment(\.dismiss) private var dismiss
     @State private var commands: [SlashCommandInfo] = []

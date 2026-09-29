@@ -69,7 +69,60 @@ final class BufferedSpeechRecoveryTests: XCTestCase {
         var timing = ElevenLabsTranscriptionStream.Timing()
         timing.poll = 1_000_000
         timing.retry = 1_000_000
+        timing.catchUp = 1_000_000
         return timing
+    }
+
+    /// Short segments so a test can reach a pause-delimited commit quickly.
+    @available(iOS 26.0, macOS 26.0, *)
+    private var shortSegmentTiming: ElevenLabsTranscriptionStream.Timing {
+        var timing = fastTiming
+        timing.segmentTarget = 2
+        timing.segmentPause = 1
+        return timing
+    }
+
+    /// Committing at every short pause made Scribe finalize fragments on their
+    /// own: clipped words and invented fillers at each seam. Natural pauses
+    /// inside the first 20 s must not close a segment; the first pause after
+    /// it does; 30 s is a hard cap even with no pause at all.
+    @MainActor
+    func testPausesDoNotCommitBeforeTargetButCloseTheSegmentAfterIt() async throws {
+        guard #available(iOS 26.0, macOS 26.0, *) else { throw XCTSkip() }
+        let audio = BufferedSpeechAudio(sampleRate: 100)
+        let socket = SpeechSocketFixture()
+        socket.ready()
+        var commitAtFrames: [Int] = []
+        var sentFrames = 0
+        socket.onSend = { payload in
+            if payload["commit"] as? Bool == true {
+                commitAtFrames.append(sentFrames)
+                socket.committed("segment")
+            } else if let pcm = Data(base64Encoded: payload["audio_base_64"] as! String) {
+                sentFrames += pcm.count / 2
+            }
+        }
+        let stream = ElevenLabsTranscriptionStream(audio: audio, timing: fastTiming,
+                                                   connect: { socket }, event: { _ in })
+        defer { stream.stop() }
+        stream.start()
+        // 18 s of speech with a 2 s thinking pause every 4 s: 2 s voiced, 2 s quiet.
+        for second in 0..<18 {
+            audio.append(Data(count: 200), voiced: second % 4 < 2)
+        }
+        try await eventually { sentFrames == 1800 }
+        XCTAssertEqual(commitAtFrames, [], "Pauses before the 20 s target must not commit")
+        // Speech through 21 s, then a pause: the segment closes at that pause.
+        for _ in 18..<21 { audio.append(Data(count: 200), voiced: true) }
+        audio.append(Data(count: 200), voiced: false)
+        try await eventually { commitAtFrames.count == 1 }
+        XCTAssertEqual(commitAtFrames, [2200])
+        // 31 s of continuous speech: forced at 30 s, never beyond it.
+        for _ in 0..<31 { audio.append(Data(count: 200), voiced: true) }
+        try await eventually { commitAtFrames.count == 2 }
+        XCTAssertEqual(commitAtFrames[1] - commitAtFrames[0], 3000)
+        try await stream.finish()
+        XCTAssertEqual(audio.snapshot.confirmed, audio.snapshot.captured)
     }
 
     @MainActor
@@ -92,7 +145,7 @@ final class BufferedSpeechRecoveryTests: XCTestCase {
             try await Task.sleep(nanoseconds: 2_000_000)
             if payload["commit"] as? Bool == true { second.committed("there") }
         }
-        let stream = ElevenLabsTranscriptionStream(audio: audio, timing: fastTiming, connect: {
+        let stream = ElevenLabsTranscriptionStream(audio: audio, timing: shortSegmentTiming, connect: {
             connections += 1
             return connections == 1 ? first : second
         }, event: {
@@ -116,6 +169,40 @@ final class BufferedSpeechRecoveryTests: XCTestCase {
         XCTAssertTrue((second.sent[0]["previous_text"] as? String)?.contains("Hello") == true)
         XCTAssertFalse(second.sent.dropFirst().contains { $0["previous_text"] != nil })
         XCTAssertEqual(second.maxConcurrentSends, 1)
+    }
+
+    /// Scribe can send a partial for a segment after its committed transcript.
+    /// Passed through, the controller showed committed + partial and sent
+    /// "A. Send command. A". Stale partials must not surface; new speech must.
+    @MainActor
+    func testLatePartialForCommittedSegmentIsDropped() async throws {
+        guard #available(iOS 26.0, macOS 26.0, *) else { throw XCTSkip() }
+        let audio = BufferedSpeechAudio(sampleRate: 100)
+        let socket = SpeechSocketFixture()
+        socket.ready()
+        var partials: [String] = []
+        socket.onSend = { payload in
+            guard payload["commit"] as? Bool == true else { return }
+            socket.committed("We need to recheck. Send command.")
+            socket.emit(["message_type": "partial_transcript", "text": "We need to recheck. Send command."])
+            socket.emit(["message_type": "partial_transcript", "text": "we need to recheck send"])
+        }
+        let stream = ElevenLabsTranscriptionStream(audio: audio, timing: shortSegmentTiming, connect: { socket }, event: {
+            if case .partial(let text) = $0 { partials.append(text) }
+        })
+        defer { stream.stop() }
+        audio.append(Data(count: 200), voiced: true)
+        audio.append(Data(count: 200), voiced: true)
+        audio.append(Data(count: 200), voiced: false)
+        stream.start()
+        try await eventually { audio.snapshot.confirmed == 300 }
+        try await Task.sleep(nanoseconds: 20_000_000)
+        XCTAssertEqual(partials, [], "Partials for already-committed audio must be dropped")
+        socket.onSend = nil
+        audio.append(Data(count: 200), voiced: true)
+        try await eventually { (socket.sent.last?["audio_base_64"] as? String) != nil && socket.sent.count >= 5 }
+        socket.emit(["message_type": "partial_transcript", "text": "Different new words"])
+        try await eventually { partials == ["Different new words"] }
     }
 
     @MainActor

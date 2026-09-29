@@ -51,8 +51,8 @@ public extension Notification.Name {
 @available(iOS 26.0, macOS 26.0, *)
 public struct PlanCheckpointControl: View {
     private let bridge: AgentBridge
-    @ObservedObject private var model: RipulSessionListModel
-    @ObservedObject private var sessionStore: SessionListStore
+    private var model: RipulSessionListModel
+    private var sessionStore: SessionListStore
     private let cache: RipulSessionCache
     private let plan: PlanDetail
     private let planKey: String

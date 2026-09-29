@@ -940,7 +940,7 @@ final class RipulDevOverlayRootVC: UIViewController {
 /// mini-player idiom).
 @available(iOS 26.0, *)
 private struct CompactAgentBarView: View {
-    @ObservedObject var bridge: AgentBridge
+    var bridge: AgentBridge
     let onExpand: () -> Void
     let onMinimize: () -> Void
 

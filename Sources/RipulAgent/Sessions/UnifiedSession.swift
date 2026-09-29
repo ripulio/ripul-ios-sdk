@@ -186,6 +186,13 @@ public struct UnifiedSession: Identifiable, Codable {
         return base + base.map { UnifiedSession.cliUuid(for: $0) }
     }
 
+    /// Every id this row's read state may be stored under. CLI sessions are
+    /// keyed inconsistently (`cli_<uuid>` live, bare uuid from the scanner),
+    /// so reading and writing unread state must both consult all of them.
+    public var readStateKeys: [String] {
+        [id, ripulSession?.sourceChatId, ripulSession?.id].compactMap { $0 } + matchKeys
+    }
+
     /// Copy of this row with a different (or no) matched Ripul tab, and
     /// optionally a refreshed title.
     ///
@@ -413,12 +420,18 @@ public struct UnifiedSession: Identifiable, Codable {
     ///
     /// - Parameter machineNames: Maps remote session ID → machine display name,
     ///   so each session is tagged with the machine it actually lives on.
+    /// How long a tab may be missing from its machine's scan before it is
+    /// treated as archived there rather than not yet written.
+    static let orphanGraceInterval: TimeInterval = 300
+
     public static func build(
         from remote: [RemoteSessionInfo],
         localSessions: [ChatSession],
         machineNames: [String: String],
         recentlyClosedLocalIds: Set<String> = [],
-        tagsByKey: [String: [String]] = [:]
+        confirmedMachineNames: Set<String> = [],
+        tagsByKey: [String: [String]] = [:],
+        now: Date = Date()
     ) -> [UnifiedSession] {
         // Resolve a session's tags by trying each of its keys (and the
         // cli_-stripped form) against the bulk map — tolerates local/remote
@@ -538,11 +551,25 @@ public struct UnifiedSession: Identifiable, Codable {
         // conversation, preferring the `cli_<uuid>` identity — the canonical
         // form every other path resolves to, and the one whose content came
         // from the JSONL itself.
+        //
+        // An orphan exists to keep a chat visible while its machine can't be
+        // asked. When the machine DID answer and its full list doesn't include
+        // the chat, the chat was archived or deleted there (by an agent, or on
+        // the Mac) and this device was never told — so its leftover tab is not
+        // a row. Hidden, not closed: a wrong call undoes itself on the next
+        // scan. A tab opened in the last few minutes is spared, since a chat
+        // started from here may not be on the host's disk yet.
+        func archivedElsewhere(_ s: ChatSession) -> Bool {
+            guard s.isSharedGuest != true, s.hostChatId != nil,
+                  let machine = s.remoteMachineName, confirmedMachineNames.contains(machine) else { return false }
+            return now.timeIntervalSince(s.createdAt) > Self.orphanGraceInterval
+        }
         var emittedOrphanUuids = Set<String>()
         let orphanSurvivors: Set<String> = {
             var byUuid: [String: ChatSession] = [:]
             for s in localSessions where !coveredLocalIds.contains(s.id)
-                && !recentlyClosedLocalIds.contains(s.id) {
+                && !recentlyClosedLocalIds.contains(s.id)
+                && !archivedElsewhere(s) {
                 let uuid = cliUuid(for: s.hostChatId ?? s.sourceChatId)
                 guard let incumbent = byUuid[uuid] else { byUuid[uuid] = s; continue }
                 let incumbentIsCli = canonicalKey(incumbent.hostChatId ?? incumbent.sourceChatId) != (incumbent.hostChatId ?? incumbent.sourceChatId)

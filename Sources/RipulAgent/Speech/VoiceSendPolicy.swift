@@ -9,8 +9,20 @@ public enum VoiceSendMode: String, CaseIterable, Sendable {
 /// activity. A recognizer stall alone must not count as the command's pause.
 enum VoiceSendPolicy {
     static let commandPause: TimeInterval = 0.7
+    /// Recognizers mishear the phrase ("same command", "sent command") and
+    /// split or join it ("Send. Command.", "sendcommand"). Near-homophones of
+    /// "send" with singular "command" count anywhere. Looser forms that occur
+    /// in ordinary speech ("run the same command", "how do I send commands")
+    /// count only as their own sentence, after recognizer punctuation.
     private static let closingCommand = try! NSRegularExpression(
-        pattern: #"(?i)(?<![\p{L}\p{N}_])send[\s\p{P}]+command[\s\p{P}]*$"#
+        pattern: #"""
+        (?ix)
+        (?:
+          (?<![\p{L}\p{N}_]) (?:send|sent|sand) [\s\p{P}]* (?:command|comand|commend)
+        | (?<=[.!?,;:…]\s{0,3}) (?:send|sent|sand|same|said) [\s\p{P}]+ (?:command|comand|commend|comment)s?
+        )
+        [\s\p{P}]*$
+        """#
     )
 
     /// Nil means the closing command is absent or has no message before it.

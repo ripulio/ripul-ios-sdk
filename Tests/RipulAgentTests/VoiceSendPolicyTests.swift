@@ -32,7 +32,27 @@ final class VoiceSendPolicyTests: XCTestCase {
 
     func testOnlyWholeClosingWordsMatch() {
         for text in ["Please resend command", "Please send commands", "Please send command later",
-                     "Please send commander", "Please sendcommand", "Please unsend command"] {
+                     "Please send commander", "Please unsend command", "Please sendcommander"] {
+            XCTAssertNil(command(text), text)
+        }
+    }
+
+    func testClosingPhraseToleratesMishearingsAndJoinedWords() {
+        for text in ["Check the logs sendcommand", "Check the logs sent command",
+                     "Check the logs send-command.", "Check the logs sand command",
+                     "Check the logs send comand", "Check the logs send commend."] {
+            XCTAssertEqual(command(text), "Check the logs", text)
+        }
+        for text in ["Check the logs. Same command.", "Check the logs. Same, command.",
+                     "Check the logs. Said command.", "Check the logs. Send commands.",
+                     "Check the logs. Send comment.", "Check the logs.  same command"] {
+            XCTAssertEqual(command(text), "Check the logs.", text)
+        }
+    }
+
+    func testLooseFormsNeedTheirOwnSentence() {
+        for text in ["Run the same command", "How do I send commands", "Please send comment",
+                     "What she said command", "Run the samecommand"] {
             XCTAssertNil(command(text), text)
         }
     }

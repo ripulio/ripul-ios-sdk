@@ -20,8 +20,8 @@ public struct PlanSessionsSection: View {
     private final class RefreshKick: ObservableObject { var started = false }
 
     private let bridge: AgentBridge
-    @ObservedObject private var model: RipulSessionListModel
-    @ObservedObject private var sessionStore: SessionListStore
+    private var model: RipulSessionListModel
+    private var sessionStore: SessionListStore
     @StateObject private var kick = RefreshKick()
     @State private var expanded = true
     private let planKey: String
@@ -165,7 +165,7 @@ public struct PlanSessionsSection: View {
 @available(iOS 26.0, macOS 26.0, *)
 public struct PlanSessionLinkPicker: View {
     private let bridge: AgentBridge
-    @ObservedObject private var model: RipulSessionListModel
+    private var model: RipulSessionListModel
     private let cache: RipulSessionCache
     private let tokenProvider: () -> String?
     private let planKey: String

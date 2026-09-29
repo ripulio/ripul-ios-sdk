@@ -170,6 +170,7 @@ struct NativeToolStripContent: View {
     @State private var pressRegions = ToolPressRegions()
 
     var body: some View {
+        let _ = MainThreadSampler.count("ToolStrip.body")
         Group {
             if let snapshot = store.display {
                 ScrollViewReader { proxy in

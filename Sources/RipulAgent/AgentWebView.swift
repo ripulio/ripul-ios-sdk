@@ -49,10 +49,28 @@ public struct AgentWebView: NSViewRepresentable {
     }
 
     public func makeNSView(context: Context) -> WKWebView {
+        Self.makePage(configuration: configuration, bridge: bridge, coordinator: context.coordinator,
+                      frame: .zero, keepsRunningOutsideWindow: false)
+    }
+
+    /// Builds a page, attaches the bridge and starts loading. One place, so
+    /// that a page SwiftUI makes and a page the app owns (`AgentPage`) are the
+    /// same page.
+    static func makePage(
+        configuration: AgentConfiguration,
+        bridge: AgentBridge,
+        coordinator: Coordinator,
+        frame: CGRect,
+        keepsRunningOutsideWindow: Bool
+    ) -> WKWebView {
         let config = WKWebViewConfiguration()
         // Allow programmatic audio playback (read-aloud TTS) — see the iOS
         // config below for why; macOS WKWebView applies the same gesture gate.
         config.mediaTypesRequiringUserActionForPlayback = []
+        // WebKit suspends a page that is in no window unless told otherwise.
+        if keepsRunningOutsideWindow {
+            config.preferences.inactiveSchedulingPolicy = .none
+        }
 
         let bridgeScript = WKUserScript(
             source: Self.bridgeJavaScript,
@@ -63,11 +81,11 @@ public struct AgentWebView: NSViewRepresentable {
         config.userContentController.addUserScript(Self.installationIdentityScript)
         config.userContentController.addUserScript(Self.nativeBuildScript)
         config.userContentController.addUserScript(Self.hostPreferencesScript())
-        config.userContentController.add(context.coordinator, name: "agentBridge")
-        config.userContentController.add(context.coordinator, name: "agentLog")
-        config.userContentController.add(context.coordinator, name: "agentNetwork")
-        config.userContentController.add(context.coordinator, name: "agentStartup")
-        config.userContentController.add(context.coordinator, name: "curtainLowered")
+        config.userContentController.add(coordinator, name: "agentBridge")
+        config.userContentController.add(coordinator, name: "agentLog")
+        config.userContentController.add(coordinator, name: "agentNetwork")
+        config.userContentController.add(coordinator, name: "agentStartup")
+        config.userContentController.add(coordinator, name: "curtainLowered")
 
         // Inject font-face declarations for any requested font families
         if let families = configuration.fontFamilies, !families.isEmpty {
@@ -101,10 +119,10 @@ public struct AgentWebView: NSViewRepresentable {
         // Allow the host app to customize the configuration (e.g., register URL scheme handlers)
         configuration.configureWebView?(config)
 
-        let webView = WKWebView(frame: .zero, configuration: config)
-        webView.navigationDelegate = context.coordinator
-        webView.uiDelegate = context.coordinator
-        context.coordinator.attachWebView(webView)
+        let webView = WKWebView(frame: frame, configuration: config)
+        webView.navigationDelegate = coordinator
+        webView.uiDelegate = coordinator
+        coordinator.attachWebView(webView)
 
         #if DEBUG
         if #available(macOS 13.3, *) {
@@ -113,6 +131,7 @@ public struct AgentWebView: NSViewRepresentable {
         #endif
 
         bridge.attach(to: webView)
+        AgentPageLifecycle.created(webView, bridge: bridge)
 
         // _cb makes the HTML URL unique per launch so WKWebView always fetches
         // the latest HTML (which references the current content-hashed bundle
@@ -124,7 +143,7 @@ public struct AgentWebView: NSViewRepresentable {
         queryItems.append(URLQueryItem(name: "_cb", value: String(Int(Date().timeIntervalSince1970))))
         urlComponents.queryItems = queryItems
         let url = urlComponents.url!
-        NSLog("[AgentWebView] Loading URL: %@", url.absoluteString)
+        NSLog("[AgentWebView] Loading URL: %@", WebViewLogRedaction.url(url))
         webView.load(URLRequest(url: url))
 
         return webView
@@ -133,12 +152,8 @@ public struct AgentWebView: NSViewRepresentable {
     public func updateNSView(_ webView: WKWebView, context: Context) {}
 
     public static func dismantleNSView(_ webView: WKWebView, coordinator: Coordinator) {
-        webView.configuration.userContentController.removeScriptMessageHandler(forName: "agentBridge")
-        webView.configuration.userContentController.removeScriptMessageHandler(forName: "agentLog")
-        webView.configuration.userContentController.removeScriptMessageHandler(forName: "agentNetwork")
-        webView.configuration.userContentController.removeScriptMessageHandler(forName: "agentStartup")
-        webView.configuration.userContentController.removeScriptMessageHandler(forName: "curtainLowered")
-        webView.configuration.userContentController.removeAllUserScripts()
+        retire(webView)
+        AgentPageLifecycle.retired(webView, bridge: coordinator.bridge)
     }
 
     // MARK: - Coordinator
@@ -173,6 +188,11 @@ public struct AgentWebView: NSViewRepresentable {
             _ userContentController: WKUserContentController,
             didReceive message: WKScriptMessage
         ) {
+            #if DEBUG
+            // [PERFMIN] web→native traffic by type: each body is decoded through
+            // JavaScriptCore on the main thread.
+            MainThreadSampler.count("fromWeb." + Self.shortType(message.body))
+            #endif
             // Direct Mac access is a privileged native capability. Third-party
             // frames can address WebKit handlers even without our injected JS.
             if standalone {
@@ -210,7 +230,7 @@ public struct AgentWebView: NSViewRepresentable {
                       url.scheme == local.scheme, url.host == local.host, url.port == local.port else { return .cancel }
             }
             if let url = navigationAction.request.url {
-                NSLog("[AgentWebView] Navigation: %@", url.absoluteString)
+                NSLog("[AgentWebView] Navigation: %@", WebViewLogRedaction.url(url))
                 if navigationAction.navigationType == .linkActivated && isExternalURL(url) {
                     NSLog("[AgentWebView] Opening external URL in browser: %@", url.absoluteString)
                     NSWorkspace.shared.open(url)
@@ -255,7 +275,7 @@ public struct AgentWebView: NSViewRepresentable {
         }
 
         public func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-            NSLog("[AgentWebView] Page finished loading: %@", webView.url?.absoluteString ?? "nil")
+            NSLog("[AgentWebView] Page finished loading: %@", WebViewLogRedaction.url(webView.url))
             Task { @MainActor in
                 bridge.pageDidFinishLoading()
             }
@@ -390,7 +410,7 @@ final class AgentWebViewController: UIViewController {
 @MainActor
 public struct AgentWebView: View {
     public let configuration: AgentConfiguration
-    @ObservedObject public var bridge: AgentBridge
+    public var bridge: AgentBridge
 
     public init(configuration: AgentConfiguration, bridge: AgentBridge) {
         self.configuration = configuration
@@ -491,7 +511,14 @@ private struct AgentWebViewRepresentable: UIViewControllerRepresentable {
         // specifically checks for the "Version/" token to distinguish real Safari
         // from embedded web views and blocks OAuth when it's absent.
         // "RipulNative" lets the web app detect native mode via navigator.userAgent.
+        // "RipulSimulator" marks a Simulator build, so peers can tell it from
+        // the physical phone signed in to the same account — otherwise both
+        // are "Peter_Maude_(iPhone)" to every roster and device tool.
+        #if targetEnvironment(simulator)
+        config.applicationNameForUserAgent = "Version/17.0 RipulNative/1.0 RipulSimulator Mobile/15E148 Safari/604.1"
+        #else
         config.applicationNameForUserAgent = "Version/17.0 RipulNative/1.0 Mobile/15E148 Safari/604.1"
+        #endif
 
         // Content-hashed JS bundles + no-cache HTML headers on the server
         // handle cache invalidation correctly. No need to nuke the WKWebView
@@ -585,6 +612,7 @@ private struct AgentWebViewRepresentable: UIViewControllerRepresentable {
         #endif
 
         bridge.attach(to: webView)
+        AgentPageLifecycle.created(webView, bridge: bridge)
 
         // Load the URL with the full site key config in the hash.
         // AgentView validates the site key natively before creating this
@@ -602,7 +630,7 @@ private struct AgentWebViewRepresentable: UIViewControllerRepresentable {
         queryItems.append(URLQueryItem(name: "_cb", value: String(Int(Date().timeIntervalSince1970))))
         urlComponents.queryItems = queryItems
         let url = urlComponents.url!
-        NSLog("[AgentWebView] Loading URL: %@", url.absoluteString)
+        NSLog("[AgentWebView] Loading URL: %@", WebViewLogRedaction.url(url))
         webView.load(URLRequest(url: url))
 
         return controller
@@ -615,12 +643,8 @@ private struct AgentWebViewRepresentable: UIViewControllerRepresentable {
     static func dismantleUIViewController(_ controller: AgentWebViewController, coordinator: AgentWebView.Coordinator) {
         let webView = controller.webView
         coordinator.bridge.detachToolStripAnchor()
-        webView.configuration.userContentController.removeScriptMessageHandler(forName: "agentBridge")
-        webView.configuration.userContentController.removeScriptMessageHandler(forName: "agentLog")
-        webView.configuration.userContentController.removeScriptMessageHandler(forName: "agentNetwork")
-        webView.configuration.userContentController.removeScriptMessageHandler(forName: "agentStartup")
-        webView.configuration.userContentController.removeScriptMessageHandler(forName: "curtainLowered")
-        webView.configuration.userContentController.removeAllUserScripts()
+        AgentWebView.retire(webView)
+        AgentPageLifecycle.retired(webView, bridge: coordinator.bridge)
     }
 }
 
@@ -734,6 +758,11 @@ extension AgentWebView {
             _ userContentController: WKUserContentController,
             didReceive message: WKScriptMessage
         ) {
+            #if DEBUG
+            // [PERFMIN] web→native traffic by type: each body is decoded through
+            // JavaScriptCore on the main thread.
+            MainThreadSampler.count("fromWeb." + Self.shortType(message.body))
+            #endif
             // Direct Mac access is a privileged native capability. Third-party
             // frames can address WebKit handlers even without our injected JS.
             if standalone {
@@ -771,7 +800,7 @@ extension AgentWebView {
                       url.scheme == local.scheme, url.host == local.host, url.port == local.port else { return .cancel }
             }
             if let url = navigationAction.request.url {
-                NSLog("[AgentWebView] Navigation: %@", url.absoluteString)
+                NSLog("[AgentWebView] Navigation: %@", WebViewLogRedaction.url(url))
                 if navigationAction.navigationType == .linkActivated && isExternalURL(url) {
                     NSLog("[AgentWebView] Opening external URL in Safari: %@", url.absoluteString)
                     await UIApplication.shared.open(url)
@@ -826,7 +855,8 @@ extension AgentWebView {
             Self.lockTabsHeight(in: webView)
             Task { @MainActor in
                 bridge.pageDidFinishLoading()
-                bridge.didFinishFirstNavigation = true
+                // Every main-frame didFinish lands here; publish only the first.
+                bridge.setIfChanged(\.didFinishFirstNavigation, true)
             }
         }
 
@@ -1578,3 +1608,34 @@ extension AgentWebView {
         return declarations.joined(separator: "\n")
     }
 }
+
+extension AgentWebView {
+    /// Shut down a page SwiftUI has taken down. Removing handlers alone is not
+    /// enough: WebKit can keep the page alive, and its JS keeps running against
+    /// whatever channels the host registered. On 2026-09-28 a Mac host's
+    /// replaced page kept polling `claudeCli` for 20+ minutes without
+    /// `agentBridge`, and CLI tool calls routed to it failed. Every channel goes,
+    /// including the host's, and the page is emptied so nothing runs on.
+    static func retire(_ webView: WKWebView) {
+        let controller = webView.configuration.userContentController
+        controller.removeAllScriptMessageHandlers()
+        controller.removeAllUserScripts()
+        // Detach delegates first: the coordinator would treat the blank page as
+        // a navigation away from the app and update the bridge, which by now
+        // belongs to the replacement page.
+        webView.navigationDelegate = nil
+        webView.uiDelegate = nil
+        webView.stopLoading()
+        webView.loadHTMLString("", baseURL: nil)
+    }
+}
+
+#if DEBUG
+extension NSObject {
+    /// `agent-framework:agent:activity` -> `agent:activity`, for [PERFMIN] counters.
+    static func shortType(_ body: Any) -> String {
+        let type = ((body as? [String: Any])?["type"] as? String) ?? "?"
+        return type.hasPrefix("agent-framework:") ? String(type.dropFirst("agent-framework:".count)) : type
+    }
+}
+#endif

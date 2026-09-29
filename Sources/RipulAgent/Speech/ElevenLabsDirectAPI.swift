@@ -104,9 +104,25 @@ final class ElevenLabsDirectAPI {
             guard let text = jsonBody?["text"] as? String, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, text.count <= 5000,
                   let voice = jsonBody?["voiceId"] as? String, !voice.isEmpty, voice.count <= 128,
                   voice.utf8.allSatisfy({ (48...57).contains($0) || (65...90).contains($0) || (97...122).contains($0) || $0 == 45 || $0 == 95 }) else { throw Failure.invalidRequest }
-            return try await data(request(path: "/v1/text-to-speech/\(voice)/stream", method: "POST",
-                body: ["text": text, "model_id": "eleven_multilingual_v2", "voice_settings": jsonBody?["voiceSettings"] as? [String: Any] ?? [:]],
-                query: [URLQueryItem(name: "output_format", value: "mp3_44100_128")]))
+            let fallback = ElevenLabsModelOption.defaultModelId
+            let requested = (jsonBody?["modelId"] as? String).flatMap { ElevenLabsModelOption.isValidId($0) ? $0 : nil } ?? fallback
+            func synthesize(_ model: String) async throws -> Data {
+                var settings = jsonBody?["voiceSettings"] as? [String: Any] ?? [:]
+                if !ElevenLabsModelOption.takesPaceAndStyle(model) {
+                    settings["speed"] = nil
+                    settings["style"] = nil
+                }
+                return try await data(request(path: "/v1/text-to-speech/\(voice)/stream", method: "POST",
+                    body: ["text": text, "model_id": model, "voice_settings": settings],
+                    query: [URLQueryItem(name: "output_format", value: "mp3_44100_128")]))
+            }
+            do {
+                return try await synthesize(requested)
+            } catch Failure.http(let status) where requested != fallback && (status == 400 || status == 422) {
+                // A chosen model this key cannot use would otherwise silence
+                // every reply; speak with the default instead, like the worker.
+                return try await synthesize(fallback)
+            }
         default: throw Failure.invalidRequest
         }
     }

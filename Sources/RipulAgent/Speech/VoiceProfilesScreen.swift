@@ -132,6 +132,7 @@ struct VoiceProfileEditorScreen: View {
     @State private var profileDescription = ""
     @State private var sttProviderId = ""
     @State private var voiceId = ""
+    @State private var ttsModelId = ""
     @State private var pace = 1.0
     @State private var expressiveness = 0.35
     @State private var language = "en"
@@ -193,6 +194,15 @@ struct VoiceProfileEditorScreen: View {
                     Label("Voice", systemImage: "person.wave.2")
                 }
                 .uiKitIdentifier("VoiceProfileEditor.voice")
+                Picker(selection: $ttsModelId) {
+                    Text("Default (\(ElevenLabsModelOption.named(ElevenLabsModelOption.defaultModelId)?.label ?? ""))").tag("")
+                    ForEach(ElevenLabsModelOption.all) { model in
+                        Text(model.label).tag(model.id)
+                    }
+                } label: {
+                    Label("ElevenLabs model", systemImage: "cpu")
+                }
+                .uiKitIdentifier("VoiceProfileEditor.ttsModel")
                 VStack(alignment: .leading, spacing: 2) {
                     HStack {
                         Label("Pace", systemImage: "hare")
@@ -288,6 +298,7 @@ struct VoiceProfileEditorScreen: View {
         profileDescription = existing.description ?? ""
         sttProviderId = existing.sttProviderId ?? ""
         voiceId = existing.voiceId ?? ""
+        ttsModelId = existing.ttsModelId ?? ""
         pace = existing.pace ?? 1.0
         expressiveness = existing.expressiveness ?? 0.35
         language = existing.language ?? "en"
@@ -318,6 +329,7 @@ struct VoiceProfileEditorScreen: View {
             description: profileDescription.isEmpty ? nil : profileDescription,
             ttsProviderId: nil,
             voiceId: voiceId.isEmpty ? nil : voiceId,
+            ttsModelId: ttsModelId,
             pace: pace,
             expressiveness: expressiveness,
             sttProviderId: sttProviderId.isEmpty ? nil : sttProviderId,

@@ -112,14 +112,16 @@ public struct RipulAgentScreen: View {
     @Environment(\.ripulWindowContext) private var workspace
     @Environment(\.ripulComposerChrome) private var composerChrome
     @Environment(\.supportsMultipleWindows) private var supportsMultipleWindows
-    @ObservedObject var bridge: AgentBridge
-    @ObservedObject var model: RipulSessionListModel
+    var bridge: AgentBridge
+    var model: RipulSessionListModel
     let configuration: RipulSessionsConfiguration
     let tokenProvider: () -> String?
     let slots: RipulAgentScreenSlots
 
     @Environment(\.colorScheme) private var colorScheme
     @State private var availableWidth: CGFloat = 0
+    /// The session list's callbacks, one box for the screen's lifetime.
+    @State private var listActions = RipulSessionsViewActions()
     @State private var dockedMetadataWidth: CGFloat = 0
     private var chatAreaWidth: CGFloat { max(1, availableWidth - (metadataIsDocked ? dockedMetadataWidth : 0)) }
     private var canShowSessionSplit: Bool {
@@ -168,8 +170,12 @@ public struct RipulAgentScreen: View {
     /// External owner of the list<->chat visibility (e.g. the app's ContentView,
     /// which drives it from deep links). nil = the screen owns the state.
     private let externalShowingSessionList: Binding<Bool>?
+    /// The same, as an object: the binding is then made here, in this body,
+    /// rather than in the host's (see `RipulListMode`).
+    private let listMode: RipulListMode?
     private var showingSessionList: Binding<Bool> {
-        externalShowingSessionList ?? $fallbackShowingSessionList
+        if let listMode { return Bindable(listMode).showingSessionList }
+        return externalShowingSessionList ?? $fallbackShowingSessionList
     }
     @State private var renamingSession: ChatSession?
     @State private var renameText = ""
@@ -283,7 +289,8 @@ public struct RipulAgentScreen: View {
         configuration: RipulSessionsConfiguration,
         tokenProvider: @escaping () -> String?,
         slots: RipulAgentScreenSlots = .init(),
-        showingSessionList: Binding<Bool>? = nil
+        showingSessionList: Binding<Bool>? = nil,
+        listMode: RipulListMode? = nil
     ) {
         self.bridge = bridge
         self.model = model
@@ -291,6 +298,7 @@ public struct RipulAgentScreen: View {
         self.tokenProvider = tokenProvider
         self.slots = slots
         self.externalShowingSessionList = showingSessionList
+        self.listMode = listMode
         _fallbackInviteManager = StateObject(wrappedValue: RipulInviteManager(
             baseURL: configuration.baseURL,
             cache: configuration.cache
@@ -350,11 +358,14 @@ public struct RipulAgentScreen: View {
             // the window's navigation button while the session list scrolls.
             // Keep the editor mounted; only the visible chat coordinates chrome.
             .environment(\.ripulComposerChrome, isListMode ? nil : composerChrome)
+            // ...but its bottom padding keeps the bar's clearance, so returning
+            // to the chat does not reflow it under a settled bottom pin.
+            .environment(\.composerClearanceChrome, composerChrome)
             .onChange(of: isListMode) { _, showingList in
                 if showingList { composerChrome?.setInteraction("input", active: false) }
             }
-            .onAppear { bridge.nativeChatScrollerEnabled = showNativeChatScroller }
-            .onChange(of: showNativeChatScroller) { bridge.nativeChatScrollerEnabled = $0 }
+            .onAppear { bridge.setIfChanged(\.nativeChatScrollerEnabled, showNativeChatScroller) }
+            .onChange(of: showNativeChatScroller) { bridge.setIfChanged(\.nativeChatScrollerEnabled, $0) }
     }
 
     /// Session metadata content, shared by the compact slide-out overlay and the
@@ -370,10 +381,9 @@ public struct RipulAgentScreen: View {
     /// difference: the compact slide-over closes itself on select/new-chat; the
     /// regular sidebar is persistent and passes a no-op.
     private func sessionListColumn(dismiss: @escaping () -> Void) -> some View {
-        RipulSessionsView(
-            bridge: bridge,
-            cache: configuration.cache,
-            tokenProvider: tokenProvider,
+        // Fresh callbacks into the one box the list holds, so the list can
+        // compare equal and skip its body on a flip (see RipulSessionsViewActions).
+        listActions.update(
             onSelectSession: { session in
                 // Choose mode: return this session to the calling app instead of
                 // opening it. (Set by a `ripul://choose` hand-off — see RipulChooseMode.)
@@ -386,8 +396,8 @@ public struct RipulAgentScreen: View {
                 workspace?.isRestoringSelection = false
                 let waitsForSlide = !showsSessionSplit && !restoring
                 let row = model.unifiedSessions.first { $0.matchKeys.contains(session.sourceChatId) || $0.matchKeys.contains(session.id) }
-                workspace?.selectedSessionID = row?.id ?? session.sourceChatId
-                workspace?.title = session.displayName ?? row?.title ?? "Ripul"
+                workspace?.select(sessionID: row?.id ?? session.sourceChatId,
+                                  title: session.displayName ?? row?.title ?? "Ripul")
                 bridge.navigatingToSessionId = session.id
                 defer {
                     // The model cancels this entire callback when another row
@@ -404,6 +414,9 @@ public struct RipulAgentScreen: View {
                 await bridge.focusSession(id: session.id)
                 guard !Task.isCancelled else { return }
                 bridge.logSessionStartMarker("ios.navigation_requested", chatId: session.sourceChatId)
+                #if os(iOS) && DEBUG
+                ChatEntryMotionProbe.shared.start(bridge: bridge, label: "entry chat=\(session.sourceChatId.suffix(8))")
+                #endif
                 withAnimation(chatOpenAnimation, completionCriteria: .removed) {
                     if !restoring { showingSessionList.wrappedValue = false }
                 } completion: {
@@ -414,10 +427,17 @@ public struct RipulAgentScreen: View {
                 if workspace == nil { bridge.scrollToBottom() }
             },
             onDismiss: { dismiss() },
-            allowRipulAgents: configuration.allowRipulAgents,
             invitesSection: configuration.invitesSection,
-            inviteManager: inviteManager,
             emptyStateOverride: configuration.emptyStateOverride,
+            onListedSessionsChanged: slots.onListedSessionsChanged
+        )
+        return RipulSessionsView(
+            bridge: bridge,
+            cache: configuration.cache,
+            tokenProvider: tokenProvider,
+            actions: listActions,
+            allowRipulAgents: configuration.allowRipulAgents,
+            inviteManager: inviteManager,
             model: model,
             chooseMode: slots.chooseMode,
             showsTitleLozenge: false,
@@ -428,9 +448,9 @@ public struct RipulAgentScreen: View {
             // The list has either the host's Agents/Plans bar or our Sessions
             // bar above it at every width. Docking metadata must not remove
             // that header's clearance and put Machines underneath its buttons.
-            reservesTopBarSpace: true,
-            onListedSessionsChanged: slots.onListedSessionsChanged
+            reservesTopBarSpace: true
         )
+        .equatable()
         // SessionChatColumns extends both panes through the vertical safe area
         // so chat can draw behind the glass. Restore the list's window clearance
         // explicitly, in addition to its app-header reservation. Local geometry
@@ -611,7 +631,11 @@ public struct RipulAgentScreen: View {
     }
 
     public var body: some View {
+        let _ = ChatSlideProbe.markBody("AgentScreen") { Self._printChanges() }
         decoratedLayout
+        .onAppear {
+            ChatSlideProbe.shared.watch(codexFastMode, as: "codexFastMode")
+        }
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { availableWidth = $0 }
         .onPreferenceChange(RipulMetadataColumnWidthKey.self) { dockedMetadataWidth = $0 }
         .onChange(of: metadataIsDocked) { _, docked in
@@ -641,7 +665,17 @@ public struct RipulAgentScreen: View {
         .modifier(SolutionsSheet(bridge: bridge, management: solutionManagement))
         .onChange(of: showingSessionList.wrappedValue) { showing in
             if showing {
-                Task { await model.loadMachinesFromAPI() }
+                // Refresh machines only once the slide back has settled. The
+                // fetch returns ~100-300ms later — mid-spring — and `machines`
+                // is @Published on a model this whole screen observes, so an
+                // immediate refresh re-rendered AgentScreen (and the web-view
+                // host) halfway through the slide: the mid-swipe stutter.
+                let isShowing = showingSessionList
+                Task {
+                    try? await Task.sleep(nanoseconds: 600_000_000)
+                    guard isShowing.wrappedValue else { return }
+                    await model.loadMachinesFromAPI()
+                }
             } else {
                 rawModeSessions = Set(cache.stringArray(forKey: "ripulRawModeSessions") ?? [])
                 sessionProviders = cache.dictionary(forKey: "ripulSessionProviders") as? [String: String] ?? [:]
@@ -746,13 +780,13 @@ public struct RipulAgentScreen: View {
         .onChange(of: bridge.activeSessionId) { newId in
             if let session = bridge.sessions.first(where: { $0.id == newId }) {
                 let row = model.unifiedSessions.first { $0.matchKeys.contains(session.sourceChatId) || $0.matchKeys.contains(session.id) }
-                workspace?.selectedSessionID = row?.id ?? session.sourceChatId
-                workspace?.title = session.displayName ?? row?.title ?? "Ripul"
+                workspace?.select(sessionID: row?.id ?? session.sourceChatId,
+                                  title: session.displayName ?? row?.title ?? "Ripul")
             }
             if let info = commitViewInfo, newId != info.tabId {
                 bridge.unmarkSessionEphemeral(info.tabId)
                 commitViewInfo = nil
-                bridge.suppressNativeChatInput = false
+                bridge.setIfChanged(\.suppressNativeChatInput, false)
             }
             if let newId, let session = bridge.sessions.first(where: { $0.id == newId }) {
                 Task { await refreshCodexModelsIfNeeded(for: session) }
@@ -1314,6 +1348,9 @@ public struct RipulAgentScreen: View {
               bridge.artefactPageTitle == nil,
               let session else { return nil }
         if let info = commitViewInfo, session.id == info.tabId { return nil }
+        // `activeRow`, not a scan of `unifiedSessions`: this runs in body, and
+        // reading the array subscribes the whole screen to every row.
+        if session.id == bridge.activeSessionId { return model.activeRow }
         return model.unifiedSessions.first { $0.represents(session) }
     }
 
@@ -1864,7 +1901,7 @@ public struct RipulAgentScreen: View {
     private func dismissCommitView() {
         guard let info = commitViewInfo else { return }
         bridge.unmarkSessionEphemeral(info.tabId)
-        bridge.suppressNativeChatInput = false
+        bridge.setIfChanged(\.suppressNativeChatInput, false)
         Task { await bridge.closeSession(id: info.tabId) }
         commitViewInfo = nil
         slots.onNavigateToCommits?()
@@ -1874,7 +1911,7 @@ public struct RipulAgentScreen: View {
         bridge.handleConsoleLog("[RESUME] resumeCommitSession START tabId=\(info.tabId.suffix(20)) title=\(info.sessionTitle) sha=\(info.shortSha) sessionId=\(info.sessionId ?? "nil")")
         bridge.handleConsoleLog("[RESUME] sessions.count=\(bridge.sessions.count) ephemeral=\(bridge.ephemeralSessionIds) activeId=\(bridge.activeSessionId ?? "nil")")
         bridge.unmarkSessionEphemeral(info.tabId)
-        bridge.suppressNativeChatInput = false
+        bridge.setIfChanged(\.suppressNativeChatInput, false)
         // Restore the archived session so the CLI can resume it
         if let sessionId = info.sessionId {
             Task {
@@ -2128,6 +2165,7 @@ public struct RipulAgentScreen: View {
 
     private func recordedWorkingDirectory(_ sessionId: String?) -> String? {
         guard let sessionId else { return nil }
+        if sessionId == bridge.activeSessionId { return model.activeRowProjectPath }
         return model.unifiedSessions.first { $0.ripulSession?.id == sessionId }?.projectPath
     }
 
@@ -2254,13 +2292,20 @@ private struct AgentChatDragContainer<SessionList: View, Chat: View>: View {
     // True for the brief window a gesture is springing back to rest, so that
     // settle uses the spring rather than the pick-a-session brake.
     @State private var gestureSettling = false
+    /// A committed swipe-back is sliding home on this container's own state;
+    /// the `showingSessionList` binding flips only once it has landed. The
+    /// flip re-renders ContentView and AgentScreen, which the slide probe
+    /// measured at ~120ms of main thread. Flipped at release, that froze the
+    /// chat part-way across for ~15 frames: the mid-slide stutter. Landing
+    /// first moves that cost to a moment when nothing is in motion.
+    @State private var landingOnList = false
 
 
     /// While dragging, track the finger directly. Otherwise derive from
     /// showingSessionList so programmatic shows/hides animate in the same frame
     /// (no onChange/settledOffset round-trip).
     private var effectiveOffset: CGFloat {
-        gestureActive ? dragOffset : (showingSessionList ? screenWidth : 0)
+        gestureActive ? dragOffset : ((showingSessionList || landingOnList) ? screenWidth : 0)
     }
 
     /// Which animation drives the slide. Finger-down = none (1:1 tracking).
@@ -2310,7 +2355,7 @@ private struct AgentChatDragContainer<SessionList: View, Chat: View>: View {
             showingList: showingSessionList, chatOffset: effectiveOffset,
             canInteractWithChat: !showingMetadata, list: sessionList,
             chat: chat.overlay(alignment: .leading) {
-                if !split && !showingSessionList && !showingMetadata && !suppressEdgeSwipe {
+                if !split && !showingSessionList && !landingOnList && !showingMetadata && !suppressEdgeSwipe {
                     InteractiveEdgeSwipeView(
                         onChanged: handleChanged,
                         onEnded: { offset, velocity in handleEnded(offset: offset, velocity: velocity) },
@@ -2324,7 +2369,10 @@ private struct AgentChatDragContainer<SessionList: View, Chat: View>: View {
         // Animate navigation, not the window width embedded in effectiveOffset.
         // Gesture settling already supplies its own explicit transaction.
         .animation(split ? nil : slideAnimation, value: showingSessionList)
-        .onChange(of: split) { _, _ in gestureActive = false; gestureSettling = false }
+        .onChange(of: split) { _, _ in
+            gestureActive = false; gestureSettling = false
+            if landingOnList { landOnList() }
+        }
         .onChange(of: showingSessionList) { _ in
             // Any list<->chat transition clears the gesture-settle flag. This
             // replaces a 600ms timer that could fire mid-slide (flipping the flag
@@ -2346,6 +2394,7 @@ private struct AgentChatDragContainer<SessionList: View, Chat: View>: View {
     /// touch, until the next edge swipe. Treat it as the cancel it was; a
     /// container at rest is untouched.
     private func settleAfterInterruption() {
+        if landingOnList { landOnList() }
         guard gestureActive else { return }
         NSLog("[FGSETTLE] chat slide settled from offset=\(Int(dragOffset))/\(Int(screenWidth)) list=\(showingSessionList)")
         handleCancelled()
@@ -2360,6 +2409,10 @@ private struct AgentChatDragContainer<SessionList: View, Chat: View>: View {
 
     private func handleChanged(_ offset: CGFloat) {
         guard !backGestureClosesOverlay else { return }
+        ChatSlideProbe.shared.begin()
+        #if os(iOS)
+        RipulSlideCoordination.noteSlideActivity()
+        #endif
         bridge.beginDrag()
         var t = Transaction()
         t.disablesAnimations = true
@@ -2371,6 +2424,9 @@ private struct AgentChatDragContainer<SessionList: View, Chat: View>: View {
 
     private func handleEnded(offset: CGFloat, velocity: CGFloat) {
         beginGestureSettle()
+        #if os(iOS)
+        RipulSlideCoordination.noteSlideActivity()
+        #endif
         if backGestureClosesOverlay {
             bridge.endDrag()
             withAnimation(chatSlideSpring) { gestureActive = false }
@@ -2379,6 +2435,8 @@ private struct AgentChatDragContainer<SessionList: View, Chat: View>: View {
         }
 
         let shouldCommit = offset > screenWidth * 0.35 || velocity > 400
+        ChatSlideProbe.shared.release(settle: shouldCommit ? 1.0 : 0.7, label: String(format: "%@ offset=%.0f/%.0f v=%.0f",
+            shouldCommit ? "commit" : "cancel", offset, screenWidth, velocity))
         if shouldCommit {
             if hasCommitView {
                 bridge.endDrag(delay: 0.35)
@@ -2390,8 +2448,11 @@ private struct AgentChatDragContainer<SessionList: View, Chat: View>: View {
                 bridge.endDrag(delay: 0.5)
                 withAnimation(chatSlideSpring) {
                     gestureActive = false
-                    showingSessionList = true
+                    landingOnList = true
                 }
+                RipulSlideCoordination.chatLandingOnList = true
+                // chatSlideSpring (response 0.45) has visibly arrived by here.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { landOnList() }
             }
         } else {
             bridge.endDrag(delay: 0.22)
@@ -2401,7 +2462,28 @@ private struct AgentChatDragContainer<SessionList: View, Chat: View>: View {
         }
     }
 
+    /// Hand a landed swipe-back to the binding. The offset is already at the
+    /// list, so this moves nothing; the chrome (title bar, shell bar) still
+    /// animates its own switch to list mode on the slide spring.
+    private func landOnList() {
+        guard landingOnList else { return }
+        // The host's drawer was swiped open during the landing: flip once it
+        // is at rest, not under the finger.
+        if RipulSlideCoordination.drawerInteracting {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { landOnList() }
+            return
+        }
+        RipulSlideCoordination.chatLandingOnList = false
+        RipulSlideCoordination.noteSlideActivity()
+        ChatSlideProbe.mark("list flip")
+        withAnimation(chatSlideSpring) {
+            showingSessionList = true
+            landingOnList = false
+        }
+    }
+
     private func handleCancelled() {
+        ChatSlideProbe.shared.release(label: "cancelled")
         beginGestureSettle()
         bridge.endDrag(delay: 0.18)
         withAnimation(chatSlideSpring) {

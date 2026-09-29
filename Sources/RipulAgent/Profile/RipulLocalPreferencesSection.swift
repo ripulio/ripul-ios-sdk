@@ -3,7 +3,7 @@ import SwiftUI
 /// Shared by Settings and Profile; these preferences belong to the device.
 @available(iOS 26.0, macOS 26.0, *)
 public struct RipulLocalPreferencesSection: View {
-    @ObservedObject private var bridge: AgentBridge
+    private var bridge: AgentBridge
     private let tokenProvider: () -> String?
     @AppStorage("ripul.localTheme", store: SpeechPreferences.store) private var theme = "auto"
     public init(bridge: AgentBridge, tokenProvider: @escaping () -> String?) {

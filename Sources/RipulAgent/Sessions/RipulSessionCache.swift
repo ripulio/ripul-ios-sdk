@@ -58,7 +58,21 @@ public final class UserDefaultsSessionCache: RipulSessionCache {
     public func dictionary(forKey key: String) -> [String: Any]? { userDefaults.dictionary(forKey: key) }
     public func bool(forKey key: String) -> Bool { userDefaults.bool(forKey: key) }
     public func object(forKey key: String) -> Any? { userDefaults.object(forKey: key) }
-    public func set(_ value: Any?, forKey key: String) { userDefaults.set(value, forKey: key) }
+    public func set(_ value: Any?, forKey key: String) {
+        // Timed while a chat/list slide is measured: a large synchronous write
+        // (plus the didChange notification fan-out it triggers) lands on the
+        // main thread mid-swipe.
+        guard Thread.isMainThread else { userDefaults.set(value, forKey: key); return }
+        let started = DispatchTime.now().uptimeNanoseconds
+        userDefaults.set(value, forKey: key)
+        let ms = Double(DispatchTime.now().uptimeNanoseconds - started) / 1_000_000
+        if ms >= 2 {
+            let bytes = (value as? Data)?.count ?? -1
+            MainActor.assumeIsolated {
+                ChatSlideProbe.mark(String(format: "defaults.set %@ %.0fms %dB", key, ms, bytes))
+            }
+        }
+    }
     public func removeObject(forKey key: String) { userDefaults.removeObject(forKey: key) }
 }
 

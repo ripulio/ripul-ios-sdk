@@ -8,7 +8,7 @@ import SwiftUI
 public struct RenameSessionAlert: ViewModifier {
     @Binding var renamingSession: ChatSession?
     @Binding var renameText: String
-    @ObservedObject var bridge: AgentBridge
+    var bridge: AgentBridge
 
     public init(renamingSession: Binding<ChatSession?>, renameText: Binding<String>, bridge: AgentBridge) {
         self._renamingSession = renamingSession

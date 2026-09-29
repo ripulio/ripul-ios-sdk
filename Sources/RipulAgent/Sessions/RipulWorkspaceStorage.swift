@@ -27,6 +27,15 @@ public final class RipulWorkspaceStorage {
     }
 
     private let directory: URL
+    /// All file I/O, in order. Writes are async: they ran on the main thread
+    /// inside SwiftUI onChange actions — the list/chat flip's selection save
+    /// was 87-92% of that flip's 62-90ms stall, and every keystroke re-read
+    /// and rewrote the draft. Reads are sync through the same queue, so they
+    /// always see every write issued before them.
+    private let io = DispatchQueue(label: "io.ripul.workspaceStorage", qos: .utility)
+    /// The last draft saved or read per chat, so a keystroke compares in
+    /// memory instead of reading the previous draft back from disk.
+    private var drafts: [String: Draft] = [:]
     public private(set) var selection: Selection
     public let hasSavedSelection: Bool
 
@@ -43,29 +52,38 @@ public final class RipulWorkspaceStorage {
         let previous = selection
         update(&selection)
         guard previous != selection else { return }
-        write(selection, to: directory.appendingPathComponent("selection.json"))
+        let value = selection, url = directory.appendingPathComponent("selection.json")
+        io.async { [directory] in Self.write(value, to: url, directory: directory) }
     }
 
     public func draft(for chatID: String) -> Draft {
-        Self.read(chatDirectory(chatID).appendingPathComponent("draft.json")) ?? Draft()
+        if let cached = drafts[chatID] { return cached }
+        let url = chatDirectory(chatID).appendingPathComponent("draft.json")
+        let saved: Draft = io.sync { Self.read(url) } ?? Draft()
+        drafts[chatID] = saved
+        return saved
     }
 
     public func saveDraft(_ draft: Draft, for chatID: String) {
-        let folder = chatDirectory(chatID)
-        let previous: Draft? = Self.read(folder.appendingPathComponent("draft.json"))
+        let previous = self.draft(for: chatID)
         guard draft != previous else { return }
-        // Publish the small manifest before retiring unused image files.
-        guard write(draft, to: folder.appendingPathComponent("draft.json")) else { return }
-        for id in previous?.imageIDs ?? [] where !draft.imageIDs.contains(id) {
-            try? FileManager.default.removeItem(at: imageURL(id, chatID: chatID))
+        drafts[chatID] = draft
+        let url = chatDirectory(chatID).appendingPathComponent("draft.json")
+        let retired = previous.imageIDs.filter { !draft.imageIDs.contains($0) }.map { imageURL($0, chatID: chatID) }
+        io.async { [directory] in
+            // Publish the small manifest before retiring unused image files.
+            guard Self.write(draft, to: url, directory: directory) else { return }
+            for file in retired { try? FileManager.default.removeItem(at: file) }
         }
     }
 
     public func saveImage(_ image: NativeImageAttachment, for chatID: String) {
         let url = imageURL(image.id, chatID: chatID)
-        // Attachments are immutable by ID; never encode megabytes on each keystroke.
-        guard !FileManager.default.fileExists(atPath: url.path) else { return }
-        write(image.toDictionary(), to: url)
+        io.async { [directory] in
+            // Attachments are immutable by ID; never encode megabytes on each keystroke.
+            guard !FileManager.default.fileExists(atPath: url.path) else { return }
+            Self.write(image.toDictionary(), to: url, directory: directory)
+        }
     }
 
     /// An acknowledgement may arrive after navigating to another chat. Retire
@@ -79,8 +97,13 @@ public final class RipulWorkspaceStorage {
     }
 
     public func images(for chatID: String, ids: [String]) -> [NativeImageAttachment] {
-        ids.compactMap { id in
-            guard let stored: [String: String] = Self.read(imageURL(id, chatID: chatID)),
+        let stored: [String: [String: String]] = io.sync {
+            var found: [String: [String: String]] = [:]
+            for id in ids { found[id] = Self.read(imageURL(id, chatID: chatID)) }
+            return found
+        }
+        return ids.compactMap { id in
+            guard let stored = stored[id],
                   let encoded = stored["data"], let mediaType = stored["mediaType"],
                   let data = Data(base64Encoded: encoded), let thumbnail = PlatformImage(data: data) else { return nil }
             return NativeImageAttachment(id: id, mediaType: mediaType, data: encoded, thumbnail: thumbnail)
@@ -100,7 +123,7 @@ public final class RipulWorkspaceStorage {
         guard let data = try? Data(contentsOf: url) else { return nil }
         return try? JSONDecoder().decode(T.self, from: data)
     }
-    @discardableResult private func write<T: Encodable>(_ value: T, to url: URL) -> Bool {
+    @discardableResult private static func write<T: Encodable>(_ value: T, to url: URL, directory: URL) -> Bool {
         do {
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
             var directory = directory

@@ -10,6 +10,11 @@ let package = Package(
     ],
     products: [
         .library(name: "RipulAgent", targets: ["RipulAgent"]),
+        // Command maps: sentence → an app's own actions, via the on-device
+        // model and rules. Deliberately dependency-free and separate from
+        // RipulAgent, so an app can adopt it without the agent stack — and so
+        // nothing Ripul-specific can leak in.
+        .library(name: "RipulCommands", targets: ["RipulCommands"]),
     ],
     dependencies: [
         .package(url: "https://github.com/gonzalezreal/swift-markdown-ui.git", from: "2.4.1"),
@@ -33,6 +38,11 @@ let package = Package(
         .testTarget(
             name: "RipulAgentTests",
             dependencies: ["RipulAgent"]
+        ),
+        .target(name: "RipulCommands"),
+        .testTarget(
+            name: "RipulCommandsTests",
+            dependencies: ["RipulCommands"]
         ),
     ]
 )

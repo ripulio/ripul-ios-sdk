@@ -34,21 +34,34 @@ enum SessionsPanelLayout {
     }
 }
 
+extension View {
+    /// Lets a scroll view's last content scroll clear of floating bottom
+    /// navigation (`ripulBottomBarFrame`). Measured against the view's real
+    /// frame, so it works whether or not a host's reserved safe-area inset
+    /// reached the scroll view, and never counts that inset twice.
+    @available(iOS 17.0, macOS 14.0, *)
+    public func ripulBottomBarScrollClearance(gap: CGFloat = 0) -> some View {
+        modifier(SessionsScrollClearance(gap: gap))
+    }
+}
+
 /// Leaves the panel's glass in place while the final row can scroll above
 /// floating navigation. Measure locally so safe-area clearance already taken
 /// by a sheet or a host is not applied a second time.
 @available(iOS 17.0, macOS 14.0, *)
 struct SessionsScrollClearance: ViewModifier {
     var actionBarHeight: CGFloat = 0
+    var gap: CGFloat = SessionsPanelLayout.bottomGap
     @Environment(\.ripulBottomBarFrame) private var bottomBar
-    @State private var bottomInset: CGFloat = SessionsPanelLayout.bottomGap
+    @State private var measuredInset: CGFloat?
 
     func body(content: Content) -> some View {
         #if os(iOS)
+        let bottomInset = measuredInset ?? gap
         content
             .contentMargins(.bottom, bottomInset + actionBarHeight, for: .scrollContent)
             .contentMargins(.bottom, bottomInset + actionBarHeight, for: .scrollIndicators)
-            .background(SessionsScrollBoundsReader(bottomBar: bottomBar) { bottomInset = $0 })
+            .background(SessionsScrollBoundsReader(bottomBar: bottomBar, gap: gap) { measuredInset = $0 })
         #else
         content
         #endif

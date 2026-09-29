@@ -310,7 +310,7 @@ public final class VoiceModeController: ObservableObject {
         startSilenceTicker()
 
         lastRunning = bridge.isAgentRunning
-        runningSink = bridge.$isAgentRunning.sink { [weak self] running in
+        runningSink = bridge.turnState.$isRunning.sink { [weak self] running in
             Task { @MainActor [weak self] in
                 self?.handleRunningChange(running)
             }
@@ -338,8 +338,12 @@ public final class VoiceModeController: ObservableObject {
     public func stop() {
         // Invalidate callbacks BEFORE providers synchronously emit .ended.
         phase = .inactive
-        isFinalizingTranscription = false
-        transcriptionRecovery = nil
+        // AgentView holds this controller, and stop() also runs with voice
+        // already off (e.g. on every speech-credential change): don't publish
+        // fields that are already at rest. `phase` keeps its unconditional
+        // write — its didSet has effects that must run.
+        if isFinalizingTranscription { isFinalizingTranscription = false }
+        if transcriptionRecovery != nil { transcriptionRecovery = nil }
         cancelTasks()
         runningSink = nil
         stopAllSpeech()
@@ -356,9 +360,9 @@ public final class VoiceModeController: ObservableObject {
         pendingReply = nil
         narratedMessageIds = []
         narrationQueue = []
-        partialText = ""
-        committedText = ""
-        thinkingSeconds = 0
+        if !partialText.isEmpty { partialText = "" }
+        if !committedText.isEmpty { committedText = "" }
+        if thinkingSeconds != 0 { thinkingSeconds = 0 }
         phase = .inactive
     }
 
@@ -480,6 +484,8 @@ public final class VoiceModeController: ObservableObject {
                         guard let self, self.phase == .listening, self.listeningID == attempt else { return }
                         self.isFinalizingTranscription = false
                         self.transcriptionRecovery = nil
+                        // Drained: committed text is complete; a partial now is stale.
+                        self.partialText = ""
                         self.pausedFrom = .listening
                         self.phase = .paused
                         provider.stopTranscription()
@@ -654,7 +660,8 @@ public final class VoiceModeController: ObservableObject {
             if sttProviderID == "elevenlabs", !text.isEmpty { cloudConnectedThisConversation = true }
             micFailureCount = 0
             if !isFinalizingTranscription { setCaptureLive(true) }
-            partialText = text
+            // Recognisers re-send identical partials.
+            if partialText != text { partialText = text }
             noteTranscript()
         case .committed(let text):
             if sttProviderID == "elevenlabs" { cloudConnectedThisConversation = true }
@@ -663,7 +670,7 @@ public final class VoiceModeController: ObservableObject {
             if !text.isEmpty {
                 committedText = committedText.isEmpty ? text : committedText + " " + text
             }
-            partialText = ""
+            if !partialText.isEmpty { partialText = "" }
             noteTranscript()
         case .audioLevel(let rms):
             guard !isFinalizingTranscription else { return }
@@ -880,7 +887,12 @@ public final class VoiceModeController: ObservableObject {
                     guard let self, self.phase == .listening, self.listeningID == attempt else { return }
                     self.isFinalizingTranscription = false
                     self.transcriptionRecovery = nil
-                    let finalText = (self.committedText + " " + self.partialText).trimmingCharacters(in: .whitespacesAndNewlines)
+                    // Every recorded frame is now acknowledged, so the committed
+                    // text is the whole utterance. Any partial still showing is
+                    // stale — a late copy of text already committed — and
+                    // appending it sent "A. Send command. A".
+                    self.partialText = ""
+                    let finalText = self.committedText.trimmingCharacters(in: .whitespacesAndNewlines)
                     guard !finalText.isEmpty else {
                         self.pausedFrom = .listening
                         self.phase = .paused
@@ -1096,7 +1108,8 @@ public final class VoiceModeController: ObservableObject {
                 guard let tts = self.ttsProvider as? any NativeSpeechProviding else {
                     throw CocoaError(.featureUnsupported)
                 }
-                try await tts.speak(text: text, voiceId: nil, onPlaybackEnd: done)
+                try await tts.speak(text: text, voiceId: nil,
+                                    modelId: SpeechPreferences.ttsModelId(for: .acknowledgement), onPlaybackEnd: done)
             } catch {
                 nerror("[VOICE] ambient TTS failed, falling back to Apple: \(error.localizedDescription)")
                 do {
@@ -1273,7 +1286,8 @@ public final class VoiceModeController: ObservableObject {
                 guard let tts = self.ttsProvider as? any NativeSpeechProviding else {
                     throw CocoaError(.featureUnsupported)
                 }
-                try await tts.speak(text: spoken, voiceId: nil, onPlaybackEnd: resume)
+                try await tts.speak(text: spoken, voiceId: nil,
+                                    modelId: SpeechPreferences.ttsModelId(for: .reply), onPlaybackEnd: resume)
                 playbackBegan()
             } catch {
                 guard self.phase == .speaking else { return }

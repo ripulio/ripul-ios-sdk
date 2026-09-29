@@ -45,7 +45,7 @@ struct QuickLaunchStrip: View {
     /// in the signature to match the shared callback (menu entries pass nil for
     /// "harness default"); the strip always names a model.
     var onNewCliSession: ((RemoteMachine, String, String?) -> Void)?
-    var onNewApiSession: ((String) -> Void)?
+    var onNewApiSession: ((RemoteMachine?, String) -> Void)?
     /// Every offerable model. The picker remains available while these load.
     var allTargets: [QuickLaunchTarget] = []
     /// Needed to persist pin/unpin from the picker. Nil ⇒ no picker button.
@@ -102,7 +102,12 @@ struct QuickLaunchStrip: View {
                         if let providerKey = target.providerKey, let machine {
                             onNewCliSession?(machine, providerKey, target.model.id)
                         } else {
-                            onNewApiSession?(target.model.id)
+                            // Same destination the CLI branch uses. This strip
+                            // is rendered inside a machine's row, so dropping
+                            // `machine` here sent API sessions to whatever the
+                            // web app's default machine was instead of the row
+                            // the user actually tapped.
+                            onNewApiSession?(machine, target.model.id)
                         }
                     } label: {
                         icon(for: target)

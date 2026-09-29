@@ -47,8 +47,11 @@ public struct RipulChatMember: Identifiable, Decodable {
 @MainActor
 public final class RipulInviteManager: ObservableObject {
     @Published public private(set) var invites: [RipulShareInvite] = []
-    @Published public private(set) var isLoading = false
-    @Published public private(set) var lastFetchStatus: String = ""
+    // Diagnostics and a re-entrancy guard, not UI: nothing renders them, and
+    // publishing them re-rendered every observer (the session list, the SDK
+    // console's RipulAgentScreen) twice per 20s poll, changed or not.
+    public private(set) var isLoading = false
+    public private(set) var lastFetchStatus: String = ""
 
     /// MRU list of emails the user has previously invited (persisted locally).
     @Published public private(set) var recentEmails: [String] = []
@@ -152,7 +155,10 @@ public final class RipulInviteManager: ObservableObject {
     /// Fetch the user's invites from the server.
     public func fetchInvites() async {
         let currentAccount = accountProvider?()
-        if accountId != currentAccount { invites = []; accountId = currentAccount }
+        if accountId != currentAccount {
+            if !invites.isEmpty { invites = [] }
+            accountId = currentAccount
+        }
         // A push during an in-flight read must trigger a second read, not be lost.
         guard !isLoading else { refreshQueued = true; return }
         isLoading = true
@@ -181,7 +187,10 @@ public final class RipulInviteManager: ObservableObject {
                 request.setValue("Bearer \(fresh)", forHTTPHeaderField: "Authorization")
                 (data, response) = try await session.data(for: request)
             }
-            guard accountProvider?() == currentAccount else { invites = []; return }
+            guard accountProvider?() == currentAccount else {
+                if !invites.isEmpty { invites = [] }
+                return
+            }
             guard !Task.isCancelled else { return }
             let status = (response as? HTTPURLResponse)?.statusCode ?? 0
             guard status >= 200, status < 300 else {

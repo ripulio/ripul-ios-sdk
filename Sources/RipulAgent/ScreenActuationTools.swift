@@ -1739,7 +1739,9 @@ public struct TapElementTool: NativeTool {
         .string("text", "Visible text to match (case-insensitive substring)"),
         .stringEnum("role", "Element role (see inspect_screen's role field)", values: ScreenElementFinder.roleVocabulary),
         .string("class", "Class-name substring (e.g. \"Button\", \"BarButton\")"),
-        .integer("nth", "0-based ordinal when several disjoint elements match (last resort)")
+        .integer("nth", "0-based ordinal when several disjoint elements match (last resort)"),
+        .bool("touch", "Press it with a real finger touch at its centre instead of its control or accessibility "
+              + "action (debug builds). Used automatically when nothing else can press the element.")
     )
 
     /// SDK-internal — see `RipulDeveloperOnlyTool`.
@@ -1754,6 +1756,9 @@ public struct TapElementTool: NativeTool {
         switch ScreenElementFinder.resolveTarget(args: args) {
         case .failure(let error): return error
         case .target(let m, let count): target = m; matchCount = count
+        }
+        if args["touch"] as? Bool == true {
+            return await Self.touch(target, matchCount: matchCount, ladderTrace: nil)
         }
         let outcome = ScreenActuationEngine.performTap(on: target.view,
                                                         matchId: args["id"] as? String,
@@ -1772,9 +1777,93 @@ public struct TapElementTool: NativeTool {
             if let a = outcome.activatedIdentifier { result["activatedId"] = a }
             return result
         }
+        if TouchSynthesizer.isAvailable {
+            // Nothing semantic presses it (a UITabBar item, a custom control):
+            // a finger would, so use one.
+            return await Self.touch(target, matchCount: matchCount, ladderTrace: outcome.trace)
+        }
         return ["success": false, "matched": matchCount, "element": ScreenElementFinder.describe(target),
                 "trace": outcome.trace, "error": outcome.error as Any,
                 "stamp": ScreenElementFinder.lastStampDecision as Any]
+    }
+
+    /// A real touch at the centre of the match's visible part — refused when
+    /// something else would take the finger there (an overlay, a sheet).
+    @MainActor
+    static func touch(_ target: ScreenElementFinder.Match, matchCount: Int, ladderTrace: String?) async -> [String: Any] {
+        var result: [String: Any] = ["matched": matchCount, "element": ScreenElementFinder.describe(target)]
+        let prefix = ladderTrace.map { $0 + " " } ?? ""
+        if let reason = TouchSynthesizer.unavailableReason {
+            result["success"] = false
+            result["error"] = "Real touches are unavailable: \(reason)"
+            return result
+        }
+        let window = target.window
+        let visible = target.effectiveFrame.intersection(window.bounds)
+        guard !visible.isNull, visible.width >= 1, visible.height >= 1 else {
+            result["success"] = false
+            result["error"] = "The element is off screen; scroll it into view first"
+            result["trace"] = prefix + "touch:offscreen"
+            return result
+        }
+        var point = CGPoint(x: visible.midX, y: visible.midY)
+        let hit = window.hitTest(point, with: nil)
+        if let hit, !(hit === target.view || hit.isDescendant(of: target.view) || target.view.isDescendant(of: hit)),
+           !presses(hit, for: target) {
+            result["success"] = false
+            result["error"] = "Something else is on top of the element at its centre (\(type(of: hit))); a finger "
+                + "would press that. Tap it instead, or use touch at a clear spot."
+            result["under"] = TouchTool.describeHit(hit)
+            result["trace"] = prefix + "touch:covered"
+            return result
+        }
+        // A label inside a button (a tab's title): press the button's centre,
+        // not the label's, which sits near the button's edge.
+        if let hit, let control = enclosingControl(from: hit, around: visible, in: window) {
+            let frame = control.convert(control.bounds, to: window).intersection(window.bounds)
+            point = CGPoint(x: frame.midX, y: frame.midY)
+            result["pressed"] = TouchTool.describeHit(control)
+        }
+        do {
+            try await TouchSynthesizer.tap(at: point, in: window)
+        } catch {
+            result["success"] = false
+            result["error"] = "The touch could not be delivered: \(error)"
+            result["trace"] = prefix + "touch:failed"
+            return result
+        }
+        result["success"] = true
+        result["via"] = "touch"
+        result["point"] = ["x": point.x, "y": point.y]
+        result["trace"] = prefix + "touch:delivered"
+        result["note"] = "Delivered as a real touch; confirm it did what you meant with wait_for_element or inspect_screen."
+        return result
+    }
+
+    /// Whether a view on top of the match is the match's own control drawn
+    /// separately (on iOS 26 a tab's title is not inside its `_UITabButton`):
+    /// a control carrying the same text, covering the match's centre.
+    @MainActor
+    private static func presses(_ hit: UIView, for target: ScreenElementFinder.Match) -> Bool {
+        guard let control = sequence(first: hit, next: { $0.superview }).first(where: { $0 is UIControl }) else {
+            return false
+        }
+        let text = (target.text ?? target.view.accessibilityLabel ?? "").trimmingCharacters(in: .whitespaces)
+        guard !text.isEmpty, let label = control.accessibilityLabel else { return false }
+        return label.caseInsensitiveCompare(text) == .orderedSame
+    }
+
+    /// The small control a finger at `frame` would press: the nearest UIControl
+    /// from `hit` up that contains the match — not a screen-sized one.
+    @MainActor
+    private static func enclosingControl(from hit: UIView, around frame: CGRect, in window: UIWindow) -> UIControl? {
+        for view in sequence(first: hit, next: { $0.superview }) {
+            guard let control = view as? UIControl else { continue }
+            let bounds = control.convert(control.bounds, to: window)
+            let small = bounds.width * bounds.height <= window.bounds.width * window.bounds.height / 8
+            return bounds.contains(CGPoint(x: frame.midX, y: frame.midY)) && small ? control : nil
+        }
+        return nil
     }
 
     /// A system alert's buttons are private action views with no target/action, no

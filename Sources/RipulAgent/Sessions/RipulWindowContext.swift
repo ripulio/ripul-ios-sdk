@@ -20,6 +20,14 @@ public final class RipulWindowContext: ObservableObject {
     public weak var window: UIWindow?
     #endif
 
+    /// Record the selected session and window title, publishing only what
+    /// changed. Both are re-asserted on every row tap and every active-session
+    /// change, usually with the values they already hold.
+    public func select(sessionID: String?, title: String) {
+        if selectedSessionID != sessionID { selectedSessionID = sessionID }
+        if self.title != title { self.title = title }
+    }
+
     public init(id: UUID, sessionID: String? = nil, websiteDataStore: WKWebsiteDataStore, storage: RipulWorkspaceStorage? = nil) {
         self.id = id
         self.storage = storage ?? RipulWorkspaceStorage(id: id)

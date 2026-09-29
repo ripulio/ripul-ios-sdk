@@ -7,8 +7,10 @@ import SwiftUI
 /// offering New-Agent / new-CLI-session tiles and machine settings (restart,
 /// set default, set icon, enable/disable).
 ///
-/// The app's version also hosts a "remote actions" (scripts) grid + execution
-/// sheet; that quick-actions feature is deferred and is not present here.
+/// Everything in the body is a `MachinePanelEntry`, and the user's per-machine
+/// `MachinePanelLayout` decides its order, whether it draws as a tile or a
+/// row, and whether it shows at all (Customise Panel). Host scripts — the
+/// primary remote actions — are editable from here too (Edit Scripts).
 ///
 /// Cache-derived values (`allowRipulAgents`, `machineIcon`, `isMachineDisabled`,
 /// `defaultMachineId`) are resolved by the parent — which owns the
@@ -26,8 +28,10 @@ public struct MachineRowExpandable: View {
     /// default" — what the expanded body's provider tiles ask for. The folded
     /// quick-start strip always names a model.
     var onNewCliSession: ((RemoteMachine, String, String?) -> Void)? = nil
-    /// Start a machine-free API chat pinned to a catalog model id.
-    var onNewApiSession: ((String) -> Void)? = nil
+    /// Start an API chat pinned to a catalog model id, on this row's machine.
+    /// The machine is nil only where the strip has no row to belong to (the
+    /// collapsed panel header), which means "let the web app choose".
+    var onNewApiSession: ((RemoteMachine?, String) -> Void)? = nil
     /// User-configured quick-start shortcuts for the folded strip. Resolved by
     /// the parent (which owns the cache and the model catalog); empty = no strip.
     var quickLaunchTargets: [QuickLaunchTarget] = []
@@ -84,7 +88,7 @@ public struct MachineRowExpandable: View {
         onConnect: @escaping () -> Void,
         onFocusSession: ((ChatSession) -> Void)? = nil,
         onNewCliSession: ((RemoteMachine, String, String?) -> Void)? = nil,
-        onNewApiSession: ((String) -> Void)? = nil,
+        onNewApiSession: ((RemoteMachine?, String) -> Void)? = nil,
         quickLaunchTargets: [QuickLaunchTarget] = [],
         quickLaunchAllTargets: [QuickLaunchTarget] = [],
         quickLaunchCache: RipulSessionCache? = nil,
@@ -138,6 +142,9 @@ public struct MachineRowExpandable: View {
 
     @State private var loadingTile: String?
     @State private var showIconPicker = false
+    @State private var showCustomiser = false
+    @State private var showScripts = false
+    @ObservedObject private var layoutStore = MachinePanelLayoutStore.shared
     @State private var showActionSheet: RemoteActionDescriptor?
     @State private var showDestructiveConfirm: RemoteActionDescriptor?
     @State private var showResultSheet: (action: RemoteActionDescriptor, result: [String: Any])?
@@ -151,14 +158,6 @@ public struct MachineRowExpandable: View {
     @State private var expandedContentHeight: CGFloat = 0
 
     private var isDefault: Bool { machine.machineId == defaultMachineId }
-
-    private var primaryActions: [RemoteActionDescriptor] {
-        remoteActions.filter { $0.isPrimary }
-    }
-
-    private var secondaryActions: [RemoteActionDescriptor] {
-        remoteActions.filter { !$0.isPrimary }
-    }
 
     // Claude-account row state. Nil status = not fetched yet; keep the row
     // neutral rather than implying anything about the host's sign-in.
@@ -188,6 +187,7 @@ public struct MachineRowExpandable: View {
     }
 
     @State private var showCodexAccounts = false
+    @State private var showHostSettings = false
 
     private func refreshHostAuthStatus() {
         guard let hostAuthBridge, machine.isOnline, !isMachineDisabled else { return }
@@ -231,10 +231,31 @@ public struct MachineRowExpandable: View {
                 onSetIcon?(icon)
             }
         }
+        .sheet(isPresented: $showCustomiser) {
+            MachinePanelCustomiserSheet(
+                machineId: machine.machineId,
+                machineName: machine.displayName,
+                entries: panelEntries
+            )
+        }
+        .sheet(isPresented: $showScripts) {
+            if let hostAuthBridge {
+                // A saved or deleted script changes the tiles, so re-read the
+                // catalog now rather than on the next expand.
+                HostScriptsSheet(machine: machine, bridge: hostAuthBridge) {
+                    onDiscoverActions?(machine)
+                }
+            }
+        }
         .sheet(isPresented: $showCodexAccounts) {
             if let hostAuthBridge {
                 CodexAccountSwitcherSheet(machineId: machine.machineId, machineName: machine.displayName,
                     direct: machine.meta?["connection"] == "direct", bridge: hostAuthBridge)
+            }
+        }
+        .sheet(isPresented: $showHostSettings) {
+            if let hostAuthBridge {
+                HostSettingsSheet(machineId: machine.machineId, machineName: machine.displayName, bridge: hostAuthBridge)
             }
         }
         .sheet(isPresented: $showSignInSheet, onDismiss: { refreshHostAuthStatus() }) {
@@ -414,6 +435,7 @@ public struct MachineRowExpandable: View {
     /// icon vocabulary as the collapsed panel header's strip in
     /// `GlassSessionsList`.
     private var quickLaunchStrip: some View {
+        ModelLoadingReader(hostAuthBridge?.modelLoading ?? .idle) { modelsLoading in
         QuickLaunchStrip(
             targets: quickLaunchTargets,
             machine: machine,
@@ -423,7 +445,7 @@ public struct MachineRowExpandable: View {
             onNewApiSession: onNewApiSession,
             allTargets: quickLaunchAllTargets,
             cache: quickLaunchCache,
-            modelsLoading: hostAuthBridge?.isLoadingModels ?? false,
+            modelsLoading: modelsLoading,
             modelsError: hostAuthBridge?.lastModelsError,
             onRetryModels: hostAuthBridge.map { bridge in { Task { await bridge.fetchModels() } } },
             showCircles: quickLaunchShowCircles,
@@ -437,6 +459,7 @@ public struct MachineRowExpandable: View {
             onSwitchAccount: hostAuthBridge != nil ? { showSignInSheet = true } : nil,
             onSwitchCodexAccount: hostAuthBridge != nil ? { showCodexAccounts = true } : nil
         )
+        }
     }
 
     /// When the strip shows at all: on folded rows (or always, when the row IS
@@ -518,11 +541,19 @@ public struct MachineRowExpandable: View {
         }
     }
 
-    /// Provider tiles, then the compact settings rows.
+    /// Tiles, then compact rows — whichever the layout put where, in its order.
     private var expandedContent: some View {
-        VStack(spacing: 10) {
-            // === Primary section: square tiles ===
-            //
+        let layout = layoutStore.layout(for: machine.machineId)
+        let visible = panelEntries
+            .filter { $0.available && !$0.isHidden(in: layout) }
+            .ordered(by: layout)
+        let tiles = visible.filter { $0.placement(in: layout) == .tile }
+        let rows = visible.filter { $0.placement(in: layout) == .row }
+        let tileRows = stride(from: 0, to: tiles.count, by: 2).map { start in
+            Array(tiles[start..<min(start + 2, tiles.count)])
+        }
+
+        return VStack(spacing: 10) {
             // Laid out non-lazily on purpose. A LazyVGrid only materialises the
             // rows it believes are visible, so the height it reports back
             // through MachineExpandedHeightKey would depend on the clamp that is
@@ -532,14 +563,17 @@ public struct MachineRowExpandable: View {
                 VStack(spacing: 10) {
                     ForEach(Array(tileRows.enumerated()), id: \.offset) { _, row in
                         HStack(spacing: 10) {
-                            ForEach(row) { tile in
+                            ForEach(row) { entry in
                                 MachineActionTile(
-                                    icon: tile.icon,
-                                    label: tile.label,
-                                    subtitle: tile.subtitle,
-                                    tint: tile.tint,
-                                    isLoading: loadingTile == tile.id,
-                                    action: tile.action
+                                    icon: entry.icon,
+                                    label: entry.label,
+                                    subtitle: entry.subtitle,
+                                    tint: entry.tint,
+                                    isLoading: entry.isLoading,
+                                    isSucceeded: entry.isSucceeded,
+                                    loadingLabel: entry.loadingLabel,
+                                    succeededLabel: entry.succeededLabel,
+                                    action: entry.action
                                 )
                             }
                             // Odd tile count: hold the empty half so the last
@@ -553,152 +587,212 @@ public struct MachineRowExpandable: View {
                 }
             }
 
-            // === Secondary section: compact rows ===
-            VStack(spacing: 0) {
-                // Secondary remote actions (intrinsic utilities)
-                if machine.isOnline && !isMachineDisabled {
-                    ForEach(secondaryActions, id: \.id) { action in
+            if !rows.isEmpty {
+                VStack(spacing: 0) {
+                    ForEach(rows) { entry in
                         MachineActionRow(
-                            icon: action.icon ?? "bolt",
-                            label: action.displayName,
-                            tint: action.destructive ? .red : .secondary,
-                            isLoading: loadingTile == action.id
-                        ) {
-                            handleRemoteAction(action)
-                        }
+                            icon: entry.icon,
+                            label: entry.label,
+                            tint: entry.tint,
+                            isLoading: entry.isLoading,
+                            isSucceeded: entry.isSucceeded,
+                            loadingLabel: entry.loadingLabel,
+                            succeededLabel: entry.succeededLabel,
+                            action: entry.action
+                        )
                     }
                 }
-
-                // Claude account — phone-driven host sign-in. The label
-                // carries live status so an unauthenticated host reads as
-                // needing attention without opening the sheet.
-                if machine.isOnline && !isMachineDisabled && hostAuthBridge != nil {
-                    MachineActionRow(
-                        icon: claudeAccountIcon,
-                        label: claudeAccountLabel,
-                        tint: claudeAccountTint
-                    ) {
-                        showSignInSheet = true
-                    }
-                }
-
-                if machine.isOnline && !isMachineDisabled && hostAuthBridge != nil {
-                    MachineActionRow(icon: "person.2", label: "Codex accounts", tint: .secondary) {
-                        showCodexAccounts = true
-                    }
-                }
-
-                // Restart Host
-                if (machine.isOnline && !isMachineDisabled && onRestart != nil) || isRestarting || isRestartSucceeded {
-                    MachineActionRow(
-                        icon: "arrow.triangle.2.circlepath",
-                        label: "Restart Host",
-                        tint: .orange,
-                        isLoading: isRestarting,
-                        isSucceeded: isRestartSucceeded,
-                        loadingLabel: "Restarting…",
-                        succeededLabel: "Restarted"
-                    ) {
-                        onRestart?(machine)
-                    }
-                }
-
-                // Set as Default
-                MachineActionRow(
-                    icon: isDefault ? "star.fill" : "star",
-                    label: isDefault ? "Default Machine" : "Set as Default",
-                    tint: .yellow
-                ) {
-                    onSetDefault?(isDefault ? "" : machine.machineId)
-                }
-
-                // Set Icon
-                MachineActionRow(
-                    icon: machineIcon ?? "photo.on.rectangle",
-                    label: "Set Icon",
-                    tint: .purple
-                ) {
-                    showIconPicker = true
-                }
-
-                // Disable / Enable
-                if let onToggleDisabled {
-                    MachineActionRow(
-                        icon: isMachineDisabled ? "checkmark.circle" : "nosign",
-                        label: isMachineDisabled ? "Enable" : "Disable",
-                        tint: isMachineDisabled ? .green : .red
-                    ) {
-                        onToggleDisabled(machine)
-                    }
-                }
+                .modifier(GlassTileBackground())
             }
-            .modifier(GlassTileBackground())
         }
         .padding(.top, 8)
     }
 
-    /// The square tiles, flattened from the three sources that used to feed the
-    /// grid directly, so they can be chunked into rows without a lazy container.
-    private var expandedTiles: [MachineTileSpec] {
-        guard machine.isOnline, !isMachineDisabled else { return [] }
-        var tiles: [MachineTileSpec] = []
+    /// Everything the body can draw, in shipped order and placement. The
+    /// layout reorders, re-places and hides these; `available` is the gate the
+    /// body used to express as scattered `if`s.
+    private var panelEntries: [MachinePanelEntry] {
+        let actionable = machine.isOnline && !isMachineDisabled
+        var entries: [MachinePanelEntry] = []
 
-        // New Ripul Agent
-        if createNewChat == nil && allowRipulAgents {
-            tiles.append(MachineTileSpec(
-                id: "newAgent",
-                icon: "plus.message.fill",
-                label: "New Agent",
-                subtitle: "Start a fresh Ripul agent",
-                tint: .blue
+        entries.append(MachinePanelEntry(
+            id: "builtin:newAgent",
+            icon: "plus.message.fill",
+            label: "New Agent",
+            subtitle: "Start a fresh Ripul agent",
+            tint: .blue,
+            defaultPlacement: .tile,
+            available: actionable && createNewChat == nil && allowRipulAgents,
+            isLoading: loadingTile == "newAgent",
+            loadingLabel: "Connecting…"
+        ) {
+            loadingTile = "newAgent"
+            onConnect()
+        })
+
+        // CLI provider tiles (driven by providers.json)
+        for provider in ProviderConstants.cliProviders {
+            guard let providerKey = provider.providerKey else { continue }
+            entries.append(MachinePanelEntry(
+                id: "cli:\(providerKey)",
+                icon: provider.sfSymbol,
+                label: provider.label,
+                subtitle: "Start a new remote \(provider.label) session",
+                tint: Color(hex: provider.color),
+                defaultPlacement: .tile,
+                available: actionable && createNewChat == nil && onNewCliSession != nil,
+                isLoading: loadingTile == provider.id,
+                loadingLabel: "Connecting…"
             ) {
-                loadingTile = "newAgent"
-                onConnect()
+                loadingTile = provider.id
+                // Harness tile: no model named, so the provider default
+                // stands. The model-aligned shortcuts live in the folded strip.
+                onNewCliSession?(machine, providerKey, nil)
             })
         }
 
-        // CLI provider tiles (driven by providers.json)
-        if createNewChat == nil, let newCliAction = onNewCliSession {
-            for provider in ProviderConstants.cliProviders {
-                guard let providerKey = provider.providerKey else { continue }
-                tiles.append(MachineTileSpec(
-                    id: provider.id,
-                    icon: provider.sfSymbol,
-                    label: provider.label,
-                    subtitle: "Start a new remote \(provider.label) session",
-                    tint: Color(hex: provider.color)
-                ) {
-                    loadingTile = provider.id
-                    // Harness tile: no model named, so the provider default
-                    // stands. The model-aligned shortcuts live in the folded
-                    // strip.
-                    newCliAction(machine, providerKey, nil)
-                })
-            }
-        }
-
-        // Primary remote actions (scripts, user-promoted)
-        for action in primaryActions {
-            tiles.append(MachineTileSpec(
-                id: action.id,
+        // Host-advertised actions. The host's own emphasis is the default
+        // placement; a user override outranks it.
+        for action in remoteActions {
+            entries.append(MachinePanelEntry(
+                id: "action:\(action.id)",
                 icon: action.icon ?? "bolt",
                 label: action.displayName,
                 subtitle: action.description,
-                tint: action.destructive ? .red : .cyan
+                tint: action.destructive ? .red : (action.isPrimary ? .cyan : .secondary),
+                defaultPlacement: action.isPrimary ? .tile : .row,
+                available: actionable,
+                isLoading: loadingTile == action.id,
+                loadingLabel: "Running…"
             ) {
                 handleRemoteAction(action)
             })
         }
 
-        return tiles
-    }
+        // Claude account — phone-driven host sign-in. The label carries live
+        // status so an unauthenticated host reads as needing attention.
+        entries.append(MachinePanelEntry(
+            id: "builtin:claudeAccount",
+            icon: claudeAccountIcon,
+            label: claudeAccountLabel,
+            subtitle: "Sign the host in or switch account",
+            tint: claudeAccountTint,
+            defaultPlacement: .row,
+            available: actionable && hostAuthBridge != nil
+        ) {
+            showSignInSheet = true
+        })
 
-    /// `expandedTiles` in two-column rows.
-    private var tileRows: [[MachineTileSpec]] {
-        let tiles = expandedTiles
-        return stride(from: 0, to: tiles.count, by: 2).map { start in
-            Array(tiles[start..<min(start + 2, tiles.count)])
+        entries.append(MachinePanelEntry(
+            id: "builtin:codexAccounts",
+            icon: "person.2",
+            label: "Codex accounts",
+            subtitle: "Switch the host’s Codex account",
+            tint: .secondary,
+            defaultPlacement: .row,
+            available: actionable && hostAuthBridge != nil
+        ) {
+            showCodexAccounts = true
+        })
+
+        // The Mac's own settings. Relay only: direct pairing deliberately
+        // carries no settings, and a team host's settings are its owner's.
+        entries.append(MachinePanelEntry(
+            id: "builtin:hostSettings",
+            icon: "gearshape",
+            label: "Host Settings",
+            subtitle: "Working folder, CLI and power settings",
+            tint: .secondary,
+            defaultPlacement: .row,
+            available: actionable && hostAuthBridge != nil
+                && machine.meta?["connection"] != "direct" && machine.teamId == nil
+        ) {
+            showHostSettings = true
+        })
+
+        entries.append(MachinePanelEntry(
+            id: "builtin:scripts",
+            icon: "chevron.left.forwardslash.chevron.right",
+            label: "Edit Scripts",
+            subtitle: "Write and edit this host’s scripts",
+            tint: .cyan,
+            defaultPlacement: .row,
+            available: actionable && hostAuthBridge != nil
+        ) {
+            showScripts = true
+        })
+
+        entries.append(MachinePanelEntry(
+            id: "builtin:restart",
+            icon: "arrow.triangle.2.circlepath",
+            label: "Restart Host",
+            subtitle: "Relaunch the host app",
+            tint: .orange,
+            defaultPlacement: .row,
+            // Stays through a restart so progress and result stay visible even
+            // once the machine has dropped offline.
+            available: (actionable && onRestart != nil) || isRestarting || isRestartSucceeded,
+            isLoading: isRestarting,
+            isSucceeded: isRestartSucceeded,
+            loadingLabel: "Restarting…",
+            succeededLabel: "Restarted"
+        ) {
+            onRestart?(machine)
+        })
+
+        entries.append(MachinePanelEntry(
+            id: "builtin:setDefault",
+            icon: isDefault ? "star.fill" : "star",
+            label: isDefault ? "Default Machine" : "Set as Default",
+            subtitle: "Use this machine for new sessions",
+            tint: .yellow,
+            defaultPlacement: .row
+        ) {
+            onSetDefault?(isDefault ? "" : machine.machineId)
+        })
+
+        entries.append(MachinePanelEntry(
+            id: "builtin:setIcon",
+            icon: machineIcon ?? "photo.on.rectangle",
+            label: "Set Icon",
+            subtitle: "Pick this machine’s icon",
+            tint: .purple,
+            defaultPlacement: .row
+        ) {
+            showIconPicker = true
+        })
+
+        entries.append(MachinePanelEntry(
+            id: "builtin:customise",
+            icon: "slider.horizontal.3",
+            label: "Customise Panel",
+            subtitle: "Reorder, resize and hide these",
+            tint: .secondary,
+            defaultPlacement: .row,
+            // Hiding the way back into the editor would strand the layout.
+            essential: true,
+            fixedPlacement: true
+        ) {
+            showCustomiser = true
+        })
+
+        if let onToggleDisabled {
+            entries.append(MachinePanelEntry(
+                id: "builtin:toggleDisabled",
+                icon: isMachineDisabled ? "checkmark.circle" : "nosign",
+                label: isMachineDisabled ? "Enable" : "Disable",
+                subtitle: isMachineDisabled ? "Show this machine’s actions" : "Hide this machine’s actions",
+                tint: isMachineDisabled ? .green : .red,
+                defaultPlacement: .row,
+                // A disabled machine shows almost nothing else, so this must
+                // always be there to undo it.
+                essential: true
+            ) {
+                onToggleDisabled(machine)
+            })
         }
+
+        return entries
     }
 
     private func handleRemoteAction(_ action: RemoteActionDescriptor) {
@@ -743,28 +837,29 @@ private struct MachineExpandedHeightKey: PreferenceKey {
 
 // MARK: - Machine Action Tile
 
-/// One square tile in the expanded body, resolved ahead of layout so the tiles
-/// can be chunked into explicit rows.
-private struct MachineTileSpec: Identifiable {
-    let id: String
-    let icon: String
-    let label: String
-    let subtitle: String
-    var tint: Color = .blue
-    let action: () -> Void
-}
-
 private struct MachineActionTile: View {
     let icon: String
     let label: String
     let subtitle: String
     var tint: Color = .blue
     var isLoading: Bool = false
+    // Any entry can now be placed as a tile, so the tile carries the same
+    // transient labels the row does: a Restart moved into the grid must still
+    // say "Restarting…" and "Restarted".
+    var isSucceeded: Bool = false
+    var loadingLabel: String? = nil
+    var succeededLabel: String? = nil
     let action: () -> Void
+
+    private var displayLabel: String {
+        if isLoading { return loadingLabel ?? label }
+        if isSucceeded { return succeededLabel ?? label }
+        return label
+    }
 
     public var body: some View {
         Button {
-            if !isLoading { action() }
+            if !isLoading && !isSucceeded { action() }
         } label: {
             VStack(spacing: 6) {
                 if isLoading {
@@ -772,16 +867,20 @@ private struct MachineActionTile: View {
                         .controlSize(.regular)
                         .tint(tint)
                         .frame(height: 22)
+                } else if isSucceeded {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 22, weight: .medium))
+                        .foregroundStyle(.green)
                 } else {
                     Image(systemName: icon)
                         .font(.system(size: 22, weight: .medium))
                         .foregroundStyle(tint)
                 }
                 VStack(spacing: 2) {
-                    Text(isLoading ? "Connecting…" : label)
+                    Text(displayLabel)
                         .font(.caption)
                         .fontWeight(.semibold)
-                        .foregroundStyle(.primary)
+                        .foregroundStyle(isSucceeded ? .green : .primary)
                     Text(subtitle)
                         .font(.system(size: 10))
                         .foregroundStyle(.secondary)
@@ -795,7 +894,7 @@ private struct MachineActionTile: View {
             .modifier(GlassTileBackground())
         }
         .buttonStyle(.plain)
-        .disabled(isLoading)
+        .disabled(isLoading || isSucceeded)
     }
 }
 

@@ -13,7 +13,7 @@ private struct RipulShimmerModifier: ViewModifier {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     func body(content: Content) -> some View {
-        if reduceMotion {
+        if reduceMotion || PerfSwitch.isOff("shimmer") {
             content.foregroundStyle(base)
         } else {
             content
@@ -22,31 +22,12 @@ private struct RipulShimmerModifier: ViewModifier {
         }
     }
 
+    // The band sweeps in the render server: a TimelineView(.animation)
+    // re-rendered this view every frame for as long as it was on screen.
     private func bandOverlay(content: Content) -> some View {
-        GeometryReader { geo in
-            TimelineView(.animation) { timeline in
-                band(width: geo.size.width, at: timeline.date)
-            }
-        }
-        .mask(content)
-        .allowsHitTesting(false)
-    }
-
-    private func band(width w: CGFloat, at date: Date) -> some View {
-        let t = date.timeIntervalSinceReferenceDate
-        let phase = (t / duration) - floor(t / duration)
-        let offset = -3 * w + 3 * w * phase
-        return LinearGradient(
-            stops: [
-                .init(color: .clear, location: 0.40),
-                .init(color: highlight, location: 0.50),
-                .init(color: .clear, location: 0.60),
-            ],
-            startPoint: .leading,
-            endPoint: .trailing
-        )
-        .frame(width: w * 4)
-        .offset(x: offset)
+        RenderServerShimmerBand(highlight: highlight, duration: duration)
+            .mask(content)
+            .allowsHitTesting(false)
     }
 }
 

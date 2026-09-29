@@ -42,6 +42,9 @@ public final class KeyboardObserver: ObservableObject {
             let adjusted = max(0, frame.height - bottomSafeArea)
             let animation = keyboardAnimation(from: notification)
             DispatchQueue.main.async {
+                // willShow repeats with an identical frame on focus hops, the
+                // predictive bar and first-responder changes; don't publish those.
+                guard self.height != adjusted || self.rawHeight != frame.height else { return }
                 withAnimation(animation) {
                     self.height = adjusted
                     self.rawHeight = frame.height
@@ -54,6 +57,7 @@ public final class KeyboardObserver: ObservableObject {
         // Fast initial travel then long gentle settle at the end
         let animation = Animation.timingCurve(0.05, 0.7, 0.1, 1.0, duration: 0.45)
         DispatchQueue.main.async {
+            guard self.height != 0 || self.rawHeight != 0 else { return }
             withAnimation(animation) {
                 self.height = 0
                 self.rawHeight = 0

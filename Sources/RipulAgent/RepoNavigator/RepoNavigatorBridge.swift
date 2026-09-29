@@ -69,6 +69,86 @@ extension AgentBridge {
         }
     }
 
+    /// Repos the host's `gh` login can see, most recently pushed first. The
+    /// error, when gh is missing or signed out, is worded for the screen.
+    public func repoGithubList(machineId: String) async -> Result<GitHubRepoList, RepoNavigatorError> {
+        let result = await callRepoNavigator(
+            "return await window.__ripulRepoGithubList?.(machineId) ?? { repos: [], error: 'GitHub listing is not available in this build.' };",
+            ["machineId": machineId])
+        switch result {
+        case .failure(let message): return .failure(message)
+        case .success(let value):
+            switch decodeRepoPayload([GitHubRepo].self, from: value, key: "repos") {
+            case .failure(let error): return .failure(error)
+            case .success(let repos):
+                let root = (value as? [String: Any])?["cloneRoot"] as? String
+                return .success(GitHubRepoList(repos: repos, cloneRoot: root))
+            }
+        }
+    }
+
+    /// Start cloning `source` (owner/repo or a git URL) into the host's
+    /// ~/Documents/repos. Returns as soon as the host has started; poll
+    /// `repoCloneStatus` for progress.
+    public func repoClone(machineId: String, source: String, name: String? = nil) async -> Result<RepoCloneJob, RepoNavigatorError> {
+        let result = await callRepoNavigator(
+            "return await window.__ripulRepoClone?.(machineId, source, name) ?? { success: false, error: 'Cloning is not available in this build.' };",
+            ["machineId": machineId, "source": source, "name": name.map { $0 as Any } ?? NSNull()])
+        switch result {
+        case .failure(let message): return .failure(message)
+        case .success(let value): return decodeRepoPayload(RepoCloneJob.self, from: value, key: "job")
+        }
+    }
+
+    public func repoCloneStatus(machineId: String, jobId: String) async -> Result<RepoCloneJob, RepoNavigatorError> {
+        let result = await callRepoNavigator(
+            "return await window.__ripulRepoCloneStatus?.(machineId, jobId) ?? { error: 'Cloning is not available in this build.' };",
+            ["machineId": machineId, "jobId": jobId])
+        switch result {
+        case .failure(let message): return .failure(message)
+        case .success(let value): return decodeRepoPayload(RepoCloneJob.self, from: value, key: "job")
+        }
+    }
+
+    /// Who the host's `gh` CLI is signed in to GitHub as, or the code of a
+    /// sign-in waiting for approval.
+    public func repoGithubAuthStatus(machineId: String) async -> Result<GitHubAuthStatus, RepoNavigatorError> {
+        let result = await callRepoNavigator(
+            "return await window.__ripulRepoGithubAuthStatus?.(machineId) ?? { error: 'GitHub sign-in is not available in this build.' };",
+            ["machineId": machineId])
+        switch result {
+        case .failure(let message): return .failure(message)
+        case .success(let value): return decodeRepoPayload(GitHubAuthStatus.self, from: value, key: "status")
+        }
+    }
+
+    /// Start GitHub's device flow on the host (`gh auth login --web`). Returns
+    /// the one-time code to enter at the returned URL; gh finishes by itself
+    /// once it is approved, so poll `repoGithubAuthStatus`.
+    public func repoGithubAuthBegin(machineId: String) async -> Result<GitHubAuthPending, RepoNavigatorError> {
+        let result = await callRepoNavigator(
+            "return await window.__ripulRepoGithubAuthBegin?.(machineId) ?? { success: false, error: 'GitHub sign-in is not available in this build.' };",
+            ["machineId": machineId])
+        switch result {
+        case .failure(let message): return .failure(message)
+        case .success(let value): return decodeRepoPayload(GitHubAuthPending.self, from: value, key: "pending")
+        }
+    }
+
+    public func repoGithubAuthCancel(machineId: String) async -> Result<Void, RepoNavigatorError> {
+        let result = await callRepoNavigator(
+            "return await window.__ripulRepoGithubAuthCancel?.(machineId) ?? { success: false, error: 'GitHub sign-in is not available in this build.' };",
+            ["machineId": machineId])
+        switch result {
+        case .failure(let message): return .failure(message)
+        case .success(let value):
+            if let error = (value as? [String: Any])?["error"] as? String, !error.isEmpty {
+                return .failure(RepoNavigatorError(error))
+            }
+            return .success(())
+        }
+    }
+
     /// Commits across every ref, date-ordered, with parents and decorations —
     /// the full input the lane-assignment engine needs.
     public func repoGraph(machineId: String, repoPath: String, limit: Int = 300) async -> Result<RepoGraph, RepoNavigatorError> {

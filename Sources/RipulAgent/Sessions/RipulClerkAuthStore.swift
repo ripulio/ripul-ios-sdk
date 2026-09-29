@@ -177,12 +177,13 @@ public final class RipulClerkAuthStore: ObservableObject {
             guard let dict = result as? [String: Any] else { return }
             let sessionState = dict["session"] as? String ?? "unknown"
             if let t = dict["token"] as? String, !t.isEmpty {
-                self.token = t
+                if self.token != t { self.token = t }
                 lastSessionState = "alive"
-                if let name = dict["name"] as? String, !name.isEmpty {
+                // Re-read on every 30s poll; almost always unchanged.
+                if let name = dict["name"] as? String, !name.isEmpty, self.userName != name {
                     self.userName = name
                 }
-                if let email = dict["email"] as? String, !email.isEmpty {
+                if let email = dict["email"] as? String, !email.isEmpty, self.userEmail != email {
                     self.userEmail = email
                 }
                 // Persist sign-in state for instant launch next time

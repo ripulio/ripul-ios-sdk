@@ -71,7 +71,7 @@ public extension EnvironmentValues {
 
 @available(iOS 16.0, macOS 13.0, *)
 struct DevToolsModifier: ViewModifier {
-    @ObservedObject var bridge: AgentBridge
+    var bridge: AgentBridge
     @State private var showSheet = false
 
     func body(content: Content) -> some View {
@@ -98,10 +98,29 @@ struct DevToolsModifier: ViewModifier {
     }
 
     private func registerBuiltInTools() {
-        bridge.registerBuiltInTools([
+        var tools: [NativeTool] = [
             ConsoleLogsTool(bridge: bridge),
             NetworkLogsTool(bridge: bridge),
-        ])
+        ]
+        #if canImport(UIKit)
+        // Native screen inspection and actuation, as RipulAgentConsole gives a
+        // host app: the developer's agent can see and drive the running app
+        // (open chats, scroll, wait for elements) for its own on-device tests,
+        // such as thermal runs, without the developer at the phone. All are
+        // RipulDeveloperOnlyTool: gated from the agent on an .endUser bridge.
+        tools += [
+            InspectScreenTool(bridge: bridge),
+            TapElementTool(),
+            TouchTool(),
+            ScreenFrameTool(),
+            LiveStreamOfferTool(),
+            TypeTextTool(),
+            ScrollElementTool(),
+            WaitForElementTool(),
+            OpenAppURLTool(),
+        ]
+        #endif
+        bridge.registerBuiltInTools(tools)
     }
 
     private func present() {

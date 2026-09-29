@@ -8,6 +8,8 @@ public struct VoiceProfileConfig: Equatable {
     public var profileName: String?
     public var ttsProviderId: String?
     public var voiceId: String?
+    /// ElevenLabs model for every job. Nil = the worker default.
+    public var ttsModelId: String?
     public var pace: Double?
     public var expressiveness: Double?
     public var sttProviderId: String?
@@ -30,6 +32,7 @@ public struct VoiceProfileConfig: Equatable {
         profileName: String? = nil,
         ttsProviderId: String? = nil,
         voiceId: String? = nil,
+        ttsModelId: String? = nil,
         pace: Double? = nil,
         expressiveness: Double? = nil,
         sttProviderId: String? = nil,
@@ -46,6 +49,7 @@ public struct VoiceProfileConfig: Equatable {
         self.profileName = profileName
         self.ttsProviderId = ttsProviderId
         self.voiceId = voiceId
+        self.ttsModelId = ttsModelId
         self.pace = pace
         self.expressiveness = expressiveness
         self.sttProviderId = sttProviderId
@@ -192,6 +196,20 @@ public enum SpeechPreferences {
             stored: stored,
             fallback: 0.35
         )))
+    }
+
+    public static func ttsModelKey(for role: SpeechRole) -> String { "ttsModel.\(role.rawValue)" }
+
+    /// ElevenLabs model for one job. The profile names a model for every job,
+    /// and the user may choose per job. Nil leaves it to the default
+    /// (Multilingual v2), which is also what an unset profile means.
+    public static func ttsModelId(for role: SpeechRole) -> String? {
+        let raw = store.string(forKey: ttsModelKey(for: role)) ?? ""
+        let stored: String? = ElevenLabsModelOption.isValidId(raw) ? raw : nil
+        let profile = activeProfile?.ttsModelId.flatMap { ElevenLabsModelOption.isValidId($0) ? $0 : nil }
+        // Not `resolve`: with an optional T it would wrap a missing value as
+        // `.some(nil)` and stop the fallthrough to the other tier.
+        return locked ? (profile ?? stored) : (stored ?? profile)
     }
 
     public static let voiceModeStyleKey = "voiceModeStyle"

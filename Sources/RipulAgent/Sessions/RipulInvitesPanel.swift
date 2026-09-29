@@ -11,7 +11,7 @@ import SwiftUI
 /// resulting chat tab, opens it, and keeps the invite as a standing way back.
 @available(iOS 26.0, *)
 struct RipulInvitesPanel: View {
-    @ObservedObject var bridge: AgentBridge
+    var bridge: AgentBridge
     var actions: InvitesSectionActions? = nil
 
     @ObservedObject var inviteManager: RipulInviteManager

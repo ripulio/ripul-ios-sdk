@@ -22,6 +22,9 @@ public enum RipulOpenSessionRequest {
     /// The `UnifiedSession.id` waiting to be opened.
     public static var pendingSessionId: String?
 
+    /// The rescan chasing a request whose chat isn't listed yet.
+    static var rescan: (id: String, task: Task<Void, Never>)?
+
     public static func open(sessionId: String) {
         pendingSessionId = sessionId
         NotificationCenter.default.post(name: notification, object: nil)
@@ -48,5 +51,29 @@ struct RipulOpenSessionRequestObserver: ViewModifier {
 extension View {
     func onRipulOpenSessionRequest(sessionCount: Int, perform: @escaping () -> Void) -> some View {
         modifier(RipulOpenSessionRequestObserver(sessionCount: sessionCount, perform: perform))
+    }
+}
+
+/// A request to run Move to Machine on a named chat without the long-press
+/// menu — `ripul://move-chat?id=<chat id>&to=<machine id>`. Automation can't
+/// raise a context menu, so this is how an agent drives the move end to end.
+/// The list performs it with the same `moveSession` call the menu button makes,
+/// and reports the outcome as a `[MOVE]` console line.
+public enum RipulMoveSessionRequest {
+    public static let notification = Notification.Name("ripulMoveUnifiedSession")
+
+    /// Latched, like the open request, so a list that mounts after the link
+    /// arrives still picks it up.
+    public static var pending: (sessionId: String, targetMachineId: String)?
+
+    public static func move(sessionId: String, targetMachineId: String) {
+        pending = (sessionId, targetMachineId)
+        NotificationCenter.default.post(name: notification, object: nil)
+    }
+
+    /// Hands the pending request to exactly one taker.
+    static func take() -> (sessionId: String, targetMachineId: String)? {
+        defer { pending = nil }
+        return pending
     }
 }

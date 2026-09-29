@@ -32,7 +32,11 @@ public struct StandaloneFileViewer: View {
     var standalone = false
     var baseURL: URL = AgentConfiguration.defaultBaseURL
 
-    @StateObject private var viewerBridge = AgentBridge()
+    /// Owned once, not observed: views track the bridge's reads via Observation.
+
+    @StateObject private var viewerBridgeOwner = UnobservedOwner(AgentBridge())
+
+    private var viewerBridge: AgentBridge { viewerBridgeOwner.value }
     @Environment(\.colorScheme) private var colorScheme
 
     @State private var isSearching = false

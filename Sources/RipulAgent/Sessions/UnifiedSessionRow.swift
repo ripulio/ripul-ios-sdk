@@ -117,7 +117,7 @@ public struct UnifiedSessionRow: View {
         var isLozenge: Bool { self == .lozenge }
     }
 
-    @ObservedObject var sessionStore: SessionListStore
+    var sessionStore: SessionListStore
     let session: UnifiedSession
     var presentation: Presentation = .list
     /// The user's explicit model pick for this session, when there is one.
@@ -203,8 +203,11 @@ public struct UnifiedSessionRow: View {
     /// (`cli_<uuid>` live, bare uuid from the scanner) and matchKeys is exactly
     /// the set of names this row answers to.
     private var isUnread: Bool {
-        sessionStore.isUnread(anyOf: [session.id, session.ripulSession?.sourceChatId, session.ripulSession?.id]
-            + session.matchKeys.map { Optional($0) })
+        sessionStore.isUnread(anyOf: session.readStateKeys)
+    }
+
+    private var isPinned: Bool {
+        sessionStore.isPinned(anyOf: session.readStateKeys)
     }
 
     /// Live in-progress TodoWrite plan for this row. Uses the *plain*
@@ -239,11 +242,11 @@ public struct UnifiedSessionRow: View {
     private var effectiveLastActive: Date {
         var best = session.lastUsed
         if let ripul = session.ripulSession {
-            if let t = sessionStore.lastActiveTimeByChatId[ripul.id] { best = max(best, t) }
-            if let t = sessionStore.lastActiveTimeByChatId[ripul.sourceChatId] { best = max(best, t) }
+            if let t = sessionStore.lastActive(for: ripul.id) { best = max(best, t) }
+            if let t = sessionStore.lastActive(for: ripul.sourceChatId) { best = max(best, t) }
         }
         for key in session.matchKeys {
-            if let t = sessionStore.lastActiveTimeByChatId[key] { best = max(best, t) }
+            if let t = sessionStore.lastActive(for: key) { best = max(best, t) }
         }
         if let t = cachedLastActive { best = max(best, t) }
         return best
@@ -252,8 +255,8 @@ public struct UnifiedSessionRow: View {
     /// Session-row action buttons declared by tools (e.g. "Show Plan").
     private var sessionActions: [SessionRowAction] {
         guard let ripul = session.ripulSession else { return [] }
-        return sessionStore.sessionActionsByChatId[ripul.id]
-            ?? sessionStore.sessionActionsByChatId[ripul.sourceChatId]
+        return sessionStore.sessionActions(for: ripul.id)
+            ?? sessionStore.sessionActions(for: ripul.sourceChatId)
             ?? []
     }
 
@@ -353,14 +356,28 @@ public struct UnifiedSessionRow: View {
 
                     // Unread reply badge, using the same read state as the
                     // bold title. The top-bar pill is the chat being read.
-                    if isUnread && !presentation.isLozenge {
-                        Image(systemName: "envelope")
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(.white)
-                            .background(.background, in: RoundedRectangle(cornerRadius: 2))
-                            .offset(x: 4, y: 4)
-                            .accessibilityLabel("Unread reply")
-                            .uiKitIdentifier("UnifiedSessionRow.unreadIndicatorEnvelope")
+                    // One slot: unread outranks pinned, because it asks for
+                    // action and a pin is already shown by the row's position.
+                    if !presentation.isLozenge {
+                        if isUnread {
+                            Image(systemName: "envelope")
+                                .font(.system(size: 11, weight: .medium))
+                                // .primary, not .white: the backing is
+                                // .background, which is white in light mode.
+                                .foregroundStyle(.primary)
+                                .background(.background, in: RoundedRectangle(cornerRadius: 2))
+                                .offset(x: 4, y: 4)
+                                .accessibilityLabel("Unread reply")
+                                .uiKitIdentifier("UnifiedSessionRow.unreadIndicatorEnvelope")
+                        } else if isPinned {
+                            Image(systemName: "pin.fill")
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundStyle(.primary)
+                                .background(.background, in: RoundedRectangle(cornerRadius: 2))
+                                .offset(x: 4, y: 4)
+                                .accessibilityLabel("Pinned")
+                                .uiKitIdentifier("UnifiedSessionRow.pinnedIndicator")
+                        }
                     }
                 }
                 .animation(.easeInOut(duration: 0.175), value: toolIcon)
@@ -560,10 +577,10 @@ public struct UnifiedSessionRow: View {
     private var runningIndicatorSlot: some View {
         ZStack {
             if phase == .running {
-                Image(systemName: "ellipsis")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(.tint)
-                    .symbolEffect(.variableColor.iterative, options: .repeating)
+                // Core Animation, not a SwiftUI symbol effect: see
+                // RenderServerEllipsis for the per-frame cost this removed.
+                RenderServerEllipsis(color: .accentColor)
+                    .accessibilityElement()
                     .accessibilityLabel("Running")
                     .transition(.opacity)
                     .uiKitIdentifier("UnifiedSessionRow.phaseIndicator.running")

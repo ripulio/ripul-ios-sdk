@@ -15,6 +15,9 @@ public protocol NativeSpeechProviding: AnyObject {
     /// Begins playback; returns once playback has started. `onPlaybackEnd`
     /// fires when playback finishes naturally (not on stopSpeaking()).
     func speak(text: String, voiceId: String?, onPlaybackEnd: (@MainActor () -> Void)?) async throws
+    /// As above, with the ElevenLabs model for this utterance (nil = default).
+    /// Providers without a model choice ignore it.
+    func speak(text: String, voiceId: String?, modelId: String?, onPlaybackEnd: (@MainActor () -> Void)?) async throws
     func stopSpeaking()
     /// Freeze playback mid-utterance; resumeSpeaking() continues from the
     /// same position. onPlaybackEnd does not fire while paused.
@@ -22,6 +25,13 @@ public protocol NativeSpeechProviding: AnyObject {
     func resumeSpeaking()
     func startTranscription(onEvent: @escaping @MainActor (SpeechService.TranscriptionEvent) -> Void) async throws
     func stopTranscription()
+}
+
+@available(iOS 26.0, macOS 26.0, *)
+public extension NativeSpeechProviding {
+    func speak(text: String, voiceId: String?, modelId: String?, onPlaybackEnd: (@MainActor () -> Void)?) async throws {
+        try await speak(text: text, voiceId: voiceId, onPlaybackEnd: onPlaybackEnd)
+    }
 }
 
 @available(iOS 26.0, macOS 26.0, *)
@@ -405,8 +415,11 @@ public final class ElevenLabsNativeSpeechProvider: NSObject, NativeSpeechProvidi
         return try JSONDecoder().decode(VoicesResponse.self, from: data).voices
     }
 
-    /// UserDefaults key prefix for the persisted region-default voice id.
     public func speak(text: String, voiceId: String?, onPlaybackEnd: (@MainActor () -> Void)?) async throws {
+        try await speak(text: text, voiceId: voiceId, modelId: nil, onPlaybackEnd: onPlaybackEnd)
+    }
+
+    public func speak(text: String, voiceId: String?, modelId: String?, onPlaybackEnd: (@MainActor () -> Void)?) async throws {
         playbackGeneration += 1
         let generation = playbackGeneration
         let resolvedVoiceId: String
@@ -446,22 +459,25 @@ public final class ElevenLabsNativeSpeechProvider: NSObject, NativeSpeechProvidi
         }
         guard generation == playbackGeneration else { throw CancellationError() }
         let expressiveness = SpeechPreferences.speechExpressiveness
+        var body: [String: Any] = [
+            "text": text,
+            "voiceId": resolvedVoiceId,
+            "voiceSettings": [
+                "speed": SpeechPreferences.speechPace,
+                // Expressiveness fans out to two ElevenLabs knobs:
+                // more style, less stability as it rises. Models that
+                // dropped speed and style have them removed downstream.
+                "style": 0.6 * expressiveness,
+                "stability": 0.9 - 0.6 * expressiveness,
+            ],
+        ]
+        if let modelId { body["modelId"] = modelId }
         let audio: Data
         do {
             audio = try await send(
                 path: "api/v1/speech/synthesize",
                 method: "POST",
-                jsonBody: [
-                    "text": text,
-                    "voiceId": resolvedVoiceId,
-                    "voiceSettings": [
-                        "speed": SpeechPreferences.speechPace,
-                        // Expressiveness fans out to two ElevenLabs knobs:
-                        // more style, less stability as it rises.
-                        "style": 0.6 * expressiveness,
-                        "stability": 0.9 - 0.6 * expressiveness,
-                    ],
-                ]
+                jsonBody: body
             )
         } catch {
             // A stale persisted region default (voice since removed from the

@@ -345,7 +345,6 @@ public struct NativeChatInput: View {
     @State private var hiddenClasses: Set<String> = Set(AtClassToggleSpec.all.filter { AtClassToggles.isHidden($0.key) }.map(\.key))
     @State private var showHistorySheet = false
     @State private var showTodoPicker = false
-    @State private var glowPhase: Bool = false
     @State private var showSlashMenu = false
     @State private var slashFilter = ""
     @State private var slashCommands: [SlashCommandInfo] = []
@@ -1429,20 +1428,9 @@ public struct NativeChatInput: View {
                 }
                 .padding(.vertical, 6 * composerCollapse)
                 .modifier(GlassChatInputBackground(glassStyle: resolvedChatInputGlassStyle))
-                .modifier(WaitingGlowModifier(isActive: agentWaiting, glowPhase: glowPhase))
+                .modifier(WaitingGlowModifier(isActive: agentWaiting))
 
                 historyMenuButton.modifier(ComposerFold(horizontal: true))
-            }
-        }
-        .onChange(of: agentWaiting) { waiting in
-            if waiting {
-                withAnimation(.easeInOut(duration: 6.0).repeatForever(autoreverses: true)) {
-                    glowPhase = true
-                }
-            } else {
-                withAnimation(.easeOut(duration: 0.3)) {
-                    glowPhase = false
-                }
             }
         }
     }
@@ -1483,18 +1471,7 @@ public struct NativeChatInput: View {
             }
             .padding(.vertical, 6 * composerCollapse)
             .modifier(GlassChatInputBackground(glassStyle: resolvedChatInputGlassStyle))
-            .modifier(WaitingGlowModifier(isActive: agentWaiting, glowPhase: glowPhase))
-        }
-        .onChange(of: agentWaiting) { waiting in
-            if waiting {
-                withAnimation(.easeInOut(duration: 6.0).repeatForever(autoreverses: true)) {
-                    glowPhase = true
-                }
-            } else {
-                withAnimation(.easeOut(duration: 0.3)) {
-                    glowPhase = false
-                }
-            }
+            .modifier(WaitingGlowModifier(isActive: agentWaiting))
         }
     }
 
@@ -1936,7 +1913,6 @@ public struct NativeChatInput: View {
     @State private var atTriggerIndex: String.Index?
     @State private var showHistorySheet = false
     @State private var showTodoPicker = false
-    @State private var glowPhase: Bool = false
     @State private var showAtSuggestions = false
     @State private var allElementSuggestions: [ElementSuggestion] = []
     @State private var elementSuggestions: [ElementSuggestion] = []
@@ -2775,20 +2751,9 @@ public struct NativeChatInput: View {
                 }
                 .frame(minHeight: 40)
                 .modifier(GlassChatInputBackground(glassStyle: resolvedChatInputGlassStyle))
-                .modifier(WaitingGlowModifier(isActive: agentWaiting, glowPhase: glowPhase))
+                .modifier(WaitingGlowModifier(isActive: agentWaiting))
 
                 historyMenuButton
-            }
-        }
-        .onChange(of: agentWaiting) { waiting in
-            if waiting {
-                withAnimation(.easeInOut(duration: 6.0).repeatForever(autoreverses: true)) {
-                    glowPhase = true
-                }
-            } else {
-                withAnimation(.easeOut(duration: 0.3)) {
-                    glowPhase = false
-                }
             }
         }
     }
@@ -2827,18 +2792,7 @@ public struct NativeChatInput: View {
                 .padding(.bottom, 6)
             }
             .modifier(GlassChatInputBackground(glassStyle: resolvedChatInputGlassStyle))
-            .modifier(WaitingGlowModifier(isActive: agentWaiting, glowPhase: glowPhase))
-        }
-        .onChange(of: agentWaiting) { waiting in
-            if waiting {
-                withAnimation(.easeInOut(duration: 6.0).repeatForever(autoreverses: true)) {
-                    glowPhase = true
-                }
-            } else {
-                withAnimation(.easeOut(duration: 0.3)) {
-                    glowPhase = false
-                }
-            }
+            .modifier(WaitingGlowModifier(isActive: agentWaiting))
         }
     }
 
@@ -3372,20 +3326,20 @@ struct TodoPickerSheet: View {
 @available(iOS 15.0, macOS 14.0, *)
 private struct WaitingGlowModifier: ViewModifier {
     let isActive: Bool
-    let glowPhase: Bool
 
     // Stroke-opacity pulse only — no .shadow. An animating blur radius over the
     // glass pill forces the compositor to re-blur the region every frame for the
-    // entire agent run (sustained GPU heat, thermal audit R2-2).
+    // entire agent run (sustained GPU heat, thermal audit R2-2). The pulse runs
+    // in the render server (see RenderServerAnimations): a SwiftUI
+    // repeatForever re-rendered the composer every frame for the whole turn.
     func body(content: Content) -> some View {
         content
-            .overlay(
-                RoundedRectangle(cornerRadius: 22)
-                    .stroke(
-                        Color.orange.opacity(isActive ? (glowPhase ? 0.35 : 0.12) : 0),
-                        lineWidth: 1.25
-                    )
-            )
+            .overlay {
+                if isActive && !PerfSwitch.isOff("glow") {
+                    RenderServerPulseStroke(cornerRadius: 22, lineWidth: 1.25, color: .orange,
+                                            low: 0.12, high: 0.35, duration: 6)
+                }
+            }
     }
 }
 

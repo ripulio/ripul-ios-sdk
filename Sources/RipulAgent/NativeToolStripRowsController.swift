@@ -35,11 +35,27 @@ final class NativeToolStripRowsController {
     private var pendingAnchors: [Key: [String: Any]] = [:]
     private var pendingPlacements: Set<Key> = []
     private var settleTimer: Timer?
+    private let hosts = NativeToolStripHostPool()
+    private var lastAttachAt: CFTimeInterval = 0
+
+    /// Whether a strip may be created or reparented now. Always when the web
+    /// view is still; mid-scroll, one per frame. Strips ride their row's view
+    /// and hosts are pooled, so attaching during a scroll lands in the right
+    /// place cheaply — holding it until the scroll stopped is what made rows
+    /// revealed by a fling show the web copy and then flip.
+    private func mayAttach() -> Bool {
+        if isScrollIdle { return true }
+        let now = CACurrentMediaTime()
+        guard now - lastAttachAt >= 1.0 / 60 else { return false }
+        lastAttachAt = now
+        return true
+    }
 
     /// UIKit owns the gesture and its inertia, including drags that began in
     /// web content. Read activity flags only while layout work is pending;
     /// never observe or write contentOffset to keep native views in position.
     private var isScrollIdle: Bool {
+        MainThreadSampler.count("strip.idleWalk")
         guard let webView else { return true }
         func isMoving(_ view: UIView) -> Bool {
             if let scroll = view as? UIScrollView,
@@ -56,29 +72,36 @@ final class NativeToolStripRowsController {
 
     private func flushPlacements() {
         guard presented, !pendingPlacements.isEmpty else { return }
-        guard isScrollIdle else {
-            if settleTimer == nil {
-                let timer = Timer(timeInterval: 0.08, repeats: false) { [weak self] _ in
-                    MainActor.assumeIsolated {
-                        self?.settleTimer = nil
-                        self?.flushPlacements()
-                    }
-                }
-                settleTimer = timer
-                // Default mode naturally pauses during touch tracking. UIKit's
-                // deceleration flag also keeps this work out of a flick's tail.
-                RunLoop.main.add(timer, forMode: .default)
-            }
-            return
+        MainThreadSampler.count("strip.flush")
+        // Strips already on screen take their new position now, even mid-
+        // scroll: that is a frame move, not the view creation or reparenting
+        // the idle wait below exists for.
+        for key in pendingPlacements {
+            guard let row = rows[key], let geometry = row.geometry, let anchor = row.anchor,
+                  anchor.isAttached else { continue }
+            anchor.receive(geometry)
+            if anchor.isAttached { pendingPlacements.remove(key) }
         }
+        guard !pendingPlacements.isEmpty else { settleTimer?.invalidate(); settleTimer = nil; return }
         settleTimer?.invalidate(); settleTimer = nil
-        let keys = pendingPlacements
-        pendingPlacements.removeAll()
-        for key in keys {
-            guard let row = rows[key] else { continue }
-            if row.geometry == nil { row.detach() }
-            else { attach(row, key: key) }
+        for key in pendingPlacements {
+            guard let row = rows[key] else { pendingPlacements.remove(key); continue }
+            if row.geometry == nil { row.detach(); pendingPlacements.remove(key); continue }
+            guard mayAttach() else { break }
+            attach(row, key: key)
+            pendingPlacements.remove(key)
         }
+        guard !pendingPlacements.isEmpty else { return }
+        // The rest on following frames. Common modes: this runs during touch
+        // tracking too, within mayAttach's one-per-frame budget.
+        let timer = Timer(timeInterval: 1.0 / 60, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.settleTimer = nil
+                self?.flushPlacements()
+            }
+        }
+        settleTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
     }
 
     var rowCount: Int { rows.count }
@@ -88,6 +111,11 @@ final class NativeToolStripRowsController {
             if let frame = item.value.anchor?.frameInWebView { frames[item.key.group] = frame }
         }
     }
+    #if DEBUG
+    var screenMinYs: [Int] {
+        rows.values.compactMap { $0.anchor?.screenMinY }.sorted()
+    }
+    #endif
     var accessibilityElements: [Any] {
         rows.values.sorted { ($0.anchor?.frameInWebView?.minY ?? .infinity) < ($1.anchor?.frameInWebView?.minY ?? .infinity) }
             .flatMap { $0.anchor?.accessibilityElements ?? [] }
@@ -153,7 +181,8 @@ final class NativeToolStripRowsController {
         guard presented, let webView, let geometry = row.geometry else { return }
         if row.anchor == nil {
             row.anchor = NativeToolStripAnchorController(webView: webView, store: row.store,
-                accessibilityGroupId: key.group, canChangeLayout: { [weak self] in self?.isScrollIdle ?? true })
+                accessibilityGroupId: key.group, hosts: hosts,
+                canChangeLayout: { [weak self] in self?.mayAttach() ?? true })
         }
         row.anchor?.receive(geometry)
         if !row.store.isPresented { row.store.present(send: send) }

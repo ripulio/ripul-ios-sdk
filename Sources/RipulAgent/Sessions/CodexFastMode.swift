@@ -28,15 +28,21 @@ public final class CodexFastModeSettings: ObservableObject {
 
     public func refresh(bridge: AgentBridge, chatId: String?, modelId: String?) async {
         let ticket = UUID(); generation = ticket
-        state = nil; error = nil; saving = false
+        // RipulAgentScreen observes this object, so each write re-renders the
+        // whole screen. Refreshing the SAME chat keeps its current state until
+        // the answer lands (usually identical); only another chat's state is
+        // cleared up front, so it can never show against the wrong chat.
+        if state?.chatId != chatId, state != nil { state = nil }
+        if error != nil { error = nil }
+        if saving { saving = false }
         guard let chatId else { return }
         do {
             let next = try await bridge.codexFastMode(chatId: chatId, modelId: modelId)
             guard generation == ticket, !Task.isCancelled else { return }
-            state = next
+            if state != next { state = next }
         } catch {
             guard generation == ticket, !Task.isCancelled else { return }
-            self.error = error.localizedDescription
+            if self.error != error.localizedDescription { self.error = error.localizedDescription }
         }
     }
 

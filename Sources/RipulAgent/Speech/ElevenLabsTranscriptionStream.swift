@@ -24,10 +24,19 @@ final class URLSessionSpeechSocket: RealtimeSpeechSocket {
 
 /// Reconnectable transcription, deliberately independent of AVAudioEngine.
 /// A single awaited send loop preserves ordering and backpressure. Manual
-/// commits delimit at most 20 seconds of audio (normally a natural pause).
+/// commits delimit 20–30 seconds of audio, cut at a pause where one exists.
 /// Only one commit is outstanding, and no subsequent audio is sent before
 /// its reply. Thus a received commit acknowledges an exact PCM boundary;
 /// replay never depends on fuzzy text matching or word-timestamp rounding.
+///
+/// Segments are long on purpose. Every commit makes Scribe finalize that
+/// segment on its own, and ElevenLabs warns that committing several times in
+/// short sequence degrades the model. Committing at every one-second pause
+/// (the first version of this stream) turned thinking pauses into full stops,
+/// clipped soft trailing words ("int-") and made the model invent fillers
+/// ("Mm-hmm ...") at the start of the next segment: 12 of 45 voice messages
+/// in the following two days, against 1 of 247 before. Recovery does not need
+/// short segments; it replays from the last acknowledged boundary either way.
 @available(iOS 26.0, macOS 26.0, *)
 @MainActor
 final class ElevenLabsTranscriptionStream {
@@ -41,6 +50,17 @@ final class ElevenLabsTranscriptionStream {
         var connectionTimeout: TimeInterval = 8
         var responseTimeout: TimeInterval = 12
         var recoveryLimit: TimeInterval = 60
+        /// Delay between chunks while a backlog (audio recorded while
+        /// connecting or reconnecting) is being sent: ~8× real time for 85 ms
+        /// chunks, so on-screen text catches up in seconds rather than lagging.
+        var catchUp: UInt64 = 10_000_000
+        /// Seconds of audio before a pause may close a segment.
+        var segmentTarget: TimeInterval = 20
+        /// Quiet (seconds since the last voiced chunk) that counts as a pause.
+        var segmentPause: TimeInterval = 0.8
+        /// Hard cap. Scribe commits on its own after ~36 s, which this stream
+        /// would treat as an unsolicited boundary, so stay well inside it.
+        var segmentLimit: TimeInterval = 30
     }
 
     private let diagnosticID = UUID().uuidString
@@ -68,6 +88,9 @@ final class ElevenLabsTranscriptionStream {
     private var segmentHasVoice = false
     private var firstChunk = true
     private var previousText = ""
+    /// Text of the segment just acknowledged, until the next segment's first
+    /// genuine partial. See `isStalePartial`.
+    private var lastCommittedText: String?
     private var recoveryTarget: Int?
     private var finishing = false
     private(set) var finished = false
@@ -196,8 +219,8 @@ final class ElevenLabsTranscriptionStream {
             sender = Task { @MainActor [weak self] in
                 do {
                     while let self, self.isCurrent(id), !self.finished {
-                        try await self.sendNext(generation: id)
-                        try await Task.sleep(nanoseconds: self.timing.poll)
+                        let backlog = try await self.sendNext(generation: id)
+                        try await Task.sleep(nanoseconds: backlog ? self.timing.catchUp : self.timing.poll)
                     }
                 } catch {
                     guard let self, self.isCurrent(id) else { return }
@@ -206,9 +229,12 @@ final class ElevenLabsTranscriptionStream {
             }
         case "partial_transcript":
             lastResponse = Date()
-            event(.partial(json["text"] as? String ?? ""))
+            let text = json["text"] as? String ?? ""
+            guard !isStalePartial(text) else { return }
+            lastCommittedText = nil
+            event(.partial(text))
         case "committed_transcript":
-            // With manual commits and <=20s segments, an unsolicited commit
+            // With manual commits and <=30s segments, an unsolicited commit
             // cannot safely acknowledge audio. Replay rather than guess.
             guard let commit = pendingCommit else {
                 reconnect(Failure(message: "Unexpected transcription boundary"))
@@ -222,6 +248,7 @@ final class ElevenLabsTranscriptionStream {
             lastVoicedFrame = commit.frame
             lastResponse = Date()
             previousText = String((previousText + " " + text).suffix(49))
+            lastCommittedText = text
             event(.committed(text))
             if let target = recoveryTarget, commit.frame >= target {
                 let elapsed = Int(Date().timeIntervalSince(recoveryAt ?? Date()) * 1000)
@@ -245,10 +272,37 @@ final class ElevenLabsTranscriptionStream {
         }
     }
 
-    private func sendNext(generation id: UUID) async throws {
-        guard pendingCommit == nil, let socket else { return }
+    /// Sends at most one audio chunk and, when a segment is complete, its
+    /// commit. Returns true when more recorded audio is already waiting.
+    @discardableResult
+    /// Scribe can deliver a partial for a segment after that segment's
+    /// committed transcript. The controller shows committed + partial, so a
+    /// late partial repeats the whole segment: "A. Send command. A" once
+    /// segments became utterance-length (a one-second segment only ever
+    /// repeated a word). A partial is stale when the stream has finished, when
+    /// no audio has been sent since the acknowledged commit (it cannot
+    /// describe new speech), or when it is still just a prefix of the text
+    /// that was committed. The committed text is never filtered, so dropping a
+    /// genuine partial only delays the display of new words.
+    private func isStalePartial(_ text: String) -> Bool {
+        if finished { return true }
+        if pendingCommit == nil && sentFrame == segmentStart && lastCommittedText != nil { return true }
+        guard let committed = lastCommittedText else { return false }
+        let partial = Self.normalized(text)
+        return partial.isEmpty || Self.normalized(committed).hasPrefix(partial)
+    }
+
+    private static func normalized(_ text: String) -> String {
+        text.lowercased()
+            .unicodeScalars.filter { CharacterSet.alphanumerics.contains($0) || $0 == " " }
+            .map(String.init).joined()
+            .split(separator: " ").joined(separator: " ")
+    }
+
+    private func sendNext(generation id: UUID) async throws -> Bool {
+        guard pendingCommit == nil, let socket else { return false }
         let state = audio.snapshot
-        if finishing && state.captured == state.confirmed { finished = true; return }
+        if finishing && state.captured == state.confirmed { finished = true; return false }
         if let chunk = audio.chunk(after: sentFrame) {
             var payload: [String: Any] = ["message_type": "input_audio_chunk",
                                           "audio_base_64": chunk.pcm.base64EncodedString(),
@@ -264,16 +318,21 @@ final class ElevenLabsTranscriptionStream {
             let text = String(decoding: try JSONSerialization.data(withJSONObject: payload), as: UTF8.self)
             sendingAt = Date()
             try await socket.send(text)
-            guard isCurrent(id) else { return }
+            guard isCurrent(id) else { return false }
             sendingAt = nil
         }
+        let backlog = audio.chunk(after: sentFrame) != nil
         let length = sentFrame - segmentStart
-        guard length > 0 else { return }
+        guard length > 0 else { return backlog }
         let rate = audio.sampleRate
+        let seconds = Double(length) / Double(rate)
         let endOfCapture = finishing && sentFrame == audio.snapshot.captured
         let atRecoveryBoundary = recoveryTarget.map { sentFrame >= $0 } ?? false
-        let quiet = segmentHasVoice && sentFrame - lastVoicedFrame >= rate
-        guard endOfCapture || length >= rate * 20 || (length >= rate * 2 && (quiet || atRecoveryBoundary)) else { return }
+        let quiet = segmentHasVoice && Double(sentFrame - lastVoicedFrame) >= Double(rate) * timing.segmentPause
+        guard endOfCapture
+            || seconds >= timing.segmentLimit
+            || (seconds >= timing.segmentTarget && quiet)
+            || (seconds >= 2 && atRecoveryBoundary) else { return backlog }
         // Scribe begins processing after 2s. Pad a short final segment with
         // silence; padding is transport-only and never advances the PCM ledger.
         let padding = max(0, rate * 2 - length)
@@ -284,6 +343,7 @@ final class ElevenLabsTranscriptionStream {
         sendingAt = Date()
         try await socket.send(String(decoding: try JSONSerialization.data(withJSONObject: payload), as: UTF8.self))
         if isCurrent(id) { sendingAt = nil }
+        return false // Nothing more is sent until this commit is acknowledged.
     }
 
     private func checkHealth() {

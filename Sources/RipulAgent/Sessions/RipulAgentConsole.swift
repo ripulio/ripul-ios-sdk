@@ -1,5 +1,6 @@
 #if os(iOS)
 import SwiftUI
+import Combine
 
 /// Navigation requests belong to one console, so a host shortcut cannot open
 /// a sheet in another signed-in surface.
@@ -39,9 +40,14 @@ public final class RipulConsoleNavigation: ObservableObject {
 public struct RipulAgentConsole: View {
     @ObservedObject private var navigation: RipulConsoleNavigation
     private let configuration: RipulSessionsConfiguration
-    @StateObject private var bridge: AgentBridge
-    @StateObject private var authStore: RipulClerkAuthStore
-    @StateObject private var listModel: RipulSessionListModel
+    /// Owned once, not observed: views track the bridge's reads via Observation.
+    /// Constructed once (see ConsoleCore): this initializer runs on every
+    /// parent re-render.
+    @StateObject private var core: ConsoleCore
+    private var bridge: AgentBridge { core.bridge }
+    private var authStore: RipulClerkAuthStore { core.authStore }
+    /// Owned once, not observed; views track the model's reads via Observation.
+    private var listModel: RipulSessionListModel { core.listModel }
     /// Set when the user explicitly asks to sign in from the reconnect splash
     /// (e.g. to use a different account) — forces the sign-in view over the
     /// returning-user reconnect path.
@@ -58,7 +64,7 @@ public struct RipulAgentConsole: View {
     /// CRUD for recorded macros (docs/plans/automation-macros/). Owns no
     /// state of its own beyond the token closure — safe to construct once
     /// in `init` alongside `listModel`.
-    private let macroClient: RipulMacroClient
+    private var macroClient: RipulMacroClient { core.macroClient }
 
     /// - Parameter bridge: optional externally-owned bridge, which MUST be a
     ///   `.developer`-audience bridge built on the configuration's registry
@@ -75,28 +81,7 @@ public struct RipulAgentConsole: View {
         self.navigation = navigation ?? RipulConsoleNavigation()
         self.configuration = configuration
         self.slots = slots
-        let authStore = RipulClerkAuthStore(cache: configuration.cache)
-        _authStore = StateObject(wrappedValue: authStore)
-        self.macroClient = RipulMacroClient(baseURL: configuration.baseURL, tokenProvider: { authStore.token })
-        let bridge = bridge ?? AgentBridge(registry: configuration.registry, audience: .developer)
-        assert(
-            bridge.audience == .developer,
-            "RipulAgentConsole requires a .developer-audience AgentBridge — construct the " +
-            "passed-in bridge with AgentBridge(registry: configuration.registry, audience: .developer), " +
-            "or omit `bridge:` to let the console create its own. An .endUser bridge here " +
-            "would silently refuse this console's own dev tools."
-        )
-        assert(
-            bridge.registry === configuration.registry,
-            "RipulAgentConsole's bridge must project from the SAME registry as its " +
-            "configuration — otherwise the editor and the agent see different tool sets."
-        )
-        _bridge = StateObject(wrappedValue: bridge)
-        _listModel = StateObject(wrappedValue: RipulSessionListModel(
-            bridge: bridge,
-            tokenProvider: { authStore.token },
-            cache: configuration.cache
-        ))
+        _core = StateObject(wrappedValue: ConsoleCore(configuration: configuration, bridge: bridge))
     }
 
     public var body: some View {
@@ -150,6 +135,9 @@ public struct RipulAgentConsole: View {
                 NetworkLogsTool(bridge: bridge),
                 InspectScreenTool(bridge: bridge),
                 TapElementTool(),
+                TouchTool(),
+                ScreenFrameTool(),
+                LiveStreamOfferTool(),
                 TypeTextTool(),
                 ScrollElementTool(),
                 WaitForElementTool(),
@@ -333,6 +321,44 @@ public struct RipulAgentConsole: View {
             status: "Reconnecting…",
             action: (title: "Sign in with a different account", handler: { forceSignIn = true })
         )
+    }
+}
+
+/// The console's auth store, macro client, bridge and session model,
+/// constructed exactly once. Built in the view's initializer they were rebuilt
+/// on every parent re-render — a whole AgentBridge each time when none was
+/// passed in — and the macro client's token provider captured the latest
+/// throwaway auth store instead of the one `@StateObject` kept.
+@MainActor
+final class ConsoleCore: ObservableObject {
+    let objectWillChange = ObservableObjectPublisher()
+    let authStore: RipulClerkAuthStore
+    let macroClient: RipulMacroClient
+    let bridge: AgentBridge
+    let listModel: RipulSessionListModel
+    private var forward: AnyCancellable?
+
+    init(configuration: RipulSessionsConfiguration, bridge: AgentBridge?) {
+        let authStore = RipulClerkAuthStore(cache: configuration.cache)
+        self.authStore = authStore
+        self.macroClient = RipulMacroClient(baseURL: configuration.baseURL, tokenProvider: { authStore.token })
+        let bridge = bridge ?? AgentBridge(registry: configuration.registry, audience: .developer)
+        assert(
+            bridge.audience == .developer,
+            "RipulAgentConsole requires a .developer-audience AgentBridge — construct the " +
+            "passed-in bridge with AgentBridge(registry: configuration.registry, audience: .developer), " +
+            "or omit `bridge:` to let the console create its own. An .endUser bridge here " +
+            "would silently refuse this console's own dev tools."
+        )
+        assert(
+            bridge.registry === configuration.registry,
+            "RipulAgentConsole's bridge must project from the SAME registry as its " +
+            "configuration — otherwise the editor and the agent see different tool sets."
+        )
+        self.bridge = bridge
+        self.listModel = RipulSessionListModel(bridge: bridge, tokenProvider: { authStore.token }, cache: configuration.cache)
+        // The console reads the auth store's state; keep re-rendering on it.
+        forward = authStore.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
     }
 }
 #endif

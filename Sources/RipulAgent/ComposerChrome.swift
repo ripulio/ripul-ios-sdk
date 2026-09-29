@@ -33,6 +33,9 @@ public final class RipulComposerChrome: ObservableObject {
 private struct ComposerChromeKey: EnvironmentKey {
     static let defaultValue: RipulComposerChrome? = nil
 }
+private struct ComposerClearanceChromeKey: EnvironmentKey {
+    static let defaultValue: RipulComposerChrome? = nil
+}
 private struct ComposerCollapseKey: EnvironmentKey {
     static let defaultValue: CGFloat = 0
 }
@@ -40,6 +43,13 @@ extension EnvironmentValues {
     public var ripulComposerChrome: RipulComposerChrome? {
         get { self[ComposerChromeKey.self] }
         set { self[ComposerChromeKey.self] = newValue }
+    }
+    /// Chrome whose clearance a retained chat keeps while its composer is
+    /// detached (sessions list showing). Without it the web padding shrinks and
+    /// regrows by the bar's height on every list round trip — the entry nod.
+    var composerClearanceChrome: RipulComposerChrome? {
+        get { self[ComposerClearanceChromeKey.self] }
+        set { self[ComposerClearanceChromeKey.self] = newValue }
     }
     var composerCollapse: CGFloat {
         get { self[ComposerCollapseKey.self] }

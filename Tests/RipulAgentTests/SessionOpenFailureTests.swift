@@ -36,10 +36,12 @@ final class SessionOpenFailureTests: XCTestCase {
     }
 
     private func waitForFailure(_ model: RipulSessionListModel, timeout: TimeInterval = 3) async {
-        let failed = expectation(description: "Failure is published")
-        let subscription = model.$openSessionError.compactMap { $0 }.prefix(1).sink { _ in failed.fulfill() }
-        await fulfillment(of: [failed], timeout: timeout)
-        withExtendedLifetime(subscription) {}
+        // The model is @Observable (no Combine publisher): poll for the error.
+        let deadline = Date().addingTimeInterval(timeout)
+        while model.openSessionError == nil, Date() < deadline {
+            try? await Task.sleep(nanoseconds: 20_000_000)
+        }
+        XCTAssertNotNil(model.openSessionError, "Failure is published")
         XCTAssertNil(model.openingUnifiedSessionId)
     }
 

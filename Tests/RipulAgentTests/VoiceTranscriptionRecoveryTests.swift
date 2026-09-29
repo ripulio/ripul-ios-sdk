@@ -70,6 +70,38 @@ final class VoiceTranscriptionRecoveryTests: XCTestCase {
         }
     }
 
+    /// A late partial arriving after the final commit used to be appended to
+    /// the complete committed text, sending the whole utterance twice.
+    @MainActor
+    func testSendUsesCommittedTextAndIgnoresLatePartial() async throws {
+        guard #available(iOS 26.0, macOS 26.0, *) else { throw XCTSkip() }
+        let cloud = StubTranscriptionProvider("elevenlabs")
+        var submitted: [String] = []
+        let controller = VoiceModeController(transcriptionProvider: cloud, fallback: StubTranscriptionProvider("apple"),
+            submit: { submitted.append($0); return false })
+        defer { controller.stop() }
+        let started = expectation(description: "Capture")
+        cloud.onStart = { started.fulfill() }
+        controller.beginListening(keepText: false)
+        await fulfillment(of: [started], timeout: 1)
+        let callback = try XCTUnwrap(cloud.starts.last)
+        callback(.connectionReady)
+        callback(.partial("During the upgrade we take the service down"))
+        var finish: CheckedContinuation<Void, Never>?
+        let draining = expectation(description: "Drain starts")
+        cloud.onFinish = {
+            draining.fulfill()
+            await withCheckedContinuation { finish = $0 }
+        }
+        controller.sendNow()
+        await fulfillment(of: [draining], timeout: 1)
+        callback(.committed("During the upgrade, we will take the service down."))
+        callback(.partial("During the upgrade, we will take the service down."))
+        finish?.resume()
+        try await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertEqual(submitted, ["During the upgrade, we will take the service down."])
+    }
+
     @MainActor
     func testReadyCloudNeverFallsBackEvenBeforeItsFirstWordOrOnLaterUtterance() async throws {
         guard #available(iOS 26.0, macOS 26.0, *) else { throw XCTSkip() }

@@ -1,227 +1,207 @@
 import Foundation
 import Combine
+import Observation
 
-/// Leaf `ObservableObject` holding the per-chat maps that drive the **session
-/// list** (and the in-chat todo lozenge + Files "recently edited") and nothing
-/// else. See the extended note below for why it exists.
+/// Per-chat live state that drives the **session list** (and the in-chat todo
+/// lozenge, plan controls and Files "recently edited"). Kept off `AgentBridge`
+/// so bridge traffic never re-renders the list.
 ///
-/// Why this exists: `AgentBridge` is a 62-`@Published`-field `ObservableObject`
-/// that the WKWebView-hosting `AgentView`/`AgentWebView`/`ChatComposer` observe.
-/// SwiftUI invalidation is object-level, so mutating ANY `@Published` field on
-/// the bridge re-runs the body of every view observing it — including the web
-/// host. These maps are written on **every tool start/end event during a run**
-/// yet are consumed ONLY by the session list. Leaving them on the bridge meant
-/// every streaming tool event re-rendered the web host. By moving them onto this
-/// dedicated leaf, a write fires `objectWillChange` on the store — NOT on
-/// `AgentBridge` — so only views observing `bridge.sessionList` re-render.
+/// ## Observation granularity
+/// These maps change on every tool start/end and activity event of every
+/// running chat. As an `ObservableObject` any one write re-rendered every
+/// observer — every session row on every screen, for any chat — which is how
+/// the list became a sustained re-render (and context-menu flicker, and heat)
+/// source for the whole length of a turn.
 ///
-/// Publishing is done MANUALLY (via `willSet` → `notify()`) rather than with
-/// `@Published`, so `updatesSuppressed` can gate SwiftUI notifications: a debug
-/// switch that freezes the session list's live updates (data still lands, only
-/// the re-render is suppressed) to bisect whether the list contributes to heat.
+/// Now each chat key has a `SessionActivityCell` (`@Observable`), and every
+/// per-chat read (`turnPhase(for:)`, `visibleTodoStateForList(for:)`, …) goes
+/// through the cell, so a row re-renders only when *its* chat changes. The
+/// maps themselves stay the write API (`AgentBridge` mutates them as before)
+/// but are unobserved storage: each write diffs old vs new and updates only the
+/// cells whose value actually changed. Bulk readers observe
+/// `recencyRevision`, which moves only when the recency *order* may change.
+///
+/// `updatesSuppressed` (Settings debug switch) still freezes the UI: data lands
+/// in the maps, cells stop updating, and re-enabling resyncs every cell.
 @MainActor
-public final class SessionListStore: ObservableObject {
-    /// Debug switch. When true, mutations still land (data stays correct) but
-    /// `objectWillChange` is NOT fired, so the session list / todo lozenge /
-    /// Files-recents stop re-rendering. Used to bisect streaming heat.
-    public var updatesSuppressed = false
+@Observable
+public final class SessionListStore {
+    @ObservationIgnored public var updatesSuppressed = false {
+        didSet { if oldValue && !updatesSuppressed { resyncAllCells() } }
+    }
 
-    /// Explicit publisher so emission can be gated on `updatesSuppressed`.
-    /// (Because none of the fields below use `@Published`, this is the store's
-    /// sole `objectWillChange`.)
-    public let objectWillChange = ObservableObjectPublisher()
+    @ObservationIgnored private var cells: [String: SessionActivityCell] = [:]
 
-    /// Coalesced SwiftUI invalidation. During a run, activity events land many
-    /// times per second (the web's thinking forward is throttled to ~4 Hz, but
-    /// tool start/end and relayed events are not, and one event often writes
-    /// two maps here), and every `objectWillChange` re-runs the body of EVERY
-    /// screen observing this store — sessions list, Files recents, todo
-    /// lozenge, plans. Visible symptom: a presented context menu flickering
-    /// for the whole length of a turn; invisible one: sustained re-render heat
-    /// on screens full of glass materials. Nothing in these maps changes
-    /// meaning faster than a human reads a subtitle, so one send per window is
-    /// enough. The first write of a burst sends immediately (subtitle still
-    /// appears promptly); writes inside the window ride a single trailing
-    /// flush, so the final state always renders.
-    private static let notifyCoalesceInterval: TimeInterval = 0.25
-    private var lastNotifySentAt: Date = .distantPast
-    private var notifyFlushScheduled = false
+    /// The observable per-chat state for `chatId` (created on first read).
+    public func cell(_ chatId: String) -> SessionActivityCell {
+        if let cell = cells[chatId] { return cell }
+        let cell = SessionActivityCell()
+        cells[chatId] = cell
+        if !updatesSuppressed { load(cell, chatId) }
+        return cell
+    }
 
-    private func notify() {
-        guard !updatesSuppressed else { return }
-        let now = Date()
-        let elapsed = now.timeIntervalSince(lastNotifySentAt)
-        if elapsed >= Self.notifyCoalesceInterval {
-            lastNotifySentAt = now
-            objectWillChange.send()
-            return
-        }
-        guard !notifyFlushScheduled else { return }
-        notifyFlushScheduled = true
-        let delay = Self.notifyCoalesceInterval - elapsed
-        Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: UInt64(max(0, delay) * 1_000_000_000))
-            guard let self else { return }
-            self.notifyFlushScheduled = false
-            guard !self.updatesSuppressed else { return }
-            self.lastNotifySentAt = Date()
-            self.objectWillChange.send()
+    /// Moves whenever a last-active change could reorder a recency-sorted list:
+    /// a new chat, or a chat whose new time passed another chat's. A running
+    /// chat already on top advances without touching it.
+    public private(set) var recencyRevision = 0
+
+    // MARK: - Storage maps (write API; unobserved — read per chat via `cell`)
+
+    /// Chats whose last agent turn has not been looked at. Ids arrive in both
+    /// CLI forms, so test membership through `isUnread(anyOf:)`.
+    @ObservationIgnored public var unreadChatIds: Set<String> = [] {
+        didSet {
+            guard oldValue != unreadChatIds else { return }
+            for key in oldValue.symmetricDifference(unreadChatIds) { update(key) { $0.unread = self.unreadChatIds.contains(key) } }
         }
     }
 
-    /// Chats whose last agent turn has not been looked at.
-    ///
-    /// Distinct from the turn phase, which the row's "hand" reads. A session
-    /// can be awaiting input AND already read — you opened it, saw the reply,
-    /// and left without answering. Phase says what the agent is doing; this
-    /// says whether YOU have seen it. Conflating them is what made the row's
-    /// only unread-ish signal a lie.
-    ///
-    /// Ids arrive in both CLI forms (`cli_<uuid>` and the bare uuid), so
-    /// membership is tested through `isUnread(anyOf:)` rather than directly.
-    public var unreadChatIds: Set<String> = [] { willSet { notify() } }
+    /// Sessions pinned to the top of the list, by canonical id (no `cli_`).
+    /// Observed as a whole: a pin reorders the list, so every reader should
+    /// re-render, and it changes only when you pin or unpin something.
+    public var pinnedChatKeys: Set<String> = []
+
+    /// True when any of the supplied aliases for one session is pinned.
+    public func isPinned(anyOf keys: [String]) -> Bool {
+        keys.contains { pinnedChatKeys.contains(AgentBridge.canonicalChatKey($0)) }
+    }
+
+    /// Per-chat latest activity event (session-list subtitle while running).
+    @ObservationIgnored public var latestActivityByChatId: [String: AgentActivityEvent] = [:] {
+        didSet { diff(oldValue, latestActivityByChatId) { cell, value in cell.latestActivity = value } }
+    }
+
+    /// Last time any activity was observed for a chat (list recency sort).
+    /// Mirrored to `lastActiveTimeSubject` for persistence.
+    @ObservationIgnored public var lastActiveTimeByChatId: [String: Date] = [:] {
+        didSet {
+            guard oldValue != lastActiveTimeByChatId else { return }
+            diff(oldValue, lastActiveTimeByChatId) { cell, value in cell.lastActive = value }
+            if !updatesSuppressed {
+                if recencyOrderMayChange(from: oldValue, to: lastActiveTimeByChatId) { recencyRevision &+= 1 }
+                lastActiveTimeSubject.send(lastActiveTimeByChatId)
+            }
+        }
+    }
+    /// Fires on `lastActiveTimeByChatId` changes (unless updates are suppressed).
+    @ObservationIgnored public let lastActiveTimeSubject = PassthroughSubject<[String: Date], Never>()
+
+    /// Per-chat session-row actions declared by tools (e.g. "Show Plan").
+    @ObservationIgnored public var sessionActionsByChatId: [String: [SessionRowAction]] = [:] {
+        didSet { diff(oldValue, sessionActionsByChatId) { cell, value in cell.sessionActions = value } }
+    }
+
+    /// Authoritative TodoWrite state per chat.
+    @ObservationIgnored public var todoStates: [String: TodoState] = [:] {
+        didSet { diff(oldValue, todoStates) { cell, value in cell.todoState = value } }
+    }
+
+    /// Per-chat dismissal marker for the in-chat lozenge.
+    @ObservationIgnored public var dismissedTodoVersions: [String: Int] = [:] {
+        didSet { diff(oldValue, dismissedTodoVersions) { cell, value in cell.dismissedTodoVersion = value } }
+    }
+
+    /// Per-chat "viewed in list" marker (session-list plan summary row).
+    @ObservationIgnored public var listViewedTodoVersions: [String: Int] = [:] {
+        didSet { diff(oldValue, listViewedTodoVersions) { cell, value in cell.listViewedTodoVersion = value } }
+    }
+
+    /// Per-chat agent turn phase, stored RAW (running / awaitingInput /
+    /// completed / failed). The display collapse happens in `turnPhase(for:)`.
+    @ObservationIgnored public var sessionPhases: [String: AgentTurnPhase] = [:] {
+        didSet { diff(oldValue, sessionPhases) { cell, value in cell.rawPhase = value } }
+    }
+
+    /// When the phase above was established. No view reads it.
+    @ObservationIgnored public var phaseTimestampByChatId: [String: Date] = [:]
+
+    // MARK: - Per-chat reads (fine-grained: each goes through the chat's cell)
 
     /// True when any of the supplied aliases for one session is unread.
     public func isUnread(anyOf keys: [String?]) -> Bool {
-        guard !unreadChatIds.isEmpty else { return false }
         for case let key? in keys where !key.isEmpty {
-            if unreadChatIds.contains(key) { return true }
-            if key.hasPrefix("cli_"), unreadChatIds.contains(String(key.dropFirst(4))) { return true }
-            if unreadChatIds.contains("cli_\(key)") { return true }
+            if cell(key).unread { return true }
+            if key.hasPrefix("cli_"), cell(String(key.dropFirst(4))).unread { return true }
+            if cell("cli_\(key)").unread { return true }
         }
         return false
     }
 
-    /// Per-chat latest activity event (session-list subtitle while running).
-    public var latestActivityByChatId: [String: AgentActivityEvent] = [:] { willSet { if newValue != latestActivityByChatId { notify() } } }
-
-    /// Last time any activity was observed for a chat (list recency sort).
-    /// Also mirrored to `lastActiveTimeSubject` (ungated) so persistence keeps
-    /// working even while re-renders are suppressed.
-    public var lastActiveTimeByChatId: [String: Date] = [:] {
-        willSet { if newValue != lastActiveTimeByChatId { notify() } }
-        // Gated by suppression too: SessionManager turns this into an @Published
-        // `lastActiveBySessionId`, which re-renders the session list (sort + times)
-        // for running sessions — a live update that bypasses the store freeze
-        // otherwise. Persistence still happens on background via a direct save, so
-        // nothing is lost while frozen.
-        didSet { if !updatesSuppressed && oldValue != lastActiveTimeByChatId { lastActiveTimeSubject.send(lastActiveTimeByChatId) } }
-    }
-    /// Fires on `lastActiveTimeByChatId` changes (unless updates are suppressed).
-    /// SessionManager subscribes to this to persist timestamps (replaces the old
-    /// `$lastActiveTimeByChatId` Published publisher).
-    public let lastActiveTimeSubject = PassthroughSubject<[String: Date], Never>()
-
-    /// Per-chat session-row actions declared by tools (e.g. "Show Plan").
-    public var sessionActionsByChatId: [String: [SessionRowAction]] = [:] { willSet { notify() } }
-
-    /// Authoritative TodoWrite state per chat.
-    public var todoStates: [String: TodoState] = [:] { willSet { notify() } }
-
-    /// Per-chat dismissal marker for the in-chat lozenge.
-    public var dismissedTodoVersions: [String: Int] = [:] { willSet { notify() } }
-
-    /// Per-chat "viewed in list" marker (session-list plan summary row).
-    public var listViewedTodoVersions: [String: Int] = [:] { willSet { notify() } }
-
-    /// Per-chat agent turn phase, stored RAW (running / awaitingInput /
-    /// completed / failed). The display collapse happens in `turnPhase(for:)`.
-    public var sessionPhases: [String: AgentTurnPhase] = [:] { willSet { notify() } }
-
-    /// When the phase above was established (from the event's own timestamp).
-    /// Not used for display gating — kept because the session list sorts and
-    /// debugs against "when did this last change phase".
-    public var phaseTimestampByChatId: [String: Date] = [:] { willSet { notify() } }
-
-    /// Gated read — returns nil when updates are suppressed so rows that
-    /// re-render from AgentBridge.objectWillChange don't show live phase changes.
-    ///
-    /// Collapse rules:
-    /// - `.running` → the row's live spinner.
-    /// - `.awaitingInput` → the agent is BLOCKED on you.
-    /// - `.completed` / `.failed` → also "your move": the turn finished.
-    ///
-    /// The session row draws nothing for the awaiting-input case any more —
-    /// unread shading already says "your move", and says it better. The
-    /// collapse survives for callers that ask whether a session is still
-    /// mid-flight (e.g. the plan checkpoint control).
+    /// Collapsed phase for display: running / awaitingInput; completed and
+    /// failed read as awaitingInput ("your move"); idle is nil. Nil while
+    /// updates are suppressed.
     public func turnPhase(for chatId: String) -> AgentTurnPhase? {
-        guard !updatesSuppressed else { return nil }
-        guard let raw = sessionPhases[chatId] else { return nil }
+        guard !updatesSuppressed, let raw = cell(chatId).rawPhase else { return nil }
         switch raw {
-        case .running, .awaitingInput:
-            return raw
-        case .completed, .failed:
-            return .awaitingInput
-        case .idle:
-            return nil
+        case .running, .awaitingInput: return raw
+        case .completed, .failed: return .awaitingInput
+        case .idle: return nil
         }
     }
 
-    // MARK: - Computed reads (moved from AgentBridge so rows can drop the bridge @ObservedObject)
+    /// Raw phase for a chat (no collapse), through its cell.
+    public func rawPhase(for chatId: String) -> AgentTurnPhase? { cell(chatId).rawPhase }
+
+    /// Last-active time for a chat, through its cell.
+    public func lastActive(for chatId: String) -> Date? { cell(chatId).lastActive }
+
+    /// Session-row actions for a chat, through its cell.
+    public func sessionActions(for chatId: String) -> [SessionRowAction]? { cell(chatId).sessionActions }
 
     /// In-progress plan for a chat, or nil if dismissed or absent.
     public func visibleTodoState(for chatId: String) -> TodoState? {
-        guard let state = todoStates[chatId] else { return nil }
-        if dismissedTodoVersions[chatId] == state.version { return nil }
+        let cell = cell(chatId)
+        guard let state = cell.todoState else { return nil }
+        if cell.dismissedTodoVersion == state.version { return nil }
         return state
     }
 
-    /// Session-list variant — also hides the plan once the user has opened the
-    /// chat (listViewedTodoVersions), while the in-chat lozenge is unaffected.
+    /// Session-list variant — also hides the plan once the user has opened the chat.
     public func visibleTodoStateForList(for chatId: String) -> TodoState? {
         guard let state = visibleTodoState(for: chatId) else { return nil }
-        if let viewed = listViewedTodoVersions[chatId], viewed >= state.version { return nil }
+        if let viewed = cell(chatId).listViewedTodoVersion, viewed >= state.version { return nil }
         return state
     }
 
     /// Short tool label for the session list. Gated by updatesSuppressed.
     public func latestToolLabelForList(for chatId: String) -> String? {
-        guard !updatesSuppressed else { return nil }
-        guard let activity = latestActivityByChatId[chatId] else { return nil }
+        guard !updatesSuppressed, let activity = cell(chatId).latestActivity else { return nil }
         return activity.displayName
     }
 
     /// Full tool activity event (toolStart or toolEnd) for the session list. Gated.
     public func latestToolActivityForList(for chatId: String) -> AgentActivityEvent? {
-        guard !updatesSuppressed else { return nil }
-        guard let activity = latestActivityByChatId[chatId] else { return nil }
+        guard !updatesSuppressed, let activity = cell(chatId).latestActivity else { return nil }
         switch activity {
         case .toolStart, .toolEnd: return activity
         default: return nil
         }
     }
 
-    /// Absolute file paths the agent has recently edited (Files "Recently Edited").
-    /// Written per Edit tool event during a run; persisted (debounced) to survive
-    /// restarts.
+    // MARK: - Recently edited files (bulk; observed as a whole by Files)
+
     public var recentlyEditedFiles: [String] =
-        UserDefaults.standard.stringArray(forKey: SessionListStore.recentlyEditedKey) ?? [] {
-        willSet { notify() }
-    }
+        UserDefaults.standard.stringArray(forKey: SessionListStore.recentlyEditedKey) ?? []
 
     public static let maxRecentlyEditedFiles = 30
     private static let recentlyEditedKey = "ripulRecentlyEditedFiles"
-    private var persistRecentWork: DispatchWorkItem?
+    @ObservationIgnored private var persistRecentWork: DispatchWorkItem?
 
     public init() {}
 
-    /// Insert `path` at the front of `recentlyEditedFiles`, dedup, cap, and
-    /// schedule a debounced persist.
     public func recordRecentlyEditedFile(_ path: String) {
         var list = recentlyEditedFiles
         if let existing = list.firstIndex(of: path) { list.remove(at: existing) }
         list.insert(path, at: 0)
-        if list.count > Self.maxRecentlyEditedFiles {
-            list = Array(list.prefix(Self.maxRecentlyEditedFiles))
-        }
+        if list.count > Self.maxRecentlyEditedFiles { list = Array(list.prefix(Self.maxRecentlyEditedFiles)) }
         guard list != recentlyEditedFiles else { return }
         recentlyEditedFiles = list
         scheduleRecentlyEditedPersist()
     }
 
     public func clearRecentlyEditedFiles() {
-        recentlyEditedFiles = []
+        if !recentlyEditedFiles.isEmpty { recentlyEditedFiles = [] }
         persistRecentWork?.cancel()
         persistRecentWork = nil
         UserDefaults.standard.removeObject(forKey: Self.recentlyEditedKey)
@@ -242,4 +222,70 @@ public final class SessionListStore: ObservableObject {
         persistRecentWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0, execute: work)
     }
+
+    // MARK: - Cell sync
+
+    /// Apply per-key changes between two maps to existing cells only (a cell
+    /// that has never been read loads its values when first created).
+    private func diff<Value: Equatable>(_ old: [String: Value], _ new: [String: Value],
+                                        apply: (SessionActivityCell, Value?) -> Void) {
+        guard !updatesSuppressed, !cells.isEmpty, old != new else { return }
+        for (key, value) in new where old[key] != value {
+            if let cell = cells[key] { apply(cell, value) }
+        }
+        for key in old.keys where new[key] == nil {
+            if let cell = cells[key] { apply(cell, nil) }
+        }
+    }
+
+    private func update(_ key: String, _ body: (SessionActivityCell) -> Void) {
+        guard !updatesSuppressed, let cell = cells[key] else { return }
+        body(cell)
+    }
+
+    private func load(_ cell: SessionActivityCell, _ key: String) {
+        cell.unread = unreadChatIds.contains(key)
+        cell.latestActivity = latestActivityByChatId[key]
+        cell.lastActive = lastActiveTimeByChatId[key]
+        cell.sessionActions = sessionActionsByChatId[key]
+        cell.todoState = todoStates[key]
+        cell.dismissedTodoVersion = dismissedTodoVersions[key]
+        cell.listViewedTodoVersion = listViewedTodoVersions[key]
+        cell.rawPhase = sessionPhases[key]
+    }
+
+    private func resyncAllCells() {
+        for (key, cell) in cells { load(cell, key) }
+        recencyRevision &+= 1
+    }
+
+    /// Whether an updated time could reorder the chats: a new key, or one whose
+    /// time crossed another key's. The common case — the running chat, already
+    /// most recent, advancing — reorders nothing.
+    private func recencyOrderMayChange(from old: [String: Date], to new: [String: Date]) -> Bool {
+        if old.count != new.count { return true }
+        for (key, time) in new {
+            guard let previous = old[key] else { return true }
+            guard previous != time else { continue }
+            let low = min(previous, time), high = max(previous, time)
+            for (other, otherTime) in new where other != key && otherTime > low && otherTime < high { return true }
+        }
+        return false
+    }
+}
+
+/// Live list state for one chat key. Every property is set only on a real
+/// change, so reading it costs a re-render only when this chat changes.
+@MainActor
+@Observable
+public final class SessionActivityCell {
+    public internal(set) var unread = false
+    public internal(set) var latestActivity: AgentActivityEvent?
+    public internal(set) var lastActive: Date?
+    public internal(set) var sessionActions: [SessionRowAction]?
+    public internal(set) var todoState: TodoState?
+    public internal(set) var dismissedTodoVersion: Int?
+    public internal(set) var listViewedTodoVersion: Int?
+    public internal(set) var rawPhase: AgentTurnPhase?
+    init() {}
 }

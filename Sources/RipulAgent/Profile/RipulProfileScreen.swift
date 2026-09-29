@@ -4,7 +4,7 @@ import SwiftUI
 /// Identity and service keys use the account; speech choices remain app-local.
 @available(iOS 26.0, macOS 26.0, *)
 public struct RipulProfileScreen<PlanContent: View>: View {
-    @ObservedObject var bridge: AgentBridge
+    var bridge: AgentBridge
     let userName: String?
     let userEmail: String?
     let tokenProvider: () -> String?

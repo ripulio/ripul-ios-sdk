@@ -317,7 +317,7 @@ private struct ConsoleTabView: View {
 
 @available(iOS 16.0, macOS 13.0, *)
 private struct NetworkTabView: View {
-    @ObservedObject var bridge: AgentBridge
+    var bridge: AgentBridge
     @State private var searchText = ""
     @State private var methodFilter: String = "ALL"
     @State private var expandedIDs: Set<UUID> = []
@@ -518,7 +518,7 @@ private struct NetworkTabView: View {
 
 @available(iOS 16.0, macOS 13.0, *)
 private struct ToolsTabView: View {
-    @ObservedObject var bridge: AgentBridge
+    var bridge: AgentBridge
     @Environment(\.dismiss) private var dismiss
     @State private var scrollHudOn = false
     @State private var wsDebugOn = false

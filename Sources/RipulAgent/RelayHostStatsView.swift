@@ -8,15 +8,17 @@ import SwiftUI
 /// the freshest pong sample per room. Surfaces the signals needed to tell
 /// "host is online" apart from "host is accepting messages":
 ///
-/// - Frames in vs messages dispatched — gap means React path is starved.
-/// - Age of the last messages-effect run — stale while frames arrive means
-///   the effect is wedged.
+/// - Command frames in vs commands dispatched — a gap means the host received
+///   agent commands and dropped them before execution.
 /// - Per-chat chain breadcrumbs — names the `await` a stuck chain is hung on.
+///
+/// Stall thresholds mirror the web watcher in `useHostDiagnostics.ts`: 30s at a
+/// setup step, 5 min for a whole turn.
 ///
 /// Accessible via the `/rr.` debug menu → "Relay Host Stats".
 @available(iOS 16.0, macOS 13.0, *)
 public struct RelayHostStatsView: View {
-    @ObservedObject var bridge: AgentBridge
+    var bridge: AgentBridge
     @State private var rooms: [RoomStats] = []
     @State private var selfHost: RoomStats?
     @State private var lastFetchedAt: Date?
@@ -290,7 +292,7 @@ public struct RelayHostStatsView: View {
 
             if !room.inFlight.isEmpty {
                 Divider()
-                inFlightList(room.inFlight, now: room.sampleAt)
+                inFlightList(room.inFlight, room: room, now: room.sampleAt)
             }
 
             if !room.chainSteps.isEmpty {
@@ -324,13 +326,15 @@ public struct RelayHostStatsView: View {
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(health.color)
             infoIcon("""
-            HEALTHY — frames and commands advancing in step, effect ran recently.
+            HEALTHY — no dropped commands and no stalled turns. An idle host is healthy: pings and self-echo raise 'Frames in' without any commands, and that is expected.
 
-            WEDGED — frames kept arriving between polls but commands drained stayed flat. The React messages-effect isn't running even though the WebSocket is. This is the 'host looks online but won't accept messages' failure.
+            WEDGED — agent commands from other devices reached the host between polls but were not dispatched. The host dropped them before execution (bridge disabled, relay not connected, or background API missing). This is the 'host looks online but won't accept messages' failure.
 
-            EFFECT STALE — the messages-effect hasn't run in >10s while frames kept arriving. Same underlying class of failure as WEDGED, caught via a different signal.
+            STALLED — a turn is stuck: 30s+ at a setup step (loading the chat, saving the message, resolving the model), or running 5+ minutes in total. Same thresholds the host itself uses to log setup-stall / stuck.
 
             OFFLINE — the last ping failed (timeout, send error, disconnected). The WebSocket itself is down.
+
+            Hosts on an older web build don't report command frames, so WEDGED can't be detected for them.
             """)
         }
     }
@@ -345,9 +349,22 @@ public struct RelayHostStatsView: View {
                 tooltip: """
                 Lifetime count of chat frames this host's WebSocket has received since the bridge mounted. Counted imperatively in the onMessage handler BEFORE any filtering or React involvement.
 
-                Includes every inbound message: real agent commands, liveness pings, self-echo of your own outbound events, peer join/leave frames, and schema-invalid payloads.
+                Includes every inbound message: real agent commands, liveness pings, self-echo of the host's own outbound events (every streamed turn event comes back), and control traffic.
 
-                Compared against 'Commands drained' below: when Frames in keeps climbing but Commands drained stalls, the React path is starved — that's the 'host looks online but won't accept messages' signature.
+                So this climbing while 'Commands drained' stays flat is normal — an idle host being pinged does exactly that. Compare 'Command frames in' instead.
+                """
+            )
+            statRow(
+                "Command frames in",
+                value: room.commandFramesReceived.map { "\($0)" } ?? "—",
+                detail: room.commandFramesSinceLastSample.map { "+\($0) since last" },
+                valueColor: (room.droppedSinceLastSample ?? 0) > 0 ? .orange : nil,
+                tooltip: """
+                Agent commands from other devices that reached the host's inbound handler, counted BEFORE the checks that can drop them (bridge enabled, relay connected, background API present).
+
+                Should advance in step with 'Commands drained'. When this rises and 'Commands drained' doesn't, the host is receiving commands and dropping them — that is the WEDGED state.
+
+                '—' means the host is on a web build that doesn't report this counter.
                 """
             )
             statRow(
@@ -355,9 +372,9 @@ public struct RelayHostStatsView: View {
                 value: "\(room.messagesReceived)",
                 detail: room.messagesSinceLastSample.map { "+\($0) since last" },
                 tooltip: """
-                Lifetime count of agent commands that actually reached handleCommand — i.e. frames that passed every filter (not self-clientId, not a ping handled by the imperative fast-path, valid RelayAgentPayload, isAgentCommand true) and were dispatched to the executor.
+                Lifetime count of agent commands that were dispatched to a handler — frames that passed every filter (not the host's own clientId, not a ping, a valid agent command) and every gate (bridge enabled, relay connected, background API present).
 
-                Under healthy load this climbs in step with Frames in minus pings/self-echo. If this stops climbing while Frames in keeps climbing, the host's React messages-effect has stopped running — the wedge we're hunting.
+                Climbs in step with 'Command frames in'. Pings and self-echo never count here, so an idle host sits flat.
                 """
             )
             statRow(
@@ -369,26 +386,25 @@ public struct RelayHostStatsView: View {
 
                 Represents every frame that arrived but was intentionally not dispatched as a command: self-echo of your own outbound events (same clientId), host:ping answered by the imperative fast-path, peer:queryResponse handled separately, peer roster frames, and anything that fails the agent-command type guards.
 
-                Stable or slowly-climbing = normal. What matters for the wedge is the per-poll delta on 'Frames in' vs 'Commands drained', NOT this lifetime gap.
+                Climbing = normal (pings and streamed events echo back). It says nothing about a wedge — compare 'Command frames in' with 'Commands drained' for that.
                 """
             )
             statRow(
-                "Effect last ran",
+                "Last frame in",
                 value: ageString(room.lastMessagesEffectRanTs, now: room.sampleAt),
-                valueColor: room.effectStale ? .orange : nil,
                 tooltip: """
-                Time since the host's messages-handling useEffect body last executed. Stamped unconditionally at the top of the effect on every run — even when gated off — so it proves the React hook is being re-invoked regardless of whether messages are being drained.
+                Time since the host's inbound handler last saw ANY chat frame — pings and self-echo included. Commands are dispatched straight from that handler (no React effect in the path), so this is simply 'when did the relay last deliver something to this host'.
 
-                Under healthy load this refreshes every time React renders the bridge, typically sub-second. Turns orange when it's been >10s since the effect ran AND frames were still arriving in that window — meaning the React render queue is starved (long task, infinite render loop, etc.).
+                A long age while other devices are connected means delivery to the host has stopped (the host rebuilds its socket itself when that happens — see 'host-self-heal' in the comms log). A long age with nobody connected is just a quiet room.
                 """
             )
             statRow(
                 "Command last received",
                 value: ageString(room.lastCommandReceivedTs, now: room.sampleAt),
                 tooltip: """
-                Time since the host last entered handleCommand for ANY command kind — including a host:ping answered imperatively. Stamped in both the imperative fast-path and the React-effect path.
+                Time since the host last received a host:ping or a dispatched agent command.
 
-                Proves the WebSocket itself is still delivering frames to the bridge. If this goes stale while Frames in keeps climbing, the imperative handler has stopped running — which would be very unusual (pings would stop returning). More commonly it stays fresh due to pings even when the real command flow is wedged.
+                Stays fresh from pings alone, so it proves the host answers — not that commands are getting through. Use 'Command frames in' vs 'Commands drained' for that.
                 """
             )
             statRow(
@@ -397,14 +413,14 @@ public struct RelayHostStatsView: View {
                 tooltip: """
                 Time since the last agent:start or agent:resume execution chain finished — either success or caught error. 'null' means no agent turn has completed since the host bridge mounted.
 
-                A long age here while 'Pending chains' > 0 is the 'chain is hung' signature: a turn started but its finally block has not fired. Cross-reference with the 'Chain breadcrumbs' list below to see the exact await it's stuck on.
+                A long age here while 'Pending chains' > 0 can be a hung chain, or just a long turn. The 'In-flight commands' and 'Chain breadcrumbs' lists below turn orange only past the stall thresholds.
                 """
             )
             statRow(
                 "Pending chains",
                 value: "\(room.pendingCommandCount)",
                 tooltip: """
-                Count of distinct chatIds that currently have an active per-chat execution chain. Each chat queues sequentially but different chats run in parallel, so this is NOT the total queue depth — it's the number of chats with any in-flight work.
+                Count of distinct chatIds that currently have an active per-chat execution chain (running or queued). Each chat queues sequentially but different chats run in parallel, so this is NOT the total queue depth — it's the number of chats with any work.
 
                 Grows and never drops = chain promise leak. Cross-reference with 'In-flight commands' below for the per-chat age.
                 """
@@ -458,7 +474,7 @@ public struct RelayHostStatsView: View {
     }
 
     @ViewBuilder
-    private func inFlightList(_ cmds: [InFlightRow], now: Date) -> some View {
+    private func inFlightList(_ cmds: [InFlightRow], room: RoomStats, now: Date) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 6) {
                 Text("In-flight commands")
@@ -467,7 +483,7 @@ public struct RelayHostStatsView: View {
                 infoIcon("""
                 Per-chat list of agent commands currently being executed on the host. An entry appears when a command (agent:start or agent:resume) enters its execution chain and is removed when the chain's finally block fires.
 
-                Age shown per row is how long the command has been running. Rows turn orange at >45s — well past a normal turn. The SAME chatId + kind appearing across many polls without the age resetting is a hung chain; cross-reference with 'Chain breadcrumbs' for the exact await.
+                Age shown per row is how long the command has been running. Agent turns routinely take 20-60s or more, so a row turns orange only when the turn is stalled: 30s+ at a setup step (see 'Chain breadcrumbs'), or 5+ minutes in total.
                 """)
             }
             ForEach(cmds) { cmd in
@@ -484,7 +500,7 @@ public struct RelayHostStatsView: View {
                     Spacer()
                     Text(ageString(cmd.startedAt, now: now))
                         .font(.system(.caption2, design: .monospaced))
-                        .foregroundStyle(cmd.startedAt != nil && now.timeIntervalSince1970 * 1000 - cmd.startedAt! > 45_000 ? .orange : .secondary)
+                        .foregroundStyle(room.stallReason(for: cmd) != nil ? .orange : .secondary)
                 }
             }
         }
@@ -498,9 +514,9 @@ public struct RelayHostStatsView: View {
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
                 infoIcon("""
-                Per-chat breadcrumb of the most recent await boundary inside the agent:start execution chain. Stamped at: queued, chain-entered, ensureChatLoaded, initializeChatActions, saveUserMessage, ensureChatTab, getModelById, executeAgentWithPrompt. Cleared when the chain's finally fires.
+                Per-chat breadcrumb of the most recent await boundary inside the execution chain. Setup steps: queued, chain-entered, ensureChatLoaded, initializeChatActions, saveUserMessage, ensureChatTab, getModelById. Turn steps: executeAgentWithPrompt (agent:start), resumeWithContext (agent:resume). Cleared when the chain's finally fires. Age is time at THIS step.
 
-                If an entry persists at the same step across many polls with a growing age, that specific await is hung — names the exact failure point (e.g. 'stuck 47s at ensureChatLoaded' points at IndexedDB; 'stuck at getModelById' points at model API; etc.). Rows turn orange at >45s.
+                Setup steps settle in a few seconds, so a row turns orange at 30s — that await is hung ('ensureChatLoaded' points at IndexedDB, 'getModelById' at the model API). Turn steps are the agent actually working and turn orange only at 5 min.
                 """)
             }
             ForEach(steps) { step in
@@ -517,7 +533,7 @@ public struct RelayHostStatsView: View {
                     Spacer()
                     Text(ageString(step.ts, now: now))
                         .font(.system(.caption2, design: .monospaced))
-                        .foregroundStyle(step.ts != nil && now.timeIntervalSince1970 * 1000 - step.ts! > 45_000 ? .orange : .secondary)
+                        .foregroundStyle(RoomStats.isStepStalled(step, now: now) ? .orange : .secondary)
                 }
             }
         }
@@ -529,16 +545,18 @@ public struct RelayHostStatsView: View {
             HStack(spacing: 6) {
                 Text("Queue backlog")
                     .font(.caption.weight(.semibold))
-                    .foregroundStyle(total > 0 ? .orange : .secondary)
+                    .foregroundStyle(.secondary)
                 infoIcon("""
                 Commands currently QUEUED behind the running turn on a chat — they cannot start until the in-flight turn on that same chat completes. Each chat has its own serial chain, so a backlog on one chat does not hold up others.
+
+                Sending a follow-up while a turn runs queues it here — that is normal. It only matters if the turn ahead of it is stalled (orange in 'In-flight commands').
 
                 This is the live count; the worst value is captured in 'Peaks → Max queue backlog' so a backlog that has since drained is still visible after the fact.
                 """)
                 Spacer()
                 Text("\(total) waiting")
                     .font(.system(.caption2, design: .monospaced))
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(.secondary)
             }
             ForEach(rows) { row in
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
@@ -566,6 +584,8 @@ public struct RelayHostStatsView: View {
                 infoIcon("""
                 High-watermarks since the host launched (or you last reset). The live gauges above recover once a freeze clears, so these peaks are how you diagnose a stall after the fact — they record the worst the pipeline got.
 
+                Orange = past a threshold: a turn that ran 5+ min, or any incident count. A queue backlog is a follow-up sent while a turn was running (normal); 'queue-block' counts those too, so it is shown but not flagged.
+
                 Reset (this machine only) zeroes the watermarks so you can watch a fresh window.
                 """)
                 Spacer()
@@ -580,7 +600,7 @@ public struct RelayHostStatsView: View {
             }
 
             if peaks.isQuiet {
-                Text("No notable peaks — clean since reset.")
+                Text("Nothing has run since reset.")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             } else {
@@ -590,7 +610,7 @@ public struct RelayHostStatsView: View {
                     detail: peaks.maxQueueBacklog > 0
                         ? "\(shortChat(peaks.maxQueueBacklogChatId)) · \(absTime(peaks.maxQueueBacklogAt))"
                         : nil,
-                    warn: peaks.maxQueueBacklog > 0
+                    warn: false
                 )
                 peakRow(
                     "Longest in-flight turn",
@@ -598,7 +618,7 @@ public struct RelayHostStatsView: View {
                     detail: peaks.maxInFlightAgeMs >= 1
                         ? "\(peaks.maxInFlightAgeKind ?? "?") at '\(peaks.maxInFlightAgeStep ?? "?")' · \(absTime(peaks.maxInFlightAgeAt))"
                         : nil,
-                    warn: peaks.maxInFlightAgeMs > 45_000
+                    warn: peaks.maxInFlightAgeMs >= RoomStats.turnStuckMs
                 )
                 peakRow(
                     "Max concurrent chains",
@@ -607,7 +627,7 @@ public struct RelayHostStatsView: View {
                     warn: false
                 )
                 HStack(spacing: 10) {
-                    incidentCount("queue-block", peaks.queueBlockCount)
+                    incidentCount("queue-block", peaks.queueBlockCount, warn: false)
                     incidentCount("setup-stall", peaks.setupStallCount)
                     incidentCount("stuck", peaks.stuckCount)
                     incidentCount("fail", peaks.executeFailCount)
@@ -640,11 +660,11 @@ public struct RelayHostStatsView: View {
     }
 
     @ViewBuilder
-    private func incidentCount(_ label: String, _ count: Int) -> some View {
+    private func incidentCount(_ label: String, _ count: Int, warn: Bool = true) -> some View {
         HStack(spacing: 3) {
             Text("\(count)")
                 .font(.system(.caption2, design: .monospaced).weight(.semibold))
-                .foregroundStyle(count > 0 ? .orange : .secondary)
+                .foregroundStyle(warn && count > 0 ? .orange : .secondary)
             Text(label)
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
@@ -988,6 +1008,10 @@ fileprivate struct RoomStats: Identifiable {
     let framesSinceLastSample: Int?
     let messagesSinceLastSample: Int?
     let frameGap: Int
+    /// Peer agent-command frames counted before the dispatch gates. nil = host
+    /// on a web build that doesn't report it.
+    let commandFramesReceived: Int?
+    let commandFramesSinceLastSample: Int?
     let lastMessagesEffectRanTs: Double?
     let lastCommandReceivedTs: Double?
     let lastCommandCompletedTs: Double?
@@ -999,6 +1023,13 @@ fileprivate struct RoomStats: Identifiable {
     let queueDepth: [QueueDepthRow]
 
     var id: String { roomId }
+
+    /// Per-poll delta, nil when either side is missing or the counter went
+    /// backwards (the bridge remounted and its counters reset).
+    static func delta(_ now: Int?, _ before: Int?) -> Int? {
+        guard let now, let before, now >= before else { return nil }
+        return now - before
+    }
 
     /// Total current queue backlog across all chats (commands waiting to run).
     var totalBacklog: Int { queueDepth.reduce(0) { $0 + $1.depth } }
@@ -1013,33 +1044,57 @@ fileprivate struct RoomStats: Identifiable {
         }
     }
 
-    /// Effect stale = messages effect has not run in > 10s while frames kept arriving.
-    var effectStale: Bool {
-        guard let ts = lastMessagesEffectRanTs, ts > 0 else { return false }
-        let age = sampleAt.timeIntervalSince1970 * 1000 - ts
-        return age > 10_000 && (framesSinceLastSample ?? 0) > 0
+    // Mirrors SETUP_STUCK_MS / TURN_STUCK_MS in chrome-extension useHostDiagnostics.ts.
+    static let setupStallMs: Double = 30_000
+    static let turnStuckMs: Double = 5 * 60_000
+    /// Breadcrumbs where the agent is actually working — long waits are normal.
+    static let turnSteps: Set<String> = ["executeAgentWithPrompt", "resumeWithContext"]
+
+    static func isStepStalled(_ step: ChainStepRow, now: Date) -> Bool {
+        guard let ts = step.ts else { return false }
+        let age = now.timeIntervalSince1970 * 1000 - ts
+        return age >= (turnSteps.contains(step.step) ? turnStuckMs : setupStallMs)
+    }
+
+    /// Commands that arrived between polls but were not dispatched. nil when the
+    /// host doesn't report command frames (older web build) or on the first poll.
+    var droppedSinceLastSample: Int? {
+        guard let cmdDelta = commandFramesSinceLastSample,
+              let msgsDelta = messagesSinceLastSample else { return nil }
+        return max(0, cmdDelta - msgsDelta)
+    }
+
+    /// Why this in-flight command counts as stalled, or nil if it doesn't.
+    func stallReason(for cmd: InFlightRow) -> String? {
+        let now = sampleAt.timeIntervalSince1970 * 1000
+        if let step = chainSteps.first(where: { $0.chatId == cmd.chatId }),
+           let ts = step.ts,
+           Self.isStepStalled(step, now: sampleAt) {
+            return "\(cmd.kind) on …\(cmd.chatId.suffix(8)) stuck \(Int((now - ts) / 1000))s at '\(step.step)'"
+        }
+        if let started = cmd.startedAt, now - started >= Self.turnStuckMs {
+            return "\(cmd.kind) on …\(cmd.chatId.suffix(8)) running \(Int((now - started) / 60_000)) min — past the 5 min stuck threshold"
+        }
+        return nil
     }
 
     var health: HealthStatus {
         if let error {
             return HealthStatus(label: "OFFLINE", color: .red, detail: error)
         }
-        // Frames climbing but commands not → React path wedged.
-        if let framesDelta = framesSinceLastSample,
-           let msgsDelta = messagesSinceLastSample,
-           framesDelta > 2 && msgsDelta == 0 {
+        // Frames alone prove nothing — pings and self-echo raise them on an idle
+        // host. Only commands that arrived and were NOT dispatched are a wedge.
+        if let dropped = droppedSinceLastSample, dropped > 0 {
             return HealthStatus(
                 label: "WEDGED",
                 color: .orange,
-                detail: "Frames arriving (+\(framesDelta)) but no commands drained — React path starved."
+                detail: "\(dropped) command(s) arrived but weren't dispatched — the host dropped them before execution (bridge disabled, relay not connected, or background API missing)."
             )
         }
-        if effectStale {
-            return HealthStatus(
-                label: "EFFECT STALE",
-                color: .orange,
-                detail: "Messages effect has not run recently while frames were arriving."
-            )
+        let stalls = inFlight.compactMap { stallReason(for: $0) }
+        if let first = stalls.first {
+            let more = stalls.count > 1 ? " (+\(stalls.count - 1) more)" : ""
+            return HealthStatus(label: "STALLED", color: .orange, detail: first + more)
         }
         return HealthStatus(label: "HEALTHY", color: .green, detail: nil)
     }
@@ -1057,13 +1112,17 @@ fileprivate struct RoomStats: Identifiable {
         self.framesReceived = frames
         self.messagesReceived = msgs
         self.frameGap = frames - msgs
+        let cmdFrames = (selfHealth["commandFramesReceivedCount"] as? Double).map { Int($0) }
+        self.commandFramesReceived = cmdFrames
 
         if let previous {
             self.framesSinceLastSample = frames - previous.framesReceived
             self.messagesSinceLastSample = msgs - previous.messagesReceived
+            self.commandFramesSinceLastSample = Self.delta(cmdFrames, previous.commandFramesReceived)
         } else {
             self.framesSinceLastSample = nil
             self.messagesSinceLastSample = nil
+            self.commandFramesSinceLastSample = nil
         }
 
         self.lastMessagesEffectRanTs = selfHealth["lastMessagesEffectRanTs"] as? Double
@@ -1111,15 +1170,19 @@ fileprivate struct RoomStats: Identifiable {
         self.framesReceived = frames
         self.messagesReceived = msgs
         self.frameGap = frames - msgs
+        let cmdFrames = (host["commandFramesReceivedCount"] as? Double).map { Int($0) }
+        self.commandFramesReceived = cmdFrames
 
         // "since last" is relative to the previous POLL (this view), not the
         // previous pong. That's what we actually want to show on a live view.
         if let previous {
             self.framesSinceLastSample = frames - previous.framesReceived
             self.messagesSinceLastSample = msgs - previous.messagesReceived
+            self.commandFramesSinceLastSample = Self.delta(cmdFrames, previous.commandFramesReceived)
         } else {
             self.framesSinceLastSample = nil
             self.messagesSinceLastSample = nil
+            self.commandFramesSinceLastSample = nil
         }
 
         self.lastMessagesEffectRanTs = host["lastMessagesEffectRanTs"] as? Double
@@ -1251,7 +1314,8 @@ fileprivate struct PeaksData {
         self.executeFailCount = Int((d["executeFailCount"] as? Double) ?? 0)
     }
 
-    /// True when every watermark is at rest — nothing notable has happened.
+    /// True when nothing has run at all since reset. Ordinary turns do count —
+    /// the longest-turn row is useful context even when it isn't a warning.
     var isQuiet: Bool {
         maxQueueBacklog == 0 && maxInFlightAgeMs < 1 && maxPendingChains <= 1
             && queueBlockCount == 0 && setupStallCount == 0 && stuckCount == 0 && executeFailCount == 0

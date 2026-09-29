@@ -28,9 +28,151 @@ public struct RepoSummary: Codable, Sendable, Identifiable, Hashable {
     public let headSha: String?
     /// staged + modified + untracked.
     public let dirtyCount: Int
+    /// `remote.origin.url`; nil when the repo has no origin (or the host
+    /// predates the field).
+    public let originUrl: String?
+
+    public init(path: String, name: String, currentBranch: String? = nil, headSha: String? = nil,
+                dirtyCount: Int = 0, originUrl: String? = nil) {
+        self.path = path
+        self.name = name
+        self.currentBranch = currentBranch
+        self.headSha = headSha
+        self.dirtyCount = dirtyCount
+        self.originUrl = originUrl
+    }
 
     public var id: String { path }
     public var isDirty: Bool { dirtyCount > 0 }
+
+    /// Lowercased `owner/name` when origin is on github.com, else nil.
+    public var githubFullName: String? {
+        originUrl.flatMap(RepoGitHubCatalog.githubFullName(fromRemoteURL:))
+    }
+}
+
+// MARK: - GitHub + clone
+
+/// A repo the host's `gh` login can see.
+public struct GitHubRepo: Codable, Sendable, Identifiable, Hashable {
+    /// owner/name, as GitHub capitalises it.
+    public let fullName: String
+    public let name: String
+    public let owner: String
+    public let description: String?
+    public let isPrivate: Bool
+    public let isFork: Bool
+    public let isArchived: Bool
+    /// ISO 8601.
+    public let pushedAt: String?
+    public let htmlUrl: String
+    public let cloneUrl: String
+    public let defaultBranch: String?
+
+    public var id: String { fullName }
+
+    public init(fullName: String, name: String, owner: String, description: String? = nil,
+                isPrivate: Bool = false, isFork: Bool = false, isArchived: Bool = false,
+                pushedAt: String? = nil, htmlUrl: String = "", cloneUrl: String = "",
+                defaultBranch: String? = nil) {
+        self.fullName = fullName
+        self.name = name
+        self.owner = owner
+        self.description = description
+        self.isPrivate = isPrivate
+        self.isFork = isFork
+        self.isArchived = isArchived
+        self.pushedAt = pushedAt
+        self.htmlUrl = htmlUrl
+        self.cloneUrl = cloneUrl
+        self.defaultBranch = defaultBranch
+    }
+
+    public var pushedDate: Date? {
+        pushedAt.flatMap { ISO8601DateFormatter().date(from: $0) }
+    }
+}
+
+public struct GitHubRepoList: Sendable {
+    public let repos: [GitHubRepo]
+    /// Where clones land on the host, e.g. /Users/me/Documents/repos.
+    public let cloneRoot: String?
+}
+
+/// A GitHub sign-in waiting for approval: enter `code` at `url`.
+public struct GitHubAuthPending: Codable, Sendable, Hashable {
+    /// e.g. "42D5-EAAE"
+    public let code: String
+    /// https://github.com/login/device
+    public let url: String
+    public let startedAt: Double
+    public let expiresAt: Double
+
+    public init(code: String, url: String, startedAt: Double = 0, expiresAt: Double = 0) {
+        self.code = code
+        self.url = url
+        self.startedAt = startedAt
+        self.expiresAt = expiresAt
+    }
+}
+
+/// The host `gh` CLI's GitHub login.
+public struct GitHubAuthStatus: Codable, Sendable, Hashable {
+    public let ghInstalled: Bool
+    public let signedIn: Bool
+    /// Active account.
+    public let login: String?
+    public let scopes: String?
+    public let pending: GitHubAuthPending?
+    /// Why the last sign-in failed, or why the saved login is unusable.
+    public let error: String?
+
+    public init(ghInstalled: Bool, signedIn: Bool, login: String? = nil, scopes: String? = nil,
+                pending: GitHubAuthPending? = nil, error: String? = nil) {
+        self.ghInstalled = ghInstalled
+        self.signedIn = signedIn
+        self.login = login
+        self.scopes = scopes
+        self.pending = pending
+        self.error = error
+    }
+}
+
+/// A clone running (or recently finished) on the host.
+public struct RepoCloneJob: Codable, Sendable, Identifiable, Hashable {
+    public enum State: String, Codable, Sendable {
+        case running, succeeded, failed
+    }
+
+    public let id: String
+    /// What was asked for: owner/repo or a URL.
+    public let source: String
+    /// Folder name.
+    public let name: String
+    /// Absolute destination on the host.
+    public let path: String
+    public let state: State
+    /// git's progress phase, e.g. "Receiving objects".
+    public let phase: String?
+    public let percent: Int?
+    public let error: String?
+    public let startedAt: Double
+    public let finishedAt: Double?
+
+    public init(id: String, source: String, name: String, path: String, state: State,
+                phase: String? = nil, percent: Int? = nil, error: String? = nil,
+                startedAt: Double = 0, finishedAt: Double? = nil) {
+        self.id = id
+        self.source = source
+        self.name = name
+        self.path = path
+        self.state = state
+        self.phase = phase
+        self.percent = percent
+        self.error = error
+        self.startedAt = startedAt
+        self.finishedAt = finishedAt
+    }
 }
 
 // MARK: - Graph

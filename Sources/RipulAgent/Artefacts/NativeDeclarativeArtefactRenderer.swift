@@ -106,6 +106,7 @@
     @ObservedObject var state: NativeArtefactFormState
     @FocusState private var focused: String?
     var body: some View {
+      let _ = MainThreadSampler.count("DeclarativeEmbed.body")
       VStack(alignment: .leading, spacing: 14) {
         if let snapshot = state.snapshot {
           if !snapshot.error.isEmpty { Text(snapshot.error).font(.callout).foregroundStyle(.red) }

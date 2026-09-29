@@ -27,6 +27,14 @@ public struct VoiceSettingsScreen: View {
     private var isManaged: Bool { !BundledAgentRuntime.isEnabled && SpeechPreferences.isManagedByProfile }
     @State private var hasDeviceKey = DeviceSpeechCredentials.isConfigured
 
+    /// What "no choice" means: the site key's model when its profile names
+    /// one, otherwise the built-in default.
+    private var defaultModelLabel: String {
+        let id = SpeechPreferences.activeProfile?.ttsModelId ?? ElevenLabsModelOption.defaultModelId
+        let label = ElevenLabsModelOption.named(id)?.label ?? id
+        return SpeechPreferences.activeProfile?.ttsModelId == nil ? "Default (\(label))" : "Site default (\(label))"
+    }
+
     public var body: some View {
         Form {
             DeviceSpeechKeySection()
@@ -44,6 +52,21 @@ public struct VoiceSettingsScreen: View {
                     }
                     .uiKitIdentifier("VoiceSettingsScreen.managedBanner")
                 }
+            }
+
+            // Standalone without a key speaks with Apple, so there is no model to choose.
+            if !(BundledAgentRuntime.isEnabled && !hasDeviceKey) {
+                Section {
+                    ForEach(SpeechRole.allCases, id: \.self) { role in
+                        ElevenLabsModelPicker(role: role, defaultLabel: defaultModelLabel)
+                    }
+                } header: {
+                    Text("ElevenLabs models")
+                } footer: {
+                    Text("Replies are what conversation mode says back, acknowledgements are the short lines while the agent works, and read aloud is the speaker button on a message. "
+                         + ElevenLabsModelOption.all.map { "\($0.label): \($0.summary)" }.joined(separator: " "))
+                }
+                .disabled(isManaged)
             }
 
             Section {
@@ -129,7 +152,7 @@ public struct VoiceSettingsScreen: View {
             } header: {
                 Text("Delivery")
             } footer: {
-                Text("Applies to ElevenLabs speech — replies, acknowledgments, and read-aloud. Higher expressiveness is livelier but slightly less steady.")
+                Text("Applies to ElevenLabs speech — replies, acknowledgments, and read-aloud. Higher expressiveness is livelier but slightly less steady. Eleven v4 ignores Pace.")
             }
             .disabled(isManaged)
 
@@ -164,5 +187,39 @@ public struct VoiceSettingsScreen: View {
         #if os(macOS)
         .formStyle(.grouped)
         #endif
+    }
+}
+
+/// One job's ElevenLabs model, stored per role in the speech preferences.
+@available(iOS 26.0, macOS 26.0, *)
+private struct ElevenLabsModelPicker: View {
+    let role: SpeechRole
+    let defaultLabel: String
+    @AppStorage private var modelId: String
+
+    init(role: SpeechRole, defaultLabel: String) {
+        self.role = role
+        self.defaultLabel = defaultLabel
+        _modelId = AppStorage(wrappedValue: "", SpeechPreferences.ttsModelKey(for: role), store: SpeechPreferences.store)
+    }
+
+    var body: some View {
+        Picker(selection: $modelId) {
+            Text(defaultLabel).tag("")
+            ForEach(ElevenLabsModelOption.all) { model in
+                Text(model.label).tag(model.id)
+            }
+        } label: {
+            Label(role.title, systemImage: icon)
+        }
+        .uiKitIdentifier("VoiceSettingsScreen.ttsModel.\(role.rawValue)")
+    }
+
+    private var icon: String {
+        switch role {
+        case .reply: return "bubble.left.and.text.bubble.right"
+        case .acknowledgement: return "checkmark.bubble"
+        case .readAloud: return "speaker.wave.2"
+        }
     }
 }

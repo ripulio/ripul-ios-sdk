@@ -46,21 +46,29 @@ final class ThermalWorkTests: XCTestCase {
         store.lastActiveTimeByChatId["chat"] = timestamp
         store.latestActivityByChatId["chat"] = .thinking
         try await Task.sleep(for: .milliseconds(300)) // drain the existing coalescer
-        var publications = 0
+        // The store is @Observable, read per chat through its cell: count the
+        // first change a reader of this chat's row would see.
+        final class Count: @unchecked Sendable { var value = 0 }
+        let publications = Count()
+        let cell = store.cell("chat")
+        withObservationTracking {
+            _ = cell.lastActive
+            _ = cell.latestActivity
+            _ = store.recencyRevision
+        } onChange: { publications.value += 1 }
         var timestampWrites = 0
-        let a = store.objectWillChange.sink { publications += 1 }
         let b = store.lastActiveTimeSubject.sink { _ in timestampWrites += 1 }
-        defer { a.cancel(); b.cancel() }
+        defer { b.cancel() }
         for _ in 0..<100 {
             store.lastActiveTimeByChatId["chat"] = timestamp
             store.latestActivityByChatId["chat"] = .thinking
         }
         try await Task.sleep(for: .milliseconds(300))
-        XCTAssertEqual(publications, 0)
+        XCTAssertEqual(publications.value, 0)
         XCTAssertEqual(timestampWrites, 0)
         store.lastActiveTimeByChatId["chat"] = timestamp.addingTimeInterval(-10)
         XCTAssertEqual(timestampWrites, 1, "Authoritative downward corrections must survive")
-        XCTAssertEqual(publications, 1)
+        XCTAssertEqual(publications.value, 1)
     }
 
     func testCancelledPlaybackWaitExitsWithoutAnotherPollOrCompletion() async throws {

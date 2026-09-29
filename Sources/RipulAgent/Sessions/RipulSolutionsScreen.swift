@@ -47,7 +47,7 @@ public struct RipulSolutionManagement {
 
 public struct RipulSolutionsScreen: View {
     let management: RipulSolutionManagement
-    @ObservedObject var bridge: AgentBridge
+    var bridge: AgentBridge
     /// nil when the host's sidebar is a pinned rail — there is nothing to slide
     /// open, so the bar drops its leading button. Same convention as
     /// `RipulAgentScreenSlots.showingSidebar`.

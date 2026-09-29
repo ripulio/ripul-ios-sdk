@@ -30,8 +30,9 @@ public struct SessionListMenu: View {
     let bridge: AgentBridge
     let model: RipulSessionListModel
     let cache: RipulSessionCache
-    /// Collapsed when a new session opens, matching the list's own behavior.
-    let showingSessionList: Binding<Bool>
+    /// Collapses the list when a new session opens, matching the list's own
+    /// behavior. Write-only: the menu never reads the mode.
+    let setShowingSessionList: (Bool) -> Void
     /// Raises the host's `NewSessionModelPicker`. Menu content can't present a
     /// sheet of its own, so the host owns the presentation and this only asks
     /// for it. Nil ⇒ the entry is omitted.
@@ -61,7 +62,27 @@ public struct SessionListMenu: View {
         self.bridge = bridge
         self.model = model
         self.cache = cache
-        self.showingSessionList = showingSessionList
+        self.setShowingSessionList = { showingSessionList.wrappedValue = $0 }
+        self.onShowModelPicker = onShowModelPicker
+        self.usesUnifiedCreation = usesUnifiedCreation
+        self.showsSolutions = showsSolutions
+    }
+
+    /// For a large host view: no `Binding` is made in the host's body, so the
+    /// host doesn't observe the mode (see `RipulListMode`).
+    public init(
+        bridge: AgentBridge,
+        model: RipulSessionListModel,
+        cache: RipulSessionCache,
+        listMode: RipulListMode,
+        onShowModelPicker: (() -> Void)? = nil,
+        usesUnifiedCreation: Bool = false,
+        showsSolutions: Bool = false
+    ) {
+        self.bridge = bridge
+        self.model = model
+        self.cache = cache
+        self.setShowingSessionList = { listMode.showingSessionList = $0 }
         self.onShowModelPicker = onShowModelPicker
         self.usesUnifiedCreation = usesUnifiedCreation
         self.showsSolutions = showsSolutions
@@ -79,7 +100,7 @@ public struct SessionListMenu: View {
                     Task {
                         await model.connectWithProvider(provider.providerKey!, to: machine, onSelect: { session in
                             withAnimation(.easeInOut(duration: 0.28)) {
-                                showingSessionList.wrappedValue = false
+                                setShowingSessionList(false)
                             }
                             Task {
                                 await bridge.focusSession(id: session.id)
@@ -87,7 +108,7 @@ public struct SessionListMenu: View {
                             }
                         }, onDismiss: {
                             withAnimation(.easeInOut(duration: 0.28)) {
-                                showingSessionList.wrappedValue = false
+                                setShowingSessionList(false)
                             }
                         })
                     }
@@ -179,8 +200,8 @@ public struct SessionListMenu: View {
 /// exactly what `SessionListMenu` used to hardcode one button at a time.
 @available(iOS 26.0, macOS 26.0, *)
 public struct NewSessionModelPicker: View {
-    @ObservedObject var bridge: AgentBridge
-    @ObservedObject var model: RipulSessionListModel
+    var bridge: AgentBridge
+    var model: RipulSessionListModel
     let cache: RipulSessionCache
     /// Collapsed when the new session opens, matching the list's own behavior.
     let showingSessionList: Binding<Bool>

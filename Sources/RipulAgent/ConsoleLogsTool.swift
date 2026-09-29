@@ -10,6 +10,7 @@ public struct ConsoleLogsTool: NativeTool {
         .string("query", "Text search filter — only return logs containing this substring"),
         .string("levels", "Comma-separated log levels to include (log,info,warn,error,debug,trace). Defaults to all."),
         .number("since", "Only return logs after this timestamp (epoch ms)"),
+        .number("until", "Only return logs at or before this timestamp (epoch ms) — with since, reads a past window"),
         .number("limit", "Max number of log entries to return (default 50, max 500)"),
         .bool("includeStack", "Include stack traces for error entries")
     )
@@ -24,10 +25,10 @@ public struct ConsoleLogsTool: NativeTool {
 
     @MainActor
     public func execute(args: [String: Any]) async throws -> Any {
-        let query = args["query"] as? String
         let includeStack = args["includeStack"] as? Bool ?? false
         let limit = min(args["limit"] as? Int ?? 50, 500)
-        let since = args["since"] as? Double
+        let since = (args["since"] as? Double).map { Date(timeIntervalSince1970: $0 / 1000) }
+        let until = (args["until"] as? Double).map { Date(timeIntervalSince1970: $0 / 1000) }
 
         let levelsFilter: Set<String>?
         if let levelsStr = args["levels"] as? String {
@@ -40,23 +41,24 @@ public struct ConsoleLogsTool: NativeTool {
         // promises "logs from all layers", and native logs live in the host-owned
         // buffer so they survive from launch, before this bridge existed.
         let allEntries = RipulLog.merged(with: bridge.consoleLogs)
-        var entries = allEntries
 
-        if let since {
-            let sinceDate = Date(timeIntervalSince1970: since / 1000)
-            entries = entries.filter { $0.timestamp >= sinceDate }
+        // This runs on the main actor, which on the Mac host also serves every
+        // CLI bridge request. Lowercasing every buffered message per query
+        // (thousands of lines, some ~40 KB) froze the host for 45 s+ on
+        // 2026-09-26. Walk newest-first, match case-insensitively without
+        // copying, and stop as soon as `limit` entries are found.
+        let query = (args["query"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+        var tail: [ConsoleLogEntry] = []
+        tail.reserveCapacity(limit)
+        for entry in allEntries.reversed() {
+            if let until, entry.timestamp > until { continue }
+            if let since, entry.timestamp < since { break }
+            if let levelsFilter, !levelsFilter.contains(entry.level) { continue }
+            if let query, entry.message.range(of: query, options: .caseInsensitive) == nil { continue }
+            tail.append(entry)
+            if tail.count >= limit { break }
         }
-
-        if let levelsFilter {
-            entries = entries.filter { levelsFilter.contains($0.level) }
-        }
-
-        if let query, !query.isEmpty {
-            let q = query.lowercased()
-            entries = entries.filter { $0.message.lowercased().contains(q) }
-        }
-
-        let tail = entries.suffix(limit)
+        tail.reverse()
 
         let logs: [[String: Any]] = tail.map { entry in
             var dict: [String: Any] = [

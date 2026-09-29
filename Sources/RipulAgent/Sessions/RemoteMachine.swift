@@ -25,12 +25,28 @@ public struct RemoteMachine: Identifiable, Codable, Equatable {
 
     public var id: String { machineId }
 
-    public var isOnline: Bool {
+    /// Built once: `isOnline` is read per machine inside view bodies
+    /// (RipulAgentScreen's menu key, the session list), and constructing an
+    /// ISO8601DateFormatter each time is expensive. The class is thread-safe.
+    private nonisolated(unsafe) static let lastSeenFormatter: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        guard let date = formatter.date(from: lastSeenAt) else { return false }
+        return formatter
+    }()
+
+    public var isOnline: Bool {
+        guard let date = Self.lastSeenFormatter.date(from: lastSeenAt) else { return false }
         return Date().timeIntervalSince(date) < 300 // 5 minute TTL
     }
+
+    /// True when this row IS the machine this app is running on.
+    ///
+    /// Viewer-relative, so it is stamped by the web app's `__ripulGetMachines`
+    /// for this caller rather than carried in the machine's registered meta,
+    /// which every viewer shares. Only a Mac host (one with a CLI bridge) ever
+    /// reports it — the phone registers as a machine but can run no agent loop,
+    /// so it correctly reports false for every row.
+    public var isLocalHost: Bool { meta?["isLocal"] == "true" }
 
     // MARK: - Host kind
 
