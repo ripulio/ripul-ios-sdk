@@ -1,9 +1,13 @@
 import SwiftUI
+import PhotosUI
 import WebKit
 @testable import RipulAgent
 
 struct InspectorAttachmentHarness: View {
     @StateObject private var model = InspectorAttachmentModel()
+    @State private var draft = ""
+    @State private var images: [NativeImageAttachment] = []
+    @State private var photos: [PhotosPickerItem] = []
 
     var body: some View {
         VStack(spacing: 16) {
@@ -11,12 +15,27 @@ struct InspectorAttachmentHarness: View {
             Button("Open web inspector") { model.open(web: true) }
             InspectorAttachmentTargets(model: model).frame(height: 260)
             InspectorAttachmentStatus(store: model.bridge.composerContexts)
-            ComposerContextChips(store: model.bridge.composerContexts, session: "attachment-conversation")
-            ComposerContextButton(store: model.bridge.composerContexts, session: "attachment-conversation",
-                                  options: model.bridge.composerContexts.availableOptions, size: 44)
+            if model.usesComposer {
+                // Returns count the times the explorer handed the screen back.
+                Text("returns=\(model.returns)").accessibilityIdentifier("attachmentHarness.returns")
+            } else {
+                ComposerContextChips(store: model.bridge.composerContexts, session: "attachment-conversation")
+                ComposerContextButton(store: model.bridge.composerContexts, session: "attachment-conversation",
+                                      options: model.bridge.composerContexts.availableOptions, size: 44)
+            }
             Spacer()
         }
         .padding(24)
+        .overlay(alignment: .bottom) {
+            // The production composer and its @ menu, mounted over the page
+            // the way AgentView mounts it, so the menu has room to grow.
+            if model.usesComposer {
+                NativeChatInput(text: $draft, imageAttachments: $images, selectedPhotos: $photos, onSubmit: {},
+                                onPickElement: { model.pickForChat() },
+                                contextStore: model.bridge.composerContexts, contextSessionID: "attachment-conversation",
+                                contextOptions: model.bridge.composerContexts.availableOptions)
+            }
+        }
     }
 }
 
@@ -34,6 +53,8 @@ private final class InspectorAttachmentModel: ObservableObject {
     @Published var bridge = AgentBridge()
     private var minimizedAgent: RipulDevOverlayWindow?
     private let usesHostGesture = ProcessInfo.processInfo.arguments.contains("--minimized-chat")
+    let usesComposer = ProcessInfo.processInfo.arguments.contains("--chat-pick")
+    @Published var returns = 0
     weak var native: UIButton?
     weak var web: WKWebView?
 
@@ -76,6 +97,23 @@ private final class InspectorAttachmentModel: ObservableObject {
         } else {
             RipulViewExplorer.present(in: window, bridge: bridge)
         }
+        probe(target, in: window, web: isWeb)
+    }
+
+    /// The composer's @ → Element, in the explorer's default Design mode.
+    /// The chat here is this harness screen, so its return is counted.
+    func pickForChat() {
+        guard let target = native, let window = target.window else { return }
+        UserDefaults.standard.set("design", forKey: "viewInspector.mode")
+        UserDefaults.standard.set(8, forKey: "viewInspector.posX")
+        UserDefaults.standard.set(80, forKey: "viewInspector.posY")
+        UserDefaults.standard.set(360, forKey: "viewInspector.w")
+        UserDefaults.standard.set(260, forKey: "viewInspector.h")
+        RipulViewExplorer.pickElementForChat(bridge: bridge, in: window) { [weak self] in self?.returns += 1 }
+        probe(target, in: window, web: false)
+    }
+
+    private func probe(_ target: UIView, in window: UIWindow, web isWeb: Bool) {
         Task {
             try? await Task.sleep(for: .milliseconds(400))
             let local = isWeb ? CGPoint(x: 40, y: 40) : CGPoint(x: target.bounds.midX, y: target.bounds.midY)

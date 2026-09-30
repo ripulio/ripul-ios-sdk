@@ -1890,11 +1890,18 @@ public struct TapElementTool: NativeTool {
         let action = hits[nth]
         // The handler is private (`_handler`). KVC on a missing key raises an ObjC
         // exception Swift can't catch, so check the ivar exists before asking for it.
+        // Private, so compiled out of store builds (docs: app-store-private-apis.md,
+        // agent-actuation): there the alert is dismissed and the tool says so.
         typealias Handler = @convention(block) (UIAlertAction) -> Void
+        #if DEBUG || RIPUL_DEVELOPER_BUILD
         let handlerKnown = class_getInstanceVariable(UIAlertAction.self, "_handler") != nil
         let handler = handlerKnown
             ? (action.value(forKey: "handler") as AnyObject?).map { unsafeBitCast($0, to: Handler.self) }
             : nil
+        #else
+        let handlerKnown = false
+        let handler: Handler? = nil
+        #endif
         alert.dismiss(animated: true) { handler?(action) }
         ScreenSnapshotStore.shared.invalidate()
         if !handlerKnown {
@@ -1997,6 +2004,9 @@ public struct TapElementTool: NativeTool {
     /// exception through Swift terminates the app. Runtime lookups return nil
     /// on any mismatch instead of throwing. Verified on the iOS 26 SDK.
     static func fireTapTargets(of gesture: UITapGestureRecognizer) -> Bool {
+        // Private fields: compiled out of store builds (agent-actuation), where
+        // the tool reports that it can't press the control instead.
+        #if DEBUG || RIPUL_DEVELOPER_BUILD
         guard let targetsIvar = class_getInstanceVariable(UIGestureRecognizer.self, "_targets"),
               let records = object_getIvar(gesture, targetsIvar) as? [NSObject], !records.isEmpty else { return false }
         var fired = false
@@ -2013,6 +2023,9 @@ public struct TapElementTool: NativeTool {
             fired = true
         }
         return fired
+        #else
+        return false
+        #endif
     }
 }
 

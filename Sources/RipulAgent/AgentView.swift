@@ -826,6 +826,13 @@ private struct ChatComposer: View {
     // MARK: Chat input
 
     #if os(iOS)
+    /// The `@` Element row needs the host's Selected element option and a
+    /// chat for the chip to land in — the same gates as the context menu.
+    private var canPickElement: Bool {
+        bridge.currentSourceChatId != nil
+            && contextOptions.contains { $0.id == RipulComposerContext.selectedElement.id }
+    }
+
     private var chatInput: some View {
         NativeChatInput(
             text: $chatMessage,
@@ -871,6 +878,7 @@ private struct ChatComposer: View {
                     return ElementSuggestion(dataUi: dataUi)
                 }
             },
+            onPickElement: canPickElement ? { bridge.pickElementForChat() } : nil,
             onQueryParticipants: {
                 let dicts = await bridge.queryAutocomplete(category: "people", query: "")
                 return dicts.compactMap { dict in

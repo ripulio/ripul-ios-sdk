@@ -116,6 +116,13 @@ public final class LiveStreamEncoder: @unchecked Sendable {
             kVTCompressionPropertyKey_ExpectedFrameRate: fps,
             kVTCompressionPropertyKey_AverageBitRate: bitrate,
             kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration: 4,
+            // Written into the stream, so a viewer shows the colours the
+            // senders capture in (sRGB) instead of guessing. Untagged, a
+            // viewer's guess differed from the stills shown over the video, and
+            // the picture brightened and dimmed as one replaced the other.
+            kVTCompressionPropertyKey_ColorPrimaries: kCVImageBufferColorPrimaries_ITU_R_709_2,
+            kVTCompressionPropertyKey_TransferFunction: kCVImageBufferTransferFunction_sRGB,
+            kVTCompressionPropertyKey_YCbCrMatrix: kCVImageBufferYCbCrMatrix_ITU_R_709_2,
         ]
         for (key, value) in properties { VTSessionSetProperty(created, key: key, value: value as CFTypeRef) }
         VTCompressionSessionPrepareToEncodeFrames(created)

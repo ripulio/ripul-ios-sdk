@@ -76,6 +76,20 @@ element again to capture the new highlight; Attach replaces the previous element
 chip. Current screen remains a separate attachment. A closed Explorer, removed or
 hidden element, or excluded selection produces an explanatory error.
 
+#### Pick an element from the composer
+
+Typing `@` in the composer also offers **Element → Pick an element** (it stays
+listed while the text after `@` still spells toward "element" or "pick"). Choosing it
+removes the typed `@…`, minimizes the SDK assistant and opens View Explorer in a
+picking mode. The Explorer shows an **Add to chat** bar under its header, in Design
+and Advanced alike and also while folded. Add to chat captures the highlight as
+above with the configured defaults, attaches it to the chat that asked, closes the
+Explorer and reopens the assistant. There is no review sheet, because the pick itself
+was the choice; tap the chip to review or change it before sending. Closing the
+Explorer without adding reopens the assistant with nothing attached. The row appears
+only when the host offers Selected element and the chat has an ID. It is iOS and
+Catalyst only. `AgentBridge.pickElementForChat()` starts the same flow.
+
 Developers can configure element choices independently:
 
 ```swift

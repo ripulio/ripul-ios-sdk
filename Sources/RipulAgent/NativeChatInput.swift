@@ -276,6 +276,10 @@ public struct NativeChatInput: View {
     var onQueryFiles: ((String) async -> [FileSuggestion])?
     /// Optional callback to fetch UI element suggestions from the current page.
     var onQueryElements: (() async -> [ElementSuggestion])?
+    /// Optional: the `@` overlay's Element row. Picking it clears the typed
+    /// `@…` and hands off to the host, which opens the View Explorer and
+    /// brings the chosen element back as a composer context chip.
+    var onPickElement: (() -> Void)?
     /// Optional callback to fetch chat participant suggestions (agents + humans).
     /// When provided, the `@` category overlay shows a "People" row that lists them.
     var onQueryParticipants: (() async -> [ParticipantSuggestion])?
@@ -382,6 +386,7 @@ public struct NativeChatInput: View {
         chatInputLayout: String? = nil,
         onQueryFiles: ((String) async -> [FileSuggestion])? = nil,
         onQueryElements: (() async -> [ElementSuggestion])? = nil,
+        onPickElement: (() -> Void)? = nil,
         onQueryParticipants: (() async -> [ParticipantSuggestion])? = nil,
         onQueryTeammates: (() async -> [TeammateSuggestion])? = nil,
         onInviteTeammate: ((TeammateSuggestion) async -> String?)? = nil,
@@ -422,6 +427,7 @@ public struct NativeChatInput: View {
         self.chatInputLayout = chatInputLayout
         self.onQueryFiles = onQueryFiles
         self.onQueryElements = onQueryElements
+        self.onPickElement = onPickElement
         self.onQueryParticipants = onQueryParticipants
         self.onQueryBranches = onQueryBranches
         self.onQueryTeammates = onQueryTeammates
@@ -657,7 +663,7 @@ public struct NativeChatInput: View {
     /// Detect `@` followed by typing and populate a single ranked suggestion list
     /// (participants first, then files, then UI elements).
     private func handleAtDetection(_ value: String) {
-        guard onQueryFiles != nil || onQueryElements != nil || onQueryParticipants != nil || onQueryBranches != nil || onQueryTeammates != nil else { return }
+        guard onQueryFiles != nil || onQueryElements != nil || onPickElement != nil || onQueryParticipants != nil || onQueryBranches != nil || onQueryTeammates != nil else { return }
 
         guard let atRange = value.range(of: "@", options: .backwards) else {
             dismissAtOverlay()
@@ -803,6 +809,24 @@ public struct NativeChatInput: View {
             text += "@ui:\(suggestion.dataUi) "
         }
         dismissAtOverlay()
+    }
+
+    /// The Element row is an action, not a mention: the typed `@…` goes, and
+    /// the element comes back later as a context chip rather than as text.
+    private func selectElementPick() {
+        if let triggerIdx = atTriggerIndex {
+            text = String(text[text.startIndex..<triggerIdx])
+        }
+        dismissAtOverlay()
+        dismissKeyboard()
+        onPickElement?()
+    }
+
+    /// Offered for a bare `@` and for anything typed toward "element".
+    private var elementPickShown: Bool {
+        guard onPickElement != nil else { return false }
+        let query = afterAtText.lowercased()
+        return query.isEmpty || "element".hasPrefix(query) || "pick".hasPrefix(query)
     }
 
     private func selectParticipantSuggestion(_ suggestion: ParticipantSuggestion) {
@@ -957,7 +981,7 @@ public struct NativeChatInput: View {
             let teamShown = !teammateSuggestions.isEmpty && !hiddenClasses.contains("people")
             let branchesShown = !branchSuggestions.isEmpty && !hiddenClasses.contains("repo")
             let filesShown = !fileSuggestions.isEmpty && !hiddenClasses.contains("files")
-            let hasResults = peopleShown || teamShown || branchesShown || filesShown || !elementSuggestions.isEmpty
+            let hasResults = elementPickShown || peopleShown || teamShown || branchesShown || filesShown || !elementSuggestions.isEmpty
             if !hasResults {
                 HStack(spacing: 8) {
                     Image(systemName: "magnifyingglass")
@@ -973,6 +997,13 @@ public struct NativeChatInput: View {
             } else {
                 ScrollView {
                     LazyVStack(spacing: 0) {
+                        if elementPickShown {
+                            suggestionSectionHeader("Element")
+                            elementPickRow
+                            if peopleShown || teamShown || branchesShown || filesShown || !elementSuggestions.isEmpty {
+                                Divider()
+                            }
+                        }
                         if peopleShown {
                             suggestionSectionHeader("People")
                             ForEach(participantSuggestions) { suggestion in
@@ -1080,6 +1111,37 @@ public struct NativeChatInput: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+    }
+
+    private var elementPickRow: some View {
+        Button {
+            selectElementPick()
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "scope")
+                    .foregroundStyle(.secondary)
+                    .frame(width: 20)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Pick an element")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                    Text("Choose it on screen with View Explorer")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                Spacer()
+                Text("Pick")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.tint)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("NativeChatInput.at.element")
     }
 
     private func teammateRow(_ suggestion: TeammateSuggestion) -> some View {

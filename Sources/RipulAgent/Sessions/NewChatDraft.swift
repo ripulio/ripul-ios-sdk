@@ -11,11 +11,12 @@ public struct NewChatMachine: Identifiable, Equatable {
     public let connection: NewChatConnection
     public let unavailableReason: String?
     public let teamName: String?
-    public let canManageAccounts: Bool
+    /// SF Symbol the user gave this Mac; `nil` uses the generic computer.
+    public let icon: String?
     public init(id: String, name: String, connection: NewChatConnection, unavailableReason: String? = nil,
-                teamName: String? = nil, canManageAccounts: Bool = true) {
+                teamName: String? = nil, icon: String? = nil) {
         self.id = id; self.name = name; self.connection = connection; self.unavailableReason = unavailableReason
-        self.teamName = teamName; self.canManageAccounts = canManageAccounts
+        self.teamName = teamName; self.icon = icon
     }
 }
 
@@ -72,8 +73,36 @@ public struct NewChatDraft: Codable, Equatable {
         }
         if let reason = machine.unavailableReason { return reason }
         let path = folder.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard path.isEmpty || (path.hasPrefix("/") && !path.contains("\0")) else { return "Enter an absolute project folder, or use the Mac's configured working directory." }
+        guard path.isEmpty || (path.hasPrefix("/") && !path.contains("\0")) else { return "Choose an absolute project folder, or use the Mac's configured working directory." }
         return nil
+    }
+}
+
+/// Folders chats were started in from New Chat, most recent first, per
+/// destination Mac. Built only from explicit picks: the Mac's configured
+/// default is resolved on the Mac, so its path is never known here.
+public struct NewChatRecentFolders: Codable, Equatable {
+    public static let preferencesKey = "ripul.newChat.recentFolders"
+    public static let limit = 4
+    private var folders: [String: [String]] = [:]
+
+    public init(data: Data? = nil) {
+        if let data, let saved = try? JSONDecoder().decode(Self.self, from: data) { self = saved }
+    }
+    public var data: Data? { try? JSONEncoder().encode(self) }
+    public func folders(connection: NewChatConnection, machineID: String) -> [String] {
+        folders[Self.key(connection, machineID)] ?? []
+    }
+    /// Moves `folder` to the front, dropping the oldest beyond `limit`.
+    public mutating func record(_ folder: String, connection: NewChatConnection, machineID: String) {
+        var path = folder.trimmingCharacters(in: .whitespacesAndNewlines)
+        while path.count > 1 && path.hasSuffix("/") { path.removeLast() }
+        guard path.hasPrefix("/"), !machineID.isEmpty else { return }
+        let key = Self.key(connection, machineID)
+        folders[key] = Array(([path] + (folders[key] ?? []).filter { $0 != path }).prefix(Self.limit))
+    }
+    private static func key(_ connection: NewChatConnection, _ machineID: String) -> String {
+        connection.rawValue + ":" + machineID
     }
 }
 
@@ -83,6 +112,9 @@ public struct NewChatLaunch: Equatable {
     public let machineID: String
     public let folder: String
     public let modelID: String
+    /// Applied once the chat exists, so it is not part of the creation
+    /// identity: retitling a failed attempt still retries the same request.
+    public var title = ""
     public init(draft: NewChatDraft, modelID: String, previous: NewChatLaunch? = nil) {
         connection = draft.connection; machineID = draft.machineID ?? ""
         folder = draft.folder.trimmingCharacters(in: .whitespacesAndNewlines); self.modelID = modelID

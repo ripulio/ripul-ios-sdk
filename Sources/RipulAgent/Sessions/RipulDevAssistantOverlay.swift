@@ -171,8 +171,14 @@ public final class RipulDevAssistantOverlay {
     /// Explicitly launching the host inspector reveals the host, even when an
     /// existing explorer is currently covered by the expanded assistant.
     func minimizeForInspection(in scene: UIWindowScene) {
-        guard window?.windowScene === scene, window?.isExpanded == true else { return }
+        guard isExpanded(in: scene) else { return }
         collapse()
+    }
+
+    /// Whether the full console is showing in `scene` — the chat a pick for
+    /// the composer minimizes and then reopens.
+    func isExpanded(in scene: UIWindowScene) -> Bool {
+        window?.windowScene === scene && window?.isExpanded == true
     }
 
     /// Cold-boot the console NOW (web app load + auth poll + relay) without

@@ -10,7 +10,7 @@ let ripulViewExplorerOverlayTag = 0x5249_5055   // "RIPU"
 
 /// Marketing version of the RipulAgent SDK, surfaced in the inspector's copy output as `sdk: …`
 /// so we can always tell which build is actually running on the device. Bump on every release.
-let ripulSDKVersion = "0.7.153"
+let ripulSDKVersion = "0.7.154"
 
 // MARK: - View Inspector Overlay
 //
@@ -3134,6 +3134,8 @@ struct InspectorHUD: View {
     @State private var contextPreview: ComposerContextAttachmentDraft?
     @State private var captureContextTask: Task<Void, Never>?
     @State private var capturingContext = false
+    /// Opened from the composer's `@` → Element: shows the Add to chat bar.
+    @ObservedObject private var chatPick = ExplorerChatPick.shared
     /// Folded-header Copy all feedback. The basket itself lives in the
     /// selection toolbar, which a folded HUD does not show — and folded is how
     /// the HUD is used on Catalyst — so the header carries the count and the
@@ -3229,6 +3231,9 @@ struct InspectorHUD: View {
         VStack(spacing: 0) {
             // Header
             header
+
+            // Outside the fold: folding to use the app keeps the way back.
+            if chatPick.isActive { chatReturnBar }
 
             if !folded {
                 selectionToolbar
@@ -3346,17 +3351,12 @@ struct InspectorHUD: View {
                 hudButton("Activate", disabled: !session.hasSelection) { session.activate() }
                     .uiKitIdentifier("Inspector.activate")
             }
-            hudButton(capturingContext ? "Capturing…" : "Attach element", disabled: !session.hasSelection || capturingContext) {
-                capturingContext = true
-                session.error = nil
-                session.pinned = true
-                captureContextTask = Task { @MainActor in
-                    defer { capturingContext = false }
-                    do { contextPreview = try await RipulViewExplorer.prepareSelectedElementAttachment() }
-                    catch is CancellationError { }
-                    catch { if !Task.isCancelled { session.error = error.localizedDescription } }
-                }
-            }.uiKitIdentifier("Inspector.attachElement")
+            // A pick for the chat has its own Add to chat bar; one way back.
+            if !chatPick.isActive {
+                hudButton(capturingContext ? "Capturing…" : "Attach element", disabled: !session.hasSelection || capturingContext) {
+                    captureElement { contextPreview = $0 }
+                }.uiKitIdentifier("Inspector.attachElement")
+            }
             Spacer(minLength: 0)
             hudIconButton("hand.point.up.left", label: session.interacting ? "Resume inspecting" : "Interact with app",
                 tone: .cyan, active: session.interacting) {
@@ -3364,6 +3364,43 @@ struct InspectorHUD: View {
                 if !session.interacting { session.refresh() }
             }.uiKitIdentifier("Inspector.interact")
         }
+    }
+
+    /// Both attach paths capture the same way: pinned, so the selection holds
+    /// while the snapshot is taken, and errors land under the lozenge.
+    private func captureElement(then use: @escaping @MainActor (ComposerContextAttachmentDraft) -> Void) {
+        capturingContext = true
+        session.error = nil
+        session.pinned = true
+        captureContextTask = Task { @MainActor in
+            defer { capturingContext = false }
+            do { use(try await RipulViewExplorer.prepareSelectedElementAttachment()) }
+            catch is CancellationError { }
+            catch { if !Task.isCancelled { session.error = error.localizedDescription } }
+        }
+    }
+
+    /// The way back to the chat that opened this pick, under the header so it
+    /// survives folding.
+    private var chatReturnBar: some View {
+        Button {
+            captureElement { RipulViewExplorer.finishChatPick(with: $0) }
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: capturingContext ? "hourglass" : "arrow.uturn.backward")
+                Text(capturingContext ? "Adding…" : session.hasSelection ? "Add to chat" : "Tap an element to add to the chat")
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+            }
+            .font(.system(size: 12, weight: .semibold, design: .monospaced))
+            .modifier(HudButtonChrome(disabled: !session.hasSelection || capturingContext, tone: .green,
+                                      active: session.hasSelection && !capturingContext))
+        }
+        .buttonStyle(.plain)
+        .disabled(!session.hasSelection || capturingContext)
+        .accessibilityHint("Attaches the selected element to your message and returns to the chat")
+        .uiKitIdentifier("Inspector.addToChat")
+        .padding(.horizontal, 10).padding(.vertical, 6)
     }
 
     private var header: some View {
@@ -3524,7 +3561,9 @@ struct InspectorHUD: View {
                 EmptyView()   // handled above
             }
         } else {
-            Text(isDesign
+            Text(chatPick.isActive
+                 ? "Tap the element you want to ask about, then Add to chat. Fold the panel to use the app first."
+                 : isDesign
                  ? "Tap anything on screen to change how it looks. Fold the panel to use the app."
                  : tab == .edit
                  ? "Tap an element to edit its appearance. Drag anywhere to move the reticule precisely. Fold the panel to interact with the app."

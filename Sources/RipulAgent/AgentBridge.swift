@@ -2383,6 +2383,10 @@ public final class AgentBridge: NSObject {
     @ObservationIgnored private var startupBudget = StartupLoadBudget()
     @ObservationIgnored private var startupMonitoring = false
     @ObservationIgnored private var startupNavigationFinished = false
+    /// When the navigation currently in flight began, so a heal can tell a load
+    /// that is still running from one that has hung. Read together with
+    /// `webView.isLoading` — a stale value on a settled page is inert.
+    @ObservationIgnored private var navigationBeganAt: Date?
     @ObservationIgnored private var startupLastStage = ""
     @ObservationIgnored private var startupProgressObservation: NSKeyValueObservation?
     @ObservationIgnored private var startupTimeoutError: String?
@@ -2718,6 +2722,7 @@ public final class AgentBridge: NSObject {
         // including redirects. Explicit Retry starts a new attempt in reload().
         if !startupMonitoring { beginStartupMonitoring() }
         startupNavigationFinished = false
+        navigationBeganAt = Date()
         recordStartupProgress()
     }
 
@@ -2787,6 +2792,7 @@ public final class AgentBridge: NSObject {
     /// Called by the coordinator when navigation completes. Dynamic imports and
     /// authentication may still be loading; completion is only one milestone.
     public func pageDidFinishLoading() {
+        navigationBeganAt = nil
         // Push persisted network capture state into the web view
         if isNetworkCaptureEnabled {
             evaluateJavaScript("window.__ripulNetworkCapture && window.__ripulNetworkCapture(true)")
@@ -3311,6 +3317,11 @@ public final class AgentBridge: NSObject {
     /// race; past it, absent callables are treated as a broken boot, not a slow one.
     private static let callableInstallGraceMs = 8_000
 
+    /// How long a navigation may be in flight before a heal will interrupt it.
+    /// Above WebKit's own 60s request timeout, so a stalled load fails honestly
+    /// (and heals on that) instead of being cancelled and restarted forever.
+    private static let inFlightLoadCeiling: TimeInterval = 75
+
     /// Back-compat shim for call sites that only need the verdict.
     public func probeWebContextHealth() async -> WebContextHealth {
         await probeWebContext().health
@@ -3450,7 +3461,21 @@ public final class AgentBridge: NSObject {
     /// Recover a dead/crashed JS context, escalating on repeated failures within
     /// the window. Returns true if a recovery action was triggered.
     @discardableResult
-    public func healWebContext(reason: String) async -> Bool {
+    public func healWebContext(reason: String, force: Bool = false) async -> Bool {
+        // A load that is still in flight is not a context to heal — it is one
+        // that has not finished yet. Reloading over it CANCELS it (-999) rather
+        // than retrying it, and the fresh load is cancelled by the next heal in
+        // turn, so on a slow network no attempt ever completes or reaches its
+        // own timeout to report an honest error. Let WebKit's 60s request
+        // timeout do its job; past the ceiling the load really has hung.
+        if !force, webView?.isLoading == true,
+           Date().timeIntervalSince(navigationBeganAt ?? .distantPast) < Self.inFlightLoadCeiling {
+            handleConsoleLog("LOG: [WEBVIEW_HEAL] load still in flight — leaving it alone (\(reason))")
+            #if os(macOS)
+            scheduleInFlightRecheck(reason: reason)
+            #endif
+            return false
+        }
         // A suspended WKWebView won't reload, and probing/escalating while
         // backgrounded is pointless (and would burn through the ladder against a
         // process that can't recover until resume). Arm a deferred reload and
@@ -3498,6 +3523,23 @@ public final class AgentBridge: NSObject {
         }
         scheduleHealVerification(reason: reason)
         return true
+    }
+
+    /// macOS-only: look again once a load that was in flight has had time to
+    /// settle.
+    ///
+    /// Deliberately NOT `scheduleDeferredHeal`: that one re-enters
+    /// `healWebContext` immediately when its floor has already elapsed, so
+    /// calling it from the in-flight guard would spin on the CPU rather than
+    /// wait. The fixed sleep makes this a bounded poll, and `reason` is passed
+    /// through unchanged so a retry does not grow the string each round.
+    private func scheduleInFlightRecheck(reason: String) {
+        deferredHealTask?.cancel()
+        deferredHealTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 10_000_000_000)
+            guard let self, !Task.isCancelled, self.isAppActive else { return }
+            await self.healWebContext(reason: reason)
+        }
     }
 
     /// macOS-only: schedule a heal retry once the current floor has elapsed.
@@ -8897,6 +8939,14 @@ public final class AgentBridge: NSObject {
         evaluateVoidJavaScript("window.__ripulUpdateUserSettings?.({ enableElementDebugger: true })")
         #endif
     }
+
+    #if os(iOS)
+    /// The composer's `@` → Element: pick one element in the View Explorer
+    /// and bring it back to this chat's composer as a Selected element chip.
+    public func pickElementForChat() {
+        RipulViewExplorer.pickElementForChat(bridge: self, in: webView?.window ?? RipulChrome.appWindow())
+    }
+    #endif
 
     /// Ask the web file viewer to close (triggered by the native back button).
     public func requestFileViewerClose() {

@@ -4,8 +4,8 @@ import SwiftUI
 //
 // Browse a paired Mac's folders from the phone (via
 // `AgentBridge.listRemoteDirectory`) and pick one with a toolbar button.
-// Shared by the Files screen ("Pin Folder", "Use This Folder") and Host
-// Settings (working directory, favourites).
+// Shared by the Files screen ("Pin Folder", "Use This Folder"), Host
+// Settings (working directory, favourites) and New Chat (its folder).
 
 /// Root picker shown inside the "Pin Folder" sheet.
 public struct RemoteFolderRootsView: View {
@@ -26,11 +26,13 @@ public struct RemoteFolderRootsView: View {
                 } label: {
                     rootRow(icon: "house.fill", title: "Home", subtitle: "~")
                 }
+                .accessibilityIdentifier("RemoteFolder.home")
                 NavigationLink {
                     RemoteFolderBrowserView(bridge: bridge, machineId: machineId, path: "/", actionTitle: actionTitle, onPin: onPin)
                 } label: {
                     rootRow(icon: "externaldrive.fill", title: "Root", subtitle: "/")
                 }
+                .accessibilityIdentifier("RemoteFolder.root")
             } header: {
                 Text("Start browsing from")
             } footer: {
@@ -114,6 +116,9 @@ public struct RemoteFolderBrowserView: View {
                                     .lineLimit(1)
                             }
                         }
+                        // Keyed by name: unique within one listing, and what a
+                        // test or an agent navigating by path already knows.
+                        .accessibilityIdentifier("RemoteFolder.folder.\((folder.path as NSString).lastPathComponent)")
                     }
                     if let onOpenFile {
                         ForEach(entries.filter { !$0.isDirectory }, id: \.path) { file in
@@ -140,6 +145,7 @@ public struct RemoteFolderBrowserView: View {
                 } label: {
                     Text(actionTitle)
                 }
+                .accessibilityIdentifier("RemoteFolder.action")
             }
         }
         .task(id: path) { await load() }
@@ -174,5 +180,37 @@ public struct RemoteFolderBrowserView: View {
         entries = result.entries
         errorMessage = result.error
         isLoading = false
+    }
+}
+
+/// The picker in a sheet of its own: browse, pick, close. For screens where
+/// the folder is one field among others (Host Settings, New Chat).
+public struct RemoteFolderBrowseSheet: View {
+    var bridge: AgentBridge
+    let machineId: String
+    let actionTitle: String
+    let identifierPrefix: String
+    let onPick: (String) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    public init(bridge: AgentBridge, machineId: String, actionTitle: String, identifierPrefix: String,
+                onPick: @escaping (String) -> Void) {
+        self.bridge = bridge; self.machineId = machineId; self.actionTitle = actionTitle
+        self.identifierPrefix = identifierPrefix; self.onPick = onPick
+    }
+
+    public var body: some View {
+        NavigationStack {
+            RemoteFolderRootsView(bridge: bridge, machineId: machineId, actionTitle: actionTitle) { path in
+                onPick(path)
+                dismiss()
+            }
+            .navigationTitle("Choose Folder")
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            #endif
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.uiKitIdentifier("\(identifierPrefix).cancel") } }
+        }
+        .ripulSheet(.page, detents: [.large])
     }
 }

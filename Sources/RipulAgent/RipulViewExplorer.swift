@@ -98,6 +98,34 @@ extension Notification.Name {
     static let ripulExplorerShortcutsDidChange = Notification.Name("ripulExplorerShortcutsDidChange")
 }
 
+// MARK: - Picking an element for a chat
+
+/// The composer's `@` → Element round trip. While active, the HUD shows an
+/// Add to chat bar; attaching or closing the explorer ends it and hands the
+/// screen back to the chat that asked. Observable so an explorer that was
+/// already open picks the bar up without being rebuilt.
+@available(iOS 16.0, *)
+@MainActor
+final class ExplorerChatPick: ObservableObject {
+    static let shared = ExplorerChatPick()
+    @Published private(set) var isActive = false
+    private var onReturn: (() -> Void)?
+
+    func begin(onReturn: (() -> Void)?) {
+        self.onReturn = onReturn
+        isActive = true
+    }
+
+    /// Ends the pick and returns what brings the chat back, or nil when no
+    /// pick was running.
+    func end() -> (() -> Void)? {
+        guard isActive else { return nil }
+        isActive = false
+        defer { onReturn = nil }
+        return onReturn ?? {}
+    }
+}
+
 // MARK: - RipulViewExplorer
 //
 // Host-agnostic launcher for the native View Explorer (`ViewInspectorOverlay`).
@@ -300,9 +328,38 @@ public enum RipulViewExplorer {
         return true
     }
 
+    /// Open the explorer to pick one element for `bridge`'s chat (the
+    /// composer's `@` → Element). Presenting minimizes the SDK assistant, as
+    /// any launch does; this also remembers to reopen it. Add to chat attaches
+    /// the element to that chat's composer, and closing the explorer either
+    /// way returns to the chat. `onReturn` replaces the assistant reopen for
+    /// hosts that present the chat themselves.
+    @discardableResult
+    static func pickElementForChat(bridge: AgentBridge, in window: UIWindow? = nil,
+                                   onReturn: (() -> Void)? = nil) -> Bool {
+        var reopen = onReturn
+        if reopen == nil, #available(iOS 26.0, *),
+           let scene = (window ?? RipulChrome.appWindow())?.windowScene,
+           RipulDevAssistantOverlay.shared.isExpanded(in: scene) {
+            reopen = { RipulDevAssistantOverlay.shared.expand() }
+        }
+        guard present(in: window, bridge: bridge) else { return false }
+        ExplorerChatPick.shared.begin(onReturn: reopen)
+        return true
+    }
+
+    /// Add to chat: the reviewed-draft path without the review sheet, since
+    /// the pick itself was the choice. The chip stays editable in the composer.
+    static func finishChatPick(with draft: ComposerContextAttachmentDraft) {
+        draft.attach(draft.item)
+        dismiss()
+    }
+
     /// Remove the View Explorer if shown.
     public static func dismiss() {
         contextBridge = nil
+        let returnToChat = ExplorerChatPick.shared.end()
+        defer { returnToChat?() }
         guard let win = window else { return }
         ViewInspectorController.live?.session?.close()
         win.relinquishKey()

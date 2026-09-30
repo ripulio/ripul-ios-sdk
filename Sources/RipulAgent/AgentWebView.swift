@@ -895,7 +895,11 @@ extension AgentWebView {
             }
         }
 
+        /// A runtime subclass of WebKit's content view without the bar above the
+        /// keyboard. Compiled out of store builds (keyboard-bar in
+        /// app-store-private-apis.md), which accept the bar.
         static func removeInputAccessoryView(from webView: WKWebView) {
+            #if DEBUG || RIPUL_DEVELOPER_BUILD
             guard let contentView = webView.scrollView.subviews.first(where: {
                 String(describing: type(of: $0)).hasPrefix("WKContent")
             }) else { return }
@@ -917,6 +921,7 @@ extension AgentWebView {
             }
 
             object_setClass(contentView, subclass!)
+            #endif
         }
 
         public func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {

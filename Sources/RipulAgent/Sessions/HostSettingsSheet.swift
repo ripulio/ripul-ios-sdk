@@ -379,7 +379,7 @@ private struct HostDirectoryScreen: View {
         .disabled(model.saving.contains(key))
         .navigationTitle(setting?.label ?? "")
         .sheet(isPresented: $browsing) {
-            HostFolderBrowseSheet(model: model, actionTitle: "Use This Folder") { model.set(key, .text($0)) }
+            RemoteFolderBrowseSheet(bridge: model.bridge, machineId: model.machineId, actionTitle: "Use This Folder", identifierPrefix: "HostSettings.browse") { model.set(key, .text($0)) }
         }
     }
 }
@@ -426,32 +426,9 @@ private struct HostDirectoryListScreen: View {
         .disabled(model.saving.contains(key))
         .navigationTitle(setting?.label ?? "")
         .sheet(isPresented: $browsing) {
-            HostFolderBrowseSheet(model: model, actionTitle: "Add Favorite") { picked in
+            RemoteFolderBrowseSheet(bridge: model.bridge, machineId: model.machineId, actionTitle: "Add Favorite", identifierPrefix: "HostSettings.browse") { picked in
                 if !paths.contains(picked) { model.set(key, .list(paths + [picked])) }
             }
         }
-    }
-}
-
-/// The shared remote folder picker in a sheet: pick, apply, close.
-private struct HostFolderBrowseSheet: View {
-    @ObservedObject var model: HostSettingsModel
-    let actionTitle: String
-    let onPick: (String) -> Void
-    @Environment(\.dismiss) private var dismiss
-
-    var body: some View {
-        NavigationStack {
-            RemoteFolderRootsView(bridge: model.bridge, machineId: model.machineId, actionTitle: actionTitle) { path in
-                onPick(path)
-                dismiss()
-            }
-            .navigationTitle("Choose Folder")
-            #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
-            #endif
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.uiKitIdentifier("HostSettings.browse.cancel") } }
-        }
-        .ripulSheet(.page, detents: [.large])
     }
 }

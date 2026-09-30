@@ -22,3 +22,8 @@ then uses the same no-bridge `toggle(in:)` entry point as a host's shake gesture
 It verifies that native and web captures reach that existing agent's composer.
 The hosted regression also checks that dismissing the agent prevents attaching
 to its old conversation.
+
+The composer variant (`--chat-pick`) mounts the production `NativeChatInput` and
+drives its `@` → Element row in the Explorer's default Design mode. Closing the
+Explorer returns to the chat with nothing attached; Add to chat attaches the
+element with the composer's defaults, removes the typed `@…` and returns once.

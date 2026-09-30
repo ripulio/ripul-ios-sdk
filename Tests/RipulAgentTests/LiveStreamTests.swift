@@ -354,3 +354,188 @@ final class LiveStreamEncoderKindTests: XCTestCase {
         XCTAssertTrue(LiveStreamEncoder.Kind.software.finishesEachPicture)
     }
 }
+
+/// Version 2: every remote screen on one protocol.
+final class LiveStreamProtocolTwoTests: XCTestCase {
+    func testEveryNewKindRoundTripsOverTheWire() async throws {
+        let listener = LiveStreamListener()
+        let port = try await listener.start()
+        async let accepted = listener.accept(timeout: 5)
+        let (viewer, _) = try await LiveStreamClient.connect(
+            to: ["127.0.0.1"], port: port, key: listener.key, session: listener.session,
+            hello: ["viewer": "test", "protocol": 2, "wants": ["video"]], timeout: 3)
+        let (source, hello) = try await accepted
+        XCTAssertEqual(hello["protocol"] as? Int, 2)
+
+        let toSource: [(LiveStreamMessage, [String: Any])] = [
+            (.mouse, ["t": 0, "action": "down", "x": 10.5, "y": 20, "button": "left", "clicks": 1]),
+            (.wheel, ["t": 16, "dx": 0, "dy": -12, "x": 10, "y": 20, "phase": "began"]),
+            (.key, ["insert": "c", "modifiers": ["command"]]),
+            (.key, ["special": "escape"]),
+            (.clipboard, ["text": "copied", "revision": 3]),
+            (.invoke, ["id": "i1", "method": "listMenus", "args": [] as [Any]]),
+        ]
+        for (kind, json) in toSource { try await viewer.send(kind, json: json) }
+        for (kind, json) in toSource {
+            let (type, payload) = try await source.receive()
+            XCTAssertEqual(type, kind)
+            XCTAssertEqual(NSDictionary(dictionary: LiveStreamWire.json(payload)), NSDictionary(dictionary: json))
+        }
+
+        let toViewer: [(LiveStreamMessage, [String: Any])] = [
+            (.state, ["title": "Safari", "width": 1280, "height": 800, "crop": ["x": 0, "y": 40, "width": 1280, "height": 760]]),
+            (.keyboard, ["visible": true, "type": 7]),
+            (.dom, ["events": [["type": 2]], "full": true]),
+            (.clipboard, ["text": "from the Mac", "revision": 4]),
+            (.reply, ["id": "i1", "result": ["menus": [] as [Any]]]),
+            (.controller, ["driving": false, "by": "iPhone 16"]),
+        ]
+        for (kind, json) in toViewer { try await source.send(kind, json: json) }
+        let jpeg = Data([0xFF, 0xD8, 0xFF, 0xE0, 1, 2, 3, 0xFF, 0xD9])
+        try await source.send(.still, LiveStreamWire.still(.init(presentationMicros: 9_000_001, fullWidth: 1800,
+                                                                  fullHeight: 1344, jpeg: jpeg)))
+        for (kind, json) in toViewer {
+            let (type, payload) = try await viewer.receive()
+            XCTAssertEqual(type, kind)
+            XCTAssertEqual(NSDictionary(dictionary: LiveStreamWire.json(payload)), NSDictionary(dictionary: json))
+        }
+        let (stillType, stillPayload) = try await viewer.receive()
+        XCTAssertEqual(stillType, .still)
+        let still = try XCTUnwrap(LiveStreamWire.parseStill(stillPayload))
+        XCTAssertEqual(still.presentationMicros, 9_000_001)
+        XCTAssertEqual(still.jpeg, jpeg)
+        XCTAssertTrue(still.isWhole)
+        XCTAssertEqual(still.fullWidth, 1800)
+        source.close(); viewer.close()
+    }
+
+    func testStillPayloads() {
+        let patch = LiveStreamWire.Still(presentationMicros: 42, x: 640, y: 96, fullWidth: 2560, fullHeight: 1600,
+                                         jpeg: Data([7, 8, 9]))
+        XCTAssertEqual(LiveStreamWire.parseStill(LiveStreamWire.still(patch)), patch)
+        XCTAssertFalse(patch.isWhole)
+        XCTAssertNil(LiveStreamWire.parseStill(Data(repeating: 0, count: 24)), "A header and no picture")
+        var outside = patch
+        outside.x = 2560
+        XCTAssertNil(LiveStreamWire.parseStill(LiveStreamWire.still(outside)), "A patch outside its picture")
+        var sizeless = patch
+        sizeless.fullWidth = 0
+        XCTAssertNil(LiveStreamWire.parseStill(LiveStreamWire.still(sizeless)))
+    }
+
+    /// An app built before version 2 says nothing of it: an app's screen that takes touches.
+    func testAVersionOneConfigReadsAsAnAppScreen() {
+        let config = LiveStreamConfig(json: ["width": 390.0, "height": 844.0, "pixelWidth": 590, "pixelHeight": 1280,
+                                             "touch": true, "pointer": true, "keyboard": true])
+        XCTAssertEqual(config.version, 1)
+        XCTAssertEqual(config.source, .app)
+        XCTAssertEqual(config.input, .touch)
+        XCTAssertTrue(config.controls.isEmpty)
+        XCTAssertFalse(config.stills)
+        XCTAssertEqual(config.width, 390)
+        XCTAssertEqual(config.pixelHeight, 1280)
+    }
+
+    func testAVersionTwoConfigSaysWhatTheSourceIs() {
+        var json: [String: Any] = ["width": 1280, "height": 800, "pixelWidth": 2560, "pixelHeight": 1600]
+        json.merge(LiveStreamConfig.fields(source: .macWindow, input: .mouse, controls: ["resize", "crop"], stills: true)) { $1 }
+        // Through JSON, as it travels.
+        let data = try! JSONSerialization.data(withJSONObject: json)
+        let config = LiveStreamConfig(json: LiveStreamWire.json(data))
+        XCTAssertEqual(config.version, 2)
+        XCTAssertEqual(config.source, .macWindow)
+        XCTAssertEqual(config.input, .mouse)
+        XCTAssertEqual(config.controls, ["resize", "crop"])
+        XCTAssertTrue(config.stills)
+        XCTAssertEqual(config.width, 1280)
+        // A source this build doesn't know reads as an app, not as nothing.
+        XCTAssertEqual(LiveStreamConfig(json: ["protocol": 3, "source": "hologram"]).source, .app)
+    }
+
+    /// A version 1 app is handed a version 2 hello and a v2 control, and carries on.
+    func testAVersionOnePeerIgnoresVersionTwoFields() async throws {
+        let listener = LiveStreamListener()
+        let port = try await listener.start()
+        async let accepted = listener.accept(timeout: 5)
+        let (viewer, _) = try await LiveStreamClient.connect(
+            to: ["127.0.0.1"], port: port, key: listener.key, session: listener.session,
+            hello: ["viewer": "v2", "protocol": 2, "wants": ["video", "dom"], "stills": true], timeout: 3)
+        let (app, hello) = try await accepted
+        // What a version 1 app reads from the hello is all still there.
+        XCTAssertEqual(hello["session"] as? String, listener.session)
+        XCTAssertEqual(hello["viewer"] as? String, "v2")
+        // A v2-only kind first, then a v1 one: the v1 end skips what it can't
+        // use by kind, so the pointer still arrives in order.
+        try await viewer.send(.wheel, json: ["t": 0, "dx": 0, "dy": 5, "x": 1, "y": 1, "phase": "began"])
+        try await viewer.send(.pointer, json: ["id": "f", "phase": "down", "x": 1, "y": 1, "t": 0])
+        let first = try await app.receive()
+        XCTAssertEqual(first.type, .wheel, "This build knows the kind; a v1 build skips it (testAKindThisBuildDoesNotKnowIsSkipped)")
+        let second = try await app.receive()
+        XCTAssertEqual(second.type, .pointer)
+        app.close(); viewer.close()
+    }
+
+    func testStateMergesAndReportsOnlyWhatChanged() {
+        var state = LiveStreamState(json: ["title": "Inbox", "url": "https://a.test", "loading": true,
+                                           "width": 1280, "height": 800])
+        XCTAssertEqual(state.title, "Inbox")
+        XCTAssertEqual(state.loading, true)
+        let before = state
+        state.merge(["loading": false, "title": NSNull()])
+        XCTAssertNil(state.title, "Null clears a field")
+        XCTAssertEqual(state.loading, false)
+        XCTAssertEqual(state.url, "https://a.test", "Unmentioned fields stay")
+        let changes = state.changes(since: before)
+        XCTAssertEqual(changes["loading"] as? Bool, false)
+        XCTAssertTrue(changes["title"] is NSNull)
+        XCTAssertNil(changes["url"])
+        XCTAssertNil(changes["width"])
+        XCTAssertTrue(state.changes(since: state).isEmpty)
+
+        state.merge(["crop": ["x": 0, "y": 38, "width": 1280, "height": 762]])
+        XCTAssertEqual(state.crop?["y"], 38)
+        var viewerSide = before
+        viewerSide.merge(state.changes(since: before))
+        XCTAssertEqual(viewerSide, state, "A viewer that merges the changes ends up with the source's state")
+    }
+
+    func testAHeldButtonIsLetGoAfterSilence() {
+        var input = LiveStreamHeldInput()
+        XCTAssertFalse(input.expired(now: 100), "Nothing held")
+        input.heard(action: "down", button: "left", x: 50, y: 60, at: 10)
+        XCTAssertFalse(input.expired(now: 12))
+        // The viewer repeats a still held button twice a second.
+        input.heard(action: "move", button: "left", x: 50, y: 60, at: 12)
+        XCTAssertFalse(input.expired(now: 14.4))
+        XCTAssertTrue(input.expired(now: 14.6), "2.5 s without a word")
+        XCTAssertEqual(input.releaseAll(), ["left"])
+        XCTAssertEqual(input.point.x, 50)
+        XCTAssertFalse(input.expired(now: 100), "Nothing left held")
+
+        input.heard(action: "down", button: "right", x: 1, y: 2, at: 20)
+        input.heard(action: "up", button: "right", x: 1, y: 2, at: 20.1)
+        XCTAssertFalse(input.expired(now: 30), "Let go by the viewer: nothing to cancel")
+        XCTAssertTrue(input.releaseAll().isEmpty)
+    }
+
+    /// Mouse and wheel events keep the viewer's spacing on the source's clock,
+    /// however they arrive — the same timeline fingers use.
+    func testMouseAndWheelTimelines() {
+        // A drag: down, three moves 8 ms apart, arriving together 40 ms after the down.
+        var drag = LiveStreamPointerTimeline(start: 1_000_000, ticksPerMillisecond: 1000)
+        let now: UInt64 = 1_040_000
+        XCTAssertEqual([8.0, 16, 24].map { drag.time(offsetMilliseconds: $0, now: now) }, [1_008_000, 1_016_000, 1_024_000])
+        // A flick's momentum: events 16 ms apart, the last of them still in the future here.
+        var wheel = LiveStreamPointerTimeline(start: 2_000_000, ticksPerMillisecond: 1000)
+        XCTAssertEqual(wheel.time(offsetMilliseconds: 16, now: 2_020_000), 2_016_000)
+        XCTAssertEqual(wheel.time(offsetMilliseconds: 32, now: 2_020_000), 2_020_000, "Never ahead of now")
+        XCTAssertEqual(wheel.time(offsetMilliseconds: 48, now: 2_020_000), 2_020_001, "Nor backwards")
+    }
+
+    func testKeyNamesAreKnown() {
+        for name in ["escape", "tab", "left", "pageDown", "f12", "return"] {
+            XCTAssertTrue(LiveStreamKeys.specials.contains(name), name)
+        }
+        XCTAssertEqual(LiveStreamKeys.modifiers, ["command", "shift", "option", "control", "function"])
+    }
+}

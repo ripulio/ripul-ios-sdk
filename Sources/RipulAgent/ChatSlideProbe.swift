@@ -84,8 +84,13 @@ public final class ChatSlideProbe {
     private typealias Demangle = @convention(c) (
         UnsafePointer<CChar>?, Int, UnsafeMutablePointer<CChar>?, UnsafeMutablePointer<Int>?, UInt32
     ) -> UnsafeMutablePointer<CChar>?
+    #if DEBUG || RIPUL_DEVELOPER_BUILD
     private static let demangle: Demangle? = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "swift_demangle")
         .map { unsafeBitCast($0, to: Demangle.self) }
+    #else
+    /// Looked up by name, so not in store builds: names stay mangled there.
+    private static let demangle: Demangle? = nil
+    #endif
 
     /// The first few app frames above Combine: the setter and whoever called it.
     private static func callerSummary() -> String {

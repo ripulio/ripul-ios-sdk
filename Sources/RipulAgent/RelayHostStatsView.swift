@@ -177,7 +177,9 @@ public struct RelayHostStatsView: View {
             if bridgeDiagnostics.hostStatusAvailable == false {
                 HStack(spacing: 12) {
                     Button {
-                        Task { await bridge.healWebContext(reason: "manual heal from Relay Host Stats") }
+                        // force: the automatic path defers to a load in flight;
+                        // someone pressing this button is overriding that.
+                        Task { await bridge.healWebContext(reason: "manual heal from Relay Host Stats", force: true) }
                     } label: {
                         Label("Heal now", systemImage: "bandage")
                     }
