@@ -10,9 +10,9 @@ final class InspectorAttachmentUITests: XCTestCase {
     }
 
     /// The composer's @ → Element round trip, in the explorer's default Design
-    /// mode: closing returns with nothing attached; Add to chat returns with
-    /// the element as a chip, using the composer's defaults, and removes the
-    /// typed @ text.
+    /// mode: closing returns with nothing attached; each Add to chat returns
+    /// with the next lettered element as a chip and its name where the @ was,
+    /// so one message can compare several elements (native, then web).
     func testComposerElementPickReturnsTheElementToTheChat() {
         continueAfterFailure = false
         let app = XCUIApplication()
@@ -20,6 +20,7 @@ final class InspectorAttachmentUITests: XCTestCase {
         app.launch()
         let status = app.staticTexts["attachmentHarness.status"]
         let returns = app.staticTexts["attachmentHarness.returns"]
+        let field = app.textViews.firstMatch
         XCTAssertTrue(status.waitForExistence(timeout: 10))
         XCTAssertEqual(returns.label, "returns=0")
 
@@ -28,35 +29,47 @@ final class InspectorAttachmentUITests: XCTestCase {
         expectation(for: NSPredicate(format: "label == %@", "returns=1"), evaluatedWith: returns)
         waitForExpectations(timeout: 5)
         XCTAssertEqual(status.label, "attachments=0; images=0; tab=0")
+        XCTAssertEqual(field.value as? String, "", "A closed pick leaves no name behind")
         XCTAssertFalse(app.buttons["Inspector.addToChat"].exists)
 
-        pickElement(in: app, typing: "Look at @el")
+        addElement(in: app, typing: "Look at @el", returns: returns, expectedReturns: 2)
+        XCTAssertEqual(status.label, "attachments=1; images=1; tab=0")
+        XCTAssertEqual(field.value as? String, "Look at @Element A ")
+
+        addElement(in: app, typing: "and compare it with @", returns: returns, expectedReturns: 3)
+        XCTAssertEqual(status.label, "attachments=2; images=2; tab=0", "A second element adds to the first")
+        XCTAssertEqual(field.value as? String, "Look at @Element A and compare it with @Element B ")
+        for letter in ["A", "B"] {
+            let chip = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Preview Element \(letter) — ")).firstMatch
+            XCTAssertTrue(chip.exists, "The composer must show Element \(letter)")
+        }
+        let returned = XCTAttachment(screenshot: app.screenshot())
+        returned.name = "two elements returned to the composer"
+        returned.lifetime = .keepAlways
+        add(returned)
+    }
+
+    private func addElement(in app: XCUIApplication, typing text: String, returns: XCUIElement, expectedReturns: Int) {
+        pickElement(in: app, typing: text)
         let addToChat = app.buttons["Inspector.addToChat"]
         expectation(for: NSPredicate(format: "enabled == true"), evaluatedWith: addToChat)
         waitForExpectations(timeout: 5)
         XCTAssertFalse(app.buttons["Inspector.attachElement"].exists, "A pick for the chat has one way back")
         let picking = XCTAttachment(screenshot: app.screenshot())
-        picking.name = "explorer picking an element for the chat"
+        picking.name = "explorer picking element \(expectedReturns - 1) for the chat"
         picking.lifetime = .keepAlways
         add(picking)
         addToChat.tap()
-        expectation(for: NSPredicate(format: "label == %@", "returns=2"), evaluatedWith: returns)
+        expectation(for: NSPredicate(format: "label == %@", "returns=\(expectedReturns)"), evaluatedWith: returns)
         waitForExpectations(timeout: 10)
-        XCTAssertEqual(status.label, "attachments=1; images=1; tab=0")
         XCTAssertFalse(app.buttons["InspectorHUD.exitButton"].exists, "Add to chat closes the explorer")
-        XCTAssertEqual(app.textViews.firstMatch.value as? String, "Look at ")
-        let chip = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Preview Element")).firstMatch
-        XCTAssertTrue(chip.exists, "The composer must show the returned element")
-        let returned = XCTAttachment(screenshot: app.screenshot())
-        returned.name = "element returned to the composer"
-        returned.lifetime = .keepAlways
-        add(returned)
     }
 
     private func pickElement(in app: XCUIApplication, typing text: String) {
         let field = app.textViews.firstMatch
         XCTAssertTrue(field.waitForExistence(timeout: 5))
-        field.tap()
+        // The end of the text, where a person continues typing.
+        field.coordinate(withNormalizedOffset: CGVector(dx: 0.99, dy: 0.99)).tap()
         field.typeText(text)
         let row = app.buttons["NativeChatInput.at.element"]
         XCTAssertTrue(row.waitForExistence(timeout: 5), "@ must offer the Element picker")

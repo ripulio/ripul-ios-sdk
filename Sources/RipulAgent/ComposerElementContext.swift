@@ -16,12 +16,13 @@ struct ComposerElementSelection {
 #endif
 
 extension RipulComposerContext {
+    static let selectedElementID = "ripul.selectedElement"
     public static var selectedElement: Self { selectedElement(configuration: .init()) }
 
     /// Capture the View Explorer's existing highlight, never move or activate it.
     /// Uses the same developer availability/defaults and user preview as Current screen.
     public static func selectedElement(configuration: RipulScreenContextConfiguration) -> Self {
-        var option = Self(id: "ripul.selectedElement", title: "Selected element",
+        var option = Self(id: selectedElementID, title: "Selected element",
             subtitle: "The element selected in Inspector", systemImage: "scope", kind: .screen) {
             try await ComposerScreenContext.captureSelectedElement(configuration: configuration).selectedText
         }

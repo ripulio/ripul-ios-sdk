@@ -62,6 +62,39 @@ final class ComposerContextTests: XCTestCase {
         XCTAssertTrue(result.contains("Add Shift\\nQuoted \\\"text\\\""))
     }
     @MainActor
+    func testElementsAccumulateLetteredAndTheMessageNamesEachOne() {
+        let store = RipulComposerContextStore(storage: nil)
+        func element(_ name: String) -> RipulContextAttachment {
+            RipulContextAttachment(option: .selectedElement, content: "Label: \(name)", title: "Element — " + name)
+        }
+        let a = store.attach(element("Save"), to: "chat")
+        let b = store.attach(element("Cancel"), to: "chat")
+        XCTAssertEqual([a.reference, b.reference], ["Element A", "Element B"])
+        XCTAssertEqual([a.title, b.title], ["Element A — Save", "Element B — Cancel"])
+        // Reviewing a chip replaces it in place and keeps its letter.
+        store.attach(a, to: "chat")
+        XCTAssertEqual(store.attachments(for: "chat").map(\.id), [a.id, b.id])
+        // A removed letter is not handed out again while the draft may name it.
+        store.remove(b.id, from: "chat")
+        let c = store.attach(element("Delete"), to: "chat")
+        XCTAssertEqual(c.reference, "Element C")
+        // Other kinds still replace their predecessor, and letters are per chat.
+        store.attach(RipulContextAttachment(option: .currentScreen, content: "One"), to: "chat")
+        store.attach(RipulContextAttachment(option: .currentScreen, content: "Two"), to: "chat")
+        XCTAssertEqual(store.attachments(for: "chat").map(\.content), ["Label: Save", "Label: Delete", "Two"])
+        XCTAssertEqual(store.attach(element("Other"), to: "other").reference, "Element A")
+        let message = RipulContextAttachment.message("Compare @Element A with @Element C", attachments: store.attachments(for: "chat"))
+        XCTAssertTrue(message.contains("\"reference\" : \"Element A\""))
+        XCTAssertTrue(message.contains("\"reference\" : \"Element C\""))
+        XCTAssertTrue(message.contains("\"title\" : \"Element C — Delete\""))
+        // A new message starts again at A.
+        store.didSend(store.attachments(for: "chat"), session: "chat")
+        XCTAssertEqual(store.attach(element("Next"), to: "chat").reference, "Element A")
+        XCTAssertEqual(RipulContextAttachment.elementReference(26), "Element 27")
+        XCTAssertEqual(RipulContextAttachment.elementIndex("Element 27"), 26)
+    }
+
+    @MainActor
     func testOnlyOptedInConversationInstructionsSurviveRestart() {
         let suite = "ComposerContextTests." + UUID().uuidString
         let storage = UserDefaults(suiteName: suite)!

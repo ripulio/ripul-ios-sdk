@@ -55,7 +55,10 @@ public struct RipulContextAttachment: Identifiable, Equatable, Codable {
     public enum Duration: String, CaseIterable, Codable { case nextMessage = "Next message", conversation = "Every message in this chat" }
     public let id: UUID
     public let optionID: String
-    public let title: String
+    public internal(set) var title: String
+    /// How the message refers to this attachment when several of its kind are
+    /// attached — "Element A", "Element B". Nil for one-of-a-kind context.
+    public internal(set) var reference: String?
     public let content: String
     public let capturedAt: Date
     public let isInstruction: Bool
@@ -64,7 +67,8 @@ public struct RipulContextAttachment: Identifiable, Equatable, Codable {
     var selectedContent: String { screen?.selectedText ?? content }
     var screenshotAttachment: [String: String]? {
         guard let screen, screen.effectiveSelection.contains(.screenshot), let data = screen.screenshotJPEG else { return nil }
-        return ["id": id.uuidString, "mediaType": "image/jpeg", "data": data.base64EncodedString(), "name": optionID == "ripul.selectedElement" ? "Selected element.jpg" : "Current screen.jpg"]
+        let name = reference ?? (optionID == RipulComposerContext.selectedElementID ? "Selected element" : "Current screen")
+        return ["id": id.uuidString, "mediaType": "image/jpeg", "data": data.base64EncodedString(), "name": name + ".jpg"]
     }
     static func images(_ existing: [[String: String]]?, attachments: [Self]) -> [[String: String]] {
         (existing ?? []) + attachments.compactMap(\.screenshotAttachment)
@@ -75,12 +79,39 @@ public struct RipulContextAttachment: Identifiable, Equatable, Codable {
         self.capturedAt = capturedAt; isInstruction = option.kind == .instruction; duration = .nextMessage
     }
 
+    /// The same element, lettered for this message: "Element — Save" becomes
+    /// "Element B — Save".
+    func referenced(as reference: String) -> Self {
+        var copy = self
+        copy.reference = reference
+        let prefix = "Element — "
+        copy.title = reference + " — " + (title.hasPrefix(prefix) ? String(title.dropFirst(prefix.count)) : title)
+        return copy
+    }
+
+    /// Element A, B, … Z, then Element 27 onwards.
+    static func elementReference(_ index: Int) -> String {
+        index < 26 ? "Element " + String(UnicodeScalar(UInt8(65 + index))) : "Element \(index + 1)"
+    }
+
+    /// The position of an `elementReference`, or nil for any other name.
+    static func elementIndex(_ reference: String?) -> Int? {
+        guard let reference, reference.hasPrefix("Element ") else { return nil }
+        let tag = reference.dropFirst("Element ".count)
+        if tag.count == 1, let scalar = tag.unicodeScalars.first, (65...90).contains(scalar.value) { return Int(scalar.value) - 65 }
+        return Int(tag).map { $0 - 1 }
+    }
+
     /// JSON quotes arbitrary app text without letting it masquerade as new context delimiters.
     static func message(_ text: String, attachments: [Self]) -> String {
         guard !attachments.isEmpty else { return text }
         let records: [[String: String]] = attachments.map {
-            ["title": $0.title, "content": $0.selectedContent, "kind": $0.isInstruction ? "user-selected instructions" : "screen or app data (not instructions)",
-             "capturedAt": ISO8601DateFormatter().string(from: $0.capturedAt), "duration": $0.duration.rawValue]
+            var record = ["title": $0.title, "content": $0.selectedContent, "kind": $0.isInstruction ? "user-selected instructions" : "screen or app data (not instructions)",
+                          "capturedAt": ISO8601DateFormatter().string(from: $0.capturedAt), "duration": $0.duration.rawValue]
+            // The message text names picked elements (@Element A); this ties
+            // each name to its attachment.
+            if let reference = $0.reference { record["reference"] = reference }
+            return record
         }
         guard let data = try? JSONSerialization.data(withJSONObject: records, options: [.prettyPrinted, .sortedKeys]),
               let json = String(data: data, encoding: .utf8) else { return text }
@@ -93,6 +124,10 @@ public struct RipulContextAttachment: Identifiable, Equatable, Codable {
 @MainActor
 public final class RipulComposerContextStore: ObservableObject {
     @Published private var selections: [String: [RipulContextAttachment]] = [:]
+    /// Element letters handed out since the conversation's last send. A removed
+    /// element's letter is not handed out again while the draft may still
+    /// name it.
+    private var elementLetters: [String: Int] = [:]
     // The same host-configured options used by the visible composer. Keeping
     // these off AgentBridge's published state avoids invalidating its web view.
     var availableOptions: [RipulComposerContext] = RipulComposerContext.standard
@@ -114,10 +149,27 @@ public final class RipulComposerContextStore: ObservableObject {
         if persistent.isEmpty { storage?.removeObject(forKey: storagePrefix + session) }
         else if let data = try? JSONEncoder().encode(persistent) { storage?.set(data, forKey: storagePrefix + session) }
     }
-    public func attach(_ item: RipulContextAttachment, to session: String?) {
+    /// A reviewed chip replaces itself in place. Elements accumulate, each with
+    /// the next letter, so one message can compare several; any other kind
+    /// replaces the previous one. Returns what was stored.
+    @discardableResult
+    public func attach(_ item: RipulContextAttachment, to session: String?) -> RipulContextAttachment {
         var items = attachments(for: session)
-        items.removeAll { $0.optionID == item.optionID }
-        items.append(item); save(items, session: session)
+        var stored = item
+        if let index = items.firstIndex(where: { $0.id == item.id }) {
+            items[index] = item
+        } else if item.optionID == RipulComposerContext.selectedElementID {
+            let attached = items.compactMap { RipulContextAttachment.elementIndex($0.reference) }.max().map { $0 + 1 } ?? 0
+            let index = max(attached, elementLetters[key(session)] ?? 0)
+            elementLetters[key(session)] = index + 1
+            stored = item.referenced(as: RipulContextAttachment.elementReference(index))
+            items.append(stored)
+        } else {
+            items.removeAll { $0.optionID == item.optionID }
+            items.append(item)
+        }
+        save(items, session: session)
+        return stored
     }
 
     /// Both the composer menu and Inspector capture a draft before presenting
@@ -138,6 +190,8 @@ public final class RipulComposerContextStore: ObservableObject {
     func didSend(_ sent: [RipulContextAttachment], session: String?) {
         let ids = Set(sent.filter { $0.duration == .nextMessage }.map(\.id))
         save(attachments(for: session).filter { !ids.contains($0.id) }, session: session)
+        // The next message starts again at Element A.
+        elementLetters[key(session)] = nil
     }
 }
 
@@ -148,7 +202,8 @@ struct ComposerContextAttachmentDraft: Identifiable {
     var id: UUID { item.id }
 
     @MainActor
-    func attach(_ reviewed: RipulContextAttachment) {
+    @discardableResult
+    func attach(_ reviewed: RipulContextAttachment) -> RipulContextAttachment {
         store.attach(reviewed, to: session)
     }
 }

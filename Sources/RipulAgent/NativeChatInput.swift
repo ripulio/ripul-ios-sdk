@@ -276,10 +276,12 @@ public struct NativeChatInput: View {
     var onQueryFiles: ((String) async -> [FileSuggestion])?
     /// Optional callback to fetch UI element suggestions from the current page.
     var onQueryElements: (() async -> [ElementSuggestion])?
-    /// Optional: the `@` overlay's Element row. Picking it clears the typed
+    /// Optional: the `@` overlay's Element row. Picking it replaces the typed
     /// `@…` and hands off to the host, which opens the View Explorer and
-    /// brings the chosen element back as a composer context chip.
-    var onPickElement: (() -> Void)?
+    /// brings the chosen element back as a composer context chip. The host
+    /// returns the element's name ("Element A"), which lands where the `@`
+    /// was, or nil when nothing was picked.
+    var onPickElement: (() async -> String?)?
     /// Optional callback to fetch chat participant suggestions (agents + humans).
     /// When provided, the `@` category overlay shows a "People" row that lists them.
     var onQueryParticipants: (() async -> [ParticipantSuggestion])?
@@ -386,7 +388,7 @@ public struct NativeChatInput: View {
         chatInputLayout: String? = nil,
         onQueryFiles: ((String) async -> [FileSuggestion])? = nil,
         onQueryElements: (() async -> [ElementSuggestion])? = nil,
-        onPickElement: (() -> Void)? = nil,
+        onPickElement: (() async -> String?)? = nil,
         onQueryParticipants: (() async -> [ParticipantSuggestion])? = nil,
         onQueryTeammates: (() async -> [TeammateSuggestion])? = nil,
         onInviteTeammate: ((TeammateSuggestion) async -> String?)? = nil,
@@ -811,15 +813,25 @@ public struct NativeChatInput: View {
         dismissAtOverlay()
     }
 
-    /// The Element row is an action, not a mention: the typed `@…` goes, and
-    /// the element comes back later as a context chip rather than as text.
+    /// The Element row opens a pick rather than naming something already
+    /// known: the typed `@…` goes now, and the element's name ("@Element A")
+    /// takes its place once the pick returns — so "compare @Element A with
+    /// @Element B" reads the way it was typed. The `@` query is always the
+    /// last word, so the name goes on the end.
     private func selectElementPick() {
+        guard let onPickElement else { return }
         if let triggerIdx = atTriggerIndex {
             text = String(text[text.startIndex..<triggerIdx])
         }
         dismissAtOverlay()
         dismissKeyboard()
-        onPickElement?()
+        let field = $text
+        Task { @MainActor in
+            guard let reference = await onPickElement() else { return }
+            let current = field.wrappedValue
+            let gap = current.isEmpty || current.last?.isWhitespace == true ? "" : " "
+            field.wrappedValue = current + gap + "@" + reference + " "
+        }
     }
 
     /// Offered for a bare `@` and for anything typed toward "element".

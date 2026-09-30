@@ -878,7 +878,7 @@ private struct ChatComposer: View {
                     return ElementSuggestion(dataUi: dataUi)
                 }
             },
-            onPickElement: canPickElement ? { bridge.pickElementForChat() } : nil,
+            onPickElement: canPickElement ? { await bridge.pickElementForChat() } : nil,
             onQueryParticipants: {
                 let dicts = await bridge.queryAutocomplete(category: "people", query: "")
                 return dicts.compactMap { dict in

@@ -46,8 +46,9 @@ final class ComposerElementContextTests: XCTestCase {
         XCTAssertEqual(draft.session, "minimized-chat")
         XCTAssertEqual(draft.item.content, "Reviewed host element")
         XCTAssertEqual(captures, 1)
-        draft.attach(draft.item)
-        XCTAssertEqual(bridge.composerContexts.attachments(for: "minimized-chat"), [draft.item])
+        let stored = draft.attach(draft.item)
+        XCTAssertEqual(stored.reference, "Element A")
+        XCTAssertEqual(bridge.composerContexts.attachments(for: "minimized-chat"), [stored])
         XCTAssertTrue(bridge.composerContexts.attachments(for: "minimized-tab").isEmpty)
         agent.isHidden = true
         do { _ = try await RipulViewExplorer.prepareSelectedElementAttachment(); XCTFail("A closed agent must not receive new attachments") }
@@ -78,8 +79,9 @@ final class ComposerElementContextTests: XCTestCase {
         bridge.activeSessionId = "attachment-tab-b"
         var reviewed = explorer.item
         reviewed.screen?.selected = [.instrumentedText]
-        explorer.attach(reviewed)
-        XCTAssertEqual(bridge.composerContexts.attachments(for: "attachment-chat-a"), [reviewed])
+        let stored = explorer.attach(reviewed)
+        XCTAssertEqual(stored.screen?.selected, [.instrumentedText])
+        XCTAssertEqual(bridge.composerContexts.attachments(for: "attachment-chat-a"), [stored])
         XCTAssertTrue(bridge.composerContexts.attachments(for: "attachment-tab-a").isEmpty)
         XCTAssertTrue(bridge.composerContexts.attachments(for: "attachment-chat-b").isEmpty)
         XCTAssertNil(bridge.composerContexts.attachments(for: "attachment-chat-a").first?.screenshotAttachment)

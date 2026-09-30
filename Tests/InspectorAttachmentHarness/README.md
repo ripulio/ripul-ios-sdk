@@ -25,5 +25,6 @@ to its old conversation.
 
 The composer variant (`--chat-pick`) mounts the production `NativeChatInput` and
 drives its `@` → Element row in the Explorer's default Design mode. Closing the
-Explorer returns to the chat with nothing attached; Add to chat attaches the
-element with the composer's defaults, removes the typed `@…` and returns once.
+Explorer returns to the chat with nothing attached; each Add to chat attaches the
+next lettered element (web, then native) with the composer's defaults, puts
+`@Element A` / `@Element B` where the `@` was, and returns once.

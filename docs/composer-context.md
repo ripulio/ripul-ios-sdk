@@ -72,8 +72,12 @@ chrome removed and explicitly excluded regions masked.
 Capture reads the existing selection without moving the crosshair or activating the
 control. It reads live values and bounds when selected, then freezes that draft.
 Moving the Explorer does not change an attachment already reviewed. Choose Selected
-element again to capture the new highlight; Attach replaces the previous element
-chip. Current screen remains a separate attachment. A closed Explorer, removed or
+element again to capture the new highlight; Attach adds it beside the earlier ones.
+Elements are lettered per message (**Element A**, **Element B**, …) in the chip, the
+attachment title, its screenshot name, and a `reference` field in the context sent,
+so one message can compare several. Reviewing a chip keeps its letter; a removed
+element's letter is not handed out again until the message is sent. Current screen
+remains a single, separate attachment. A closed Explorer, removed or
 hidden element, or excluded selection produces an explanatory error.
 
 #### Pick an element from the composer
@@ -81,14 +85,17 @@ hidden element, or excluded selection produces an explanatory error.
 Typing `@` in the composer also offers **Element → Pick an element** (it stays
 listed while the text after `@` still spells toward "element" or "pick"). Choosing it
 removes the typed `@…`, minimizes the SDK assistant and opens View Explorer in a
-picking mode. The Explorer shows an **Add to chat** bar under its header, in Design
-and Advanced alike and also while folded. Add to chat captures the highlight as
+picking mode. When the element comes back, its name (`@Element A`) takes the place of
+the `@`, so "Look at @Element A and compare it with @Element B" reads as typed.
+The Explorer shows an **Add to chat** bar under its header, in Design and Advanced
+alike and also while folded. Add to chat captures the highlight as
 above with the configured defaults, attaches it to the chat that asked, closes the
 Explorer and reopens the assistant. There is no review sheet, because the pick itself
 was the choice; tap the chip to review or change it before sending. Closing the
 Explorer without adding reopens the assistant with nothing attached. The row appears
 only when the host offers Selected element and the chat has an ID. It is iOS and
-Catalyst only. `AgentBridge.pickElementForChat()` starts the same flow.
+Catalyst only. `await AgentBridge.pickElementForChat()` starts the same flow and
+returns the element's name, or nil when nothing was added.
 
 Developers can configure element choices independently:
 

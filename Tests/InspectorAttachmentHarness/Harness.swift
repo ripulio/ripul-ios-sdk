@@ -31,7 +31,7 @@ struct InspectorAttachmentHarness: View {
             // the way AgentView mounts it, so the menu has room to grow.
             if model.usesComposer {
                 NativeChatInput(text: $draft, imageAttachments: $images, selectedPhotos: $photos, onSubmit: {},
-                                onPickElement: { model.pickForChat() },
+                                onPickElement: { await model.pickForChat() },
                                 contextStore: model.bridge.composerContexts, contextSessionID: "attachment-conversation",
                                 contextOptions: model.bridge.composerContexts.availableOptions)
             }
@@ -101,16 +101,24 @@ private final class InspectorAttachmentModel: ObservableObject {
     }
 
     /// The composer's @ → Element, in the explorer's default Design mode.
-    /// The chat here is this harness screen, so its return is counted.
-    func pickForChat() {
-        guard let target = native, let window = target.window else { return }
+    /// The chat here is this harness screen, so its return is counted. Picks
+    /// alternate native and web targets; the name comes back to the composer.
+    private var picks = 0
+    func pickForChat() async -> String? {
+        picks += 1
+        let isWeb = picks % 2 == 0
+        guard let target: UIView = isWeb ? web : native, let window = target.window else { return nil }
         UserDefaults.standard.set("design", forKey: "viewInspector.mode")
         UserDefaults.standard.set(8, forKey: "viewInspector.posX")
         UserDefaults.standard.set(80, forKey: "viewInspector.posY")
         UserDefaults.standard.set(360, forKey: "viewInspector.w")
         UserDefaults.standard.set(260, forKey: "viewInspector.h")
-        RipulViewExplorer.pickElementForChat(bridge: bridge, in: window) { [weak self] in self?.returns += 1 }
-        probe(target, in: window, web: false)
+        return await withCheckedContinuation { continuation in
+            RipulViewExplorer.pickElementForChat(bridge: bridge, in: window,
+                                                 onReturn: { [weak self] in self?.returns += 1 },
+                                                 onFinish: { continuation.resume(returning: $0) })
+            probe(target, in: window, web: isWeb)
+        }
     }
 
     private func probe(_ target: UIView, in window: UIWindow, web isWeb: Bool) {

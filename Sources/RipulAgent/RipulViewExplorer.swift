@@ -102,27 +102,38 @@ extension Notification.Name {
 
 /// The composer's `@` → Element round trip. While active, the HUD shows an
 /// Add to chat bar; attaching or closing the explorer ends it and hands the
-/// screen back to the chat that asked. Observable so an explorer that was
-/// already open picks the bar up without being rebuilt.
+/// screen back to the chat that asked, with the name the element was given
+/// ("Element A") or nil when nothing was added. Observable so an explorer
+/// that was already open picks the bar up without being rebuilt.
 @available(iOS 16.0, *)
 @MainActor
 final class ExplorerChatPick: ObservableObject {
     static let shared = ExplorerChatPick()
     @Published private(set) var isActive = false
     private var onReturn: (() -> Void)?
+    private var onFinish: ((String?) -> Void)?
+    private var reference: String?
 
-    func begin(onReturn: (() -> Void)?) {
+    func begin(onReturn: (() -> Void)?, onFinish: ((String?) -> Void)?) {
+        // A pick replaced by another one ends empty.
+        self.onFinish?(nil)
         self.onReturn = onReturn
+        self.onFinish = onFinish
+        reference = nil
         isActive = true
     }
 
-    /// Ends the pick and returns what brings the chat back, or nil when no
-    /// pick was running.
+    /// Add to chat succeeded: the name the chat's text should use.
+    func picked(_ reference: String) { self.reference = reference }
+
+    /// Ends the pick and returns what brings the chat back and reports the
+    /// outcome, or nil when no pick was running.
     func end() -> (() -> Void)? {
         guard isActive else { return nil }
         isActive = false
-        defer { onReturn = nil }
-        return onReturn ?? {}
+        let reopen = onReturn, finish = onFinish, reference = reference
+        onReturn = nil; onFinish = nil; self.reference = nil
+        return { reopen?(); finish?(reference) }
     }
 }
 
@@ -333,25 +344,28 @@ public enum RipulViewExplorer {
     /// any launch does; this also remembers to reopen it. Add to chat attaches
     /// the element to that chat's composer, and closing the explorer either
     /// way returns to the chat. `onReturn` replaces the assistant reopen for
-    /// hosts that present the chat themselves.
+    /// hosts that present the chat themselves. `onFinish` receives the
+    /// element's name in the message ("Element A"), or nil if none was added.
     @discardableResult
     static func pickElementForChat(bridge: AgentBridge, in window: UIWindow? = nil,
-                                   onReturn: (() -> Void)? = nil) -> Bool {
+                                   onReturn: (() -> Void)? = nil,
+                                   onFinish: ((String?) -> Void)? = nil) -> Bool {
         var reopen = onReturn
         if reopen == nil, #available(iOS 26.0, *),
            let scene = (window ?? RipulChrome.appWindow())?.windowScene,
            RipulDevAssistantOverlay.shared.isExpanded(in: scene) {
             reopen = { RipulDevAssistantOverlay.shared.expand() }
         }
-        guard present(in: window, bridge: bridge) else { return false }
-        ExplorerChatPick.shared.begin(onReturn: reopen)
+        guard present(in: window, bridge: bridge) else { onFinish?(nil); return false }
+        ExplorerChatPick.shared.begin(onReturn: reopen, onFinish: onFinish)
         return true
     }
 
     /// Add to chat: the reviewed-draft path without the review sheet, since
     /// the pick itself was the choice. The chip stays editable in the composer.
     static func finishChatPick(with draft: ComposerContextAttachmentDraft) {
-        draft.attach(draft.item)
+        let stored = draft.attach(draft.item)
+        ExplorerChatPick.shared.picked(stored.reference ?? stored.title)
         dismiss()
     }
 

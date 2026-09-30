@@ -8943,8 +8943,13 @@ public final class AgentBridge: NSObject {
     #if os(iOS)
     /// The composer's `@` → Element: pick one element in the View Explorer
     /// and bring it back to this chat's composer as a Selected element chip.
-    public func pickElementForChat() {
-        RipulViewExplorer.pickElementForChat(bridge: self, in: webView?.window ?? RipulChrome.appWindow())
+    /// Returns the element's name in the message ("Element A") for the text
+    /// to use, or nil when the Explorer was closed without adding one.
+    public func pickElementForChat() async -> String? {
+        await withCheckedContinuation { continuation in
+            RipulViewExplorer.pickElementForChat(bridge: self, in: webView?.window ?? RipulChrome.appWindow(),
+                                                 onFinish: { continuation.resume(returning: $0) })
+        }
     }
     #endif
 
