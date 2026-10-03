@@ -5,7 +5,7 @@
       "clientType": "web",
       "displayName": "Peter Maude",
       "firstSeenAt": "2026-10-02T14:12:08.642Z",
-      "lastSeenAt": "2026-10-03T11:40:33.077Z"
+      "lastSeenAt": "2026-10-03T12:25:46.103Z"
     }
   ],
   "createdAt": "2026-10-02T14:12:08.524Z",
@@ -29,6 +29,16 @@
       "id": "dep_musb4f4d_9l1e",
       "target": "worker",
       "timestamp": "2026-10-03T11:26:59.131Z"
+    },
+    {
+      "id": "dep_muscwr8e_j8wi",
+      "target": "macos",
+      "timestamp": "2026-10-03T12:16:58.851Z"
+    },
+    {
+      "id": "dep_musd59ec_y37z",
+      "target": "macos",
+      "timestamp": "2026-10-03T12:23:35.616Z"
     }
   ],
   "filesEdited": [
@@ -523,9 +533,9 @@
       "group": "web",
       "id": "human-user_3AONWcmlO5RS8dj3lRzQZtYXFxA",
       "kind": "human",
-      "lastSeenAt": "2026-10-03T11:40:33.110Z"
+      "lastSeenAt": "2026-10-03T12:25:46.195Z"
     }
   ],
   "tags": [],
-  "updatedAt": "2026-10-03T12:04:08.684Z"
+  "updatedAt": "2026-10-03T12:25:46.195Z"
 }
