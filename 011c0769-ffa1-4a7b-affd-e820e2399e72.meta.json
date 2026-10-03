@@ -1,0 +1,531 @@
+{
+  "contributors": [
+    {
+      "clientId": "web-user_3AONWcmlO5RS8dj3lRzQZtYXFxA",
+      "clientType": "web",
+      "displayName": "Peter Maude",
+      "firstSeenAt": "2026-10-02T14:12:08.642Z",
+      "lastSeenAt": "2026-10-03T11:40:33.077Z"
+    }
+  ],
+  "createdAt": "2026-10-02T14:12:08.524Z",
+  "deployments": [
+    {
+      "id": "dep_musb1lt5_ksmq",
+      "target": "worker",
+      "timestamp": "2026-10-03T11:24:45.867Z"
+    },
+    {
+      "id": "dep_musb2kl6_f3fb",
+      "target": "worker",
+      "timestamp": "2026-10-03T11:25:30.941Z"
+    },
+    {
+      "id": "dep_musb4cti_0ndf",
+      "target": "worker",
+      "timestamp": "2026-10-03T11:26:54.171Z"
+    },
+    {
+      "id": "dep_musb4f4d_9l1e",
+      "target": "worker",
+      "timestamp": "2026-10-03T11:26:59.131Z"
+    }
+  ],
+  "filesEdited": [
+    {
+      "editCount": 8,
+      "fileName": "dump.py",
+      "filePath": "/tmp/ripul-runner-spike/dump.py",
+      "firstSeenAt": "2026-10-02T15:27:51.949Z",
+      "lastSeenAt": "2026-10-02T15:28:47.155Z",
+      "toolName": "Edit"
+    },
+    {
+      "editCount": 5,
+      "fileName": "project.yml",
+      "filePath": "/Users/petermaude/Documents/ripul/.claude/worktrees/device-runner/ripul-native-app/device-runner/project.yml",
+      "firstSeenAt": "2026-10-02T15:29:04.167Z",
+      "lastSeenAt": "2026-10-02T15:33:20.844Z",
+      "toolName": "Edit"
+    },
+    {
+      "editCount": 3,
+      "fileName": "Runner-Bridging-Header.h",
+      "filePath": "/Users/petermaude/Documents/ripul/.claude/worktrees/device-runner/ripul-native-app/device-runner/Runner/Runner-Bridging-Header.h",
+      "firstSeenAt": "2026-10-02T15:29:04.299Z",
+      "lastSeenAt": "2026-10-02T15:30:51.135Z",
+      "toolName": "Write"
+    },
+    {
+      "editCount": 11,
+      "fileName": "RunnerPrivate.h",
+      "filePath": "/Users/petermaude/Documents/ripul/.claude/worktrees/device-runner/ripul-native-app/device-runner/Runner/RunnerPrivate.h",
+      "firstSeenAt": "2026-10-02T15:29:12.482Z",
+      "lastSeenAt": "2026-10-02T15:43:33.163Z",
+      "toolName": "Edit"
+    },
+    {
+      "editCount": 29,
+      "fileName": "RunnerPrivate.m",
+      "filePath": "/Users/petermaude/Documents/ripul/.claude/worktrees/device-runner/ripul-native-app/device-runner/Runner/RunnerPrivate.m",
+      "firstSeenAt": "2026-10-02T15:29:33.881Z",
+      "lastSeenAt": "2026-10-02T15:43:41.700Z",
+      "toolName": "Edit"
+    },
+    {
+      "editCount": 29,
+      "fileName": "RunnerSpike.swift",
+      "filePath": "/Users/petermaude/Documents/ripul/.claude/worktrees/device-runner/ripul-native-app/device-runner/Runner/RunnerSpike.swift",
+      "firstSeenAt": "2026-10-02T15:29:38.142Z",
+      "lastSeenAt": "2026-10-02T16:03:35.671Z",
+      "toolName": "Edit"
+    },
+    {
+      "editCount": 65,
+      "fileName": "run.sh",
+      "filePath": "/Users/petermaude/Documents/ripul/.claude/worktrees/device-runner/ripul-native-app/device-runner/run.sh",
+      "firstSeenAt": "2026-10-02T15:30:03.542Z",
+      "lastSeenAt": "2026-10-03T07:06:48.489Z",
+      "toolName": "Edit"
+    },
+    {
+      "editCount": 5,
+      "fileName": "TouchPadApp.swift",
+      "filePath": "/Users/petermaude/Documents/ripul/.claude/worktrees/device-runner/ripul-native-app/device-runner/TouchPad/TouchPadApp.swift",
+      "firstSeenAt": "2026-10-02T15:33:17.456Z",
+      "lastSeenAt": "2026-10-02T15:36:36.753Z",
+      "toolName": "Edit"
+    },
+    {
+      "editCount": 8,
+      "fileName": "touches.py",
+      "filePath": "/tmp/ripul-runner-spike/touches.py",
+      "firstSeenAt": "2026-10-02T15:38:04.035Z",
+      "lastSeenAt": "2026-10-02T16:02:14.648Z",
+      "toolName": "Edit"
+    },
+    {
+      "editCount": 2,
+      "fileName": "RunnerScreen.swift",
+      "filePath": "/Users/petermaude/Documents/ripul/.claude/worktrees/device-runner/ripul-native-app/device-runner/Runner/RunnerScreen.swift",
+      "firstSeenAt": "2026-10-02T15:43:06.985Z",
+      "lastSeenAt": "2026-10-02T15:43:07.064Z",
+      "toolName": "Write"
+    },
+    {
+      "editCount": 14,
+      "fileName": "RunnerGesture.swift",
+      "filePath": "/Users/petermaude/Documents/ripul/.claude/worktrees/device-runner/ripul-native-app/device-runner/Runner/RunnerGesture.swift",
+      "firstSeenAt": "2026-10-02T15:43:28.464Z",
+      "lastSeenAt": "2026-10-02T16:35:04.757Z",
+      "toolName": "Edit"
+    },
+    {
+      "editCount": 117,
+      "fileName": "RunnerSession.swift",
+      "filePath": "/Users/petermaude/Documents/ripul/.claude/worktrees/device-runner/ripul-native-app/device-runner/Runner/RunnerSession.swift",
+      "firstSeenAt": "2026-10-02T15:45:19.471Z",
+      "lastSeenAt": "2026-10-03T07:06:52.690Z",
+      "toolName": "Edit"
+    },
+    {
+      "editCount": 4,
+      "fileName": "RunnerHost.swift",
+      "filePath": "/Users/petermaude/Documents/ripul/.claude/worktrees/device-runner/ripul-native-app/device-runner/Runner/RunnerHost.swift",
+      "firstSeenAt": "2026-10-02T15:45:40.177Z",
+      "lastSeenAt": "2026-10-02T15:45:40.625Z",
+      "toolName": "Write"
+    },
+    {
+      "editCount": 2,
+      "fileName": "main.swift",
+      "filePath": "/Users/petermaude/Documents/ripul/.claude/worktrees/device-runner/ripul-native-app/device-runner/probe/main.swift",
+      "firstSeenAt": "2026-10-02T15:46:30.546Z",
+      "lastSeenAt": "2026-10-02T15:46:30.746Z",
+      "toolName": "Write"
+    },
+    {
+      "editCount": 2,
+      "fileName": "build.sh",
+      "filePath": "/Users/petermaude/Documents/ripul/.claude/worktrees/device-runner/ripul-native-app/device-runner/probe/build.sh",
+      "firstSeenAt": "2026-10-02T15:46:34.379Z",
+      "lastSeenAt": "2026-10-02T15:46:35.015Z",
+      "toolName": "Write"
+    },
+    {
+      "editCount": 3,
+      "fileName": "RunnerGestureTests.swift",
+      "filePath": "/Users/petermaude/Documents/ripul/.claude/worktrees/device-runner/ripul-native-app/device-runner/Runner/RunnerGestureTests.swift",
+      "firstSeenAt": "2026-10-02T15:56:04.463Z",
+      "lastSeenAt": "2026-10-02T16:02:14.939Z",
+      "toolName": "Write"
+    },
+    {
+      "editCount": 55,
+      "fileName": "README.md",
+      "filePath": "/Users/petermaude/Documents/ripul/.claude/worktrees/device-runner/ripul-native-app/device-runner/README.md",
+      "firstSeenAt": "2026-10-02T16:05:17.728Z",
+      "lastSeenAt": "2026-10-03T07:06:52.906Z",
+      "toolName": "Edit"
+    },
+    {
+      "editCount": 4,
+      "fileName": "app-store-private-apis.md",
+      "filePath": "/Users/petermaude/Documents/ripul/.claude/worktrees/device-runner/ripul-native-app/docs/app-store-private-apis.md",
+      "firstSeenAt": "2026-10-02T16:05:30.951Z",
+      "lastSeenAt": "2026-10-02T16:05:33.727Z",
+      "toolName": "Edit"
+    },
+    {
+      "editCount": 15,
+      "fileName": "project_device_runner.md",
+      "filePath": "/Users/petermaude/Documents/ripul/.claude/worktrees/device-runner/.ripul/memories/project_device_runner.md",
+      "firstSeenAt": "2026-10-02T16:05:45.223Z",
+      "lastSeenAt": "2026-10-03T07:06:53.125Z",
+      "toolName": "Edit"
+    },
+    {
+      "editCount": 4,
+      "fileName": "INDEX-668aa14e314a.md",
+      "filePath": "/Users/petermaude/Documents/ripul/.claude/worktrees/device-runner/.ripul/memories/INDEX-668aa14e314a.md",
+      "firstSeenAt": "2026-10-02T16:05:45.378Z",
+      "lastSeenAt": "2026-10-02T16:05:46.591Z",
+      "toolName": "Edit"
+    },
+    {
+      "editCount": 4,
+      "fileName": "check.sh",
+      "filePath": "/tmp/ripul-runner-spike/check.sh",
+      "firstSeenAt": "2026-10-02T16:06:12.261Z",
+      "lastSeenAt": "2026-10-02T16:06:13.035Z",
+      "toolName": "Write"
+    },
+    {
+      "editCount": 3,
+      "fileName": "view-on-sim.sh",
+      "filePath": "/tmp/ripul-runner-spike/view-on-sim.sh",
+      "firstSeenAt": "2026-10-02T16:25:07.266Z",
+      "lastSeenAt": "2026-10-02T16:35:05.012Z",
+      "toolName": "Write"
+    },
+    {
+      "editCount": 4,
+      "fileName": "two-sims.sh",
+      "filePath": "/tmp/ripul-runner-spike/two-sims.sh",
+      "firstSeenAt": "2026-10-02T16:27:06.714Z",
+      "lastSeenAt": "2026-10-02T16:35:05.682Z",
+      "toolName": "Write"
+    },
+    {
+      "editCount": 19,
+      "fileName": "cleanup-sims.sh",
+      "filePath": "/tmp/ripul-runner-spike/cleanup-sims.sh",
+      "firstSeenAt": "2026-10-02T16:32:44.254Z",
+      "lastSeenAt": "2026-10-03T07:07:02.695Z",
+      "toolName": "Write"
+    },
+    {
+      "editCount": 7,
+      "fileName": "runnerctl.py",
+      "filePath": "/Users/petermaude/Documents/ripul/.claude/worktrees/device-runner/ripul-native-app/device-runner/runnerctl.py",
+      "firstSeenAt": "2026-10-02T16:43:18.253Z",
+      "lastSeenAt": "2026-10-03T07:06:51.618Z",
+      "toolName": "Write"
+    },
+    {
+      "editCount": 6,
+      "fileName": "DeviceRunnerScreen.swift",
+      "filePath": "/Users/petermaude/Documents/ripul/.claude/worktrees/device-runner/ripul-native-app/iOS/DeviceRunnerScreen.swift",
+      "firstSeenAt": "2026-10-02T16:44:45.924Z",
+      "lastSeenAt": "2026-10-03T07:06:51.646Z",
+      "toolName": "Write"
+    },
+    {
+      "editCount": 9,
+      "fileName": "build-app.sh",
+      "filePath": "/tmp/ripul-runner-spike/build-app.sh",
+      "firstSeenAt": "2026-10-02T16:45:38.595Z",
+      "lastSeenAt": "2026-10-03T07:06:52.028Z",
+      "toolName": "Write"
+    },
+    {
+      "editCount": 4,
+      "fileName": "viewer-sim.sh",
+      "filePath": "/tmp/ripul-runner-spike/viewer-sim.sh",
+      "firstSeenAt": "2026-10-02T16:49:16.385Z",
+      "lastSeenAt": "2026-10-03T07:06:51.831Z",
+      "toolName": "Write"
+    },
+    {
+      "editCount": 6,
+      "fileName": "passthrough-test.sh",
+      "filePath": "/tmp/ripul-runner-spike/passthrough-test.sh",
+      "firstSeenAt": "2026-10-02T16:51:20.563Z",
+      "lastSeenAt": "2026-10-03T07:06:52.378Z",
+      "toolName": "Write"
+    },
+    {
+      "editCount": 12,
+      "fileName": "ship-17.sh",
+      "filePath": "/tmp/ripul-runner-spike/ship-17.sh",
+      "firstSeenAt": "2026-10-02T17:07:29.603Z",
+      "lastSeenAt": "2026-10-03T07:06:54.506Z",
+      "toolName": "Write"
+    },
+    {
+      "editCount": 31,
+      "fileName": "project_device_runner.md",
+      "filePath": "/Users/petermaude/Documents/ripul/.ripul/memories/project_device_runner.md",
+      "firstSeenAt": "2026-10-02T17:09:19.795Z",
+      "lastSeenAt": "2026-10-03T11:26:58.289Z",
+      "toolName": "Edit"
+    },
+    {
+      "editCount": 22,
+      "fileName": "runnerctl.py",
+      "filePath": "/Users/petermaude/Documents/ripul/ripul-native-app/device-runner/runnerctl.py",
+      "firstSeenAt": "2026-10-03T05:53:48.757Z",
+      "lastSeenAt": "2026-10-03T11:26:57.883Z",
+      "toolName": "Edit"
+    },
+    {
+      "editCount": 38,
+      "fileName": "DeviceRunnerScreen.swift",
+      "filePath": "/Users/petermaude/Documents/ripul/ripul-native-app/iOS/DeviceRunnerScreen.swift",
+      "firstSeenAt": "2026-10-03T05:54:45.449Z",
+      "lastSeenAt": "2026-10-03T07:06:57.058Z",
+      "toolName": "Edit"
+    },
+    {
+      "editCount": 25,
+      "fileName": "README.md",
+      "filePath": "/Users/petermaude/Documents/ripul/ripul-native-app/device-runner/README.md",
+      "firstSeenAt": "2026-10-03T05:55:00.409Z",
+      "lastSeenAt": "2026-10-03T11:26:58.070Z",
+      "toolName": "Edit"
+    },
+    {
+      "editCount": 6,
+      "fileName": "lozenge-test.sh",
+      "filePath": "/tmp/ripul-runner-spike/lozenge-test.sh",
+      "firstSeenAt": "2026-10-03T06:13:27.635Z",
+      "lastSeenAt": "2026-10-03T07:06:56.715Z",
+      "toolName": "Write"
+    },
+    {
+      "editCount": 16,
+      "fileName": "RunnerSession.swift",
+      "filePath": "/Users/petermaude/Documents/ripul/ripul-native-app/device-runner/Runner/RunnerSession.swift",
+      "firstSeenAt": "2026-10-03T06:22:02.357Z",
+      "lastSeenAt": "2026-10-03T07:07:02.429Z",
+      "toolName": "Edit"
+    },
+    {
+      "editCount": 10,
+      "fileName": "RunnerPrivate.h",
+      "filePath": "/Users/petermaude/Documents/ripul/ripul-native-app/device-runner/Runner/RunnerPrivate.h",
+      "firstSeenAt": "2026-10-03T06:26:33.096Z",
+      "lastSeenAt": "2026-10-03T11:26:57.271Z",
+      "toolName": "Edit"
+    },
+    {
+      "editCount": 20,
+      "fileName": "RunnerPrivate.m",
+      "filePath": "/Users/petermaude/Documents/ripul/ripul-native-app/device-runner/Runner/RunnerPrivate.m",
+      "firstSeenAt": "2026-10-03T06:26:35.511Z",
+      "lastSeenAt": "2026-10-03T11:26:57.475Z",
+      "toolName": "Edit"
+    },
+    {
+      "editCount": 5,
+      "fileName": "home-cut-test.sh",
+      "filePath": "/tmp/ripul-runner-spike/home-cut-test.sh",
+      "firstSeenAt": "2026-10-03T06:27:05.568Z",
+      "lastSeenAt": "2026-10-03T07:07:02.504Z",
+      "toolName": "Write"
+    },
+    {
+      "editCount": 5,
+      "fileName": "home-kill-test.sh",
+      "filePath": "/tmp/ripul-runner-spike/home-kill-test.sh",
+      "firstSeenAt": "2026-10-03T06:30:11.687Z",
+      "lastSeenAt": "2026-10-03T07:07:02.630Z",
+      "toolName": "Write"
+    },
+    {
+      "editCount": 10,
+      "fileName": "RunnerSpike.swift",
+      "filePath": "/Users/petermaude/Documents/ripul/ripul-native-app/device-runner/Runner/RunnerSpike.swift",
+      "firstSeenAt": "2026-10-03T07:07:58.067Z",
+      "lastSeenAt": "2026-10-03T11:26:57.682Z",
+      "toolName": "Edit"
+    },
+    {
+      "editCount": 5,
+      "fileName": "compile-main.sh",
+      "filePath": "/tmp/ripul-runner-spike/compile-main.sh",
+      "firstSeenAt": "2026-10-03T08:05:34.291Z",
+      "lastSeenAt": "2026-10-03T11:26:57.967Z",
+      "toolName": "Write"
+    },
+    {
+      "editCount": 5,
+      "fileName": "CLAUDE.md",
+      "filePath": "/Users/petermaude/Documents/ripul/CLAUDE.md",
+      "firstSeenAt": "2026-10-03T08:06:44.262Z",
+      "lastSeenAt": "2026-10-03T11:26:58.171Z",
+      "toolName": "Edit"
+    },
+    {
+      "editCount": 5,
+      "fileName": "project_devices_screen.md",
+      "filePath": "/Users/petermaude/Documents/ripul/.ripul/memories/project_devices_screen.md",
+      "firstSeenAt": "2026-10-03T08:07:22.068Z",
+      "lastSeenAt": "2026-10-03T11:26:58.450Z",
+      "toolName": "Edit"
+    },
+    {
+      "editCount": 6,
+      "fileName": "SupportRoom.ts",
+      "filePath": "/Users/petermaude/Documents/ripul/chrome-extension/packages/api/src/support/SupportRoom.ts",
+      "firstSeenAt": "2026-10-03T11:11:39.391Z",
+      "lastSeenAt": "2026-10-03T11:26:58.647Z",
+      "toolName": "Edit"
+    },
+    {
+      "editCount": 3,
+      "fileName": "handlers.ts",
+      "filePath": "/Users/petermaude/Documents/ripul/chrome-extension/packages/api/src/support/handlers.ts",
+      "firstSeenAt": "2026-10-03T11:12:13.606Z",
+      "lastSeenAt": "2026-10-03T11:26:58.753Z",
+      "toolName": "Write"
+    },
+    {
+      "editCount": 3,
+      "fileName": "testWorker.ts",
+      "filePath": "/Users/petermaude/Documents/ripul/chrome-extension/packages/api/src/support/__tests__/testWorker.ts",
+      "firstSeenAt": "2026-10-03T11:12:33.187Z",
+      "lastSeenAt": "2026-10-03T11:26:58.851Z",
+      "toolName": "Write"
+    },
+    {
+      "editCount": 3,
+      "fileName": "supportHarness.ts",
+      "filePath": "/Users/petermaude/Documents/ripul/chrome-extension/packages/api/src/support/__tests__/supportHarness.ts",
+      "firstSeenAt": "2026-10-03T11:12:53.602Z",
+      "lastSeenAt": "2026-10-03T11:26:58.944Z",
+      "toolName": "Write"
+    },
+    {
+      "editCount": 3,
+      "fileName": "supportRoom.test.ts",
+      "filePath": "/Users/petermaude/Documents/ripul/chrome-extension/packages/api/src/support/__tests__/supportRoom.test.ts",
+      "firstSeenAt": "2026-10-03T11:13:18.636Z",
+      "lastSeenAt": "2026-10-03T11:26:59.039Z",
+      "toolName": "Write"
+    },
+    {
+      "editCount": 4,
+      "fileName": "LiveStreamRelay.swift",
+      "filePath": "/Users/petermaude/Documents/ripul/ripul-ios-sdk/Sources/RipulAgent/LiveStream/LiveStreamRelay.swift",
+      "firstSeenAt": "2026-10-03T11:17:12.008Z",
+      "lastSeenAt": "2026-10-03T11:19:23.723Z",
+      "toolName": "Write"
+    },
+    {
+      "editCount": 4,
+      "fileName": "LiveStreamPointerMark.swift",
+      "filePath": "/Users/petermaude/Documents/ripul/ripul-ios-sdk/Sources/RipulAgent/LiveStream/LiveStreamPointerMark.swift",
+      "firstSeenAt": "2026-10-03T11:17:25.823Z",
+      "lastSeenAt": "2026-10-03T11:19:23.812Z",
+      "toolName": "Write"
+    },
+    {
+      "editCount": 8,
+      "fileName": "RipulSupport.swift",
+      "filePath": "/Users/petermaude/Documents/ripul/ripul-ios-sdk/Sources/RipulAgent/Support/RipulSupport.swift",
+      "firstSeenAt": "2026-10-03T11:18:11.984Z",
+      "lastSeenAt": "2026-10-03T11:19:24.018Z",
+      "toolName": "Edit"
+    },
+    {
+      "editCount": 4,
+      "fileName": "RipulSupportView.swift",
+      "filePath": "/Users/petermaude/Documents/ripul/ripul-ios-sdk/Sources/RipulAgent/Support/RipulSupportView.swift",
+      "firstSeenAt": "2026-10-03T11:19:00.405Z",
+      "lastSeenAt": "2026-10-03T11:19:24.138Z",
+      "toolName": "Write"
+    },
+    {
+      "editCount": 4,
+      "fileName": "SupportViewer.swift",
+      "filePath": "/Users/petermaude/Documents/ripul/ripul-native-app/iOS/SupportViewer.swift",
+      "firstSeenAt": "2026-10-03T11:21:19.500Z",
+      "lastSeenAt": "2026-10-03T11:22:15.253Z",
+      "toolName": "Write"
+    },
+    {
+      "editCount": 4,
+      "fileName": "LiveStreamRelayTests.swift",
+      "filePath": "/Users/petermaude/Documents/ripul/ripul-ios-sdk/Tests/RipulAgentTests/LiveStreamRelayTests.swift",
+      "firstSeenAt": "2026-10-03T11:22:24.810Z",
+      "lastSeenAt": "2026-10-03T11:22:25.202Z",
+      "toolName": "Write"
+    },
+    {
+      "editCount": 1,
+      "fileName": "main.swift",
+      "filePath": "/Users/petermaude/Documents/ripul/ripul-native-app/support-probe/main.swift",
+      "firstSeenAt": "2026-10-03T11:40:33.217Z",
+      "lastSeenAt": "2026-10-03T11:40:33.217Z",
+      "toolName": "Write"
+    },
+    {
+      "editCount": 1,
+      "fileName": "build.sh",
+      "filePath": "/Users/petermaude/Documents/ripul/ripul-native-app/support-probe/build.sh",
+      "firstSeenAt": "2026-10-03T11:40:33.314Z",
+      "lastSeenAt": "2026-10-03T11:40:33.314Z",
+      "toolName": "Write"
+    },
+    {
+      "editCount": 2,
+      "fileName": "support-sessions.md",
+      "filePath": "/Users/petermaude/Documents/ripul/ripul-ios-sdk/docs/support-sessions.md",
+      "firstSeenAt": "2026-10-03T11:58:04.669Z",
+      "lastSeenAt": "2026-10-03T11:58:04.686Z",
+      "toolName": "Write"
+    },
+    {
+      "editCount": 2,
+      "fileName": "project_support_sessions.md",
+      "filePath": "/Users/petermaude/Documents/ripul/.ripul/memories/project_support_sessions.md",
+      "firstSeenAt": "2026-10-03T11:58:04.770Z",
+      "lastSeenAt": "2026-10-03T11:58:04.798Z",
+      "toolName": "Write"
+    }
+  ],
+  "id": "cli_011c0769-ffa1-4a7b-affd-e820e2399e72",
+  "modelHistory": [],
+  "notes": [],
+  "participants": [
+    {
+      "displayName": "Claude",
+      "firstSeenAt": "2026-10-02T14:12:08.506Z",
+      "group": "Local · Claude Code CLI",
+      "id": "claude-cli-raw-sonnet",
+      "kind": "agent",
+      "lastSeenAt": "2026-10-03T12:04:08.684Z"
+    },
+    {
+      "displayName": "Peter Maude",
+      "firstSeenAt": "2026-10-02T14:12:08.783Z",
+      "group": "web",
+      "id": "human-user_3AONWcmlO5RS8dj3lRzQZtYXFxA",
+      "kind": "human",
+      "lastSeenAt": "2026-10-03T11:40:33.110Z"
+    }
+  ],
+  "tags": [],
+  "updatedAt": "2026-10-03T12:04:08.684Z"
+}
