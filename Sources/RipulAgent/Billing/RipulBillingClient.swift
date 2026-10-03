@@ -51,6 +51,8 @@ public struct RipulBillingRule: Identifiable, Hashable {
     public var quantityValueColumn: String?
     public var stripePriceId: String
     public var dryRun: Bool
+    /// Free trial in days (1–730) applied at checkout; nil = no trial.
+    public var trialDays: Int?
 
     init?(json: [String: Any]) {
         guard let id = json["id"] as? String,
@@ -69,6 +71,11 @@ public struct RipulBillingRule: Identifiable, Hashable {
         self.quantityValueColumn = json["quantityValueColumn"] as? String
         self.stripePriceId = json["stripePriceId"] as? String ?? ""
         self.dryRun = json["dryRun"] as? Bool ?? true
+        if let days = (json["trialDays"] as? NSNumber)?.intValue, days > 0 {
+            self.trialDays = days
+        } else {
+            self.trialDays = nil
+        }
     }
 }
 
@@ -85,6 +92,8 @@ public struct RipulBillingRuleInput {
     public var quantityValueColumn = ""
     public var stripePriceId = ""
     public var dryRun = true
+    /// nil = no trial. Always sent (null clears) — omitting it would keep the stored trial.
+    public var trialDays: Int?
 
     public init() {}
 
@@ -100,6 +109,7 @@ public struct RipulBillingRuleInput {
         quantityValueColumn = rule.quantityValueColumn ?? ""
         stripePriceId = rule.stripePriceId
         dryRun = rule.dryRun
+        trialDays = rule.trialDays
     }
 
     func body(siteKeyId: String) -> [String: Any] {
@@ -117,6 +127,11 @@ public struct RipulBillingRuleInput {
         ]
         if !displayNameColumn.isEmpty { body["displayNameColumn"] = displayNameColumn }
         if !quantityValueColumn.isEmpty { body["quantityValueColumn"] = quantityValueColumn }
+        if let trialDays, trialDays > 0 {
+            body["trialDays"] = trialDays
+        } else {
+            body["trialDays"] = NSNull()
+        }
         return body
     }
 }

@@ -30,6 +30,26 @@ final class RepoGraphCollapseTests: XCTestCase {
         items.compactMap { if case .row(let row) = $0 { return row.commit.sha } ; return nil }
     }
 
+    // MARK: - Chats
+
+    func testTheChatThatMadeACommitDoesNotChangeTheList() {
+        // Twelve plain commits, some made by chats: the list is exactly what
+        // it would be with no chats at all.
+        let shas = (1...14).reversed().map { "c\($0)" }
+        func rows(withChats: Bool) -> [RepoGraphLayout.Row] {
+            RepoGraphLayout.layout(commits: shas.enumerated().map { index, sha in
+                GraphCommit(sha: sha, parents: index == shas.count - 1 ? [] : [shas[index + 1]], authorName: "T",
+                            timestamp: 0, subject: sha,
+                            sessionId: withChats && (3...8).contains(index) ? "A" : nil,
+                            sessionTitle: withChats && (3...8).contains(index) ? "Chat A" : nil)
+            }).rows
+        }
+        let plain = RepoGraphCollapse.items(rows: rows(withChats: false), headSha: nil)
+        let chats = RepoGraphCollapse.items(rows: rows(withChats: true), headSha: nil)
+        XCTAssertEqual(chats.map(\.id), plain.map(\.id))
+        XCTAssertEqual(collapsedItems(chats).map(\.count), [8])
+    }
+
     // MARK: - Runs
 
     func testShortRunIsNotCollapsed() {

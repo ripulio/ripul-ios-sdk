@@ -122,6 +122,10 @@ public final class RipulSessionListModel {
     public var connectingMachineId: String?
     public var connectError: String?
     public var openSessionError: String?
+    /// Which action on which chat produced `openSessionError`, so the notice and
+    /// the diagnosis sheet name an archive as an archive. Paths that set the
+    /// error alone leave this stale; read it through `matching(_:)`.
+    public var openSessionErrorSubject: ConnectionDiagnosisSubject?
     /// Something the user should know that is NOT a failure — shown as a plain
     /// note. The error notice runs every message through ConnectionDiagnosis,
     /// which read a successful move's "working directory not found" as "That
@@ -929,8 +933,23 @@ public final class RipulSessionListModel {
         return tab
     }
 
-    private func reportOpenSessionFailure(_ error: String, session: UnifiedSession) {
+    /// Show a failed action on `session` in the notice, labelled with the
+    /// action and the chat so the sheet can ask about that chat.
+    private func reportSessionFailure(_ error: String, action: ConnectionDiagnosisSubject.Action, session: UnifiedSession) {
         openSessionError = error
+        openSessionErrorSubject = ConnectionDiagnosisSubject(action: action, chatId: diagnosisChatId(for: session), rawError: error)
+    }
+
+    /// The chat id a failure sheet asks the web about: this device's tab when
+    /// there is one, else the host's `cli_<uuid>` for a `provider:<uuid>` row.
+    private func diagnosisChatId(for session: UnifiedSession) -> String {
+        if let tabId = session.ripulSession?.id { return tabId }
+        if let colon = session.id.firstIndex(of: ":") { return "cli_" + session.id[session.id.index(after: colon)...] }
+        return session.id
+    }
+
+    private func reportOpenSessionFailure(_ error: String, session: UnifiedSession) {
+        reportSessionFailure(error, action: .open, session: session)
         bridge.handleConsoleLog("ERROR: [SESSION-OPEN] sessionId=\(session.id) machineId=\(session.machineId ?? "unknown") error=\(error)")
         bridge.logSessionStartMarker("ios.open_session_failed", extra: "sessionId=\(session.id) error=\(error)")
     }
@@ -958,7 +977,7 @@ public final class RipulSessionListModel {
                 }
                 let (success, error) = await bridge.archiveRemoteSession(machineId: ownerMachineId, sessionId: session.id)
                 if !success {
-                    openSessionError = error ?? "Archive failed."
+                    reportSessionFailure(error ?? "Archive failed.", action: .archive, session: session)
                     return
                 }
             }
@@ -1069,7 +1088,7 @@ public final class RipulSessionListModel {
                 await bridge.fetchSessions()
                 await loadRemoteSessions(force: true)
             } else {
-                openSessionError = error ?? "Failed to move session."
+                reportSessionFailure(error ?? "Failed to move session.", action: .move, session: session)
             }
         }
     }
@@ -1120,7 +1139,7 @@ public final class RipulSessionListModel {
                     errors.isEmpty ? nil : "Failed:\n• " + errors.joined(separator: "\n• "),
                     results.isEmpty ? nil : "Completed:\n• " + results.joined(separator: "\n• "),
                 ] as [String?]).compactMap { $0 }.joined(separator: "\n\n")
-                openSessionError = "Couldn't delete this session.\n\n\(summary)"
+                reportSessionFailure("Couldn't delete this session.\n\n\(summary)", action: .delete, session: session)
             }
 
             // Give the remote host time to process the archive before re-fetching

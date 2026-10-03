@@ -20,6 +20,16 @@ struct CmsNavItem: Identifiable {
     var children: [CmsNavItem]
     var align: String?
     var divider: Bool
+    /// Group heading — a non-tappable label over a group (its children, or
+    /// the entries after it up to the next heading). A bar shows a separator.
+    var heading: Bool = false
+    /// Small pill text ("New", "Due Fri", a count). May hold `@query.column`
+    /// tokens — resolve with `badgeText(runtime:)`.
+    var badge: String? = nil
+    /// neutral | primary | warning | error | success (nil = per-context default).
+    var badgeTone: String? = nil
+    /// Top bar: icon-only entry (the label becomes the accessibility label).
+    var iconOnly: Bool = false
 
     static func decode(_ json: CmsJSON) -> CmsNavItem? {
         guard let obj = json.objectValue else { return nil }
@@ -37,13 +47,66 @@ struct CmsNavItem: Identifiable {
             targetViewId: obj.string("targetViewId"),
             children: decodeList(obj["children"]),
             align: obj.string("align"),
-            divider: obj.bool("divider") ?? false
+            divider: obj.bool("divider") ?? false,
+            heading: obj.bool("heading") ?? false,
+            badge: obj.string("badge"),
+            badgeTone: obj.string("badgeTone"),
+            iconOnly: obj.bool("iconOnly") ?? false
         )
     }
 
     static func decodeList(_ json: CmsJSON?) -> [CmsNavItem] {
         guard case .array(let raw)? = json else { return [] }
-        return raw.compactMap(decode)
+        return tidy(raw.compactMap(decode))
+    }
+
+    /// Mirror of the web's `tidyNavItems` heading rule: a heading with no
+    /// children of its own whose following run (same placement zone, up to
+    /// the next heading) is empty is dropped, so no label sits over nothing.
+    static func tidy(_ items: [CmsNavItem]) -> [CmsNavItem] {
+        items.enumerated().filter { index, item in
+            guard item.heading, item.children.isEmpty else { return true }
+            for sibling in items[(index + 1)...] where sibling.align == item.align {
+                return !sibling.heading
+            }
+            return false
+        }.map(\.element)
+    }
+
+    /// Menus group by `Section`, so give each flat heading (one without
+    /// children) the run of entries after it, up to the next heading — the
+    /// web's group rule made structural.
+    static func foldHeadings(_ items: [CmsNavItem]) -> [CmsNavItem] {
+        var out: [CmsNavItem] = []
+        var open: CmsNavItem?
+        for item in items {
+            if item.heading {
+                if let group = open { out.append(group) }
+                if item.children.isEmpty {
+                    open = item
+                } else {
+                    open = nil
+                    out.append(item)
+                }
+            } else if open != nil {
+                open?.children.append(item)
+            } else {
+                out.append(item)
+            }
+        }
+        if let group = open { out.append(group) }
+        return out
+    }
+
+    /// The badge to show: tokens resolved; nil when blank, "0", or a token
+    /// still unresolved (never leak `@query.column` into a pill).
+    @MainActor
+    func badgeText(runtime: CmsRuntime) -> String? {
+        guard let raw = badge else { return nil }
+        let text = runtime.resolveTemplate(raw).trimmingCharacters(in: .whitespacesAndNewlines)
+        if text.isEmpty || text == "0" { return nil }
+        if text.contains(#/@[A-Za-z_]\w*\.[A-Za-z_]\w*/#) { return nil }
+        return text
     }
 
     var isActive: Bool { false } // active = current page; computed at render
@@ -79,6 +142,50 @@ struct CmsNavItem: Identifiable {
         default:
             return false
         }
+    }
+}
+
+/// A nav entry's badge (navShared.tsx `NavBadge`): a soft-tint pill with
+/// tone-coloured text, or — `bubble` — a solid count for an icon's corner.
+struct CmsNavBadge: View {
+    let text: String
+    let tone: String?
+    var bubble: Bool = false
+    @EnvironmentObject var runtime: CmsRuntime
+
+    private var colors: (bg: Color, fg: Color) {
+        let theme = runtime.theme
+        let resolved = tone ?? (bubble ? "primary" : "neutral")
+        let toneColor: Color? = {
+            switch resolved {
+            case "primary": return theme.primary
+            case "warning": return theme.warning
+            case "error": return theme.error
+            case "success": return theme.success
+            default: return nil
+            }
+        }()
+        guard let toneColor else {
+            return bubble
+                ? (theme.textSecondary, theme.paper)
+                : (theme.textPrimary.opacity(theme.isDark ? 0.12 : 0.07), theme.textSecondary)
+        }
+        if bubble {
+            return (toneColor, resolved == "primary" ? theme.primaryContrast : .white)
+        }
+        return (toneColor.opacity(theme.isDark ? 0.22 : 0.13), toneColor)
+    }
+
+    var body: some View {
+        let c = colors
+        Text(text)
+            .font(.system(size: bubble ? 10 : 11, weight: .bold))
+            .lineLimit(1)
+            .foregroundStyle(c.fg)
+            .padding(.horizontal, bubble ? 4 : 7)
+            .frame(minWidth: bubble ? 16 : nil, minHeight: bubble ? 16 : 20)
+            .background(Capsule().fill(c.bg))
+            .cmsInspectorID(bubble ? "Cms.nav.badgeBubble" : "Cms.nav.badge")
     }
 }
 

@@ -47,6 +47,12 @@ public struct LiveStreamOfferTool: NativeTool {
 /// either is live, a pill with Stop shows at the top of the screen, in its
 /// own window, so it never appears in the picture and a remote touch can't
 /// press it. Stop ends the session and turns Live View away for a minute.
+///
+/// A support session (`RipulSupport`) is the third kind: the app's customer
+/// shares it with somebody helping them, through a relay room. It shows and
+/// never drives: the picture is the app's own drawing of its window, nothing
+/// the supporter sends reaches the app, and where they point is drawn over
+/// it for the customer to see. It is the same in every build.
 @MainActor
 final class LiveStreamHost {
     static let shared = LiveStreamHost()
@@ -68,6 +74,9 @@ final class LiveStreamHost {
     static let encoderPatience: TimeInterval = 1.0
     /// What the viewer is told when no encoder here gives pictures back; it goes back to the relay.
     static let cannotEncodeReason = "This device can't encode video for a direct connection"
+    /// A support session stops taking pictures when the supporter hasn't answered for this long:
+    /// they have gone, or the way to them is slow, and pictures would only pile up in the room.
+    static let supporterSilence: TimeInterval = 3
 
     private struct Settings {
         var maxLongSide = 1280
@@ -129,6 +138,11 @@ final class LiveStreamHost {
         let fromEdge: Bool
     }
     private var stoppedUntil: Date?
+    /// Set while the session is a support session: who to tell when it ends here.
+    private var support: ((SupportEnding) -> Void)?
+    /// When the supporter last answered (seconds, media clock).
+    private var supporterHeardAt: TimeInterval = 0
+    private var supportPulse: Task<Void, Never>?
     private var relayViewer: (name: String, seen: Date)?
     private var relayWatch: Task<Void, Never>?
     private let pool = LiveStreamPixelPool()
@@ -153,7 +167,9 @@ final class LiveStreamHost {
         let center = NotificationCenter.default
         observers.append(center.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil,
                                             queue: .main) { _ in
-            MainActor.assumeIsolated { LiveStreamHost.shared.end("The app went to the background") }
+            MainActor.assumeIsolated {
+                LiveStreamHost.shared.end("The app went to the background", ending: .background)
+            }
         })
     }
 
@@ -239,6 +255,96 @@ final class LiveStreamHost {
             result["height"] = Double(window.bounds.height)
         }
         return result
+    }
+
+    // MARK: Support sessions
+
+    /// How a support session ended at this end.
+    enum SupportEnding: Equatable {
+        /// Stop, on the pill.
+        case stopped
+        /// The app left the foreground; the session can carry on when it is back.
+        case background
+        /// The supporter said goodbye.
+        case left(String)
+        case failed(String)
+    }
+
+    var isSupporting: Bool { support != nil }
+
+    /// Starts showing the app to a supporter, on a room's channel that the
+    /// caller opened, reads, and keeps (`RipulSupport`): what the supporter
+    /// sends comes in through `supportHeard`, and `ended` says when sharing
+    /// stops here, leaving the channel to the caller. Returns why not, or nil.
+    func beginSupport(channel: LiveStreamChannel, supporter: String,
+                      ended: @escaping (SupportEnding) -> Void) -> String? {
+        guard UIApplication.shared.applicationState == .active else { return "The app isn't in the foreground" }
+        // A developer's Live View gives way to the customer's own request.
+        if session != nil { end("Replaced by a support session") }
+        let id = UUID().uuidString
+        session = id
+        support = ended
+        viewerName = String(supporter.prefix(60))
+        viewerId = nil
+        // The app's own drawing of its window, in every build: nothing here a store build lacks.
+        settings = Settings(maxLongSide: 1280, fps: 12, bitrate: 1_200_000)
+        self.channel = channel
+        indicator.show("Sharing with \(viewerName)") { [weak self] in self?.stopByUser() }
+        forceKeyframe = true
+        stats = Stats()
+        supporterHeardAt = CACurrentMediaTime()
+        watch.start()
+        startCapture(session: id, on: channel)
+        supportPulse = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self, self.session == id else { return }
+                var sent = CACurrentMediaTime().bitPattern.bigEndian
+                channel.enqueue(.ping, withUnsafeBytes(of: &sent) { Data($0) })
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+            }
+        }
+        return nil
+    }
+
+    /// The pill, for a support session that is open but showing nothing just now (the app
+    /// was left for a moment, or a connection dropped): the customer still sees that somebody
+    /// may look again, and can stop it. `beginSupport` takes the pill over; nil takes it down.
+    func supportWaiting(_ text: String?, onStop: @escaping () -> Void = {}) {
+        guard support == nil, session == nil, relayViewer == nil else { return }
+        if let text { indicator.show(text, onStop: onStop) } else { indicator.hide() }
+    }
+
+    /// Something the supporter sent, read by the session's owner.
+    func supportHeard(_ type: LiveStreamMessage, _ payload: Data) async {
+        guard support != nil, let channel else { return }
+        await handle(type, payload, on: channel)
+    }
+
+    /// A support session takes none of a viewer's input: it answers a
+    /// supporter who has just arrived, draws where they point, and no more.
+    private func handleSupport(_ type: LiveStreamMessage, _ payload: Data, on channel: LiveStreamChannel) async {
+        switch type {
+        case .hello:
+            // Arrived, or back: the picture starts again, with what it is and a whole frame.
+            supporterHeardAt = CACurrentMediaTime()
+            if let old = encoder { Task.detached { old.invalidate() } }
+            encoder = nil
+        case .pointer:
+            if let window = RipulChrome.appWindow() {
+                LiveStreamPointerMark.shared.heard(LiveStreamWire.json(payload), in: window)
+            }
+        case .control:
+            if LiveStreamWire.json(payload)["keyframe"] as? Bool == true { forceKeyframe = true }
+        case .ping:
+            try? await channel.send(.pong, payload)
+        case .pong:
+            supporterHeardAt = CACurrentMediaTime()
+        case .bye:
+            let reason = LiveStreamWire.json(payload)["reason"] as? String ?? "\(viewerName) left"
+            end(reason, sendBye: false, ending: .left(reason))
+        default:
+            break
+        }
     }
 
     // MARK: Streaming
@@ -346,6 +452,10 @@ final class LiveStreamHost {
             stats.skipped += 1
             return
         }
+        if support != nil, CACurrentMediaTime() - supporterHeardAt > Self.supporterSilence {
+            stats.skipped += 1
+            return
+        }
         guard let window = RipulChrome.appWindow(), window.bounds.width > 0, window.bounds.height > 0 else { return }
         let points = window.bounds.size
         func even(_ value: CGFloat, _ scale: CGFloat) -> CGFloat { max(2, (value * scale / 2).rounded(.down) * 2) }
@@ -447,12 +557,18 @@ final class LiveStreamHost {
         config["pixelHeight"] = Int(pixels.height)
         config["fps"] = settings.fps
         config["bitrate"] = settings.bitrate
-        config["touch"] = TouchSynthesizer.isAvailable
+        // A support session is looked at and pointed at, never driven.
+        let driven = support == nil && TouchSynthesizer.isAvailable
+        config["touch"] = driven
         config["capture"] = settings.capture
         config["encoder"] = encoderKind.rawValue
-        config["pointer"] = TouchSynthesizer.isAvailable
-        config["fingers"] = TouchSynthesizer.isAvailable ? TouchSynthesizer.mostFingers : 0
-        config["keyboard"] = true
+        config["pointer"] = driven
+        config["fingers"] = driven ? TouchSynthesizer.mostFingers : 0
+        config["keyboard"] = support == nil
+        if support != nil {
+            config["support"] = true
+            config["pointing"] = true
+        }
         channel.enqueue(.config, (try? JSONSerialization.data(withJSONObject: config)) ?? Data("{}".utf8))
     }
 
@@ -484,6 +600,10 @@ final class LiveStreamHost {
     }
 
     private func handle(_ type: LiveStreamMessage, _ payload: Data, on channel: LiveStreamChannel) async {
+        if support != nil {
+            await handleSupport(type, payload, on: channel)
+            return
+        }
         switch type {
         case .touch:
             let json = LiveStreamWire.json(payload)
@@ -689,7 +809,13 @@ final class LiveStreamHost {
     // MARK: Ending
 
     /// `unsupported` tells the viewer not to try a direct connection to this device again.
-    func end(_ reason: String, sendBye: Bool = true, unsupported: Bool = false) {
+    /// `ending` is what a support session's owner is told; its channel is the owner's to close.
+    func end(_ reason: String, sendBye: Bool = true, unsupported: Bool = false, ending: SupportEnding? = nil) {
+        let support = self.support
+        self.support = nil
+        supportPulse?.cancel()
+        supportPulse = nil
+        if support != nil { LiveStreamPointerMark.shared.clear() }
         liftFingers()
         keyboardObservers.forEach(NotificationCenter.default.removeObserver)
         keyboardObservers.removeAll()
@@ -711,16 +837,22 @@ final class LiveStreamHost {
         pointSize = .zero
         stillFrames = 0
         recentTouchIds.removeAll()
-        if let channel {
+        if let channel, support == nil {
             Task {
                 if sendBye { try? await channel.send(.bye, json: ["reason": reason, "unsupported": unsupported]) }
                 channel.close()
             }
         }
         if relayViewer == nil { indicator.hide() }
+        support?(ending ?? (unsupported ? .failed(reason) : .left(reason)))
     }
 
     private func stopByUser() {
+        if support != nil {
+            // The customer's own session: stopping it turns nobody away afterwards.
+            end("Stopped on the \(RipulLiveViewIdentity.modelName)", ending: .stopped)
+            return
+        }
         stoppedUntil = Date().addingTimeInterval(Self.stopHold)
         relayViewer = nil
         relayWatch?.cancel()
@@ -989,7 +1121,7 @@ struct LiveStreamIndicatorPill: View {
         .modifier(LiveStreamIndicatorBackground())
         .animation(.snappy(duration: 0.25), value: model.isOpen)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("This app is being viewed with Live View")
+        .accessibilityLabel("This app is being viewed: \(model.text)")
         .uiKitIdentifier("LiveStreamIndicator.pill")
     }
 }

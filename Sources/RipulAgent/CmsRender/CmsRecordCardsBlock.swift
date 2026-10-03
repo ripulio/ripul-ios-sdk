@@ -358,8 +358,8 @@ struct CmsRecordCardsBlockView: View {
     /// `cardFrame.background` (token-aware) overrides.
     @ViewBuilder
     private var cardBackground: some View {
-        if let frameBg = runtime.color(block.props.object("cardFrame")?.string("background")) {
-            frameBg
+        if let frameBg = runtime.fill(block.props.object("cardFrame")?.string("background")) {
+            Rectangle().fill(frameBg)
         } else if cardVariant == "flat" {
             Color.clear
         } else {
@@ -372,7 +372,7 @@ struct CmsRecordCardsBlockView: View {
     private var cardFrame: [String: CmsJSON]? { block.props.object("cardFrame") }
 
     private var cardCornerRadius: CGFloat {
-        CmsCss.points(cardFrame?.string("borderRadius")) ?? 14
+        runtime.radius(cardFrame?.string("borderRadius")) ?? 14
     }
 
     /// Authored border wins; else the variant default (outlined = hairline).

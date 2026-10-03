@@ -9,7 +9,10 @@ final class ToolDisplayNameTests: XCTestCase {
             ("mcp__ripul_tools_host_console_logs", "Host console logs"),
             ("host_console_logs", "Host console logs"),
             ("Device EVALUATE", "Device evaluate"),
-            ("Read", "Read")
+            ("Read", "Read"),
+            ("askUserChoice", "Ask user choice"),
+            ("WebFetch", "Web fetch"),
+            ("getHTMLContent", "Get html content")
         ] {
             for kind in ["toolStart", "toolEnd"] {
                 let event = AgentActivityEvent.from(dict: ["kind": kind, "toolName": name, "toolId": "call", "status": "success", "toolDetail": "Keep My Detail"])

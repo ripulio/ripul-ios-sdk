@@ -16,6 +16,11 @@ enum CmsTypography {
     /// Authored numeric CSS weight (100–900) → the nearest Font.Weight.
     static func weight(_ typography: [String: CmsJSON]?) -> Font.Weight? {
         guard let n = typography?["weight"]?.doubleValue else { return nil }
+        return weight(css: n)
+    }
+
+    /// Numeric CSS weight (100–900) → the nearest Font.Weight.
+    static func weight(css n: Double) -> Font.Weight {
         switch n {
         case ..<150: return .ultraLight
         case ..<250: return .thin

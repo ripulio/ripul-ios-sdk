@@ -98,6 +98,25 @@ public struct ConnectionDiagnosticsReport: Equatable {
         public var id: String { machineId }
     }
 
+    /// The chat the failure was about, when the sheet named one (`focus`):
+    /// what this device holds for it, its owner, whether the owner lists it,
+    /// and the session probe's findings. The rest of the report describes the
+    /// whole client, which is usually healthy when one chat is stuck.
+    public struct Focus: Equatable {
+        public struct Finding: Equatable, Identifiable {
+            public let severity: String
+            public let code: String
+            public let message: String
+            public var id: String { "\(code):\(message)" }
+            /// `fail` and `warn` are worth reading; `ok` lines are reassurance.
+            public var isProblem: Bool { severity != "ok" }
+        }
+        public let chatId: String
+        public let action: String?
+        public let facts: [String]
+        public let findings: [Finding]
+    }
+
     /// Where in the connect sequence the attempt got to.
     public struct Phase: Equatable {
         public let raw: String
@@ -202,6 +221,7 @@ public struct ConnectionDiagnosticsReport: Equatable {
     public let totalPairings: Int
     public let transports: [Transport]
     public let phase: Phase?
+    public let focus: Focus?
     /// machineId of the machine this attempt was for, resolved via the pairings.
     public let targetMachineId: String?
     /// Section name → error string, for subsystems that failed to report.
@@ -278,11 +298,42 @@ public struct ConnectionDiagnosticsReport: Equatable {
             }
             if let tabId = pairing["tabId"] as? String { tabToMachine[tabId] = machineId }
         }
-        let pairingGroups = groupOrder.map { machineId in
+        var pairingGroups = groupOrder.map { machineId in
             PairingGroup(
                 machineId: machineId,
                 machineName: names[machineId] ?? machineId,
                 tabCount: counts[machineId] ?? 0
+            )
+        }
+        var totalPairings = pairings.count
+        // A snapshot taken for one chat sends a count per machine instead of
+        // every pairing row.
+        if let countRows = root["pairingCounts"] as? [[String: Any]] {
+            pairingGroups = countRows.compactMap { row in
+                guard let machineId = row["machineId"] as? String else { return nil }
+                return PairingGroup(
+                    machineId: machineId,
+                    machineName: (row["machineName"] as? String) ?? machineId,
+                    tabCount: intValue(row["tabCount"]) ?? 0
+                )
+            }
+            totalPairings = pairingGroups.reduce(0) { $0 + $1.tabCount }
+        }
+
+        var focus: Focus?
+        if let focusDict = section("focus"), let chatId = focusDict["chatId"] as? String {
+            focus = Focus(
+                chatId: chatId,
+                action: focusDict["action"] as? String,
+                facts: focusDict["facts"] as? [String] ?? [],
+                findings: (focusDict["findings"] as? [[String: Any]] ?? []).compactMap { entry in
+                    guard let message = entry["message"] as? String else { return nil }
+                    return Focus.Finding(
+                        severity: (entry["severity"] as? String) ?? "warn",
+                        code: (entry["code"] as? String) ?? "",
+                        message: message
+                    )
+                }
             )
         }
 
@@ -330,9 +381,10 @@ public struct ConnectionDiagnosticsReport: Equatable {
             remoteBridgeAvailable: bridge?["available"] as? Bool,
             machines: machines,
             pairingGroups: pairingGroups,
-            totalPairings: pairings.count,
+            totalPairings: totalPairings,
             transports: transports,
             phase: phase,
+            focus: focus,
             targetMachineId: phase?.tabId.flatMap { tabToMachine[$0] },
             sectionErrors: sectionErrors,
             rawJSON: prettyPrinted(root) ?? json

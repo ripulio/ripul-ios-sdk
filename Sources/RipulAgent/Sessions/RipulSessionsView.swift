@@ -69,6 +69,7 @@ public struct RipulSessionsView: View {
     @State private var renameText = ""
     @State private var machineIcons: [String: String] = [:]
     @State private var errorDetails: String?
+    @State private var errorSubject: ConnectionDiagnosisSubject?
     /// Host-defined quick actions per machine — owned here (the app's deleted
     /// twin kept them in the list). Seeded from cache, refreshed on row expand.
     @State private var remoteActionsByMachine: [String: [RemoteActionDescriptor]] = [:]
@@ -475,7 +476,7 @@ public struct RipulSessionsView: View {
             noticeBottomClearance = $0
         })
         #endif
-        .connectionDiagnosis($errorDetails, bridge: bridge)
+        .connectionDiagnosis($errorDetails, subject: errorSubject, bridge: bridge)
     }
 
     private func sessionInfoNotice(_ note: String) -> some View {
@@ -494,7 +495,8 @@ public struct RipulSessionsView: View {
     }
 
     private func sessionErrorNotice(_ error: String) -> some View {
-        let diagnosis = ConnectionDiagnosis.classify(rawError: error, phase: nil)
+        let subject = model.openSessionErrorSubject?.matching(error)
+        let diagnosis = ConnectionDiagnosis.classify(rawError: error, phase: nil, action: subject?.action)
         return VStack(alignment: .leading, spacing: 8) {
             Label(diagnosis.summary, systemImage: "exclamationmark.triangle.fill")
                 .font(.subheadline.weight(.semibold))
@@ -504,7 +506,10 @@ public struct RipulSessionsView: View {
                     .foregroundStyle(.secondary)
             }
             HStack {
-                Button("Details") { errorDetails = error }
+                Button("Details") {
+                    errorSubject = subject
+                    errorDetails = error
+                }
                     .uiKitIdentifier("RipulSessions.error.details")
                 Spacer()
                 Button("Dismiss") {

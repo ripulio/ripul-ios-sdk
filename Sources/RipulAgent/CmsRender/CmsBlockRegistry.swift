@@ -71,6 +71,8 @@ public enum CmsBlockRegistry {
         map["modal"] = { block, _ in AnyView(CmsModalBlockView(block: block)) }
         map["recordNavigator"] = { block, _ in AnyView(CmsRecordNavigatorBlockView(block: block)) }
         map["trailMap"] = { block, _ in AnyView(CmsTrailMapBlockView(block: block)) }
+        map["featurePanel"] = { block, _ in AnyView(CmsFeaturePanelBlockView(block: block)) }
+        map["stepProgress"] = { block, _ in AnyView(CmsStepProgressBlockView(block: block)) }
         return map
     }
 }
@@ -106,7 +108,8 @@ struct CmsBlockView: View {
                 .accessibilityHidden(true)
         } else {
             let content = CmsBlockRegistry.render(block, axis: axis)
-                .modifier(CmsBlockFrameModifier(frame: block.frame, axis: axis, resolve: { runtime.color($0) }))
+                .modifier(CmsBlockFrameModifier(frame: block.frame, axis: axis, resolve: { runtime.color($0) },
+                                                fill: { runtime.fill($0) }, radius: { runtime.radius($0) }))
                 // View Explorer: every block reports `Cms.<type>.<slug>` so the
                 // inspector can name it (the native twin of `data-ui`).
                 .cmsInspectorID("Cms.\(block.type).\(block.slug ?? block.id)")
@@ -233,7 +236,8 @@ struct CmsBlockContainerView: View {
                 }
             }
         }
-        .modifier(CmsContainerFrameModifier(frame: frame, resolve: { runtime.color($0) }))
+        .modifier(CmsContainerFrameModifier(frame: frame, resolve: { runtime.color($0) },
+                                            fill: { runtime.fill($0) }, radius: { runtime.radius($0) }))
     }
 
     @ViewBuilder

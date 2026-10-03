@@ -87,6 +87,11 @@ public enum LiveStreamMessage: UInt8, Sendable {
     /// source → viewer: who is driving. JSON {driving, by?}. Several viewers may watch one screen;
     /// one drives, and a watcher's input is dropped until it asks to drive (control {drive: true}).
     case controller = 23
+    /// room → either end, in a support session (`LiveStreamRelay`): what the room itself has to
+    /// say. JSON {event: "peer", role: customer | supporter, present, name?, who?, expiresAt} when
+    /// the other end comes or goes, and {event: "ended", reason} when the session is over. Only
+    /// the room sends it: one from the other end is dropped on the way.
+    case room = 24
 }
 
 /// Version 2 of the session: what the source is and what it takes. Version 1

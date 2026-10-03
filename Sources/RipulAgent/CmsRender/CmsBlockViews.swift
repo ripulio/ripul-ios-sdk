@@ -13,28 +13,44 @@ struct CmsTextBlockView: View {
 
     var body: some View {
         let content = runtime.resolveString(block: block, propKey: "content") ?? ""
-        Text(content)
-            .font(font(for: block.props.string("element") ?? "p"))
-            .foregroundColor(typographyColor)
-            .frame(maxWidth: .infinity, alignment: .leading)
+        let element = block.props.string("element") ?? "p"
+        if let heading = Self.headingMetrics[element] {
+            // Portal heading typography (theme v2): family / weight / tracking
+            // apply to h1–h6 only, like the web's typography.h1…h6 overrides.
+            // Dynamic Type sizing is kept — the family is relative to the
+            // heading's text style.
+            let theme = runtime.theme
+            let weight = theme.headingWeight ?? heading.weight
+            let font = theme.headingFontFamily
+                .map { Font.custom($0, size: heading.size, relativeTo: heading.style) }
+                ?? Font.system(heading.style)
+            Text(content)
+                .font(font.weight(weight))
+                .tracking(CGFloat(theme.headingLetterSpacing ?? 0) * heading.size)
+                .foregroundColor(typographyColor)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        } else {
+            Text(content)
+                .font(element == "caption" ? .caption : .body)
+                .foregroundColor(typographyColor)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
 
     private var typographyColor: Color {
         runtime.color(block.props.object("typography")?.string("color")) ?? .primary
     }
 
-    private func font(for element: String) -> Font {
-        switch element {
-        case "h1": return .largeTitle.weight(.bold)
-        case "h2": return .title.weight(.bold)
-        case "h3": return .title2.weight(.semibold)
-        case "h4": return .title3.weight(.semibold)
-        case "h5": return .headline
-        case "h6": return .subheadline.weight(.semibold)
-        case "caption": return .caption
-        default: return .body
-        }
-    }
+    /// h1–h6 → native text style, its default point size (for em tracking and
+    /// custom-family sizing) and default weight.
+    private static let headingMetrics: [String: (style: Font.TextStyle, size: CGFloat, weight: Font.Weight)] = [
+        "h1": (.largeTitle, 34, .bold),
+        "h2": (.title, 28, .bold),
+        "h3": (.title2, 22, .semibold),
+        "h4": (.title3, 20, .semibold),
+        "h5": (.headline, 17, .semibold),
+        "h6": (.subheadline, 15, .semibold),
+    ]
 }
 
 // MARK: - markdown

@@ -4,6 +4,9 @@ import Foundation
 enum ToolDisplayName {
     static func format(_ name: String) -> String {
         let words = name.replacingOccurrences(of: "^mcp__ripul_tools_+", with: "", options: .regularExpression)
+            // camelCase names carry their word breaks in capitals; keep them before lowercasing.
+            .replacingOccurrences(of: "([a-z0-9])([A-Z])", with: "$1 $2", options: .regularExpression)
+            .replacingOccurrences(of: "([A-Z]+)([A-Z][a-z])", with: "$1 $2", options: .regularExpression)
             .replacingOccurrences(of: "_+", with: " ", options: .regularExpression)
             .trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         return words.prefix(1).uppercased() + words.dropFirst()

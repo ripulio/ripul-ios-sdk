@@ -567,6 +567,10 @@ Patterns are how you make that judgement once instead of continuously.
 
 ## Advanced Topics
 
+### Support sessions
+
+Your app's customer can show the app to somebody helping them, with a six-digit code they read out: the supporter sees your app only, can point but not tap, and the customer can stop at any time. One line adds it (`.ripulSupportSheet(isPresented:configuration:)`, or `RipulSupport.shared.present(from:configuration:)` from UIKit). Public Apple API only. See [docs/support-sessions.md](docs/support-sessions.md).
+
 ### Hiding the agent after a tool action
 
 When a tool performs an action that changes the visible app UI — filling in a form, navigating to a new screen, opening a media player — the agent panel is in the way. The user needs to see the result, not the chat. In these cases, your tool should minimize the agent after it finishes.

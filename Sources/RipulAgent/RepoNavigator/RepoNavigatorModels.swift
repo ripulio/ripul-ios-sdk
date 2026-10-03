@@ -31,15 +31,23 @@ public struct RepoSummary: Codable, Sendable, Identifiable, Hashable {
     /// `remote.origin.url`; nil when the repo has no origin (or the host
     /// predates the field).
     public let originUrl: String?
+    /// Chats with a transcript on the repo's `claude-sessions` branch, as the
+    /// host last fetched it. nil when the repo has no such branch.
+    public let sessionCount: Int?
+    /// Unix seconds of the newest capture.
+    public let lastSessionAt: Double?
 
     public init(path: String, name: String, currentBranch: String? = nil, headSha: String? = nil,
-                dirtyCount: Int = 0, originUrl: String? = nil) {
+                dirtyCount: Int = 0, originUrl: String? = nil,
+                sessionCount: Int? = nil, lastSessionAt: Double? = nil) {
         self.path = path
         self.name = name
         self.currentBranch = currentBranch
         self.headSha = headSha
         self.dirtyCount = dirtyCount
         self.originUrl = originUrl
+        self.sessionCount = sessionCount
+        self.lastSessionAt = lastSessionAt
     }
 
     public var id: String { path }
@@ -212,12 +220,17 @@ public struct GraphCommit: Codable, Sendable, Identifiable, Hashable {
     public let timestamp: Double
     public let subject: String
     public let refs: [RefDecoration]
+    /// The chat that made this commit, when its transcript was captured on
+    /// the `claude-sessions` branch. nil otherwise (and from older hosts).
+    public let sessionId: String?
+    public let sessionTitle: String?
 
     public var id: String { sha }
     public var shortSha: String { String(sha.prefix(8)) }
     public var isMerge: Bool { parents.count > 1 }
 
-    public init(sha: String, parents: [String], authorName: String, authorEmail: String = "", timestamp: Double, subject: String, refs: [RefDecoration] = []) {
+    public init(sha: String, parents: [String], authorName: String, authorEmail: String = "", timestamp: Double, subject: String, refs: [RefDecoration] = [],
+                sessionId: String? = nil, sessionTitle: String? = nil) {
         self.sha = sha
         self.parents = parents
         self.authorName = authorName
@@ -225,6 +238,8 @@ public struct GraphCommit: Codable, Sendable, Identifiable, Hashable {
         self.timestamp = timestamp
         self.subject = subject
         self.refs = refs
+        self.sessionId = sessionId
+        self.sessionTitle = sessionTitle
     }
 }
 

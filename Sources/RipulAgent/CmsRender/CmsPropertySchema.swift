@@ -147,6 +147,8 @@ public enum CmsInspectorSchemas {
     public static func schema(for blockType: String) -> CmsInspectorSchema? {
         switch blockType {
         case "agGrid": return CmsAgGridInspector.schema
+        case "featurePanel": return CmsFeaturePanelInspector.schema
+        case "stepProgress": return CmsStepProgressInspector.schema
         default: return nil
         }
     }

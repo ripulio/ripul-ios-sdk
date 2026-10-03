@@ -17,6 +17,13 @@ import Foundation
 /// context; the middle becomes one `.collapsed` item carrying the lanes that
 /// pass through it (identical across the run — ineligibility conditions make
 /// lane changes impossible inside a run).
+///
+/// Which chat made a commit plays no part here. Two earlier versions folded,
+/// then boxed, a chat's consecutive commits. On a branch several agents share
+/// the chats take turns, so one chat showed as a block plus strays and the
+/// history stopped reading as history. The graph now keeps git's order and
+/// only marks each commit with its chat; the by-chat view is the repo's Chats
+/// pane (RepoChatsView in the native app).
 public enum RepoGraphItem: Sendable, Identifiable {
     case row(RepoGraphLayout.Row)
     case collapsed(CollapsedRun)

@@ -33,19 +33,48 @@ enum CmsCss {
         }
     }
 
-    /// Parse #rgb/#rrggbb/#rrggbbaa hex colors. Theme tokens (`color.*`) and
-    /// named CSS colors are not resolved natively yet — nil means "no paint".
+    /// Parse #rgb/#rrggbb/#rrggbbaa hex and rgb()/rgba() colours. Theme
+    /// tokens (`color.*`) resolve through `CmsPortalTheme`; named CSS colours
+    /// are not resolved natively yet — nil means "no paint".
     static func color(_ value: String?) -> Color? {
-        guard var v = value?.trimmingCharacters(in: .whitespaces), v.hasPrefix("#") else { return nil }
-        v.removeFirst()
-        if v.count == 3 { v = v.map { "\($0)\($0)" }.joined() }
-        guard v.count == 6 || v.count == 8, let bits = UInt64(v, radix: 16) else { return nil }
-        let hasAlpha = v.count == 8
-        let r = Double((bits >> (hasAlpha ? 24 : 16)) & 0xFF) / 255
-        let g = Double((bits >> (hasAlpha ? 16 : 8)) & 0xFF) / 255
-        let b = Double((bits >> (hasAlpha ? 8 : 0)) & 0xFF) / 255
-        let a = hasAlpha ? Double(bits & 0xFF) / 255 : 1
-        return Color(red: r, green: g, blue: b, opacity: a)
+        rgba(value)?.color
+    }
+
+    /// Components of a hex or rgb()/rgba() colour (0…1). Shared by `color`
+    /// and the theme's MUI colour maths (darken / alpha / contrast).
+    static func rgba(_ value: String?) -> CmsRGBA? {
+        guard let raw = value?.trimmingCharacters(in: .whitespaces), !raw.isEmpty else { return nil }
+        if raw.hasPrefix("#") {
+            var v = String(raw.dropFirst())
+            if v.count == 3 || v.count == 4 { v = v.map { "\($0)\($0)" }.joined() }
+            guard v.count == 6 || v.count == 8, let bits = UInt64(v, radix: 16) else { return nil }
+            let hasAlpha = v.count == 8
+            let r = Double((bits >> (hasAlpha ? 24 : 16)) & 0xFF) / 255
+            let g = Double((bits >> (hasAlpha ? 16 : 8)) & 0xFF) / 255
+            let b = Double((bits >> (hasAlpha ? 8 : 0)) & 0xFF) / 255
+            let a = hasAlpha ? Double(bits & 0xFF) / 255 : 1
+            return CmsRGBA(r: r, g: g, b: b, a: a)
+        }
+        let lower = raw.lowercased()
+        guard lower.hasPrefix("rgb"), let open = lower.firstIndex(of: "("), lower.hasSuffix(")") else { return nil }
+        let inner = lower[lower.index(after: open)..<lower.index(before: lower.endIndex)]
+        let parts = inner
+            .replacingOccurrences(of: "/", with: " ")
+            .split(whereSeparator: { $0 == "," || $0 == " " })
+            .map(String.init)
+        guard parts.count == 3 || parts.count == 4 else { return nil }
+        func channel(_ s: String) -> Double? {
+            if s.hasSuffix("%") { return Double(s.dropLast()).map { $0 / 100 } }
+            return Double(s).map { $0 / 255 }
+        }
+        guard let r = channel(parts[0]), let g = channel(parts[1]), let b = channel(parts[2]) else { return nil }
+        var a = 1.0
+        if parts.count == 4 {
+            let s = parts[3]
+            guard let parsed = s.hasSuffix("%") ? Double(s.dropLast()).map({ $0 / 100 }) : Double(s) else { return nil }
+            a = parsed
+        }
+        return CmsRGBA(r: min(max(r, 0), 1), g: min(max(g, 0), 1), b: min(max(b, 0), 1), a: min(max(a, 0), 1))
     }
 
     /// Perceived-luminance lightness test (shared by contrastText and the
@@ -76,6 +105,11 @@ struct CmsBlockFrameModifier: ViewModifier {
     let axis: Axis
     /// Colour resolver (theme tokens + CSS literals). Defaults to CSS-only.
     var resolve: (String?) -> Color? = { CmsCss.color($0) }
+    /// Background fill resolver — `color.gradient` paints the brand
+    /// gradient. Defaults to the colour resolver.
+    var fill: ((String?) -> AnyShapeStyle?)? = nil
+    /// Radius resolver (`radius.*` tokens + CSS lengths). Defaults to CSS-only.
+    var radius: (String?) -> CGFloat? = { CmsCss.points($0) }
 
     func body(content: Content) -> some View {
         var fixedLength: CGFloat? = nil
@@ -84,9 +118,11 @@ struct CmsBlockFrameModifier: ViewModifier {
         }
         let fill = frame?.size == "fill"
         let width = CmsCss.points(frame?.width)
-        let radius = CmsCss.points(frame?.borderRadius) ?? 0
+        let radius = self.radius(frame?.borderRadius) ?? 0
         let borderWidth = CmsCss.points(frame?.borderWidth) ?? 0
         let borderColor = resolve(frame?.borderColor)
+        let background = (self.fill ?? { resolve($0).map { AnyShapeStyle($0) } })(frame?.background)
+            ?? AnyShapeStyle(Color.clear)
 
         return content
             .padding(CmsCss.insets(frame?.padding) ?? EdgeInsets())
@@ -99,7 +135,7 @@ struct CmsBlockFrameModifier: ViewModifier {
                 maxHeight: (fill && axis == .vertical) ? .infinity : nil
             )
             .frame(minHeight: CmsCss.points(frame?.minHeight))
-            .background(resolve(frame?.background) ?? Color.clear)
+            .background(background)
             .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: radius, style: .continuous)
@@ -115,17 +151,24 @@ struct CmsContainerFrameModifier: ViewModifier {
     let frame: CmsContainerFrame?
     /// Colour resolver (theme tokens + CSS literals). Defaults to CSS-only.
     var resolve: (String?) -> Color? = { CmsCss.color($0) }
+    /// Background fill resolver — `color.gradient` paints the brand
+    /// gradient. Defaults to the colour resolver.
+    var fill: ((String?) -> AnyShapeStyle?)? = nil
+    /// Radius resolver (`radius.*` tokens + CSS lengths). Defaults to CSS-only.
+    var radius: (String?) -> CGFloat? = { CmsCss.points($0) }
 
     func body(content: Content) -> some View {
-        let radius = CmsCss.points(frame?.borderRadius) ?? 0
+        let radius = self.radius(frame?.borderRadius) ?? 0
         let borderWidth = CmsCss.points(frame?.borderWidth) ?? 0
         let borderColor = resolve(frame?.borderColor)
+        let background = (self.fill ?? { resolve($0).map { AnyShapeStyle($0) } })(frame?.background)
+            ?? AnyShapeStyle(Color.clear)
 
         return content
             .padding(CmsCss.insets(frame?.padding) ?? EdgeInsets())
             .frame(maxWidth: CmsCss.points(frame?.maxWidth))
             .frame(minHeight: CmsCss.points(frame?.minHeight))
-            .background(resolve(frame?.background) ?? Color.clear)
+            .background(background)
             .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: radius, style: .continuous)

@@ -32,6 +32,26 @@ struct CmsGridViewSwitcherBlockView: View {
     /// When on, a view may re-bind the target grid's READ query to its own
     /// `querySlug` (web parity: the toggle gates the per-view query re-bind).
     private var switchesQuery: Bool { block.props.bool("switchesQuery") ?? false }
+    /// "grid": views switch columns/filters/sort only and the grid's own look
+    /// applies to every view (web: `styleFrom`, GRID_STYLE_KEYS).
+    private var styleFromGrid: Bool { block.props.string("styleFrom") == "grid" }
+
+    /// Twin of the web's GRID_STYLE_KEYS (gridStyleKeys.ts).
+    private static let gridStyleKeys: Set<String> = [
+        "density", "rowHeight", "headerHeight", "fontSize", "fontWeight", "textColor",
+        "headerFontSize", "headerFontWeight", "headerBgColor", "headerTextColor",
+        "rowBgColor", "alternateRowColor", "enableRowStripes",
+        "groupRowBgColor", "groupRowTextColor", "groupRowFontWeight", "groupRowFontSize",
+        "grandTotalBgColor", "grandTotalTextColor", "grandTotalFontWeight", "grandTotalFontSize",
+        "accentColor", "highlightSelectedRows", "showRowBorders", "showColumnBorders",
+        "borderStyle", "cellPadding",
+    ]
+
+    private func stateToApply(_ view: GridView) -> CmsJSON {
+        guard styleFromGrid, case .object(var obj) = view.state else { return view.state }
+        for key in Self.gridStyleKeys { obj.removeValue(forKey: key) }
+        return .object(obj)
+    }
     /// The author's selected colour, tinting the segmented control's selection.
     /// Blank falls through to the app tint rather than forcing a theme colour.
     private var accentTint: Color? {
@@ -109,7 +129,7 @@ struct CmsGridViewSwitcherBlockView: View {
     private func apply(_ view: GridView) {
         activeId = view.id
         runtime.setGridViewActiveId(targetGridId, id: view.id)
-        runtime.setGridViewState(targetGridId, state: view.state)
+        runtime.setGridViewState(targetGridId, state: stateToApply(view))
         // Per-view read-query re-bind (web parity): only when `switchesQuery`
         // is on; nil/blank reverts the grid to its base query.
         runtime.setGridQueryOverride(targetGridId, querySlug: switchesQuery ? view.querySlug : nil)

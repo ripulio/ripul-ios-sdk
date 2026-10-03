@@ -546,7 +546,37 @@ extension ScreenElementFinder {
         }
         let collapsed = collapseToOutermost(matches)
         guard let wanted = query.id, !wanted.isEmpty else { return collapsed }
-        return collapsed.map { preferStampHost($0, among: matches, id: wanted) }
+        return collapsed.map { preferIdOwner(preferStampHost($0, among: matches, id: wanted), among: matches, id: wanted) }
+    }
+
+    /// When the outermost match only BORROWED the id, the element is the view
+    /// inside it that owns it.
+    ///
+    /// A container whose id comes from the accessibility-tree projection
+    /// (`accessibilityIdInTree`: the first element published under it) names
+    /// its content, not itself. The tab bar showed it: `BarContainer` and its
+    /// `ContentView`, 398×62, both reported the Agent tab's
+    /// `Workspace.tab.agent`, collapse-to-outermost chose the bar, and with no
+    /// control at the bar's own level every rung guessed — a touch at the
+    /// bar's centre pressed the Settings tab and reported success, and on
+    /// another screen a point rung pressed the Voice row behind the bar.
+    /// The `_UITabButton` carrying the id as its own property was a match all
+    /// along. Swapped only when the container has neither the property nor a
+    /// registry stamp, so the SwiftUI downward propagation (outermost owns,
+    /// see `ownAccessibilityIdentifier`) and `preferStampHost` keep their rules.
+    static func preferIdOwner(_ outer: Match, among all: [Match], id: String) -> Match {
+        let same: (String?) -> Bool = { $0.map { $0.caseInsensitiveCompare(id) == .orderedSame } ?? false }
+        guard !same(outer.view.accessibilityIdentifier),
+              !same(UIKitIdentifierRegistry.shared.identifier(for: outer.view)) else { return outer }
+        let owners = all.filter { m in
+            m.view !== outer.view && m.view.isDescendant(of: outer.view) && same(m.view.accessibilityIdentifier)
+        }
+        let outermost = collapseToOutermost(owners)
+        guard outermost.count == 1, let owner = outermost.first else { return outer }
+        let f = owner.effectiveFrame
+        lastStampDecision = (lastStampDecision.map { $0 + " " } ?? "")
+            + "owner:swapped→\(type(of: owner.view))\(Int(f.width))x\(Int(f.height))(outer=\(type(of: outer.view)))"
+        return owner
     }
 
     /// SwiftUI propagates a `.uiKitIdentifier` UP onto hosting scaffolding as well as
@@ -702,7 +732,14 @@ extension ScreenElementFinder {
             return .failure(["success": false,
                              "error": "Provide handle, or id/text/role/class (optionally scoped with within). Run inspect_screen to find elements."])
         }
-        let found = find(q, within: anchor)
+        var found = find(q, within: anchor)
+        // Of several matches, the ones nobody can see don't count: the tab bar
+        // is drawn in two layers, and `text:"Settings"` found both tabs, in the
+        // same place, and refused as ambiguous. Only narrowed, never emptied.
+        if found.count > 1, q.nth == nil {
+            let seen = found.filter { ScreenVisibility.isVisible($0.view, in: $0.window) }
+            if !seen.isEmpty, seen.count < found.count { found = seen }
+        }
         if found.isEmpty {
             return .failure(["success": false,
                              "error": "No element found for that query\(anchor != nil ? " inside the anchor" : ""). inspect_screen shows the live tree; off-screen list rows only exist after scrolling."])
@@ -964,8 +1001,36 @@ enum ScreenActuationEngine {
         //     that resolved it by predicate).
         let screenPoint = Self.screenPoint(for: view, windowPoint: windowPoint)
         let hostRoot: UIView = Self.hostingAncestor(of: view) ?? view
-        let byPoint = Self.accessibilityElements(in: hostRoot, containing: screenPoint)
-        let allElements = Self.accessibilityElements(in: hostRoot, containing: nil)
+        // Point rungs search the whole island, so an element can share the
+        // point without being part of the target: the Voice settings row
+        // behind the glass tab bar was pressed for a tap on the bar. An element
+        // published by a view unrelated to the target (neither inside it nor
+        // containing it) is someone else's, and is left out.
+        Self.elementOwners = [:]
+        var foreign = 0
+        func belongsToTarget(_ el: NSObject) -> Bool {
+            guard let owner = Self.owner(of: el) else { return true }
+            let related = owner === view || owner.isDescendant(of: view) || view.isDescendant(of: owner)
+            if !related { foreign += 1 }
+            return related
+        }
+        // With no point given, "the point" is the target's centre. For a
+        // container holding several controls that centre is arbitrary (the tab
+        // bar's centre is whichever tab sits there), so the point rungs would
+        // be a guess: skip them, and let the ladder end in the touch
+        // fallback's refusal, which names the controls.
+        let guessingContainer: Bool = {
+            guard windowPoint == nil, let window = view.window else { return false }
+            let frame = view.convert(view.bounds, to: window).intersection(window.bounds)
+            guard !frame.isNull else { return false }
+            return TapElementTool.interactiveParts(of: view, within: frame, in: window).count >= 2
+        }()
+        if guessingContainer { trace.append("point:skipped(container)") }
+        let byPoint = guessingContainer ? []
+            : Self.accessibilityElements(in: hostRoot, containing: screenPoint).filter(belongsToTarget)
+        let allElements = guessingContainer ? []
+            : Self.accessibilityElements(in: hostRoot, containing: nil).filter(belongsToTarget)
+        if foreign > 0 { trace.append("a11yPoint:foreign(\(foreign))") }
         for el in byPoint.prefix(4) {
             let name = el.accessibilityLabel ?? String(describing: type(of: el))
             addA11y(el, via: "accessibilityElement(point)", token: "a11yPoint(\(name))", pointDerived: true)
@@ -1394,18 +1459,36 @@ enum ScreenActuationEngine {
     ///
     /// `nil` point means "everything under here", which is what the failure
     /// diagnostic reports so a miss can be told apart from an empty tree.
+    /// The UIView each element returned by the last `accessibilityElements`
+    /// walk came from: the element itself when it is a view, else the view
+    /// that published it. Lets a point rung tell an element of the target from
+    /// one that merely shares its point (a row behind a glass bar).
+    private static var elementOwners: [ObjectIdentifier: UIView] = [:]
+
+    private static func owner(of element: NSObject) -> UIView? {
+        elementOwners[ObjectIdentifier(element)]
+    }
+
     private static func accessibilityElements(in root: NSObject, containing screenPoint: CGPoint?) -> [NSObject] {
         var hits: [(el: NSObject, area: CGFloat)] = []
         var seen = Set<ObjectIdentifier>()
         var visited = 0
+        var owners: [ObjectIdentifier: UIView] = [:]
+        var currentOwner: UIView? = root as? UIView
         func visit(_ obj: NSObject, depth: Int) {
             if depth > 60 || visited > 400 { return }
             guard seen.insert(ObjectIdentifier(obj)).inserted else { return }
             visited += 1
+            let outerOwner = currentOwner
+            if let v = obj as? UIView { currentOwner = v }
+            defer { currentOwner = outerOwner }
 
             if obj.isAccessibilityElement {
                 let f = obj.accessibilityFrame
-                if screenPoint.map({ f.contains($0) }) ?? true { hits.append((obj, f.width * f.height)) }
+                if screenPoint.map({ f.contains($0) }) ?? true {
+                    hits.append((obj, f.width * f.height))
+                    if let o = currentOwner { owners[ObjectIdentifier(obj)] = o }
+                }
             }
 
             var children: [NSObject] = []
@@ -1433,6 +1516,7 @@ enum ScreenActuationEngine {
             }
         }
         visit(root, depth: 0)
+        elementOwners.merge(owners) { _, new in new }
         return hits.sorted { $0.area < $1.area }.map(\.el)
     }
 
@@ -1806,6 +1890,22 @@ public struct TapElementTool: NativeTool {
             result["trace"] = prefix + "touch:offscreen"
             return result
         }
+        // A container holding several controls has no single thing a finger at
+        // its centre means: the tab bar's centre is whichever tab sits there,
+        // a screen's centre is whichever row does. Pressing it reported success
+        // for the wrong tab, and in a read-only test a blind touch opened a
+        // chat by luck. Name the controls instead of guessing.
+        let parts = interactiveParts(of: target.view, within: visible, in: window)
+        if parts.count >= 2 {
+            result["success"] = false
+            result["error"] = "The match is a container (\(Int(visible.width))x\(Int(visible.height))) holding "
+                + "\(parts.count)\(parts.count >= Self.partsLimit ? "+" : "") controls, so a touch at its centre would "
+                + "be a guess. Nothing was pressed. Target one of them: \(parts.prefix(6).joined(separator: ", ")). "
+                + "inspect_screen with a filter gives their handles."
+            result["controls"] = Array(parts.prefix(Self.partsLimit))
+            result["trace"] = prefix + "touch:container(\(parts.count))"
+            return result
+        }
         var point = CGPoint(x: visible.midX, y: visible.midY)
         let hit = window.hitTest(point, with: nil)
         if let hit, !(hit === target.view || hit.isDescendant(of: target.view) || target.view.isDescendant(of: hit)),
@@ -1838,6 +1938,63 @@ public struct TapElementTool: NativeTool {
         result["trace"] = prefix + "touch:delivered"
         result["note"] = "Delivered as a real touch; confirm it did what you meant with wait_for_element or inspect_screen."
         return result
+    }
+
+    static let partsLimit = 12
+
+    /// The controls inside a match, named for a refusal: UIKit controls in its
+    /// subtree, and SwiftUI buttons it publishes (a SwiftUI island has no
+    /// UIControls, only accessibility elements with the button trait). Only
+    /// ones within the match's visible frame; a control's insides count once.
+    @MainActor
+    static func interactiveParts(of view: UIView, within frame: CGRect, in window: UIWindow) -> [String] {
+        var parts: [String] = []
+        var seen = Set<ObjectIdentifier>()
+        let area = frame.insetBy(dx: -1, dy: -1)
+        func name(_ label: String?, _ id: String?, fallback: String) -> String {
+            let l = label?.trimmingCharacters(in: .whitespacesAndNewlines)
+            switch (l?.isEmpty == false ? l : nil, id?.isEmpty == false ? id : nil) {
+            case let (l?, i?): return "\"\(l)\" (id \(i))"
+            case let (l?, nil): return "\"\(l)\""
+            case let (nil, i?): return "id \(i)"
+            default: return fallback
+            }
+        }
+        var stack: [UIView] = view.subviews
+        while let cur = stack.popLast(), parts.count < partsLimit {
+            guard !cur.isHidden, cur.alpha > 0.01, cur.isUserInteractionEnabled else { continue }
+            if let control = cur as? UIControl {
+                guard area.contains(control.convert(control.bounds, to: window)),
+                      seen.insert(ObjectIdentifier(control)).inserted else { continue }
+                parts.append(name(control.accessibilityLabel ?? ScreenElementFinder.descendantLabelText(of: control),
+                                  control.accessibilityIdentifier, fallback: String(describing: type(of: control))))
+                continue
+            }
+            stack.append(contentsOf: cur.subviews)
+        }
+        // SwiftUI: buttons live in the accessibility tree, not as UIControls.
+        var budget = 400
+        func visit(_ obj: NSObject, depth: Int) {
+            guard depth < 40, budget > 0, parts.count < partsLimit else { return }
+            budget -= 1
+            if obj.isAccessibilityElement, obj.accessibilityTraits.contains(.button),
+               !(obj is UIControl), seen.insert(ObjectIdentifier(obj)).inserted {
+                let f = ScreenElementFinder.windowRect(fromScreen: obj.accessibilityFrame, in: window)
+                if f.width > 0, f.height > 0, area.contains(f) {
+                    parts.append(name(obj.accessibilityLabel, (obj as? UIAccessibilityIdentification)?.accessibilityIdentifier,
+                                      fallback: "button"))
+                }
+            }
+            if let els = obj.accessibilityElements as? [NSObject] {
+                for e in els { visit(e, depth: depth + 1) }
+            } else if let v = obj as? UIView {
+                for sub in v.subviews where !sub.isHidden && sub.alpha > 0.01 && !(sub is UIControl) {
+                    visit(sub, depth: depth + 1)
+                }
+            }
+        }
+        visit(view, depth: 0)
+        return parts
     }
 
     /// Whether a view on top of the match is the match's own control drawn

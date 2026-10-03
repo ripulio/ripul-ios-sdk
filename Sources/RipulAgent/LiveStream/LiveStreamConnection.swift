@@ -82,16 +82,21 @@ public enum LiveStreamError: Error, LocalizedError, Equatable {
 
 // MARK: - Framed messages
 
-/// `LiveStreamWire` messages over one protected connection.
+/// `LiveStreamWire` messages over one protected connection: a direct one,
+/// where frames follow each other in a stream of bytes, or a WebSocket to a
+/// relay room (`LiveStreamRelay`), where each binary message is one frame.
 public final class LiveStreamChannel: @unchecked Sendable {
     public let connection: NWConnection
     private let receiveLimit: Int
+    /// A WebSocket: one frame a message.
+    private let framed: Bool
     private let lock = NSLock()
     private var inFlight = 0
 
-    public init(_ connection: NWConnection, receiveLimit: Int) {
+    public init(_ connection: NWConnection, receiveLimit: Int, webSocket: Bool = false) {
         self.connection = connection
         self.receiveLimit = receiveLimit
+        self.framed = webSocket
     }
 
     /// Bytes handed to the connection and not yet sent. Video checks it and
@@ -102,7 +107,7 @@ public final class LiveStreamChannel: @unchecked Sendable {
         let data = LiveStreamWire.frame(type, payload)
         adjust(data.count)
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            connection.send(content: data, completion: .contentProcessed { [weak self] error in
+            put(data, completion: .contentProcessed { [weak self] error in
                 self?.adjust(-data.count)
                 if let error { continuation.resume(throwing: error) } else { continuation.resume() }
             })
@@ -117,12 +122,25 @@ public final class LiveStreamChannel: @unchecked Sendable {
     public func enqueue(_ type: LiveStreamMessage, _ payload: Data) {
         let data = LiveStreamWire.frame(type, payload)
         adjust(data.count)
-        connection.send(content: data, completion: .contentProcessed { [weak self] _ in self?.adjust(-data.count) })
+        put(data, completion: .contentProcessed { [weak self] _ in self?.adjust(-data.count) })
     }
 
     /// The next message of a kind this build knows; others are read and dropped.
     public func receive() async throws -> (type: LiveStreamMessage, payload: Data) {
         while true {
+            if framed {
+                // Anything that isn't a whole frame (text, a pong) is not ours: skip it.
+                guard let message = try await readMessage(), message.count >= LiveStreamWire.headerLength else { continue }
+                guard let (kind, length) = LiveStreamWire.rawHeader(message.prefix(LiveStreamWire.headerLength),
+                                                                    limit: receiveLimit),
+                      message.count == LiveStreamWire.headerLength + length else {
+                    throw LiveStreamError.malformed
+                }
+                if let type = LiveStreamMessage(rawValue: kind) {
+                    return (type, Data(message.dropFirst(LiveStreamWire.headerLength)))
+                }
+                continue
+            }
             let header = try await read(LiveStreamWire.headerLength)
             guard let (kind, length) = LiveStreamWire.rawHeader(header, limit: receiveLimit) else {
                 throw LiveStreamError.malformed
@@ -132,9 +150,46 @@ public final class LiveStreamChannel: @unchecked Sendable {
         }
     }
 
+    /// Keeps a WebSocket that is saying nothing from being closed as idle on the way.
+    public func keepAlive() {
+        guard framed else { return }
+        let context = NWConnection.ContentContext(identifier: "ping",
+                                                  metadata: [NWProtocolWebSocket.Metadata(opcode: .ping)])
+        connection.send(content: Data(), contentContext: context, isComplete: true, completion: .idempotent)
+    }
+
     public func close() { connection.cancel() }
 
     private func adjust(_ bytes: Int) { lock.withLock { inFlight += bytes } }
+
+    private func put(_ data: Data, completion: NWConnection.SendCompletion) {
+        guard framed else {
+            connection.send(content: data, completion: completion)
+            return
+        }
+        let context = NWConnection.ContentContext(identifier: "frame",
+                                                  metadata: [NWProtocolWebSocket.Metadata(opcode: .binary)])
+        connection.send(content: data, contentContext: context, isComplete: true, completion: completion)
+    }
+
+    /// One WebSocket message: its bytes if it is binary, nil for any other kind.
+    private func readMessage() async throws -> Data? {
+        try await withCheckedThrowingContinuation { continuation in
+            connection.receiveMessage { data, context, _, error in
+                if let error {
+                    continuation.resume(throwing: error)
+                    return
+                }
+                let metadata = context?.protocolMetadata(definition: NWProtocolWebSocket.definition)
+                    as? NWProtocolWebSocket.Metadata
+                switch metadata?.opcode {
+                case .binary: continuation.resume(returning: data ?? Data())
+                case .close, nil: continuation.resume(throwing: LiveStreamError.closed)
+                default: continuation.resume(returning: nil)
+                }
+            }
+        }
+    }
 
     private func read(_ count: Int) async throws -> Data {
         try await withCheckedThrowingContinuation { continuation in

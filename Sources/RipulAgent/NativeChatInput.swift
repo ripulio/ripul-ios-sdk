@@ -1635,6 +1635,26 @@ public struct NativeChatInput: View {
         .system(size: UIFont.preferredFont(forTextStyle: .body).pointSize + 1, weight: .semibold)
     }
 
+    /// Up recalls history only at the start of a message: a single line, or a
+    /// recalled message still unedited (so a multi-line one can be stepped
+    /// past). Once the user's own text runs to a second line, the arrows move
+    /// the caret. Down only steps back toward the draft while browsing.
+    private func canRecallHistory(up: Bool, singleLine: Bool) -> Bool {
+        guard let history = messageHistory, history.hasMessages else { return false }
+        let showingRecalled = history.browsingEntry == text
+        return up ? singleLine || showingRecalled : showingRecalled
+    }
+
+    private func recallHistory(up: Bool) {
+        guard let history = messageHistory else { return }
+        // An edited recall is the user's text now: keep it as the draft that
+        // Down returns to, rather than continuing from the old position.
+        if let entry = history.browsingEntry, entry != text { history.resetCursor() }
+        if let recalled = up ? history.navigateUp(currentText: text) : history.navigateDown() {
+            text = recalled
+        }
+    }
+
     private var textInputView: some View {
         NoAutofillTextView(
             text: $text,
@@ -1668,6 +1688,10 @@ public struct NativeChatInput: View {
                 imageAttachments.append(contentsOf: attachments)
                 return true
             },
+            canRecallHistory: messageHistory == nil ? nil : { up, singleLine in
+                canRecallHistory(up: up, singleLine: singleLine)
+            },
+            onRecallHistory: { up in recallHistory(up: up) },
             freezesHeight: composerCollapse > 0
         )
         .frame(maxWidth: .infinity, minHeight: textHeight + (36 - textHeight) * composerCollapse, maxHeight: textHeight + (36 - textHeight) * composerCollapse, alignment: .leading)
@@ -3570,6 +3594,18 @@ class ChatTextView: UITextView {
     /// Key commands come from hardware keyboards, including iPhone Mirroring.
     /// Onscreen Return still uses UITextView's normal newline insertion.
     var onReturnKey: (() -> Void)?
+    /// Hardware Up/Down recall sent messages. Asked with the arrow's direction
+    /// and whether the text sits on one visual line; when it answers false the
+    /// arrow is left to move the caret, so multi-line text navigates normally.
+    var canRecallHistory: ((_ up: Bool, _ singleLine: Bool) -> Bool)?
+    var onRecallHistory: ((_ up: Bool) -> Void)?
+
+    /// Start and end of the text share a visual line; a soft wrap counts as a
+    /// second line, the same as a newline.
+    private var isSingleLine: Bool {
+        guard hasText else { return true }
+        return abs(caretRect(for: beginningOfDocument).minY - caretRect(for: endOfDocument).minY) < 1
+    }
 
     override var keyCommands: [UIKeyCommand]? {
         // Let an input method use Return to confirm its marked text instead
@@ -3579,7 +3615,20 @@ class ChatTextView: UITextView {
         send.wantsPriorityOverSystemBehavior = true
         let newline = UIKeyCommand(input: "\r", modifierFlags: .shift, action: #selector(handleShiftReturnKey))
         newline.wantsPriorityOverSystemBehavior = true
-        return [send, newline] + (super.keyCommands ?? [])
+        var commands = [send, newline]
+        // Offered only when recall applies: an arrow without a command falls
+        // through to the text view's own caret movement.
+        if let canRecallHistory {
+            let singleLine = isSingleLine
+            for (input, up) in [(UIKeyCommand.inputUpArrow, true), (UIKeyCommand.inputDownArrow, false)]
+            where canRecallHistory(up, singleLine) {
+                let recall = UIKeyCommand(input: input, modifierFlags: [],
+                                          action: up ? #selector(handleHistoryUp) : #selector(handleHistoryDown))
+                recall.wantsPriorityOverSystemBehavior = true
+                commands.append(recall)
+            }
+        }
+        return commands + (super.keyCommands ?? [])
     }
 
     @objc private func handleReturnKey() {
@@ -3590,6 +3639,8 @@ class ChatTextView: UITextView {
         guard isEditable, markedTextRange == nil else { return }
         insertText("\n")
     }
+    @objc private func handleHistoryUp() { onRecallHistory?(true) }
+    @objc private func handleHistoryDown() { onRecallHistory?(false) }
 }
 
 /// UITextView wrapper that completely disables autofill suggestions.
@@ -3602,6 +3653,8 @@ struct NoAutofillTextView: UIViewRepresentable {
     var onTextChange: ((String) -> Void)?
     var onFocusChanged: ((Bool) -> Void)?
     var onPasteImages: (([UIImage]) -> Bool)?
+    var canRecallHistory: ((_ up: Bool, _ singleLine: Bool) -> Bool)?
+    var onRecallHistory: ((_ up: Bool) -> Void)?
     var freezesHeight = false
 
     private let minHeight: CGFloat = 36
@@ -3665,6 +3718,8 @@ struct NoAutofillTextView: UIViewRepresentable {
         if wasFrozen && !freezesHeight { context.coordinator.recalcHeight(textView) }
         textView.onPasteImages = onPasteImages
         textView.onReturnKey = onSubmit
+        textView.canRecallHistory = canRecallHistory
+        textView.onRecallHistory = onRecallHistory
         // Keep placeholder text in sync with SwiftUI state
         if context.coordinator.placeholderLabel?.text != placeholder {
             context.coordinator.placeholderLabel?.text = placeholder

@@ -170,6 +170,10 @@ public struct GlassSessionsList: View {
     // it. Keeping a copy here would have meant two sources for one highlight.
     @State private var selectedProjectFilter: String? = nil
     @State private var selectedTagFilter: String? = nil
+    @State private var groupChatsOnly = false
+    /// Every id a group chat (another person in it) may be listed under, from
+    /// `bridge.getGroupChatIds()`. Kept across a failed read rather than emptied.
+    @State private var groupChatKeys: Set<String> = []
     @State private var showBatchArchiveConfirm = false
     @State private var showBatchDeleteConfirm = false
     @State private var leavingInvitedSession: UnifiedSession? = nil
@@ -436,7 +440,7 @@ public struct GlassSessionsList: View {
             collapsible: false,
             followsContainerBottomCorners: true,
             center: {
-                if availableProjects.count > 1 || !availableTags.isEmpty {
+                if hasGroupChats || availableProjects.count > 1 || !availableTags.isEmpty {
                     projectFilterMenu
                 }
             },
@@ -487,7 +491,9 @@ public struct GlassSessionsList: View {
                             selectedSessionIds.insert(session.id)
                         }
                     },
-                    onRefresh: onRefresh,
+                    onRefresh: onRefresh.map { refresh in
+                        { await refresh(); await refreshGroupChats() }
+                    },
                     row: { session in
                         UnifiedSessionRow(
                             sessionStore: sessionStore,
@@ -800,25 +806,52 @@ public struct GlassSessionsList: View {
         Binding(get: { activeTagFilter }, set: { selectedTagFilter = $0 })
     }
 
-    /// Whether any filter (project and/or tag) is narrowing the list.
-    private var hasActiveFilter: Bool { activeProjectFilter != nil || activeTagFilter != nil }
-
-    /// Summary shown on the filter pill for the current project/tag selection.
-    private var filterLabel: String {
-        switch (activeProjectFilter, activeTagFilter) {
-        case (nil, nil): return "All Projects"
-        case let (project?, nil): return project
-        case let (nil, tag?): return "#\(tag)"
-        case let (project?, tag?): return "\(project) · #\(tag)"
+    /// A chat with another person in it: someone else's, shared with you, or
+    /// yours with someone invited — joined or not, as the chat itself counts.
+    /// The web app already lists each chat under its CLI uuid too, so a plain
+    /// lookup suffices — no hashing per row on every body pass.
+    private func isGroupChat(_ session: UnifiedSession) -> Bool {
+        session.isSharedGuest || session.readStateKeys.contains { key in
+            groupChatKeys.contains(key) || groupChatKeys.contains(UnifiedSession.canonicalKey(key))
         }
     }
 
-    /// Project filter shown centred in the Sessions panel header: a pill
-    /// button displaying the active project (or "All Projects") that opens a
-    /// menu to switch. The caller hides it when fewer than two projects exist.
+    private var hasGroupChats: Bool { unifiedSessions.contains(where: isGroupChat) }
+
+    /// The Group Chats filter, in effect only while a group chat is listed —
+    /// like a stale project, it falls back to every chat rather than an empty list.
+    private var activeGroupFilter: Bool { groupChatsOnly && hasGroupChats }
+
+    /// Whether any filter (chats, project and/or tag) is narrowing the list.
+    private var hasActiveFilter: Bool { activeGroupFilter || activeProjectFilter != nil || activeTagFilter != nil }
+
+    /// Summary shown on the filter pill for the current chats/project/tag selection.
+    private var filterLabel: String {
+        let parts = [activeProjectFilter, activeTagFilter.map { "#\($0)" }].compactMap { $0 }
+        if activeGroupFilter {
+            return (parts.isEmpty ? ["Group Chats"] : ["Group"] + parts).joined(separator: " · ")
+        }
+        return parts.isEmpty ? "All Projects" : parts.joined(separator: " · ")
+    }
+
+    private func refreshGroupChats() async {
+        if let keys = await bridge.getGroupChatIds() { groupChatKeys = keys }
+    }
+
+    /// Filter shown centred in the Sessions panel header: a pill button
+    /// displaying the active selection (or "All Projects") that opens a menu to
+    /// switch. The caller hides it when there is nothing to choose between.
     @ViewBuilder
     private var projectFilterMenu: some View {
         Menu {
+            if hasGroupChats {
+                Picker("Filter by Chats", selection: $groupChatsOnly) {
+                    Text("All Chats").tag(false)
+                    Label("Group Chats", systemImage: "person.2").tag(true)
+                }
+                .pickerStyle(.inline)
+                .uiKitIdentifier("GlassSessionsList.sessions.groupFilterPicker")
+            }
             if availableProjects.count > 1 {
                 Picker("Filter by Project", selection: projectFilterBinding) {
                     Text("All Projects").tag(String?.none)
@@ -874,7 +907,10 @@ public struct GlassSessionsList: View {
     private var filteredSessions: [UnifiedSession] {
         let trimmed = searchText.trimmingCharacters(in: .whitespaces)
         var base = unifiedSessions
-        // Project + tag filters (header dropdown) — applied before the text search.
+        // Chats + project + tag filters (header dropdown) — applied before the text search.
+        if activeGroupFilter {
+            base = base.filter(isGroupChat)
+        }
         if let project = activeProjectFilter {
             base = base.filter { $0.projectName == project }
         }
@@ -1157,6 +1193,9 @@ public struct GlassSessionsList: View {
             if count <= 12 && !searchText.isEmpty { searchText = "" }
         }
         .onChange(of: bridge.sessions.count) { _, _ in quickLaunchLoading = nil }
+        // Re-read who is in which chat when chats come or go (an accepted
+        // invite, a new chat); pull-to-refresh reads it too.
+        .task(id: unifiedSessions.count) { await refreshGroupChats() }
         .onReceive(NotificationCenter.default.publisher(for: QuickLaunchPreferences.didChangeNotification)) { _ in
             quickLaunchRevision &+= 1
         }

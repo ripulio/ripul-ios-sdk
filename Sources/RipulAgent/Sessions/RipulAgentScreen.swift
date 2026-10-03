@@ -68,6 +68,9 @@ public struct RipulAgentScreenSlots {
     public var sessionColumnVisibility: Binding<NavigationSplitViewVisibility>?
     /// First three rows in the displayed session list, after filtering/sorting.
     public var onListedSessionsChanged: (([RipulListedSession]) -> Void)?
+    /// "Minimise Chat" in the chat's ellipsis menu: the host folds the chat
+    /// into its floating launcher bubble. nil while the host cannot fold it.
+    public var onMinimizeChat: (() -> Void)?
 
     public init(
         showingSidebar: Binding<Bool>? = nil,
@@ -81,7 +84,8 @@ public struct RipulAgentScreenSlots {
         hostMenuItems: (() -> AnyView)? = nil,
         hidesListModeBar: Bool = false,
         sessionColumnVisibility: Binding<NavigationSplitViewVisibility>? = nil,
-        onNewChat: ((String?) -> Void)? = nil
+        onNewChat: ((String?) -> Void)? = nil,
+        onMinimizeChat: (() -> Void)? = nil
     ) {
         self.showingSidebar = showingSidebar
         self.onNavigateToFiles = onNavigateToFiles
@@ -95,6 +99,7 @@ public struct RipulAgentScreenSlots {
         self.sessionColumnVisibility = sessionColumnVisibility
         self.onListedSessionsChanged = onListedSessionsChanged
         self.onNewChat = onNewChat
+        self.onMinimizeChat = onMinimizeChat
     }
 }
 
@@ -1129,6 +1134,12 @@ public struct RipulAgentScreen: View {
         } else if isListMode {
             sessionListMenuItems
         } else {
+            if let minimize = slots.onMinimizeChat {
+                Button(action: minimize) {
+                    Label("Minimise Chat", systemImage: "pip.enter")
+                }
+                .uiKitIdentifier("AgentScreen.contextMenu.minimizeChatButton")
+            }
             if let info = commitViewInfo, session?.id == info.tabId {
                 Button {
                     resumeCommitSession(info)
@@ -1528,6 +1539,7 @@ public struct RipulAgentScreen: View {
             sessionWorkingDirectory ?? "-",
             hostWorkingDirectory ?? "-",
             slots.onInviteByEmail != nil ? "invite" : "-",
+            slots.onMinimizeChat != nil ? "minimize" : "-",
             cache.bool(forKey: "showElementDebuggerMenu") ? (elementDebuggerActive ? "dbg1" : "dbg0") : "-",
             cache.bool(forKey: "enableNoteInjection") ? "notes" : "-",
             bridge.selectedEffort ?? "-",

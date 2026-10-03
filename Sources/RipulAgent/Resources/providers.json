@@ -24,7 +24,10 @@
       "modelPrefixes": [
         "claude-cli"
       ],
-      "defaultModelId": "claude-cli-raw-sonnet"
+      "defaultModelId": "claude-cli-raw-sonnet",
+      "composerActions": [
+        "steer"
+      ]
     },
     {
       "id": "codex",

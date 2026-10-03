@@ -48,8 +48,10 @@ public enum WorkspaceColumns {
     }
 
     public static func sessionListWidth(in width: CGFloat, preferred: CGFloat? = nil) -> CGFloat {
-        // A dragged divider must still leave a usable chat at 800pt.
-        min(max(380, width - 420), min(preferred == nil ? 460 : 640, max(380, preferred ?? width * 0.40)))
+        // Automatic sizing stops at 460pt; a dragged divider may widen the list
+        // as far as the chat allows, which must stay usable (420pt, even at 800pt).
+        let wanted = preferred.map { max(380, $0) } ?? min(460, max(380, width * 0.40))
+        return min(max(380, width - 420), wanted)
     }
 
     public static func showsMetadata(width: CGFloat, hasActiveChat: Bool) -> Bool {
@@ -89,7 +91,7 @@ struct SessionChatColumns<List: View, Chat: View>: View {
                 .allowsHitTesting((showsBoth || !showingList) && canInteractWithChat)
                 .accessibilityHidden(!showsBoth && showingList)
             if showsBoth {
-                Divider().frame(width: 1)
+                columnSeparator
                     .overlay {
                         if let onResizeList {
                             ZStack {
@@ -106,6 +108,9 @@ struct SessionChatColumns<List: View, Chat: View>: View {
                             .frame(width: 44)
                             #endif
                             .contentShape(Rectangle())
+                            #if targetEnvironment(macCatalyst)
+                            .columnResizeCursor()
+                            #endif
                                 // Measure in the stationary column container,
                                 // not in the divider that follows the finger.
                                 .gesture(DragGesture(minimumDistance: 3, coordinateSpace: .named(resizeCoordinateSpace))
@@ -142,5 +147,40 @@ struct SessionChatColumns<List: View, Chat: View>: View {
         // full-height web view is cut off behind the top and composer glass.
         .ignoresSafeArea(.container, edges: .vertical)
     }
+
+    /// The divider's grab area takes the separator's size. Outside a stack a
+    /// Divider is horizontal, so it measured 1×1pt: on the Mac, with no grip
+    /// capsule to enlarge it, nothing could be grabbed. Catalyst draws a
+    /// full-height line like the metadata column's; touch keeps the grip.
+    @ViewBuilder
+    private var columnSeparator: some View {
+        #if targetEnvironment(macCatalyst)
+        Rectangle().fill(.separator).frame(width: 1).frame(maxHeight: .infinity)
+        #else
+        Divider().frame(width: 1)
+        #endif
+    }
 }
+
+#if targetEnvironment(macCatalyst)
+/// UIKit has no column-resize pointer on the Mac. The host app, which carries
+/// an AppKit bundle, sets this to show or clear it while a divider is hovered.
+/// Set once at launch and read from hover callbacks, both on the main thread.
+public enum RipulColumnResizeCursor {
+    nonisolated(unsafe) public static var update: ((Bool) -> Void)?
+}
+
+extension View {
+    /// Shows the Mac column-resize pointer over a divider's grab area,
+    /// reasserted on every move so UIKit's own pointer updates cannot win.
+    func columnResizeCursor() -> some View {
+        onContinuousHover { phase in
+            switch phase {
+            case .active: RipulColumnResizeCursor.update?(true)
+            case .ended: RipulColumnResizeCursor.update?(false)
+            }
+        }
+    }
+}
+#endif
 #endif

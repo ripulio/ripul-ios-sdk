@@ -47,7 +47,9 @@ public enum RepoGraphFocus {
                     authorEmail: stubCommit.authorEmail,
                     timestamp: stubCommit.timestamp,
                     subject: stubCommit.subject,
-                    refs: stubCommit.refs
+                    refs: stubCommit.refs,
+                    sessionId: stubCommit.sessionId,
+                    sessionTitle: stubCommit.sessionTitle
                 ))
             }
         }

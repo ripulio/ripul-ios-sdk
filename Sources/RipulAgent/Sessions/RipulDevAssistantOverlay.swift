@@ -853,7 +853,8 @@ final class RipulDevOverlayRootVC: UIViewController {
                 },
                 hostMenuItems: { [hostPreviewState] in
                     AnyView(HostScreenPreviewMenu(state: hostPreviewState))
-                }
+                },
+                onMinimizeChat: { [weak self] in self?.overlay?.collapse() }
             ),
             bridge: sharedBridge,
             navigation: navigation

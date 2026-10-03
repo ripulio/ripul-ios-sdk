@@ -3,9 +3,9 @@ import SwiftUI
 // MARK: - Structured rendering of a ConnectionDiagnosticsReport
 //
 // The sections are ordered by what a failing connect actually needs answered:
-// where did it stall → was the machine we wanted reachable → what are the
-// transports doing → is the client itself healthy. The raw JSON is never
-// removed, only demoted behind a disclosure and a copy button.
+// which chat was it → where did it stall → was the machine we wanted reachable
+// → what are the transports doing → is the client itself healthy. The raw JSON
+// is never removed, only demoted behind a disclosure and a copy button.
 
 @available(iOS 17.0, macOS 14.0, *)
 struct ConnectionDiagnosticsView: View {
@@ -13,6 +13,9 @@ struct ConnectionDiagnosticsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
+            if let focus = report.focus {
+                focusSection(focus)
+            }
             if let phase = report.phase {
                 phaseCard(phase)
             }
@@ -85,6 +88,32 @@ struct ConnectionDiagnosticsView: View {
                 .fill(Color.orange.opacity(phase.isStalled ? 0.12 : 0.06))
         )
         .accessibilityElement(children: .combine)
+    }
+
+    // MARK: The chat
+
+    /// The failed chat's own facts lead: when one chat is stuck, the client
+    /// around it is usually healthy, and the sections below say only that.
+    private func focusSection(_ focus: ConnectionDiagnosticsReport.Focus) -> some View {
+        let problems = focus.findings.filter(\.isProblem)
+        return section("This chat", subtitle: String(focus.chatId.suffix(8))) {
+            ForEach(focus.facts, id: \.self) { fact in
+                Text(fact)
+                    .font(.caption)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            ForEach(problems.isEmpty ? Array(focus.findings.prefix(1)) : problems) { finding in
+                HStack(alignment: .top, spacing: 8) {
+                    statusDot(finding.severity == "fail" ? .red : finding.isProblem ? .orange : .green)
+                        .padding(.top, 3)
+                    Text(finding.message)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .accessibilityElement(children: .combine)
+            }
+        }
     }
 
     // MARK: Machines

@@ -648,7 +648,7 @@ public struct RipulBillingScreen: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(rule.name)
                     .font(.subheadline.weight(.semibold))
-                Text("\(rule.status)\(rule.dryRun ? " · dry run" : "") · \(rule.subjectQuery) · \(model.priceLabel(for: rule.stripePriceId))")
+                Text("\(rule.status)\(rule.dryRun ? " · dry run" : "") · \(rule.subjectQuery) · \(model.priceLabel(for: rule.stripePriceId))\(rule.trialDays.map { " · \($0)-day trial" } ?? "")")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
@@ -793,6 +793,22 @@ struct RipulBillingRuleEditorView: View {
                 Text("Price — authored in the Stripe dashboard")
             } footer: {
                 Text("The period's peak bills, in arrears — one invoice per period, no mid-period charges. The meter's event name is read from the Price at push time.")
+            }
+
+            Section {
+                HStack {
+                    Text("Free trial (days)")
+                    Spacer()
+                    TextField("None", value: $input.trialDays, format: .number)
+                        .keyboardType(.numberPad)
+                        .multilineTextAlignment(.trailing)
+                        .frame(maxWidth: 120)
+                        .uiKitIdentifier("RipulBilling.editor.trialDays")
+                }
+            } header: {
+                Text("Free trial")
+            } footer: {
+                Text("Optional. New sign-ups start with this many free days (1–730) before the first billing period. Leave empty for no trial.")
             }
         }
         .uiKitIdentifier("RipulBilling.editor")

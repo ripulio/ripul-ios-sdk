@@ -58,6 +58,16 @@ public final class CmsRuntime: ObservableObject {
         theme.resolve(value)
     }
 
+    /// Resolve a background fill: `color.gradient` → brand gradient, else a colour.
+    public func fill(_ value: String?) -> AnyShapeStyle? {
+        theme.fill(value)
+    }
+
+    /// Resolve a corner radius: `radius.*` token or CSS length.
+    public func radius(_ value: String?) -> CGFloat? {
+        theme.radius(value)
+    }
+
     @Published public private(set) var queries: [String: QueryState] = [:]
     /// Selected rows per query slug. Control blocks also publish their output
     /// rows here under their block slug (calendar bounds, etc.).

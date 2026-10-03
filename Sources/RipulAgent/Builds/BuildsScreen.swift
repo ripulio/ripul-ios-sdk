@@ -8,29 +8,40 @@ import SwiftUI
 //
 //     RipulBuildsScreen(source: .ripulHosted(app: "ripul"))
 //
+// A host with other things to keep up to date (Ripul's Mac hosts) adds its
+// own sections under "This app" with `extraSections`, and joins pull-to-refresh
+// with `onRefresh`.
 // ---------------------------------------------------------------------------
 
 @available(iOS 17.0, macOS 14.0, *)
-public struct RipulBuildsScreen: View {
+public struct RipulBuildsScreen<ExtraSections: View>: View {
 
     @StateObject private var store: RipulBuildFeedStore
     @State private var pendingInstall: RipulBuild?
+    private let extraSections: ExtraSections
+    private let onRefresh: () async -> Void
 
     public init(
         source: RipulBuildFeedSource,
         baseURL: URL = AgentConfiguration.defaultBaseURL,
-        tokenProvider: @escaping () -> String? = { MachineTokenStore.token }
+        tokenProvider: @escaping () -> String? = { MachineTokenStore.token },
+        onRefresh: @escaping () async -> Void = {},
+        @ViewBuilder extraSections: () -> ExtraSections
     ) {
         _store = StateObject(wrappedValue: RipulBuildFeedStore(
             source: source,
             baseURL: baseURL,
             tokenProvider: tokenProvider
         ))
+        self.extraSections = extraSections()
+        self.onRefresh = onRefresh
     }
 
     public var body: some View {
         List {
             runningBuildSection
+
+            extraSections
 
             if let error = store.lastError {
                 Section {
@@ -55,7 +66,11 @@ public struct RipulBuildsScreen: View {
             }
         }
         .navigationTitle("Builds")
-        .refreshable { await store.refresh() }
+        .refreshable {
+            async let feed: Void = store.refresh()
+            async let extra: Void = onRefresh()
+            _ = await (feed, extra)
+        }
         .task { await store.refresh() }
         .alert(
             "Install the build from \(RipulBuildNumber.display(pendingInstall?.build ?? "", relative: false))?",
@@ -223,6 +238,17 @@ public struct RipulBuildsScreen: View {
             && build.build == RipulBuildFeedStore.runningBuild
     }
 
+}
+
+@available(iOS 17.0, macOS 14.0, *)
+extension RipulBuildsScreen where ExtraSections == EmptyView {
+    public init(
+        source: RipulBuildFeedSource,
+        baseURL: URL = AgentConfiguration.defaultBaseURL,
+        tokenProvider: @escaping () -> String? = { MachineTokenStore.token }
+    ) {
+        self.init(source: source, baseURL: baseURL, tokenProvider: tokenProvider) { EmptyView() }
+    }
 }
 
 /// Liquid Glass on iOS 26+, bordered elsewhere.

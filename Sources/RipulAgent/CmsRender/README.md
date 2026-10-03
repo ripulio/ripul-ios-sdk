@@ -94,14 +94,14 @@ every future port:
 | `CmsParameterKinds.swift` | Twin of `parameterKinds.ts`: `datePredicate` + `value` kinds, projections (range/operator/date, single/list) with the web's exact waiting semantics. |
 | `CmsDatePredicate.swift` | The predicate fold (§1.1). |
 | `CmsFormatValue.swift` | The display-format engine (§1.1). |
-| `CmsPortalTheme.swift` | `color.*` token table ⇄ `COLOR_PATHS` in `colorTokens.ts`, resolved against `PortalThemeConfig.palette` with MUI light/dark defaults. Non-tokens fall through to `CmsCss.color` (hex only today). |
-| `CmsLayout.swift` | `CmsCss` (px/rem lengths, padding shorthand, hex colours) + `CmsBlockFrameModifier` (hug/fill/fixed along the stack axis) + `CmsContainerFrameModifier`. Both take a `resolve` closure so frame colours honour theme tokens. |
+| `CmsPortalTheme.swift` | Theme v2 twin of `PortalThemeConfig` + `buildPortalTheme`/`deriveBrand` (portalTheme.ts): `darkPalette` layered over `palette` when dark, MUI light/dark defaults, derived brand tokens (accent = darken(primary, .35), tint, surfaceMuted, accent→primary gradient), role radii, heading typography, button style. `resolve` ⇄ `COLOR_PATHS` (colorTokens.ts), `fill` (adds `color.gradient` → `LinearGradient`), `radius` ⇄ radiusTokens.ts. Decoding is lenient (a mistyped field is unset, never a failed load). Non-tokens fall through to `CmsCss.color` (hex + rgb()/rgba()). |
+| `CmsLayout.swift` | `CmsCss` (px/rem lengths, padding shorthand, hex/rgba colours) + `CmsBlockFrameModifier` (hug/fill/fixed along the stack axis) + `CmsContainerFrameModifier`. Both take `resolve` / `fill` / `radius` closures so frame colours, gradient backgrounds and `radius.*` tokens honour the theme. |
 | `CmsBlockRegistry.swift` | type→renderer map (+ `register` for host apps); `CmsBlockView` (frame application; **hidden/off-device blocks stay MOUNTED invisibly** — zero frame, opacity 0 — so they keep feeding outputs, same rule as the web); `CmsBlockContainerView` (list/row stacks, template slots stacked `main`-first, sidebar → `CmsSidebarLayoutView`); `CmsUnsupportedBlockView`. |
 | `CmsPageView.swift` | Public entry + `CmsPageLoader` (§4). Ladybug diagnostics button, drawer overlay host. |
 | `CmsBrowserView.swift` | Test-bed browser: definitions → pages, per-definition test-identity menu (§4.3). |
 | `CmsRuntimeDiagnostics.swift` | The runtime inspector (§7.1) with Copy. |
 | `CmsSidebarLayout.swift` / `CmsDrawerOverlay.swift` | Sidebar layout collapse (§6). |
-| Blocks | `CmsBlockViews.swift` (text/markdown/image/divider/section/container), `CmsRecordCardsBlock.swift`, `CmsCalendarBlocks.swift` + `CmsNativeMonthCalendar.swift`, `CmsSelectionBlocks.swift`, `CmsKpiStripBlock.swift`, `CmsAgGridBlock.swift`, `CmsParameterSetterBlock.swift`, `CmsGridViewSwitcherBlock.swift`, `CmsAgentChatBlock.swift`. |
+| Blocks | `CmsBlockViews.swift` (text/markdown/image/divider/section/container), `CmsRecordCardsBlock.swift`, `CmsCalendarBlocks.swift` + `CmsNativeMonthCalendar.swift`, `CmsSelectionBlocks.swift`, `CmsKpiStripBlock.swift`, `CmsAgGridBlock.swift`, `CmsParameterSetterBlock.swift`, `CmsGridViewSwitcherBlock.swift`, `CmsAgentChatBlock.swift`, `CmsFeaturePanelBlock.swift`, `CmsStepProgressBlock.swift` (pills = wrapping capsule row, bar = native `ProgressView`). |
 
 **Decoding rule:** blocks render from RAW persisted props — the web never
 runs `schemaParse` at render, so new props are absent on old instances.

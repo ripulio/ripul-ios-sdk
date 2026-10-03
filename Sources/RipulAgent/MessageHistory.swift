@@ -104,6 +104,11 @@ public class MessageHistory: ObservableObject {
         return messages[cursor]
     }
 
+    /// The recalled message on show while browsing; nil when back at the draft.
+    public var browsingEntry: String? {
+        cursor < messages.count ? messages[cursor] : nil
+    }
+
     /// Reset browsing position (e.g. after sending a message).
     public func resetCursor() {
         cursor = messages.count

@@ -3,6 +3,15 @@ import SwiftUI
 import UIKit
 import MarkdownUI
 
+private struct NativeInteractionResponsePresentation: Equatable {
+  let selected: Set<Int>
+  let sending: Bool
+  let completed: Bool
+  let disabled: Bool
+  let answer: String
+  let error: String
+}
+
 @MainActor private final class NativeInteractionState: ObservableObject {
   @Published var snapshot: NativeInteractionSnapshot?
   @Published var selected: Set<Int> = []
@@ -14,6 +23,11 @@ import MarkdownUI
   var event: (([String: Any]) -> Void)?
   var sizeChanged: (() -> Void)?
   var disabled: Bool { snapshot?.disabled != false || awaitingSubmission || snapshot?.expectsResponse != true }
+  var responsePresentation: NativeInteractionResponsePresentation {
+    .init(selected: selected, sending: snapshot?.busy == true || awaitingSubmission,
+          completed: snapshot?.completed == true, disabled: disabled,
+          answer: snapshot?.answer ?? "", error: snapshot?.error ?? "")
+  }
   func edit(_ action: String, _ values: [String: Any]) {
     guard !disabled else { return }
     editSequence += 1
@@ -39,6 +53,10 @@ import MarkdownUI
 /// The same NativeSlotAttachment host used by artefacts owns scrolling, size and lifetime.
 @MainActor final class NativeInteractionRenderer: NativeEmbeddedRenderer {
   private let state = NativeInteractionState()
+  private var heightTransition = NativeInteractionHeightTransition()
+  private var lastResponsePresentation: NativeInteractionResponsePresentation?
+  private var animateHeightUntil: TimeInterval = 0
+  private var heightTimer: Timer?
   private lazy var host: UIHostingController<NativeInteractionPanel> = {
     let host = UIHostingController(rootView: NativeInteractionPanel(state: state))
     host.safeAreaRegions = []
@@ -54,7 +72,10 @@ import MarkdownUI
   }
   var onSizeChange: (() -> Void)? {
     get { state.sizeChanged }
-    set { state.sizeChanged = newValue }
+    set {
+      state.sizeChanged = newValue
+      if newValue == nil { heightTimer?.invalidate(); heightTimer = nil }
+    }
   }
   var isEditing: Bool { state.editing }
   var accessibilityElements: [Any] { [host.view!] }
@@ -73,12 +94,44 @@ import MarkdownUI
     state.snapshot = next
   }
   func sizeThatFits(width: CGFloat) -> CGSize {
-    host.sizeThatFits(in: CGSize(width: width, height: 20000))
+    let target = host.sizeThatFits(in: CGSize(width: width, height: 20000))
+    let now = CACurrentMediaTime()
+    let response = state.responsePresentation
+    if let previous = lastResponsePresentation, previous != response {
+      animateHeightUntil = now + NativeInteractionHeightTransition.duration
+    }
+    lastResponsePresentation = response
+    heightTransition.update(target: target, at: now,
+      animated: !UIAccessibility.isReduceMotionEnabled &&
+        (now < animateHeightUntil || heightTransition.isAnimating(at: now)))
+    if heightTransition.isAnimating(at: now), heightTimer == nil {
+      // Only run during a response resize. The existing host coalesces these
+      // signals and commits each intermediate height through its usual ack.
+      let timer = Timer(timeInterval: 1.0 / 30, repeats: true) { [weak self] timer in
+        MainActor.assumeIsolated {
+          guard let self else { timer.invalidate(); return }
+          guard self.host.view.window != nil, self.state.sizeChanged != nil else {
+            timer.invalidate()
+            self.heightTimer = nil
+            return
+          }
+          self.state.sizeChanged?()
+          if !self.heightTransition.isAnimating(at: CACurrentMediaTime()) {
+            timer.invalidate()
+            self.heightTimer = nil
+          }
+        }
+      }
+      heightTimer = timer
+      RunLoop.main.add(timer, forMode: .common)
+    }
+    return heightTransition.size(at: now)
   }
 }
 
 private struct NativeInteractionPanel: View {
   @ObservedObject var state: NativeInteractionState
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @FocusState private var focused: Bool
   @State private var activeTab = 0
   var body: some View {
@@ -168,6 +221,8 @@ private struct NativeInteractionPanel: View {
     }
     .font(.callout).frame(maxWidth: .infinity, alignment: .leading)
     .fixedSize(horizontal: false, vertical: true)
+    .animation(reduceMotion ? nil : .timingCurve(1.0 / 3, 0, 2.0 / 3, 1,
+      duration: NativeInteractionHeightTransition.duration), value: state.responsePresentation)
     .background {
       GeometryReader { geometry in Color.clear.onChange(of: geometry.size) { _, _ in state.sizeChanged?() } }
     }

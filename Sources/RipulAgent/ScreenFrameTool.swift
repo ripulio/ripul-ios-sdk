@@ -128,7 +128,8 @@ public enum RipulLiveViewIdentity {
         return info?["CFBundleDisplayName"] as? String ?? info?["CFBundleName"] as? String ?? "App"
     }
 
-    static func name(forModel model: String) -> String {
+    /// "iPhone 15 Pro Max" for "iPhone16,2"; the family, or the identifier itself, for one not listed.
+    public static func name(forModel model: String) -> String {
         let names: [String: String] = [
             "iPhone14,2": "iPhone 13 Pro", "iPhone14,3": "iPhone 13 Pro Max", "iPhone14,4": "iPhone 13 mini",
             "iPhone14,5": "iPhone 13", "iPhone14,6": "iPhone SE", "iPhone14,7": "iPhone 14",

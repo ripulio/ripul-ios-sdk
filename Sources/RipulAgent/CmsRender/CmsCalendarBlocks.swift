@@ -37,6 +37,17 @@ struct CmsSimpleCalendarBlockView: View {
     private var monthView: Bool { (block.props.string("view") ?? "week") == "month" }
     private var showWeekends: Bool { block.props.bool("showWeekends") ?? true }
     private var allowModeToggle: Bool { block.props.bool("allowModeToggle") ?? true }
+    #if os(iOS)
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    private var isCompactWidth: Bool { horizontalSizeClass == .compact }
+    #else
+    private var isCompactWidth: Bool { false }
+    #endif
+    /// Web `modeToggleOnMobile`: false hides the toggle on phone widths and
+    /// pins the author's mode there (a remembered choice must not strand them).
+    private var toggleShown: Bool {
+        allowModeToggle && !(isCompactWidth && block.props.bool("modeToggleOnMobile") == false)
+    }
     private var dotSize: CGFloat { CGFloat(block.props.double("dotSize") ?? 8) }
     /// Web accent chain: titleTypography colour, else the PORTAL theme
     /// primary (never the system accent). Drives pagers + mode toggle.
@@ -116,8 +127,10 @@ struct CmsSimpleCalendarBlockView: View {
         // Start from the user's last-chosen mode, persisted per block
         // instance (cmsId + slug) — twin of the web's localStorage mode
         // memory — falling back to the author default.
-        displayMode = UserDefaults.standard.string(forKey: modePersistenceKey)
-            ?? block.props.string("displayMode") ?? "grid"
+        let authorMode = block.props.string("displayMode") ?? "grid"
+        displayMode = toggleShown
+            ? (UserDefaults.standard.string(forKey: modePersistenceKey) ?? authorMode)
+            : authorMode
         operatorValue = block.props.string("defaultOperator")
             .flatMap(CmsRangePredicateOperator.init(rawValue:)) ?? .between
         // Two-way parameter binding: restore the user's last predicate
@@ -148,7 +161,7 @@ struct CmsSimpleCalendarBlockView: View {
                 .font(typographyFont("titleTypography", base: 14, weight: .semibold))
                 .foregroundColor(typographyColor("titleTypography") ?? .primary)
             Spacer()
-            if allowModeToggle { modeToggle }
+            if toggleShown { modeToggle }
             pagerButton(systemName: "chevron.left", step: -1)
             pagerButton(systemName: "chevron.right", step: 1)
         }
@@ -450,7 +463,7 @@ struct CmsSimpleCalendarBlockView: View {
                 }
             }
 
-            if allowModeToggle { modeToggle }
+            if toggleShown { modeToggle }
         }
         .modifier(DateChipPickerPresenter(target: $dateChipTarget) { target in
             dateChipPicker(target)

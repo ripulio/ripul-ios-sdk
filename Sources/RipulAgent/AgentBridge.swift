@@ -3723,14 +3723,20 @@ public final class AgentBridge: NSObject {
 
     /// Fetch the web app's one-shot connection diagnostics snapshot
     /// (`__ripulDiagnostics`) as a JSON string, or nil if unreachable.
+    /// `focusChatId` names the chat a failure was about, and `action` what was
+    /// being done to it: the snapshot then leads with that chat's own facts.
     @available(iOS 15.0, macOS 13.0, *)
-    public func fetchWebDiagnostics() async -> String? {
+    public func fetchWebDiagnostics(focusChatId: String? = nil, action: String? = nil) async -> String? {
         guard let webView else { return nil }
         let script = """
         if (!window.__ripulDiagnostics) return null;
-        return JSON.stringify(await window.__ripulDiagnostics());
+        return JSON.stringify(await window.__ripulDiagnostics(focusChatId ? { chatId: focusChatId, action } : undefined));
         """
-        return (try? await webView.callAsyncJavaScript(script, arguments: [:], contentWorld: .page)) as? String
+        let arguments: [String: Any] = [
+            "focusChatId": focusChatId.map { $0 as Any } ?? NSNull(),
+            "action": action.map { $0 as Any } ?? NSNull(),
+        ]
+        return (try? await webView.callAsyncJavaScript(script, arguments: arguments, contentWorld: .page)) as? String
     }
 
     /// Turn an opaque JS-call failure (throw, or an unbridgeable/nil result)
@@ -6034,7 +6040,9 @@ public final class AgentBridge: NSObject {
     }
 
     /// List the open browser tabs on a host machine (tab mirror).
-    /// Returns `{success, tabs?: [{id, url, title, active, favIconUrl?, contextName?}], error?}`.
+    /// Returns `{success, tabs?: [{id, url, title, active, favIconUrl?, contextId?, contextName?}],
+    /// contexts?: [{id, name, colorIndex, isEphemeral, tabCount?}], error?}`. `contexts` is
+    /// absent when the host has none to offer (Chrome, an older Mac).
     public func mirrorListTabs(machineId: String) async -> [String: Any] {
         guard let webView else { return ["success": false, "error": "webView is nil"] }
         do {
@@ -6156,17 +6164,51 @@ public final class AgentBridge: NSObject {
     /// Open a new browser tab on a host machine (tab mirror). Bare hosts are
     /// upgraded to https:// web-side. Returns `{success, tab?, error?}` where
     /// tab carries {id, url, title, ...} for jumping straight into a mirror.
-    public func mirrorOpenTab(machineId: String, url: String) async -> [String: Any] {
+    ///
+    /// Contexts are the host's. `contextId` names one of them (from
+    /// `mirrorListTabs`' `contexts`); `newContextName` / `newContextEphemeral`
+    /// have the host make one first. Neither: the host's own choice, which is
+    /// the context of its active tab.
+    public func mirrorOpenTab(
+        machineId: String,
+        url: String,
+        contextId: String? = nil,
+        newContextName: String? = nil,
+        newContextEphemeral: Bool = false
+    ) async -> [String: Any] {
         guard let webView else { return ["success": false, "error": "webView is nil"] }
+        var options: [String: Any] = [:]
+        if let contextId { options["contextId"] = contextId }
+        if newContextName != nil || newContextEphemeral {
+            options["newContext"] = ["name": newContextName ?? "", "ephemeral": newContextEphemeral] as [String: Any]
+        }
         do {
             let result = try await webView.callAsyncJavaScript(
-                "return await window.__ripulMirrorOpenTab?.(machineId, url) ?? {success:false, error:'not ready'};",
-                arguments: ["machineId": machineId, "url": url],
+                "return await window.__ripulMirrorOpenTab?.(machineId, url, options) ?? {success:false, error:'not ready'};",
+                arguments: ["machineId": machineId, "url": url, "options": options],
                 contentWorld: .page
             )
             return result as? [String: Any] ?? ["success": false, "error": "Unexpected result type"]
         } catch {
             handleConsoleLog("[AgentBridge] mirrorOpenTab error: \(error.localizedDescription)")
+            return ["success": false, "error": error.localizedDescription]
+        }
+    }
+
+    /// Delete one of a host machine's browsing contexts (tab mirror): its tabs
+    /// close and its cookies and storage go. Returns `{success, contexts?, error?}`
+    /// with the contexts that are left.
+    public func mirrorRemoveContext(machineId: String, contextId: String) async -> [String: Any] {
+        guard let webView else { return ["success": false, "error": "webView is nil"] }
+        do {
+            let result = try await webView.callAsyncJavaScript(
+                "return await window.__ripulMirrorRemoveContext?.(machineId, contextId) ?? {success:false, error:'not ready'};",
+                arguments: ["machineId": machineId, "contextId": contextId],
+                contentWorld: .page
+            )
+            return result as? [String: Any] ?? ["success": false, "error": "Unexpected result type"]
+        } catch {
+            handleConsoleLog("[AgentBridge] mirrorRemoveContext error: \(error.localizedDescription)")
             return ["success": false, "error": error.localizedDescription]
         }
     }
@@ -6745,6 +6787,28 @@ public final class AgentBridge: NSObject {
         } catch {
             NSLog("[AgentBridge] getSessionTags error: %@", error.localizedDescription)
             return [:]
+        }
+    }
+
+    /// Every id a group chat (one with another person in it) may be listed
+    /// under — drives the session list's Group Chats filter. Nil when the web
+    /// app couldn't read the roster, so the caller keeps its last answer.
+    @available(iOS 15.0, macOS 13.0, *)
+    public func getGroupChatIds() async -> Set<String>? {
+        guard let webView else { return nil }
+        do {
+            let result = try await webView.callAsyncJavaScript(
+                """
+                if (!window.__ripulGetGroupChatIds) return null;
+                return await window.__ripulGetGroupChatIds();
+                """,
+                contentWorld: .page
+            )
+            guard let ids = result as? [Any] else { return nil }
+            return Set(ids.compactMap { $0 as? String })
+        } catch {
+            NSLog("[AgentBridge] getGroupChatIds error: %@", error.localizedDescription)
+            return nil
         }
     }
 
@@ -7459,7 +7523,10 @@ public final class AgentBridge: NSObject {
 
     /// List commits that have a captured Claude session on the remote machine.
     @available(iOS 15.0, macOS 13.0, *)
-    public func listCommitsWithSessions(machineId: String) async -> (repoPath: String, commits: [CommitWithSession], error: String?) {
+    /// `repoPath` names the repo on that machine; nil asks about the host's
+    /// working folder (the only behaviour of hosts before October 2026 —
+    /// check the returned `repoPath` when it matters).
+    public func listCommitsWithSessions(machineId: String, repoPath: String? = nil) async -> (repoPath: String, commits: [CommitWithSession], error: String?) {
         guard let webView else {
             return ("", [], "webView is nil")
         }
@@ -7467,9 +7534,9 @@ public final class AgentBridge: NSObject {
             let result = try await webView.callAsyncJavaScript(
                 """
                 if (!window.__ripulListCommitsWithSessions) return { repoPath: '', commits: [], error: 'not ready' };
-                return await window.__ripulListCommitsWithSessions(machineId);
+                return await window.__ripulListCommitsWithSessions(machineId, repoPath);
                 """,
-                arguments: ["machineId": machineId],
+                arguments: ["machineId": machineId, "repoPath": repoPath.map { $0 as Any } ?? NSNull()],
                 contentWorld: .page
             )
             guard let dict = result as? [String: Any] else {
@@ -7516,7 +7583,7 @@ public final class AgentBridge: NSObject {
 
     /// Resume a captured session from a commit SHA on a remote machine.
     @available(iOS 15.0, macOS 13.0, *)
-    public func resumeFromCommit(machineId: String, sha: String) async -> (success: Bool, sessionId: String?, error: String?) {
+    public func resumeFromCommit(machineId: String, sha: String, repoPath: String? = nil) async -> (success: Bool, sessionId: String?, error: String?) {
         guard let webView else {
             return (false, nil, "webView is nil")
         }
@@ -7524,10 +7591,10 @@ public final class AgentBridge: NSObject {
             let result = try await webView.callAsyncJavaScript(
                 """
                 if (!window.__ripulResumeFromCommit) return { success: false, error: 'not ready' };
-                var r = await window.__ripulResumeFromCommit(machineId, sha);
+                var r = await window.__ripulResumeFromCommit(machineId, sha, repoPath);
                 return JSON.parse(JSON.stringify(r));
                 """,
-                arguments: ["machineId": machineId, "sha": sha],
+                arguments: ["machineId": machineId, "sha": sha, "repoPath": repoPath.map { $0 as Any } ?? NSNull()],
                 contentWorld: .page
             )
             guard let dict = result as? [String: Any] else {
@@ -7540,6 +7607,41 @@ public final class AgentBridge: NSObject {
         } catch {
             NSLog("[AgentBridge] resumeFromCommit error: %@", error.localizedDescription)
             return (false, nil, error.localizedDescription)
+        }
+    }
+
+    /// Continue a chat on `machineId` from the transcript captured on a
+    /// repo's `claude-sessions` branch — for a chat whose own Mac is offline
+    /// or gone. The machine fetches the newest copy and imports it as a chat
+    /// of its own, under a new id; the original is not touched. On success
+    /// `newChatId` is a tab on this device, already open.
+    @available(iOS 15.0, macOS 13.0, *)
+    public func rescueSession(
+        machineId: String,
+        repoPath: String,
+        sessionId: String,
+        displayName: String?
+    ) async -> (success: Bool, newChatId: String?, cwdFallback: Bool, targetMachineName: String?, error: String?) {
+        guard let webView else { return (false, nil, false, nil, "webView is nil") }
+        do {
+            let result = try await webView.callAsyncJavaScript(
+                "return await window.__ripulRescueSession?.(machineId, repoPath, sessionId, displayName) ?? {success:false, error:'Continuing a captured chat needs the latest app build.'};",
+                arguments: [
+                    "machineId": machineId,
+                    "repoPath": repoPath,
+                    "sessionId": sessionId,
+                    "displayName": displayName.map { $0 as Any } ?? NSNull(),
+                ],
+                contentWorld: .page
+            )
+            guard let dict = result as? [String: Any] else { return (false, nil, false, nil, "Unexpected result") }
+            let success = dict["success"] as? Bool ?? false
+            let newChatId = (dict["localTabId"] as? String) ?? (dict["newChatId"] as? String)
+            NSLog("[AgentBridge] rescueSession: %@ → %@ (%@)", sessionId, machineId, success ? (newChatId ?? "?") : (dict["error"] as? String ?? "failed"))
+            return (success, newChatId, dict["cwdFallback"] as? Bool ?? false, dict["targetMachineName"] as? String, dict["error"] as? String)
+        } catch {
+            NSLog("[AgentBridge] rescueSession error: %@", error.localizedDescription)
+            return (false, nil, false, nil, error.localizedDescription)
         }
     }
 

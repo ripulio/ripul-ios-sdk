@@ -13,6 +13,9 @@ import SwiftUI
 /// active, actions) but NOT its web presentation: the pill/underline/text
 /// variants, icon position, and label typography are web knobs a native
 /// sidebar owns instead — only `activeColor` survives, as the selection tint.
+/// The web's `appearance: app` preset is web presentation too and is ignored;
+/// its CONTENT carries over: group headings render as section labels, badges
+/// as capsules, and the workspace card (`headerTitle`…) as the first row.
 /// `mode: drawer` renders this inside the page-level glass drawer. Mutation/
 /// export actions have no native machinery yet — those rows render disabled.
 struct CmsSidebarNavBlockView: View {
@@ -100,10 +103,14 @@ struct CmsSidebarNavBlockView: View {
         flatten(items, depth: 0, into: &rows)
         return ScrollView {
             VStack(spacing: 4) {
+                workspaceCard
                 ForEach(rows) { row in
                     if row.item.divider {
                         Divider().padding(.horizontal, 16).padding(.vertical, 4)
-                    } else {
+                    }
+                    if row.item.heading {
+                        headingRow(row)
+                    } else if !row.item.divider || row.item.isActionable || !row.item.children.isEmpty {
                         navRow(row)
                     }
                 }
@@ -129,9 +136,175 @@ struct CmsSidebarNavBlockView: View {
 
     private func flatten(_ items: [CmsNavItem], depth: Int, into rows: inout [FlatRow]) {
         for item in items {
+            if item.heading {
+                // A heading is a label, never an accordion: its own children
+                // always show, at the heading's depth.
+                rows.append(FlatRow(id: "h|" + key(item, depth), item: item, depth: depth, expanded: true))
+                flatten(item.children, depth: depth, into: &rows)
+                continue
+            }
             let isOpen = expanded.contains(key(item, depth))
             rows.append(FlatRow(id: key(item, depth), item: item, depth: depth, expanded: isOpen))
             if isOpen { flatten(item.children, depth: depth + 1, into: &rows) }
+        }
+    }
+
+    /// A group heading: the small uppercase label over its group.
+    private func headingRow(_ row: FlatRow) -> some View {
+        Text(row.item.label.uppercased())
+            .font(.system(size: 11, weight: .bold))
+            .tracking(1.2)
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+            .padding(.horizontal, 14)
+            .padding(.leading, CGFloat(row.depth) * 16)
+            .padding(.top, 12)
+            .padding(.bottom, 2)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityAddTraits(.isHeader)
+            .cmsInspectorID("Cms.sidebarNav.heading")
+    }
+
+    // ── Workspace card (headerTitle / headerSubtitle / headerInitials) ──────
+
+    private var headerTitle: String? {
+        guard let title = runtime.resolveString(block: block, propKey: "headerTitle"),
+              !title.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
+        return title
+    }
+
+    /// Two-letter mark: authored initials, else the title's (any token still
+    /// unresolved is ignored, as on the web).
+    private func initials(for title: String) -> String {
+        if let authored = block.props.string("headerInitials")?.trimmingCharacters(in: .whitespaces),
+           !authored.isEmpty {
+            return String(authored.prefix(3))
+        }
+        let words = title.replacing(#/@[A-Za-z_]\w*\.[A-Za-z_]\w*/#, with: " ")
+            .split(whereSeparator: \.isWhitespace)
+        if words.count == 1 { return String(words[0].prefix(2)).uppercased() }
+        return words.prefix(2).compactMap { $0.first.map(String.init) }.joined().uppercased()
+    }
+
+    /// Records the card switches between (web: `headerQuerySlug`).
+    private var headerSource: String? {
+        block.props.string("headerQuerySlug").flatMap { $0.isEmpty ? nil : $0 }
+    }
+
+    private var headerSourceRows: [[String: CmsJSON]] {
+        guard let source = headerSource, case .ok(let result) = runtime.state(for: source) else { return [] }
+        return result.rows
+    }
+
+    /// The card's text for one record of the source: its `@source.column`
+    /// tokens read that row, other tokens the current selections.
+    private func headerText(_ propKey: String, row: [String: CmsJSON]) -> String {
+        guard let source = headerSource, let raw = block.props.string(propKey) else { return "" }
+        if let binding = block.bindings?[propKey], binding.querySlug == source {
+            return row[binding.column]?.displayString ?? ""
+        }
+        return runtime.resolveTemplate(raw.replacingOccurrences(of: "@\(source).", with: "@"), rowContext: row)
+    }
+
+    /// Land on the first record when nothing is selected yet — the shell's
+    /// pick, which the page inherits (web: useRecordCursor autoSelectFirst).
+    private func anchorHeaderSource() {
+        guard let source = headerSource else { return }
+        runtime.ensureLoaded(source)
+        if runtime.selectedRow(source) == nil, let first = headerSourceRows.first {
+            runtime.setSelectedRows(source, rows: [first])
+        }
+    }
+
+    private static let unresolvedToken = #/@[A-Za-z_]\w*\.[A-Za-z_]\w*/#
+
+    /// The workspace card: a brand-gradient mark beside the workspace name
+    /// and subtitle. With several records to pick from it is a menu of them
+    /// (plus the card's page); otherwise it opens `headerTargetPageSlug`.
+    @ViewBuilder
+    private var workspaceCard: some View {
+        if let title = headerTitle {
+            let subtitle = runtime.resolveString(block: block, propKey: "headerSubtitle")
+                .flatMap { $0.isEmpty ? nil : $0 }
+            let target = block.props.string("headerTargetPageSlug").flatMap { $0.isEmpty ? nil : $0 }
+            // Tokens whose row isn't selected yet show as a placeholder, never raw.
+            let pending = title.contains(Self.unresolvedToken) || (subtitle?.contains(Self.unresolvedToken) ?? false)
+            let rows = headerSourceRows
+            let switchable = rows.count > 1
+            let card = HStack(spacing: 10) {
+                Text(initials(for: title))
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(runtime.theme.primaryContrast)
+                    .frame(width: 30, height: 30)
+                    .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(runtime.theme.gradient))
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(title)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                    if let subtitle {
+                        Text(subtitle)
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+                Spacer(minLength: 0)
+                if switchable {
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.tertiary)
+                } else if target != nil {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            .redacted(reason: pending ? .placeholder : [])
+            .padding(10)
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(runtime.theme.surfaceMuted)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .strokeBorder(runtime.theme.divider, lineWidth: 1)
+                    )
+            )
+            .contentShape(Rectangle())
+            .padding(.bottom, 6)
+
+            Group {
+                if switchable, let source = headerSource {
+                    let current = runtime.selectedRow(source)
+                    Menu {
+                        ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                            Button {
+                                runtime.setSelectedRows(source, rows: [row])
+                            } label: {
+                                let label = headerText("headerTitle", row: row)
+                                if current == row {
+                                    Label(label, systemImage: "checkmark")
+                                } else {
+                                    Text(label)
+                                }
+                            }
+                        }
+                        if let target {
+                            Divider()
+                            Button("Settings") { runtime.navigate(toPage: target, viewRef: nil) }
+                        }
+                    } label: { card }
+                    .buttonStyle(.plain)
+                    .cmsInspectorID("Cms.sidebarNav.workspaceMenu")
+                } else if let target {
+                    Button { runtime.navigate(toPage: target, viewRef: nil) } label: { card }
+                        .buttonStyle(.plain)
+                        .cmsInspectorID("Cms.sidebarNav.workspaceCard")
+                } else {
+                    card.cmsInspectorID("Cms.sidebarNav.workspaceCard")
+                }
+            }
+            .task(id: rows.count) { anchorHeaderSource() }
         }
     }
 
@@ -163,6 +336,9 @@ struct CmsSidebarNavBlockView: View {
                     .foregroundStyle(!enabled ? Color.secondary : active ? activeTint : Color.primary)
                     .lineLimit(1)
                 Spacer(minLength: 8)
+                if let badge = item.badgeText(runtime: runtime) {
+                    CmsNavBadge(text: badge, tone: item.badgeTone)
+                }
                 if !item.children.isEmpty {
                     Image(systemName: "chevron.right")
                         .font(.system(size: 13, weight: .semibold))
@@ -200,6 +376,11 @@ struct CmsSidebarNavBlockView: View {
         }
         func walk(_ items: [CmsNavItem], depth: Int) {
             for item in items where !item.children.isEmpty {
+                if item.heading {
+                    // Headings never collapse; their children sit at its depth.
+                    walk(item.children, depth: depth)
+                    continue
+                }
                 if item.children.contains(where: containsActive) {
                     expanded.insert(key(item, depth))
                 }
@@ -217,7 +398,11 @@ struct CmsSidebarNavBlockView: View {
 /// native `Menu`s (nested any depth — hover triggers degrade to tap).
 /// `collapseOnMobile` respects the author: in a compact width class the
 /// whole tree collapses into one burger Menu. Sticky is a page-scroll
-/// concern with no native twin yet.
+/// concern with no native twin yet. `showPageTitle` shows the routed page's
+/// title; group headings become a separator in the bar and a `Section` in
+/// menus; `iconOnly` entries are bare SF Symbols with a corner count badge.
+/// The web `appearance: app` preset (bar chrome) is web presentation and is
+/// not reproduced.
 struct CmsTopNavBlockView: View {
     let block: CmsBlock
     @EnvironmentObject var runtime: CmsRuntime
@@ -253,7 +438,7 @@ struct CmsTopNavBlockView: View {
     }
 
     private var chipRadius: CGFloat {
-        CmsCss.points(block.props.string("activeRadius")) ?? (variant == "pill" ? 999 : 10)
+        runtime.radius(block.props.string("activeRadius")) ?? (variant == "pill" ? 999 : 10)
     }
 
     private var chipPadX: CGFloat { CmsCss.points(block.props.string("activePaddingX")) ?? 12 }
@@ -318,6 +503,23 @@ struct CmsTopNavBlockView: View {
         runtime.color(block.props.object("labelTypography")?.string("color")) ?? .primary
     }
 
+    /// The routed page's title (web: the portal shell's `activePage`). Nil
+    /// when no shell is active or the shell itself is the page.
+    @ViewBuilder
+    private var pageTitle: some View {
+        if block.props.bool("showPageTitle") == true, let title = runtime.outletPage?.title, !title.isEmpty {
+            let typo = block.props.object("pageTitleTypography")
+            Text(title)
+                .font(.system(size: CmsTypography.size(typo) ?? 17,
+                              weight: CmsTypography.weight(typo) ?? .bold))
+                .foregroundColor(runtime.color(typo?.string("color")) ?? .primary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .accessibilityAddTraits(.isHeader)
+                .cmsInspectorID("Cms.topNav.pageTitle")
+        }
+    }
+
     private var collapsed: Bool {
         guard block.props.bool("collapseOnMobile") ?? true else { return false }
         #if os(iOS)
@@ -339,6 +541,7 @@ struct CmsTopNavBlockView: View {
                         .padding(8)
                 }
                 logoMark
+                pageTitle
                 Spacer(minLength: 0)
             } else {
                 barZones
@@ -347,7 +550,7 @@ struct CmsTopNavBlockView: View {
         .padding(.horizontal, CmsCss.points(block.props.string("paddingX")) ?? 12)
         .frame(minHeight: CmsCss.points(block.props.string("height")) ?? 44)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(runtime.color(block.props.string("background")) ?? Color.clear)
+        .background(runtime.fill(block.props.string("background")) ?? AnyShapeStyle(Color.clear))
         .overlay(alignment: .bottom) {
             if block.props.bool("borderBottom") ?? false {
                 Rectangle()
@@ -372,6 +575,7 @@ struct CmsTopNavBlockView: View {
         let end = items.filter { zone($0) == "end" }
         return HStack(spacing: CmsCss.points(block.props.string("itemGap")) ?? 8) {
             if logoAlign == "start" { logoMark }
+            pageTitle
             ForEach(start) { barItem($0) }
             Spacer(minLength: 8)
             if logoAlign == "center" { logoMark }
@@ -382,12 +586,26 @@ struct CmsTopNavBlockView: View {
         }
     }
 
+    private func barItem(_ item: CmsNavItem) -> AnyView {
+        // A bar has no room for a group label: a heading is a separator with
+        // its own children inline after it.
+        if item.heading {
+            return AnyView(Group {
+                Divider().frame(height: 20)
+                ForEach(item.children) { barItem($0) }
+            })
+        }
+        return AnyView(barEntry(item))
+    }
+
     @ViewBuilder
-    private func barItem(_ item: CmsNavItem) -> some View {
+    private func barEntry(_ item: CmsNavItem) -> some View {
         if item.divider {
             Divider().frame(height: 20)
         }
-        if !item.children.isEmpty {
+        if item.iconOnly, let symbol = CmsNavIcon.symbol(for: item.icon) {
+            iconOnlyEntry(item, symbol: symbol)
+        } else if !item.children.isEmpty {
             Menu {
                 menuEntries(item.children)
             } label: {
@@ -404,6 +622,33 @@ struct CmsTopNavBlockView: View {
         }
     }
 
+    /// An icon-only bar entry: the SF Symbol with a count badge on its
+    /// corner; the label is the accessibility label. Parents open their Menu.
+    @ViewBuilder
+    private func iconOnlyEntry(_ item: CmsNavItem, symbol: String) -> some View {
+        let active = item.targetPageSlug != nil && item.targetPageSlug == runtime.currentPageSlug
+        let glyph = Image(systemName: symbol)
+            .font(.system(size: 17, weight: .medium))
+            .foregroundColor(active ? activeTextColor : labelColor)
+            .frame(width: 32, height: 32)
+            .overlay(alignment: .topTrailing) {
+                if let badge = item.badgeText(runtime: runtime) {
+                    CmsNavBadge(text: badge, tone: item.badgeTone, bubble: true)
+                        .offset(x: 6, y: -4)
+                }
+            }
+            .contentShape(Rectangle())
+            .accessibilityLabel(item.label)
+            .cmsInspectorID("Cms.topNav.iconItem")
+        if !item.children.isEmpty {
+            Menu { menuEntries(item.children) } label: { glyph }
+        } else {
+            Button { item.perform(runtime: runtime, openURL: openURL) } label: { glyph }
+                .buttonStyle(.plain)
+                .disabled(!item.isActionable)
+        }
+    }
+
     private func barLabel(_ item: CmsNavItem, chevron: Bool) -> some View {
         let active = item.targetPageSlug != nil && item.targetPageSlug == runtime.currentPageSlug
         return HStack(spacing: 5) {
@@ -413,6 +658,9 @@ struct CmsTopNavBlockView: View {
             Text(item.label)
                 .font(labelFont.weight(active && activeBold ? .semibold : .regular))
                 .lineLimit(1)
+            if let badge = item.badgeText(runtime: runtime) {
+                CmsNavBadge(text: badge, tone: item.badgeTone)
+            }
             if chevron {
                 Image(systemName: "chevron.down").font(.system(size: 9, weight: .semibold))
             }
@@ -446,8 +694,12 @@ struct CmsTopNavBlockView: View {
     /// Recursive Menu entries — nested children become nested Menus.
     private func menuEntries(_ items: [CmsNavItem]) -> AnyView {
         AnyView(
-            ForEach(items) { item in
-                if !item.children.isEmpty {
+            ForEach(CmsNavItem.foldHeadings(items)) { item in
+                if item.heading {
+                    Section(item.label) {
+                        menuEntries(item.children)
+                    }
+                } else if !item.children.isEmpty {
                     Menu(item.label) {
                         menuEntries(item.children)
                     }
@@ -455,10 +707,13 @@ struct CmsTopNavBlockView: View {
                     Button {
                         item.perform(runtime: runtime, openURL: openURL)
                     } label: {
+                        // Menus render plain text — the badge rides along as a
+                        // suffix rather than a styled pill.
+                        let title = item.badgeText(runtime: runtime).map { "\(item.label)  ·  \($0)" } ?? item.label
                         if let symbol = CmsNavIcon.symbol(for: item.icon) {
-                            Label(item.label, systemImage: symbol)
+                            Label(title, systemImage: symbol)
                         } else {
-                            Text(item.label)
+                            Text(title)
                         }
                     }
                     .disabled(!item.isActionable)

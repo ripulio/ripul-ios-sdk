@@ -33,6 +33,9 @@ struct DockedMetadataPane<Panel: View>: ViewModifier {
                             Color.clear
                                 .frame(width: 10)
                                 .contentShape(Rectangle())
+                                #if targetEnvironment(macCatalyst)
+                                .columnResizeCursor()
+                                #endif
                                 .gesture(
                                     DragGesture(minimumDistance: 0)
                                         .onChanged { value in

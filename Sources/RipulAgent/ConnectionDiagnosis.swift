@@ -9,6 +9,53 @@ import SwiftUI
 // details" section the end user can copy and send to us. No call sites change —
 // presenters just swap `.alert(...)` for `.connectionDiagnosis($error, bridge:)`.
 
+/// What a failure sheet is about: the action that failed and the chat it
+/// failed on. Without it every failure read as a connection failure — on
+/// 2026-10-01 an archive the host refused was headlined "Couldn't connect",
+/// and was reported as a phone that could not reach its Mac.
+public struct ConnectionDiagnosisSubject: Equatable {
+    public enum Action: String {
+        case open, archive, delete, move
+
+        /// The headline for a failure no classified code explains.
+        var failureSummary: String {
+            switch self {
+            case .open: return "Couldn’t open this chat"
+            case .archive: return "Couldn’t archive this chat"
+            case .delete: return "Couldn’t delete this chat"
+            case .move: return "Couldn’t move this chat"
+            }
+        }
+
+        var failureHint: String {
+            switch self {
+            case .move:
+                return "It’s still on its original machine. The reason is below. Try again; if it keeps failing, copy the report and send it to us."
+            default:
+                return "It’s still in your list. The reason is below. Try again; if it keeps failing, copy the report and send it to us."
+            }
+        }
+    }
+
+    public let action: Action
+    public let chatId: String?
+    /// The error this subject belongs to. A model keeps one subject beside one
+    /// error string, and other paths set the string alone; matching it keeps a
+    /// stale subject from relabelling a later, different failure.
+    public let rawError: String
+
+    public init(action: Action, chatId: String?, rawError: String) {
+        self.action = action
+        self.chatId = chatId
+        self.rawError = rawError
+    }
+
+    /// The subject when it belongs to `error`, else nil.
+    public func matching(_ error: String?) -> ConnectionDiagnosisSubject? {
+        error == rawError ? self : nil
+    }
+}
+
 /// Friendly classification of a raw connection/new-session error. Pure data — no
 /// availability gate — so it can be computed anywhere.
 public struct ConnectionDiagnosis {
@@ -18,10 +65,11 @@ public struct ConnectionDiagnosis {
 
     /// Map a raw error (+ optional live connect-phase trace) into a friendly
     /// summary/hint while preserving the raw text in `details`.
-    public static func classify(rawError: String?, phase: String?) -> ConnectionDiagnosis {
+    public static func classify(rawError: String?, phase: String?, action: ConnectionDiagnosisSubject.Action? = nil) -> ConnectionDiagnosis {
         let raw = (rawError?.isEmpty == false) ? rawError! : "Unknown error"
         let lower = raw.lowercased()
         var lines: [String] = []
+        if let action { lines.append("Action: \(action.rawValue)") }
         if let phase, !phase.isEmpty { lines.append("Last connect phase: \(phase)") }
         lines.append("Reason: \(raw)")
         let details = lines.joined(separator: "\n")
@@ -81,6 +129,12 @@ public struct ConnectionDiagnosis {
                      "Its Ripul app hasn't checked in recently. Make sure Ripul is open and awake on it (and the machine isn't asleep), then try again.")
         }
 
+        // Archive, delete and move reached a machine that refused them; the
+        // keyword sniffs below describe connect failures and would misname it.
+        if let action, action != .open {
+            return d(action.failureSummary, action.failureHint)
+        }
+
         // Unclassified — fall back to keyword sniffing on the raw text.
         if lower.contains("machine-offline") {
             return d("That machine looks offline",
@@ -107,7 +161,7 @@ public struct ConnectionDiagnosis {
             return d("The app stopped responding",
                      "Wait a few seconds, then try again. If this keeps happening, copy the details below and send them to us.")
         }
-        return d("Couldn’t connect",
+        return d(action?.failureSummary ?? "Couldn’t connect",
                  "Try again. If it keeps happening, expand the details below and send them to us.")
     }
 }
@@ -119,12 +173,14 @@ public struct ConnectionDiagnosis {
 @available(iOS 17.0, macOS 14.0, *)
 public struct ConnectionDiagnosisSheet: View {
     let rawError: String
+    var subject: ConnectionDiagnosisSubject?
     var bridge: AgentBridge?
     var onClose: () -> Void
 
     @State private var showDetails = false
     @State private var livePhase: String?
     @State private var webDiagnostics: String?
+    @State private var chatLogLines: [String] = []
     @State private var report: ConnectionDiagnosticsReport?
     @State private var diagnosticsLoaded = false
     @State private var copied: CopyTarget?
@@ -134,14 +190,15 @@ public struct ConnectionDiagnosisSheet: View {
 
     private enum CopyTarget: Equatable { case report, json }
 
-    public init(rawError: String, bridge: AgentBridge? = nil, onClose: @escaping () -> Void) {
+    public init(rawError: String, subject: ConnectionDiagnosisSubject? = nil, bridge: AgentBridge? = nil, onClose: @escaping () -> Void) {
         self.rawError = rawError
+        self.subject = subject?.matching(rawError)
         self.bridge = bridge
         self.onClose = onClose
     }
 
     private var diagnosis: ConnectionDiagnosis {
-        ConnectionDiagnosis.classify(rawError: rawError, phase: livePhase)
+        ConnectionDiagnosis.classify(rawError: rawError, phase: livePhase, action: subject?.action)
     }
 
     /// Technical details + the one-shot client diagnostics snapshot (build,
@@ -149,10 +206,21 @@ public struct ConnectionDiagnosisSheet: View {
     /// contains the actual client state, not just the error string.
     private var fullDetails: String {
         var text = diagnosis.details
+        if let chatId = subject?.chatId { text += "\nChat: \(chatId)" }
+        if !chatLogLines.isEmpty {
+            text += "\n\nRecent log lines for this chat:\n" + chatLogLines.joined(separator: "\n")
+        }
         if let webDiagnostics {
             text += "\n\nClient diagnostics:\n\(webDiagnostics)"
         }
         return text
+    }
+
+    /// A connect failure keeps the no-signal symbol; an action the machine
+    /// refused is not a connection problem.
+    private var headlineSymbol: String {
+        if let action = subject?.action, action != .open { return "exclamationmark.triangle" }
+        return "antenna.radiowaves.left.and.right.slash"
     }
 
     /// What the "Copy JSON" button puts on the clipboard: the diagnostics
@@ -167,7 +235,7 @@ public struct ConnectionDiagnosisSheet: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     HStack(spacing: 10) {
-                        Image(systemName: "antenna.radiowaves.left.and.right.slash")
+                        Image(systemName: headlineSymbol)
                             .font(.title2)
                             .foregroundStyle(.orange)
                         Text(diag.summary)
@@ -239,7 +307,8 @@ public struct ConnectionDiagnosisSheet: View {
         // the full client diagnostics snapshot for the copyable report.
         .task {
             if let p = await bridge?.getConnectPhase() { livePhase = p }
-            webDiagnostics = await bridge?.fetchWebDiagnostics()
+            if let chatId = subject?.chatId, let bridge { chatLogLines = Self.recentLogLines(mentioning: chatId, bridge: bridge) }
+            webDiagnostics = await bridge?.fetchWebDiagnostics(focusChatId: subject?.chatId, action: subject?.action.rawValue)
             // Parsed once here rather than computed from `body`: re-running
             // JSONSerialization over a multi-KB payload on every disclosure
             // toggle and copy-confirmation tick is pure waste.
@@ -267,6 +336,19 @@ public struct ConnectionDiagnosisSheet: View {
         }
     }
 
+    /// The last lines in this device's log that name the chat. Logs cite a
+    /// chat by its last 8 characters (`chat=8e0d31c1`) as often as in full.
+    private static func recentLogLines(mentioning chatId: String, bridge: AgentBridge, limit: Int = 12) -> [String] {
+        let key = String(chatId.suffix(8))
+        guard key.count == 8 else { return [] }
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm:ss"
+        return RipulLog.merged(with: bridge.consoleLogs)
+            .filter { $0.message.contains(key) }
+            .suffix(limit)
+            .map { "\(formatter.string(from: $0.timestamp)) \($0.level) \($0.message.prefix(300))" }
+    }
+
     private func copy(_ text: String, as target: CopyTarget) {
         #if os(macOS)
         NSPasteboard.general.clearContents()
@@ -287,13 +369,15 @@ public extension View {
     /// Present a friendly, expandable connection-failure diagnosis instead of a
     /// bare alert. Drives off the existing `String?` error binding — non-nil shows
     /// the sheet, dismiss clears it.
-    func connectionDiagnosis(_ error: Binding<String?>, bridge: AgentBridge? = nil) -> some View {
+    /// `subject` names the action and chat the error belongs to, when known.
+    func connectionDiagnosis(_ error: Binding<String?>, subject: ConnectionDiagnosisSubject? = nil, bridge: AgentBridge? = nil) -> some View {
         sheet(isPresented: Binding(
             get: { error.wrappedValue != nil },
             set: { if !$0 { error.wrappedValue = nil } }
         )) {
             ConnectionDiagnosisSheet(
                 rawError: error.wrappedValue ?? "",
+                subject: subject,
                 bridge: bridge,
                 onClose: { error.wrappedValue = nil }
             )

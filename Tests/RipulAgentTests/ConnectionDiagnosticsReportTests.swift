@@ -205,6 +205,44 @@ final class ConnectionDiagnosticsReportTests: XCTestCase {
         XCTAssertNil(ConnectionDiagnosticsReport.parse(json: "[1,2,3]"))
     }
 
+    /// The 2026-10-01 case: a phone archived a chat its Mac had never heard of.
+    /// The sheet named the chat, so the snapshot led with it and sent a count
+    /// per machine instead of 130 pairing rows.
+    func testFocusedSnapshotLeadsWithTheChatAndCountsPairings() throws {
+        let json = """
+        {"focus":{"chatId":"cli_e3ca0591-471c-4428-af31-34cb8e0d31c1","action":"archive",
+                  "facts":["Not open on this device","Macbook pro does not list it (129 sessions listed)"],
+                  "findings":[{"severity":"ok","code":"both-empty","message":"Both sides agree the session is empty."},
+                              {"severity":"warn","code":"no-transcript","message":"No CLI on the host holds a transcript."}]},
+         "pairingCounts":[{"machineId":"m-mbp","machineName":"Macbook pro","tabCount":103},
+                          {"machineId":"m-studio","machineName":"peter’s Mac Studio","tabCount":2}]}
+        """
+        let report = try XCTUnwrap(ConnectionDiagnosticsReport.parse(json: json))
+        let focus = try XCTUnwrap(report.focus)
+        XCTAssertEqual(focus.action, "archive")
+        XCTAssertEqual(focus.facts.last, "Macbook pro does not list it (129 sessions listed)")
+        XCTAssertEqual(focus.findings.filter(\.isProblem).map(\.code), ["no-transcript"])
+        XCTAssertEqual(report.pairingGroups.map(\.tabCount), [103, 2])
+        XCTAssertEqual(report.totalPairings, 105)
+    }
+
+    func testARefusedArchiveIsNotHeadlinedAsAConnectFailure() {
+        let raw = "CLI archive requires its provider; session was not archived"
+        XCTAssertEqual(ConnectionDiagnosis.classify(rawError: raw, phase: nil).summary, "Couldn’t connect")
+        let archive = ConnectionDiagnosis.classify(rawError: raw, phase: nil, action: .archive)
+        XCTAssertEqual(archive.summary, "Couldn’t archive this chat")
+        XCTAssertTrue(archive.details.contains("Action: archive"))
+        // A classified code still wins: it names the real cause.
+        XCTAssertEqual(ConnectionDiagnosis.classify(rawError: "machine-unavailable: gone", phase: nil, action: .archive).summary,
+                       "This chat's machine isn't connected")
+    }
+
+    func testASubjectOnlyLabelsTheErrorItBelongsTo() {
+        let subject = ConnectionDiagnosisSubject(action: .delete, chatId: "cli_x", rawError: "first")
+        XCTAssertEqual(subject.matching("first")?.action, .delete)
+        XCTAssertNil(subject.matching("a later, different failure"))
+    }
+
     func testCrashObjectIsRenderedRatherThanDropped() throws {
         let json = #"{"crash":{"live":"ReferenceError: x","lastPersisted":{"at":1,"message":"boom"}}}"#
         let report = try XCTUnwrap(ConnectionDiagnosticsReport.parse(json: json))
