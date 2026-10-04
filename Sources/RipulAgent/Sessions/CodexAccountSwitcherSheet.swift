@@ -232,7 +232,7 @@ public struct CodexAccountsSettingsScreen: View {
     public var body: some View {
         List {
             if loading { ProgressView("Loading Macs…") }
-            else if machines.isEmpty { Text("Pair with a Mac to manage its Codex accounts.").foregroundStyle(.secondary) }
+            else if machines.isEmpty { NoPairedMacView("See and switch the Codex accounts on your Mac.") }
             ForEach(machines) { machine in
                 CodexAccountSection(machineId: machine.machineId, machineName: machine.displayName,
                     direct: machine.meta?["connection"] == "direct", bridge: bridge,

@@ -516,6 +516,7 @@ public struct GlassSessionsList: View {
                             hideProjectName: activeProjectFilter != nil,
                             isSelectMode: isSelecting,
                             isSelected: selectedSessionIds.contains(session.id),
+                            isGroupChat: isGroupChat(session),
                             onSessionAction: { action in
                                 handleSessionAction(action, session: session)
                             }
@@ -1080,6 +1081,15 @@ public struct GlassSessionsList: View {
         // this root, including when the list is empty or its panel is collapsed.
         let sessions = filteredSessions
         let listedSessions = sessions.prefix(3).map { RipulListedSession(id: $0.id, title: $0.title) }
+        // In three parts, each checked by the compiler on its own. As one expression (the
+        // panels and some twenty modifiers) the compiler gave it up on one Mac and not on
+        // another: "unable to type-check this expression in reasonable time", in WAC's
+        // simulator build of 0.7.165 on the MacBook, after it had built on the Mac Studio.
+        presentations(on: lifecycle(on: panels(sessions: sessions), listedSessions: listedSessions))
+    }
+
+    /// The list in each of its states: nothing yet, connecting, and the panels.
+    private func panels(sessions: [UnifiedSession]) -> some View {
         ZStack(alignment: .bottom) {
             // The Invites panel is rendered in EVERY state below. An invited
             // guest with no machine and no chats yet is exactly the account
@@ -1166,6 +1176,11 @@ public struct GlassSessionsList: View {
 
             floatingActionBars
         }
+    }
+
+    /// What the list does as it appears and as its sessions change.
+    private func lifecycle<Content: View>(on content: Content, listedSessions: [RipulListedSession]) -> some View {
+        content
         #if os(iOS)
         // Measure the unpadded host, not the moving buttons. This also works
         // when a native tab host or a sheet has already consumed the inset.
@@ -1204,6 +1219,11 @@ public struct GlassSessionsList: View {
         // app working directory. `selectedProjectPath` survives
         // because the Folders panel still re-roots to the filtered project,
         // which is a view concern and correctly stays one.
+    }
+
+    /// The dialogs and sheets the list presents.
+    private func presentations<Content: View>(on content: Content) -> some View {
+        content
         .confirmationDialog("Archive \(selectedSessionIds.count) sessions?", isPresented: $showBatchArchiveConfirm, titleVisibility: .visible) {
             Button("Archive \(selectedSessionIds.count) Sessions", role: .destructive) {
                 let sessions = selectedSessions

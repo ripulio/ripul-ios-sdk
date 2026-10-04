@@ -205,6 +205,188 @@ final class BufferedSpeechRecoveryTests: XCTestCase {
         try await eventually { partials == ["Different new words"] }
     }
 
+    /// Scribe says nothing about sound it does not hear as speech. The stream
+    /// read twelve seconds of that as a dead socket whenever the microphone
+    /// had been loud once, and reconnected: ten times in 3.5 minutes on one
+    /// phone, each one a replay of the same noise.
+    @MainActor
+    func testSoundWithoutSpeechDoesNotReconnect() async throws {
+        guard #available(iOS 26.0, macOS 26.0, *) else { throw XCTSkip() }
+        let audio = BufferedSpeechAudio(sampleRate: 100)
+        let socket = SpeechSocketFixture()
+        socket.ready()
+        var connections = 0
+        var timing = fastTiming
+        timing.responseTimeout = 0.02
+        let stream = ElevenLabsTranscriptionStream(audio: audio, timing: timing, connect: {
+            connections += 1; return socket
+        }, event: { _ in })
+        defer { stream.stop() }
+        stream.start()
+        audio.append(Data(count: 200), voiced: true)
+        try await eventually { socket.sent.count == 1 }
+        try await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertEqual(connections, 1)
+        XCTAssertFalse(socket.cancelled)
+    }
+
+    /// With text out for the open segment Scribe repeats it about once a
+    /// second, so going quiet then does mean the connection has died.
+    @MainActor
+    func testSilenceWhileTextIsOutReconnects() async throws {
+        guard #available(iOS 26.0, macOS 26.0, *) else { throw XCTSkip() }
+        let audio = BufferedSpeechAudio(sampleRate: 100)
+        let first = SpeechSocketFixture(), second = SpeechSocketFixture()
+        first.ready(); second.ready()
+        var connections = 0
+        var timing = fastTiming
+        timing.responseTimeout = 0.03
+        let stream = ElevenLabsTranscriptionStream(audio: audio, timing: timing, connect: {
+            connections += 1; return connections == 1 ? first : second
+        }, event: { _ in })
+        defer { stream.stop() }
+        audio.append(Data(count: 200), voiced: true)
+        stream.start()
+        try await eventually { first.sent.count == 1 }
+        first.emit(["message_type": "partial_transcript", "text": "Hello"])
+        try await eventually { connections == 2 }
+        XCTAssertTrue(first.cancelled)
+    }
+
+    /// A reconnect replays the open segment and Scribe transcribes it from its
+    /// first word again. Shown as it arrived, that was the whole utterance
+    /// starting over on screen. The reconnect point is not a segment boundary
+    /// either: a commit there cuts mid-sentence.
+    @MainActor
+    func testReplayedTextStaysOffScreenUntilItHasCaughtUp() async throws {
+        guard #available(iOS 26.0, macOS 26.0, *) else { throw XCTSkip() }
+        let audio = BufferedSpeechAudio(sampleRate: 100)
+        let first = SpeechSocketFixture(), second = SpeechSocketFixture()
+        first.ready(); second.ready()
+        var connections = 0
+        var screen: [String] = []
+        var replayed = 0
+        var commits = 0
+        let regrowing = ["one", "one two", "one two three four"]
+        second.onSend = { payload in
+            if payload["commit"] as? Bool == true { commits += 1; return }
+            replayed += 1
+            second.emit(["message_type": "partial_transcript", "text": regrowing[min(replayed, 3) - 1]])
+            // Let the stream read it before the next chunk moves the replay on.
+            try await Task.sleep(nanoseconds: 3_000_000)
+        }
+        let stream = ElevenLabsTranscriptionStream(audio: audio, timing: fastTiming, connect: {
+            connections += 1; return connections == 1 ? first : second
+        }, event: {
+            switch $0 {
+            case .partial(let text): screen.append(text)
+            case .committed(let text): screen.append("committed: " + text)
+            case .recovery(nil) where connections > 1: screen.append("recovered")
+            default: break
+            }
+        })
+        defer { stream.stop() }
+        for _ in 0..<3 { audio.append(Data(count: 200), voiced: true) }
+        stream.start()
+        try await eventually { first.sent.count == 3 }
+        first.emit(["message_type": "partial_transcript", "text": "one two three"])
+        try await eventually { screen == ["one two three"] }
+        first.deliver(.failure(URLError(.networkConnectionLost)))
+        try await eventually { screen.last == "recovered" }
+        XCTAssertEqual(screen, ["one two three", "one two three four", "recovered"])
+        XCTAssertEqual(commits, 0, "The reconnect point must not close the segment")
+        XCTAssertEqual(audio.snapshot.confirmed, 0)
+    }
+
+    /// A long replay passes a real segment boundary on the way. That text
+    /// reaches the screen with the rest of the replay, not ahead of it, where
+    /// it would wipe the words still showing after it.
+    @MainActor
+    func testSegmentClosedDuringReplayReachesTheScreenWithTheRest() async throws {
+        guard #available(iOS 26.0, macOS 26.0, *) else { throw XCTSkip() }
+        let audio = BufferedSpeechAudio(sampleRate: 100)
+        let first = SpeechSocketFixture(), second = SpeechSocketFixture()
+        first.ready(); second.ready()
+        first.onSend = { _ in if first.sent.count > 1 { throw URLError(.networkConnectionLost) } }
+        var connections = 0
+        var screen: [String] = []
+        var screenBeforeCatchUp: [String]?
+        var replayed = 0
+        second.onSend = { payload in
+            if payload["commit"] as? Bool == true { second.committed("alpha beta."); return }
+            replayed += 1
+            guard replayed == 5 else { return }
+            screenBeforeCatchUp = screen
+            second.emit(["message_type": "partial_transcript", "text": "gamma delta"])
+        }
+        let stream = ElevenLabsTranscriptionStream(audio: audio, timing: shortSegmentTiming, connect: {
+            connections += 1; return connections == 1 ? first : second
+        }, event: {
+            switch $0 {
+            case .partial(let text): screen.append(text)
+            case .committed(let text): screen.append("committed: " + text)
+            case .recovery(nil) where connections > 1: screen.append("recovered")
+            default: break
+            }
+        })
+        defer { stream.stop() }
+        audio.append(Data(count: 200), voiced: true)
+        stream.start()
+        try await eventually { first.sent.count == 1 }
+        first.emit(["message_type": "partial_transcript", "text": "alpha"])
+        try await eventually { screen == ["alpha"] }
+        // Speech, a pause long enough to close the segment, then more speech.
+        audio.append(Data(count: 200), voiced: true)
+        audio.append(Data(count: 200), voiced: false)
+        audio.append(Data(count: 200), voiced: true)
+        audio.append(Data(count: 200), voiced: true)
+        try await eventually { screen.last == "recovered" }
+        XCTAssertEqual(screenBeforeCatchUp, ["alpha"])
+        XCTAssertEqual(screen, ["alpha", "committed: alpha beta.", "gamma delta", "recovered"])
+        XCTAssertEqual(audio.snapshot.confirmed, 300)
+    }
+
+    /// Text a replay had already confirmed is the user's, even when recovery
+    /// then gives up. It is handed over before the failure is reported.
+    @MainActor
+    func testConfirmedReplayTextSurvivesAFailedRecovery() async throws {
+        guard #available(iOS 26.0, macOS 26.0, *) else { throw XCTSkip() }
+        let audio = BufferedSpeechAudio(sampleRate: 100)
+        let first = SpeechSocketFixture(), second = SpeechSocketFixture()
+        first.ready(); second.ready()
+        first.onSend = { _ in if first.sent.count > 1 { throw URLError(.networkConnectionLost) } }
+        var acknowledged = false
+        second.onSend = { payload in
+            if payload["commit"] as? Bool == true { acknowledged = true; second.committed("alpha beta."); return }
+            if acknowledged { throw URLError(.networkConnectionLost) }
+        }
+        var connections = 0
+        var outcome: [String] = []
+        var timing = shortSegmentTiming
+        timing.recoveryLimit = 0.05
+        let stream = ElevenLabsTranscriptionStream(audio: audio, timing: timing, connect: {
+            connections += 1
+            if connections == 1 { return first }
+            if connections == 2 { return second }
+            throw URLError(.notConnectedToInternet)
+        }, event: {
+            switch $0 {
+            case .committed(let text): outcome.append("committed: " + text)
+            case .error: outcome.append("failed")
+            default: break
+            }
+        })
+        defer { stream.stop() }
+        audio.append(Data(count: 200), voiced: true)
+        stream.start()
+        try await eventually { first.sent.count == 1 }
+        audio.append(Data(count: 200), voiced: true)
+        audio.append(Data(count: 200), voiced: false)
+        audio.append(Data(count: 200), voiced: true)
+        try await eventually { outcome.last == "failed" }
+        XCTAssertEqual(outcome, ["committed: alpha beta.", "failed"])
+    }
+
     @MainActor
     func testLostCommitReplyReplaysSegmentAndEmitsTextOnce() async throws {
         guard #available(iOS 26.0, macOS 26.0, *) else { throw XCTSkip() }

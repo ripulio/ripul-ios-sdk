@@ -113,8 +113,6 @@ public final class ElevenLabsNativeSpeechProvider: NSObject, NativeSpeechProvidi
         }
     }
 
-    private static let supportedPcmRates: Set<Int> = [8000, 16000, 22050, 24000, 44100, 48000]
-
     /// Audio-thread → socket handoff. The mic is brought up before the
     /// WebSocket exists (see `startTranscription`), so chunks recorded in the
     /// meantime are held here, in order, and flushed on attach. Lock-guarded
@@ -556,11 +554,12 @@ public final class ElevenLabsNativeSpeechProvider: NSObject, NativeSpeechProvidi
             let engine = AVAudioEngine()
             let input = engine.inputNode
             let format = input.outputFormat(forBus: 0)
-            let sampleRate = Int(format.sampleRate)
-            guard Self.supportedPcmRates.contains(sampleRate) else {
+            // The microphone's own rate goes no further than the tap.
+            guard let downsampler = SpeechAudioDownsampler(input: format) else {
                 VoiceAudioSession.releaseIfIdle()
                 throw ProviderError.unsupportedSampleRate(format.sampleRate)
             }
+            let sampleRate = downsampler.sampleRate
 
             // Captured strongly by the tap so the audio thread never reaches back
             // through `self` for the socket (it may not exist yet).
@@ -573,12 +572,10 @@ public final class ElevenLabsNativeSpeechProvider: NSObject, NativeSpeechProvidi
             input.installTap(onBus: 0, bufferSize: 4096, format: format) { [weak self] buffer, _ in
                 guard let channel = buffer.floatChannelData?[0] else { return }
                 let frames = Int(buffer.frameLength)
-                var pcm = [Int16](repeating: 0, count: frames)
                 var energy: Float = 0
                 for i in 0..<frames {
                     let sample = max(-1.0, min(1.0, channel[i]))
                     energy += sample * sample
-                    pcm[i] = Int16(max(-32768, min(32767, Int32(sample * 32767))))
                 }
                 // Mic energy tells the caller the user is still talking even when
                 // the transcript stream has gone quiet — see TranscriptionEvent.
@@ -589,7 +586,7 @@ public final class ElevenLabsNativeSpeechProvider: NSObject, NativeSpeechProvidi
                         self.onEvent?(.audioLevel(rms))
                     }
                 }
-                let payloadData = pcm.withUnsafeBufferPointer { Data(buffer: $0) }
+                guard let payloadData = downsampler.convert(buffer), !payloadData.isEmpty else { return }
                 if let retainedAudio {
                     retainedAudio.append(payloadData, voiced: frames > 0 && (energy / Float(frames)).squareRoot() > 0.012)
                     return
@@ -608,11 +605,12 @@ public final class ElevenLabsNativeSpeechProvider: NSObject, NativeSpeechProvidi
             try engine.start()
 
             if let retainedAudio {
+                let streamID = UUID().uuidString
                 let stream = ElevenLabsTranscriptionStream(
-                    audio: retainedAudio, previouslyConnected: cloudPreviouslyConnected,
+                    audio: retainedAudio, previouslyConnected: cloudPreviouslyConnected, diagnosticID: streamID,
                     connect: { [weak self] in
                         guard let self, self.transcriptionID == captureID else { throw CancellationError() }
-                        return try await self.makeBufferedSocket(sampleRate: sampleRate, captureID: captureID)
+                        return try await self.makeBufferedSocket(sampleRate: sampleRate, captureID: captureID, streamID: streamID)
                     }, event: { [weak self] event in
                         guard let self, self.transcriptionID == captureID else { return }
                         switch event {
@@ -667,7 +665,7 @@ public final class ElevenLabsNativeSpeechProvider: NSObject, NativeSpeechProvidi
         }
     }
 
-    private func makeBufferedSocket(sampleRate: Int, captureID: UUID) async throws -> any RealtimeSpeechSocket {
+    private func makeBufferedSocket(sampleRate: Int, captureID: UUID, streamID: String) async throws -> any RealtimeSpeechSocket {
         struct TokenResponse: Decodable { let token: String }
         let data = try await send(path: "api/v1/speech/realtime-token", method: "POST")
         let token = try JSONDecoder().decode(TokenResponse.self, from: data).token
@@ -681,7 +679,11 @@ public final class ElevenLabsNativeSpeechProvider: NSObject, NativeSpeechProvidi
         if language != "auto", !language.isEmpty { query.append(URLQueryItem(name: "language_code", value: language)) }
         for term in SpeechPreferences.speechKeyterms { query.append(URLQueryItem(name: "keyterms", value: term)) }
         url.queryItems = query
-        return URLSessionSpeechSocket((directAPI == nil ? URLSession.shared : directSocketSession).webSocketTask(with: url.url!))
+        let task = (directAPI == nil ? URLSession.shared : directSocketSession).webSocketTask(with: url.url!)
+        // Before resume: the handshake's metrics are what gets logged.
+        task.delegate = SpeechSocketMetrics.shared
+        task.taskDescription = streamID
+        return URLSessionSpeechSocket(task)
     }
 
     func finishBufferedTranscription() async throws {

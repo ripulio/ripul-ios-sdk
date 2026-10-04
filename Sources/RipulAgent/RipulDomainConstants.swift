@@ -24,4 +24,8 @@ public enum RipulDomain {
 
     public static let demoURL = "https://\(demoHost)"
     public static let llmProxyURL = "https://\(llmProxyHost)"
+
+    /// The page that installs Ripul Host and Ripul on a Mac
+    /// (`chrome-extension/functions/mac.ts`).
+    public static let macDownloadURL = "\(demoURL)/mac"
 }

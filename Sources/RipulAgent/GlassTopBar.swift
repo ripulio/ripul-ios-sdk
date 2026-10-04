@@ -30,6 +30,91 @@ private struct RipulTopBarInsetModifier<Bar: View>: ViewModifier {
     }
 }
 
+// MARK: - Scope
+
+/// What a screen is scoped to, shown under the title in the lozenge: its icon
+/// and name, and a tap on the lozenge that switches between the options when
+/// there is another to choose. The Mac a machine screen is looking at is the
+/// case in point (`machines(_:current:cache:detail:pick:)`).
+public struct GlassTopBarScope {
+    public struct Option: Identifiable {
+        public let id: String
+        public let title: String
+        /// An SF Symbol.
+        public let icon: String
+
+        public init(id: String, title: String, icon: String) {
+            self.id = id
+            self.title = title
+            self.icon = icon
+        }
+    }
+
+    /// Everything the screen could be scoped to, the current one included.
+    public var options: [Option]
+    public var current: Option
+    /// Shown after the current option's name (the Console's working directory).
+    public var detail: String?
+    /// Called with an option other than the current one.
+    public var select: (Option) -> Void
+
+    public init(options: [Option], current: Option, detail: String? = nil, select: @escaping (Option) -> Void) {
+        self.options = options
+        self.current = current
+        self.detail = detail
+        self.select = select
+    }
+
+    /// The Macs a screen can use and the one it is looking at, each wearing
+    /// the icon the user gave it. Nil when there is no Mac, so the lozenge
+    /// shows the title alone.
+    public static func machines(_ machines: [RemoteMachine], current: RemoteMachine?, cache: RipulSessionCache,
+                                detail: String? = nil, pick: @escaping (RemoteMachine) -> Void) -> GlassTopBarScope? {
+        guard let current else { return nil }
+        func option(_ machine: RemoteMachine) -> Option {
+            Option(id: machine.machineId, title: machine.displayName,
+                   icon: machine.icon(cache: cache) ?? machine.defaultIconName)
+        }
+        return GlassTopBarScope(options: machines.map(option), current: option(current), detail: detail) { picked in
+            if let machine = machines.first(where: { $0.machineId == picked.id }) { pick(machine) }
+        }
+    }
+}
+
+/// The options of a `GlassTopBarScope`, in the popover the lozenge opens.
+private struct GlassTopBarScopePicker: View {
+    let scope: GlassTopBarScope
+    let dismiss: () -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ForEach(Array(scope.options.enumerated()), id: \.element.id) { index, option in
+                if index > 0 { Divider() }
+                Button {
+                    dismiss()
+                    if option.id != scope.current.id { scope.select(option) }
+                } label: {
+                    HStack(spacing: 12) {
+                        Image(systemName: option.icon).frame(width: 24)
+                        Text(option.title).lineLimit(1)
+                        Spacer(minLength: 12)
+                        Image(systemName: "checkmark").opacity(option.id == scope.current.id ? 1 : 0)
+                    }
+                    .padding(.horizontal, 16)
+                    .frame(minHeight: 44)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .uiKitIdentifier("GlassTopBar.scope.option")
+            }
+        }
+        .frame(minWidth: 230)
+        #if os(iOS)
+        .presentationCompactAdaptation(.popover)
+        #endif
+    }
+}
+
 // MARK: - Glass Top Bar
 
 /// The one top bar. Every iPhone screen wears this — there are no forks.
@@ -61,6 +146,10 @@ private struct RipulTopBarInsetModifier<Bar: View>: ViewModifier {
 public struct GlassTopBar<MenuContent: View, CenterContent: View>: View {
     let title: String
     var subtitle: String? = nil
+    /// What the screen is scoped to. Takes the subtitle's place in the default
+    /// lozenge, and makes the lozenge switch scope on a tap, unless the screen
+    /// already uses that tap (`onTapTitle`) or draws its own centre.
+    var scope: GlassTopBarScope? = nil
     var leadingIcon: String = "chevron.left"
     var showLeading: Bool = true
     var screenKey: String? = nil
@@ -143,10 +232,12 @@ public struct GlassTopBar<MenuContent: View, CenterContent: View>: View {
     var menuKey: String? = nil
 
     @Namespace private var topBarNS
+    @State private var showingScope = false
 
     public init(
         title: String,
         subtitle: String? = nil,
+        scope: GlassTopBarScope? = nil,
         leadingIcon: String = "chevron.left",
         showLeading: Bool = true,
         screenKey: String? = nil,
@@ -171,6 +262,7 @@ public struct GlassTopBar<MenuContent: View, CenterContent: View>: View {
     ) {
         self.title = title
         self.subtitle = subtitle
+        self.scope = scope
         self.leadingIcon = leadingIcon
         self.showLeading = showLeading
         self.screenKey = screenKey
@@ -274,35 +366,80 @@ public struct GlassTopBar<MenuContent: View, CenterContent: View>: View {
             id: "title",
             namespace: topBarNS
         ))
+        // Before the inset, so the popover points at the pill.
+        .popover(isPresented: $showingScope, arrowEdge: .top) {
+            if let scope {
+                GlassTopBarScopePicker(scope: scope) { showingScope = false }
+            }
+        }
         .padding(.horizontal, resolvedInset)
         .simultaneousGesture(
             LongPressGesture(minimumDuration: 1.0).onEnded { _ in
                 NotificationCenter.default.post(name: .ripulShowDevTools, object: nil)
             }
         )
-        .modifier(TitleTapGestures(onTap: onTapTitle, onDoubleTap: onDoubleTapTitle))
+        .modifier(TitleTapGestures(onTap: lozengeTap, onDoubleTap: onDoubleTapTitle))
         .uiKitIdentifier("GlassTopBar.titleLozenge")
+    }
+
+    /// A tap on the lozenge switches scope: there is another option to switch
+    /// to, the default lozenge is the one showing it, and the screen has not
+    /// taken the tap for itself. A tap gesture rather than a `Menu`, which
+    /// opens on touch-down and would take the swipe that summons the switcher.
+    private var switchesScope: Bool {
+        guard let scope, center == nil, onTapTitle == nil else { return false }
+        return scope.options.contains { $0.id != scope.current.id }
+    }
+
+    private var lozengeTap: (() -> Void)? {
+        if let onTapTitle { return onTapTitle }
+        return switchesScope ? { showingScope = true } : nil
     }
 
     @ViewBuilder
     private var defaultTitleContent: some View {
-        VStack(spacing: 1) {
-            HStack(spacing: 4) {
-                Text(title)
-                    .font(.caption)
-                    .fontWeight(.semibold)
-                    .foregroundColor(.primary)
-                    .lineLimit(1)
-                    .contentTransition(.interpolate)
-                if let key = screenKey, let screenTip {
-                    screenTip(key)
-                }
+        HStack(spacing: 8) {
+            if let scope {
+                // Beside both lines and drawn as the Machines panel draws a
+                // Mac's icon. As a caption-sized grey glyph inside the
+                // subtitle it was there, and nobody saw it.
+                Image(systemName: scope.current.icon)
+                    .font(.system(size: 16))
+                    .foregroundStyle(.blue)
+                    .contentTransition(.symbolEffect(.replace))
+                    .uiKitIdentifier("GlassTopBar.scope.icon")
             }
-            if let subtitle {
-                Text(subtitle)
+            VStack(alignment: scope == nil ? .center : .leading, spacing: 1) {
+                HStack(spacing: 4) {
+                    Text(title)
+                        .font(.caption)
+                        .fontWeight(.semibold)
+                        .foregroundColor(.primary)
+                        .lineLimit(1)
+                        .contentTransition(.interpolate)
+                    if let key = screenKey, let screenTip {
+                        screenTip(key)
+                    }
+                }
+                if let scope {
+                    HStack(spacing: 3) {
+                        Text(scope.detail.map { scope.current.title + " · " + $0 } ?? scope.current.title)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .contentTransition(.interpolate)
+                        if switchesScope {
+                            Image(systemName: "chevron.down").font(.system(size: 7, weight: .bold))
+                        }
+                    }
                     .font(.caption2)
                     .foregroundStyle(.secondary)
-                    .contentTransition(.interpolate)
+                    .uiKitIdentifier("GlassTopBar.scope")
+                } else if let subtitle {
+                    Text(subtitle)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .contentTransition(.interpolate)
+                }
             }
         }
     }
@@ -499,6 +636,7 @@ public extension GlassTopBar where CenterContent == EmptyView {
     init(
         title: String,
         subtitle: String? = nil,
+        scope: GlassTopBarScope? = nil,
         leadingIcon: String = "chevron.left",
         showLeading: Bool = true,
         screenKey: String? = nil,
@@ -523,6 +661,7 @@ public extension GlassTopBar where CenterContent == EmptyView {
         self.init(
             title: title,
             subtitle: subtitle,
+            scope: scope,
             leadingIcon: leadingIcon,
             showLeading: showLeading,
             screenKey: screenKey,

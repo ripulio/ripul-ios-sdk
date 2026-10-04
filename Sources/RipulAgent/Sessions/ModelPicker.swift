@@ -124,9 +124,8 @@ public struct ModelPickerSections: View {
     /// Called with the picked model, or nil for the "Default" row.
     ///
     /// **Optional**: when it is nil the picker isn't choosing anything, it is
-    /// *curating* — a row tap toggles that model's pin instead. That is what the
-    /// Quick Start settings screen wants, and it means the rows never look
-    /// tappable while doing nothing.
+    /// *curating* — a row tap toggles that model's pin instead, so the rows
+    /// never look tappable while doing nothing.
     let onPick: ((ModelInfo?) -> Void)?
 
     /// Local mirror of the persisted pin order. The cache is the source of
@@ -174,8 +173,11 @@ public struct ModelPickerSections: View {
 
     // MARK: Data
 
+    /// Disabled rows only for an editor. Rows the web marks not pickable here
+    /// (platform-API models in the iOS apps) never: they stay in the catalog
+    /// for lookups, and are edited from the web admin.
     private var offered: [ModelInfo] {
-        showsDisabled ? models : models.filter(\.enabled)
+        models.filter { $0.isOfferedOnThisDevice && (showsDisabled || $0.enabled) }
     }
 
     private var searching: Bool {
@@ -213,7 +215,7 @@ public struct ModelPickerSections: View {
     // MARK: Body
 
     /// Sections only, so a host `List` can put its own rows above and below
-    /// them (the Quick Start settings screen does exactly that). `ModelPickerList`
+    /// them (the New Chat sheet does exactly that). `ModelPickerList`
     /// is the same thing with the `List` supplied.
     public var body: some View {
         Group {

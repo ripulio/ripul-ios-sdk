@@ -190,7 +190,7 @@ public struct HostSettingsListScreen: View {
     public var body: some View {
         List {
             if loading { ProgressView("Loading Macs…") }
-            else if machines.isEmpty { Text("Pair with a Mac to change its settings from here.").foregroundStyle(.secondary) }
+            else if machines.isEmpty { NoPairedMacView("Change the working folder, CLI and power settings of your Mac from here.") }
             ForEach(machines) { machine in
                 NavigationLink {
                     HostSettingsForm(machineId: machine.machineId, machineName: machine.displayName, bridge: bridge)

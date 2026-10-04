@@ -246,6 +246,21 @@ public struct ModelInfo: Identifiable, Equatable, Codable {
     public let perMOutput: Double?  // $ per million output tokens
     public let tier: String?        // standard | premium
 
+    /// False = known (an existing chat still resolves its name, menus and
+    /// launch through it) but not offered as a choice in the iOS apps. The web
+    /// decides; nil (older webs, cached rows) means offered.
+    public let pickable: Bool?
+
+    /// Whether pickers on this device offer the model. iPhone, iPad and
+    /// Catalyst honour `pickable`; the Mac host offers everything.
+    public var isOfferedOnThisDevice: Bool {
+        #if os(iOS)
+        return pickable != false
+        #else
+        return true
+        #endif
+    }
+
     /// True when this is a CLI model (Claude Code / Codex / Antigravity).
     public var isCli: Bool { (type ?? "").hasSuffix("-cli") }
 
@@ -275,7 +290,8 @@ public struct ModelInfo: Identifiable, Equatable, Codable {
         cliDefaultEffort: String? = nil,
         perMInput: Double? = nil,
         perMOutput: Double? = nil,
-        tier: String? = nil
+        tier: String? = nil,
+        pickable: Bool? = nil
     ) {
         self.id = id
         self.name = name
@@ -297,6 +313,7 @@ public struct ModelInfo: Identifiable, Equatable, Codable {
         self.perMInput = perMInput
         self.perMOutput = perMOutput
         self.tier = tier
+        self.pickable = pickable
     }
 }
 
@@ -2495,15 +2512,8 @@ public final class AgentBridge: NSObject {
     /// readable by `device_console_logs` / `host_console_logs`, not just on disk.
     public static func debugLog(_ message: String) {
         let ts = debugLogTimestampFormatter.string(from: Date())
-        let line = "\(ts) \(message)\n"
-        let path = "/tmp/ripul-debug.log"
-        if let handle = FileHandle(forWritingAtPath: path) {
-            handle.seekToEndOfFile()
-            handle.write(line.data(using: .utf8)!)
-            handle.closeFile()
-        } else {
-            FileManager.default.createFile(atPath: path, contents: line.data(using: .utf8))
-        }
+        // Written off this thread, to /tmp/ripul-debug.log rolling over at 16 MB.
+        DebugLogFile.shared.append("\(ts) \(message)\n")
         // Mirror into the unified buffer the log tools read (hop to the main actor;
         // debugLog may be called from any thread).
         Task { @MainActor in AgentBridge.current?.handleConsoleLog("LOG: [native] \(message)") }
@@ -5456,7 +5466,8 @@ public final class AgentBridge: NSObject {
                     cliDefaultEffort: item["cliDefaultEffort"] as? String,
                     perMInput: (item["perMInput"] as? NSNumber)?.doubleValue,
                     perMOutput: (item["perMOutput"] as? NSNumber)?.doubleValue,
-                    tier: item["tier"] as? String
+                    tier: item["tier"] as? String,
+                    pickable: item["pickable"] as? Bool
                 )
             }
 

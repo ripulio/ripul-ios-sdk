@@ -14,7 +14,7 @@ public struct ClaudeAccountsSettingsScreen: View {
             if loading && machines.isEmpty {
                 ProgressView("Loading Macs…")
             } else if machines.isEmpty {
-                Text("Pair with a Mac to manage its Claude accounts.").foregroundStyle(.secondary)
+                NoPairedMacView("See and switch the Claude accounts on your Mac.")
             }
             ForEach(machines) { machine in
                 ClaudeAccountSection(machine: machine, bridge: bridge, refreshToken: refreshToken)

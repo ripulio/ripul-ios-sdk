@@ -156,7 +156,7 @@ public enum QuickLaunchPreferences {
                 ids.append(first.id)
             }
         }
-        ids.append(contentsOf: models.filter { $0.group == apiGroup }.map(\.id))
+        ids.append(contentsOf: models.filter { $0.group == apiGroup && $0.isOfferedOnThisDevice }.map(\.id))
         return ids
     }
 
@@ -185,7 +185,9 @@ public enum QuickLaunchPreferences {
         guard isEnabled(cache: cache) else { return [] }
         let byId = Dictionary(models.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         return selectedIds(models: models, cache: cache).compactMap { id in
-            guard let model = byId[id] else { return nil }
+            // A pin on a model this device no longer offers is kept, not shown:
+            // it comes back if the model is offered again.
+            guard let model = byId[id], model.isOfferedOnThisDevice else { return nil }
             return QuickLaunchTarget.resolve(model: model)
         }
     }
@@ -196,6 +198,7 @@ public enum QuickLaunchPreferences {
     /// session *starters*.
     public static func offerableTargets(models: [ModelInfo]) -> [QuickLaunchTarget] {
         models
+            .filter(\.isOfferedOnThisDevice)
             .map(QuickLaunchTarget.resolve)
             .filter { $0.isCli || $0.model.isSubscription || $0.model.group == apiGroup }
     }

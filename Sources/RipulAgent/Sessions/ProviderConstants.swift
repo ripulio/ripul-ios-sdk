@@ -88,8 +88,12 @@ public enum ProviderConstants {
 
     /// Resolved definition for Claude Code sessions.
     public static let claude = providers.first(where: { $0.id == "claudeCode" })!
-    /// Resolved definition for Codex sessions.
+    /// Resolved definition for the retired original Codex provider ("Codex
+    /// Legacy"), kept to match the chats it made. Not the name to show someone
+    /// choosing or setting up Codex: that is `codexShared`.
     public static let codex = providers.first(where: { $0.id == "codex" })!
+    /// Resolved definition for Codex as it is used today.
+    public static let codexShared = providers.first(where: { $0.id == "codexShared" })!
     /// Resolved definition for Antigravity sessions.
     public static let antigravity = providers.first(where: { $0.id == "antigravity" })!
     /// Resolved definition for Ripul agent sessions.

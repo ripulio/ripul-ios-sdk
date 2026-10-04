@@ -160,6 +160,19 @@ public struct AgentConfiguration {
         value.addingPercentEncoding(withAllowedCharacters: hashParamValueAllowed)
     }
 
+    /// The session token and site-key config for the page, as the JSON object
+    /// AgentWebView assigns to `window.__ripulHandoff` at document start
+    /// (chrome-extension `launchHandoff.ts` reads it). nil when there is neither.
+    public var handoffJSON: String? {
+        var handoff: [String: String] = [:]
+        if let sessionToken { handoff["sessionToken"] = sessionToken }
+        if let siteKeyConfig { handoff["siteKeyConfig"] = siteKeyConfig }
+        guard !handoff.isEmpty,
+              let data = try? JSONSerialization.data(withJSONObject: handoff),
+              let json = String(data: data, encoding: .utf8) else { return nil }
+        return json
+    }
+
     public var embeddedURL: URL {
         var components = URLComponents(url: baseURL.appendingPathComponent(path), resolvingAgainstBaseURL: false)!
 
@@ -189,14 +202,11 @@ public struct AgentConfiguration {
             hashParams.append("context=\(encoded)")
         }
 
-        if let sessionToken {
-            hashParams.append("sessionToken=\(sessionToken)")
-        }
-
-        if let siteKeyConfig,
-           let encoded = Self.hashParamValue(siteKeyConfig) {
-            hashParams.append("siteKeyConfig=\(encoded)")
-        }
+        // sessionToken and siteKeyConfig are not URL params: AgentWebView hands
+        // them to the page before it runs (`handoffJSON`). Every message the
+        // page posts to native carries its URL, and WebKit parses it again on
+        // the main thread: 17 µs a message with a short URL, 406 µs with the
+        // 35 KB config in it.
 
         // Pass theme so the page can set the correct background before React loads.
         // The bridge also sends theme changes at runtime, but this ensures the

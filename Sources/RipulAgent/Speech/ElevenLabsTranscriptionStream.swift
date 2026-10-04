@@ -37,6 +37,14 @@ final class URLSessionSpeechSocket: RealtimeSpeechSocket {
 /// ("Mm-hmm ...") at the start of the next segment: 12 of 45 voice messages
 /// in the following two days, against 1 of 247 before. Recovery does not need
 /// short segments; it replays from the last acknowledged boundary either way.
+///
+/// A replay is the price of long segments, and it is paid out of sight. Scribe
+/// transcribes replayed audio from its first word again, so showing a replay
+/// made every reconnect look like the whole utterance starting over (28 s of
+/// speech re-emits about thirty growing partials). Text from a replay is held
+/// until the replay has passed the point the dead socket had reached, then
+/// swapped in at once. The segment is not cut at that point either: a commit
+/// there lands mid-sentence, which is the seam long segments exist to avoid.
 @available(iOS 26.0, macOS 26.0, *)
 @MainActor
 final class ElevenLabsTranscriptionStream {
@@ -48,6 +56,9 @@ final class ElevenLabsTranscriptionStream {
         var poll: UInt64 = 50_000_000
         var retry: UInt64 = 300_000_000
         var connectionTimeout: TimeInterval = 8
+        /// Also the longest Scribe may stay quiet while it has text out for the
+        /// open segment. It repeats that partial about once per second of audio
+        /// received, so twelve seconds without one is a dead connection.
         var responseTimeout: TimeInterval = 12
         var recoveryLimit: TimeInterval = 60
         /// Delay between chunks while a backlog (audio recorded while
@@ -61,12 +72,22 @@ final class ElevenLabsTranscriptionStream {
         /// Hard cap. Scribe commits on its own after ~36 s, which this stream
         /// would treat as an unsolicited boundary, so stay well inside it.
         var segmentLimit: TimeInterval = 30
+        /// Seconds of audio sent beyond the reconnect point before replayed
+        /// text is shown. Scribe's partials trail the audio by about a second,
+        /// so one arriving any earlier can still be shorter than the screen.
+        var replayMargin: TimeInterval = 1
+        /// How long to wait for Scribe to say something once a replay has been
+        /// sent. A replay of nothing but room noise gets no reply at all.
+        var replaySettle: TimeInterval = 1.5
     }
 
-    private let diagnosticID = UUID().uuidString
+    /// Names this stream in `[VOICE-STT]` lines. The provider passes the same
+    /// id to its sockets so their closing metrics can be matched to it.
+    let diagnosticID: String
     private let audio: BufferedSpeechAudio
     private let connect: () async throws -> any RealtimeSpeechSocket
     private let event: (SpeechService.TranscriptionEvent) -> Void
+    private let network: () -> String
     private let timing: Timing
     private var socket: (any RealtimeSpeechSocket)?
     private var receiver: Task<Void, Never>?
@@ -80,6 +101,10 @@ final class ElevenLabsTranscriptionStream {
     private var connectingAt = Date()
     private var recoveryAt: Date?
     private var lastResponse = Date()
+    /// Scribe has text out for the open segment on this socket. Only then is
+    /// its silence evidence of anything: it says nothing at all about sound it
+    /// does not recognise as speech, however loud the microphone found it.
+    private var partialOutstanding = false
     private var pendingCommit: (frame: Int, at: Date)?
     private var sendingAt: Date?
     private var sentFrame = 0
@@ -91,18 +116,34 @@ final class ElevenLabsTranscriptionStream {
     /// Text of the segment just acknowledged, until the next segment's first
     /// genuine partial. See `isStalePartial`.
     private var lastCommittedText: String?
+    /// Frame the dead socket's capture had reached when this one opened.
+    /// Non-nil while a replay is being sent and its text is held back.
     private var recoveryTarget: Int?
+    private var replaySentAt: Date?
+    /// Results of a replay, kept off the screen until it has caught up.
+    private var heldCommitted: [String] = []
+    private var heldPartial: String?
+    /// Last partial handed to the caller for the open segment.
+    private var shownPartial = ""
+    private var lastTick = Date()
+    /// Worst lateness of the 50 ms health tick since the last line that
+    /// reported it. The tick, the sends and the receives all run on the main
+    /// actor, so this separates a busy phone from a slow network.
+    private var worstTickLag: TimeInterval = 0
     private var finishing = false
     private(set) var finished = false
     private(set) var failure: Failure?
 
     init(audio: BufferedSpeechAudio, previouslyConnected: Bool = false,
-         timing: Timing = Timing(),
+         timing: Timing = Timing(), diagnosticID: String = UUID().uuidString,
+         network: @escaping () -> String = { VoiceNetworkPath.shared.summary },
          connect: @escaping () async throws -> any RealtimeSpeechSocket,
          event: @escaping (SpeechService.TranscriptionEvent) -> Void) {
         self.audio = audio
         established = previouslyConnected
         self.timing = timing
+        self.diagnosticID = diagnosticID
+        self.network = network
         self.connect = connect
         self.event = event
     }
@@ -111,13 +152,33 @@ final class ElevenLabsTranscriptionStream {
         voiceDiagnostic("[VOICE-STT] \(message) stream=\(diagnosticID)", level: level)
     }
 
+    /// `bufferedMs` is audio without a final transcript. `unsentMs` is the part
+    /// of it not yet handed to the socket: the upload is behind when that is
+    /// large, and the service is behind when it is not.
+    private func uploadState() -> String {
+        let state = audio.snapshot
+        let rate = audio.sampleRate
+        let lag = Int(worstTickLag * 1000)
+        worstTickLag = 0
+        return "bufferedMs=\((state.captured - state.confirmed) * 1000 / rate) unsentMs=\(max(0, state.captured - sentFrame) * 1000 / rate) mainLagMs=\(lag)"
+    }
+
     func start() {
         log("start previouslyConnected=\(established)")
+        // Starts the path monitor now. Asked for the first time at "connected",
+        // it had no reading yet and the first session after launch logged
+        // net=none on a working Wi-Fi connection.
+        _ = network()
         event(.recovery("Connecting — still recording"))
         open(after: 0)
+        lastTick = Date()
         watchdog = Task { @MainActor [weak self] in
             while !Task.isCancelled {
                 guard let self, !self.stopped else { return }
+                let now = Date()
+                let late = now.timeIntervalSince(self.lastTick) - Double(self.timing.poll) / 1_000_000_000
+                self.worstTickLag = max(self.worstTickLag, late)
+                self.lastTick = now
                 self.checkHealth()
                 do { try await Task.sleep(nanoseconds: self.timing.poll) } catch { return }
             }
@@ -125,7 +186,7 @@ final class ElevenLabsTranscriptionStream {
     }
 
     func stop() {
-        if !stopped { log("stop finished=\(finished) failed=\(failure != nil) bufferedMs=\((audio.snapshot.captured - audio.snapshot.confirmed) * 1000 / audio.sampleRate)") }
+        if !stopped { log("stop finished=\(finished) failed=\(failure != nil) \(uploadState())") }
         stopped = true
         generation = UUID()
         receiver?.cancel(); sender?.cancel(); watchdog?.cancel()
@@ -138,13 +199,14 @@ final class ElevenLabsTranscriptionStream {
     func finish() async throws {
         audio.finishCapture()
         finishing = true
-        log("finalizing bufferedMs=\((audio.snapshot.captured - audio.snapshot.confirmed) * 1000 / audio.sampleRate)")
+        let began = Date()
+        log("finalizing \(uploadState())")
         while !finished {
             if let failure { throw failure }
             if stopped { throw CancellationError() }
             try await Task.sleep(nanoseconds: timing.poll)
         }
-        log("finalized")
+        log("finalized elapsedMs=\(Int(Date().timeIntervalSince(began) * 1000))")
     }
 
     private func open(after delay: UInt64) {
@@ -154,6 +216,11 @@ final class ElevenLabsTranscriptionStream {
         ready = false
         pendingCommit = nil
         sendingAt = nil
+        partialOutstanding = false
+        // A held partial came from the socket that just died. Held commits
+        // acknowledged audio, so they stay until the screen can take them.
+        heldPartial = nil
+        replaySentAt = nil
         sentFrame = audio.snapshot.confirmed
         segmentStart = sentFrame
         segmentHasVoice = false
@@ -185,7 +252,7 @@ final class ElevenLabsTranscriptionStream {
         guard !stopped else { return }
         failures += 1
         // Never log request URLs, tokens, provider bodies or audio/transcripts.
-        log("disconnect reason=\(reason) \(voiceErrorMetadata(error)) attempt=\(failures) bufferedMs=\((audio.snapshot.captured - audio.snapshot.confirmed) * 1000 / audio.sampleRate)", level: .warn)
+        log("disconnect reason=\(reason) \(voiceErrorMetadata(error)) attempt=\(failures) \(uploadState()) \(network())", level: .warn)
         if !established && failures >= 3 {
             fail("ElevenLabs is unavailable at startup. Please repeat any speech recorded while connecting.", reason: "startup_unavailable")
             return
@@ -193,8 +260,8 @@ final class ElevenLabsTranscriptionStream {
         if recoveryAt == nil { recoveryAt = Date() }
         receiver?.cancel(); sender?.cancel(); socket?.cancel(); socket = nil
         event(.recovery("Reconnecting — still recording"))
-        // Leave the last partial visible while offline. Replay replaces it;
-        // it is never promoted to committed text merely because a socket died.
+        // Leave the last partial visible while offline and during the replay.
+        // It is never promoted to committed text merely because a socket died.
         open(after: min(timing.retry * UInt64(failures), 3_000_000_000))
     }
 
@@ -205,14 +272,17 @@ final class ElevenLabsTranscriptionStream {
         switch kind {
         case "session_started":
             guard !ready else { return }
-            log("connected recovering=\(recoveryAt != nil)")
+            log("connected recovering=\(recoveryAt != nil) connectMs=\(max(0, Int(Date().timeIntervalSince(connectingAt) * 1000))) \(network())")
             ready = true
             established = true
             lastResponse = Date()
             event(.connectionReady)
             if recoveryAt != nil {
-                recoveryTarget = audio.snapshot.captured
+                let state = audio.snapshot
+                recoveryTarget = state.captured
                 event(.recovery("Catching up — audio saved"))
+                // Nothing was waiting for a transcript, so nothing is replayed.
+                if state.confirmed == state.captured { completeRecovery() }
             } else {
                 event(.recovery(nil))
             }
@@ -232,7 +302,13 @@ final class ElevenLabsTranscriptionStream {
             let text = json["text"] as? String ?? ""
             guard !isStalePartial(text) else { return }
             lastCommittedText = nil
-            event(.partial(text))
+            partialOutstanding = !text.isEmpty
+            guard recoveryTarget == nil else {
+                if !text.isEmpty { heldPartial = text }
+                if replayCaughtUp { completeRecovery() }
+                return
+            }
+            show(partial: text)
         case "committed_transcript":
             // With manual commits and <=30s segments, an unsolicited commit
             // cannot safely acknowledge audio. Replay rather than guess.
@@ -247,16 +323,17 @@ final class ElevenLabsTranscriptionStream {
             segmentHasVoice = false
             lastVoicedFrame = commit.frame
             lastResponse = Date()
+            partialOutstanding = false
             previousText = String((previousText + " " + text).suffix(49))
             lastCommittedText = text
-            event(.committed(text))
-            if let target = recoveryTarget, commit.frame >= target {
-                let elapsed = Int(Date().timeIntervalSince(recoveryAt ?? Date()) * 1000)
-                log("recovered elapsedMs=\(elapsed) replayThroughFrame=\(commit.frame)")
-                recoveryTarget = nil
-                recoveryAt = nil
-                failures = 0
-                event(.recovery(nil))
+            if let target = recoveryTarget {
+                // A long replay closes segments on the way. Their text joins
+                // the screen with the rest of the replay, not ahead of it.
+                heldCommitted.append(text)
+                heldPartial = nil
+                if commit.frame >= target { completeRecovery() }
+            } else {
+                show(committed: text)
             }
             if finishing && commit.frame == audio.snapshot.captured { finished = true }
         case "committed_transcript_with_timestamps", "warning":
@@ -272,9 +349,45 @@ final class ElevenLabsTranscriptionStream {
         }
     }
 
-    /// Sends at most one audio chunk and, when a segment is complete, its
-    /// commit. Returns true when more recorded audio is already waiting.
-    @discardableResult
+    private func show(partial text: String) {
+        shownPartial = text
+        event(.partial(text))
+    }
+
+    private func show(committed text: String) {
+        shownPartial = ""
+        event(.committed(text))
+    }
+
+    /// The replay has been sent through the reconnect point and a little
+    /// beyond, or through everything recorded when capture has stopped.
+    private var replayCaughtUp: Bool {
+        guard let target = recoveryTarget else { return true }
+        let margin = Int(Double(audio.sampleRate) * timing.replayMargin)
+        return sentFrame >= min(target + margin, audio.snapshot.captured)
+    }
+
+    private func completeRecovery() {
+        guard recoveryTarget != nil else { return }
+        let elapsed = Int(Date().timeIntervalSince(recoveryAt ?? Date()) * 1000)
+        log("recovered elapsedMs=\(elapsed) replayThroughFrame=\(sentFrame)")
+        recoveryTarget = nil
+        recoveryAt = nil
+        replaySentAt = nil
+        failures = 0
+        showHeld()
+        event(.recovery(nil))
+    }
+
+    private func showHeld() {
+        let committed = heldCommitted
+        let partial = heldPartial
+        heldCommitted = []
+        heldPartial = nil
+        for text in committed { show(committed: text) }
+        if let partial { show(partial: partial) }
+    }
+
     /// Scribe can deliver a partial for a segment after that segment's
     /// committed transcript. The controller shows committed + partial, so a
     /// late partial repeats the whole segment: "A. Send command. A" once
@@ -299,6 +412,9 @@ final class ElevenLabsTranscriptionStream {
             .split(separator: " ").joined(separator: " ")
     }
 
+    /// Sends at most one audio chunk and, when a segment is complete, its
+    /// commit. Returns true when more recorded audio is already waiting.
+    @discardableResult
     private func sendNext(generation id: UUID) async throws -> Bool {
         guard pendingCommit == nil, let socket else { return false }
         let state = audio.snapshot
@@ -311,7 +427,6 @@ final class ElevenLabsTranscriptionStream {
             firstChunk = false
             sentFrame = chunk.end
             if chunk.voiced {
-                if !segmentHasVoice { lastResponse = Date() }
                 lastVoicedFrame = chunk.end
                 segmentHasVoice = true
             }
@@ -327,12 +442,13 @@ final class ElevenLabsTranscriptionStream {
         let rate = audio.sampleRate
         let seconds = Double(length) / Double(rate)
         let endOfCapture = finishing && sentFrame == audio.snapshot.captured
-        let atRecoveryBoundary = recoveryTarget.map { sentFrame >= $0 } ?? false
         let quiet = segmentHasVoice && Double(sentFrame - lastVoicedFrame) >= Double(rate) * timing.segmentPause
+        // A replay keeps the same boundaries live audio would have had. The
+        // reconnect point is wherever the socket happened to die, usually
+        // mid-sentence, and is not one of them.
         guard endOfCapture
             || seconds >= timing.segmentLimit
-            || (seconds >= timing.segmentTarget && quiet)
-            || (seconds >= 2 && atRecoveryBoundary) else { return backlog }
+            || (seconds >= timing.segmentTarget && quiet) else { return backlog }
         // Scribe begins processing after 2s. Pad a short final segment with
         // silence; padding is transport-only and never advances the PCM ledger.
         let padding = max(0, rate * 2 - length)
@@ -361,15 +477,29 @@ final class ElevenLabsTranscriptionStream {
             reconnect(URLError(.timedOut), reason: "send_timeout")
         } else if let pendingCommit, now.timeIntervalSince(pendingCommit.at) > timing.responseTimeout {
             reconnect(URLError(.timedOut), reason: "commit_timeout")
-        } else if ready && segmentHasVoice && now.timeIntervalSince(lastResponse) > timing.responseTimeout {
+        } else if ready && partialOutstanding && now.timeIntervalSince(lastResponse) > timing.responseTimeout {
+            // Not "the microphone heard something and Scribe said nothing":
+            // that is what Scribe does with a cough, a door or a fan, and
+            // reconnecting on it replayed the same noise every 15 seconds.
             reconnect(URLError(.timedOut), reason: "response_timeout")
+        } else if ready, pendingCommit == nil, let target = recoveryTarget, sentFrame >= target {
+            if let since = replaySentAt {
+                if now.timeIntervalSince(since) >= timing.replaySettle { completeRecovery() }
+            } else {
+                replaySentAt = now
+            }
         }
     }
 
     private func fail(_ message: String, reason: StaticString, audioGap: Bool = false) {
         guard !stopped else { return }
         failure = Failure(message: message)
-        log("recovery stopped reason=\(reason) audioGap=\(audioGap) bufferedMs=\((audio.snapshot.captured - audio.snapshot.confirmed) * 1000 / audio.sampleRate)", level: .error)
+        log("recovery stopped reason=\(reason) audioGap=\(audioGap) \(uploadState()) \(network())", level: .error)
+        // Text a replay had already confirmed belongs to the user. The caller
+        // keeps whatever is on screen, so only a held partial that says more
+        // than the screen does replaces it.
+        if heldCommitted.isEmpty, let held = heldPartial, held.count < shownPartial.count { heldPartial = nil }
+        showHeld()
         stop()
         event(audioGap ? .audioGap(message) : .error(message))
     }

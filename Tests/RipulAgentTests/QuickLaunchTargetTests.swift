@@ -14,7 +14,8 @@ final class QuickLaunchTargetTests: XCTestCase {
     private func model(
         id: String,
         type: String? = nil,
-        group: String = "Ungrouped"
+        group: String = "Ungrouped",
+        pickable: Bool? = nil
     ) -> ModelInfo {
         ModelInfo(
             id: id,
@@ -24,7 +25,8 @@ final class QuickLaunchTargetTests: XCTestCase {
             group: group,
             description: nil,
             supportsThinking: false,
-            type: type
+            type: type,
+            pickable: pickable
         )
     }
 
@@ -82,5 +84,36 @@ final class QuickLaunchTargetTests: XCTestCase {
             model(id: "grok-grok-4-1-fast-reasoning-latest", group: "Grok"),
         ]
         XCTAssertTrue(QuickLaunchPreferences.offerableTargets(models: models).isEmpty)
+    }
+
+    // MARK: Rows the web marks not pickable
+
+    /// The web marks platform-API rows `pickable: false` for the iOS apps. They
+    /// stay in the catalog (an existing chat still resolves its model) but are
+    /// neither offered nor seeded as shortcuts there. The Mac host ignores it.
+    func testRowsMarkedNotPickableAreOfferedOnlyOffIos() {
+        let hidden = model(id: "backend-claude-fable-5", group: QuickLaunchPreferences.apiGroup, pickable: false)
+        let cli = model(id: "claude-cli-raw-fable", group: "Claude Code", pickable: true)
+        let offered = QuickLaunchPreferences.offerableTargets(models: [hidden, cli]).map(\.model.id)
+        let seeded = QuickLaunchPreferences.seededIds(models: [hidden, cli])
+        #if os(iOS)
+        XCTAssertFalse(hidden.isOfferedOnThisDevice)
+        XCTAssertEqual(offered, ["claude-cli-raw-fable"])
+        XCTAssertFalse(seeded.contains("backend-claude-fable-5"))
+        #else
+        XCTAssertTrue(hidden.isOfferedOnThisDevice)
+        XCTAssertEqual(offered, ["backend-claude-fable-5", "claude-cli-raw-fable"])
+        XCTAssertTrue(seeded.contains("backend-claude-fable-5"))
+        #endif
+    }
+
+    /// Rows from an older web, or decoded from a cache written before the
+    /// field existed, carry no mark and stay offered everywhere.
+    func testUnmarkedRowsStayOffered() throws {
+        XCTAssertTrue(model(id: "backend-claude-fable-5", group: QuickLaunchPreferences.apiGroup).isOfferedOnThisDevice)
+        let legacy = #"{"id":"backend-claude-fable-5","name":"Fable","modelId":"claude-fable-5","provider":"anthropic","group":"Anthropic API","supportsThinking":false,"url":"","enabled":true,"cliRawMode":false}"#
+        let decoded = try JSONDecoder().decode(ModelInfo.self, from: Data(legacy.utf8))
+        XCTAssertNil(decoded.pickable)
+        XCTAssertTrue(decoded.isOfferedOnThisDevice)
     }
 }

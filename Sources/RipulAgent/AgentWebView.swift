@@ -81,6 +81,9 @@ public struct AgentWebView: NSViewRepresentable {
         config.userContentController.addUserScript(Self.installationIdentityScript)
         config.userContentController.addUserScript(Self.nativeBuildScript)
         config.userContentController.addUserScript(Self.hostPreferencesScript())
+        if let handoff = Self.handoffScript(configuration) {
+            config.userContentController.addUserScript(handoff)
+        }
         config.userContentController.add(coordinator, name: "agentBridge")
         config.userContentController.add(coordinator, name: "agentLog")
         config.userContentController.add(coordinator, name: "agentNetwork")
@@ -184,6 +187,12 @@ public struct AgentWebView: NSViewRepresentable {
             return host != baseHost
         }
 
+        /// The document a navigation would replace: the app's own, unless the
+        /// link is aimed at a frame inside it.
+        private func replacedDocument(by action: WKNavigationAction, in webView: WKWebView) -> URL? {
+            action.targetFrame?.isMainFrame == false ? nil : webView.url
+        }
+
         public func userContentController(
             _ userContentController: WKUserContentController,
             didReceive message: WKScriptMessage
@@ -231,7 +240,8 @@ public struct AgentWebView: NSViewRepresentable {
             }
             if let url = navigationAction.request.url {
                 NSLog("[AgentWebView] Navigation: %@", WebViewLogRedaction.url(url))
-                if navigationAction.navigationType == .linkActivated && isExternalURL(url) {
+                if !standalone, navigationAction.navigationType == .linkActivated,
+                   AgentLinkRouting.leavesApp(url, from: replacedDocument(by: navigationAction, in: webView), baseHost: baseHost) {
                     NSLog("[AgentWebView] Opening external URL in browser: %@", url.absoluteString)
                     NSWorkspace.shared.open(url)
                     return .cancel
@@ -250,7 +260,7 @@ public struct AgentWebView: NSViewRepresentable {
             if standalone { return nil }
             if let url = navigationAction.request.url {
                 NSLog("[AgentWebView] Popup request: %@", url.absoluteString)
-                if isExternalURL(url) {
+                if AgentLinkRouting.leavesApp(url, from: webView.url, baseHost: baseHost) {
                     NSLog("[AgentWebView] Opening external popup URL in browser: %@", url.absoluteString)
                     NSWorkspace.shared.open(url)
                 } else {
@@ -467,6 +477,9 @@ private struct AgentWebViewRepresentable: UIViewControllerRepresentable {
         config.userContentController.addUserScript(AgentWebView.installationIdentityScript)
         config.userContentController.addUserScript(AgentWebView.nativeBuildScript)
         config.userContentController.addUserScript(AgentWebView.hostPreferencesScript())
+        if let handoff = AgentWebView.handoffScript(configuration) {
+            config.userContentController.addUserScript(handoff)
+        }
 
         config.userContentController.add(context.coordinator, name: "agentBridge")
         config.userContentController.add(context.coordinator, name: "agentLog")
@@ -695,6 +708,12 @@ extension AgentWebView {
             return host != baseHost
         }
 
+        /// The document a navigation would replace: the app's own, unless the
+        /// link is aimed at a frame inside it.
+        private func replacedDocument(by action: WKNavigationAction, in webView: WKWebView) -> URL? {
+            action.targetFrame?.isMainFrame == false ? nil : webView.url
+        }
+
         /// JS snippet that freezes the Virtuoso scroller's scrollTop for a
         /// duration, preventing any keyboard-triggered web scroll from firing.
         private static let scrollLockJS = """
@@ -801,7 +820,8 @@ extension AgentWebView {
             }
             if let url = navigationAction.request.url {
                 NSLog("[AgentWebView] Navigation: %@", WebViewLogRedaction.url(url))
-                if navigationAction.navigationType == .linkActivated && isExternalURL(url) {
+                if !standalone, navigationAction.navigationType == .linkActivated,
+                   AgentLinkRouting.leavesApp(url, from: replacedDocument(by: navigationAction, in: webView), baseHost: baseHost) {
                     NSLog("[AgentWebView] Opening external URL in Safari: %@", url.absoluteString)
                     await UIApplication.shared.open(url)
                     return .cancel
@@ -820,7 +840,7 @@ extension AgentWebView {
             if standalone { return nil }
             if let url = navigationAction.request.url {
                 NSLog("[AgentWebView] Popup request: %@", url.absoluteString)
-                if isExternalURL(url) {
+                if AgentLinkRouting.leavesApp(url, from: webView.url, baseHost: baseHost) {
                     NSLog("[AgentWebView] Opening external popup URL in Safari: %@", url.absoluteString)
                     UIApplication.shared.open(url)
                 } else {
@@ -1115,6 +1135,17 @@ extension AgentWebView {
         formatter.dateFormat = "MMdd-HHmm"
         return formatter.string(from: modified)
     }()
+
+    /// The session token and site-key config, as `window.__ripulHandoff`,
+    /// before the page's own scripts run. They used to be URL params, which
+    /// made every message the page posts to native carry them (see
+    /// AgentConfiguration.handoffJSON). Main frame only: embedded frames get
+    /// theirs from their embedder.
+    public static func handoffScript(_ configuration: AgentConfiguration) -> WKUserScript? {
+        guard let json = configuration.handoffJSON else { return nil }
+        return WKUserScript(source: "window.__ripulHandoff = \(json);",
+                            injectionTime: .atDocumentStart, forMainFrameOnly: true)
+    }
 
     /// Exposes the native mirror of host-mode prefs (hostEnabled / machineName)
     /// and the long-lived machine token so the web layer can keep host comms

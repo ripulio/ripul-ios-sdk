@@ -139,6 +139,8 @@ public struct UnifiedSessionRow: View {
     var hideProjectName: Bool = false
     var isSelectMode: Bool = false
     var isSelected: Bool = false
+    /// Another person is in this chat. Shown as a group icon under the time.
+    var isGroupChat: Bool = false
     /// Lines the title may occupy. 1 everywhere except the agent screen's
     /// EXPANDED title lozenge, where showing more of a long title is the
     /// point of expanding — and growing this row's line count (rather than
@@ -161,6 +163,7 @@ public struct UnifiedSessionRow: View {
         hideProjectName: Bool = false,
         isSelectMode: Bool = false,
         isSelected: Bool = false,
+        isGroupChat: Bool = false,
         titleLineLimit: Int = 1,
         onSessionAction: ((SessionRowAction) -> Void)? = nil
     ) {
@@ -177,6 +180,7 @@ public struct UnifiedSessionRow: View {
         self.hideProjectName = hideProjectName
         self.isSelectMode = isSelectMode
         self.isSelected = isSelected
+        self.isGroupChat = isGroupChat
         self.titleLineLimit = titleLineLimit
         self.onSessionAction = onSessionAction
     }
@@ -573,9 +577,12 @@ public struct UnifiedSessionRow: View {
     ///
     /// Unread replies are indicated by the bold title and envelope; a chat
     /// awaiting input may already have been read.
+    ///
+    /// A group chat's icon shares the slot at its trailing edge, so it sits
+    /// under the time and holds still while the dots come and go beside it.
     @ViewBuilder
     private var runningIndicatorSlot: some View {
-        ZStack {
+        HStack(spacing: 4) {
             if phase == .running {
                 // Core Animation, not a SwiftUI symbol effect: see
                 // RenderServerEllipsis for the per-frame cost this removed.
@@ -584,6 +591,13 @@ public struct UnifiedSessionRow: View {
                     .accessibilityLabel("Running")
                     .transition(.opacity)
                     .uiKitIdentifier("UnifiedSessionRow.phaseIndicator.running")
+            }
+            if isGroupChat {
+                Image(systemName: "person.2.fill")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .accessibilityLabel("Group chat")
+                    .uiKitIdentifier("UnifiedSessionRow.groupChatIcon")
             }
         }
         .frame(height: 16)
