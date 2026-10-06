@@ -5,11 +5,27 @@
       "clientType": "web",
       "displayName": "Peter Maude",
       "firstSeenAt": "2026-10-06T10:50:03.755Z",
-      "lastSeenAt": "2026-10-06T12:18:10.699Z"
+      "lastSeenAt": "2026-10-06T14:37:07.556Z"
     }
   ],
   "createdAt": "2026-10-06T10:50:03.696Z",
-  "deployments": [],
+  "deployments": [
+    {
+      "id": "dep_muws71lo_v8zi",
+      "target": "pages",
+      "timestamp": "2026-10-06T14:35:58.007Z"
+    },
+    {
+      "id": "dep_muws71o6_k3sr",
+      "target": "pages",
+      "timestamp": "2026-10-06T14:35:58.180Z"
+    },
+    {
+      "id": "dep_muwsd2ol_d6hb",
+      "target": "pages",
+      "timestamp": "2026-10-06T14:40:39.485Z"
+    }
+  ],
   "filesEdited": [
     {
       "editCount": 8,
@@ -42,6 +58,14 @@
       "firstSeenAt": "2026-10-06T12:20:54.853Z",
       "lastSeenAt": "2026-10-06T12:20:54.985Z",
       "toolName": "Write"
+    },
+    {
+      "editCount": 3,
+      "fileName": "0062_app_theme_sites_and_history.sql",
+      "filePath": "/Users/petermaude/Documents/repos/ripul/chrome-extension/packages/api/migrations/0062_app_theme_sites_and_history.sql",
+      "firstSeenAt": "2026-10-06T14:33:41.877Z",
+      "lastSeenAt": "2026-10-06T14:40:39.178Z",
+      "toolName": "Write"
     }
   ],
   "id": "cli_59b195b1-10d9-4f4b-9f13-c2fef7aedc8a",
@@ -54,7 +78,7 @@
       "group": "Local · Claude Code CLI",
       "id": "claude-cli-raw-sonnet",
       "kind": "agent",
-      "lastSeenAt": "2026-10-06T11:04:57.584Z"
+      "lastSeenAt": "2026-10-06T12:22:35.831Z"
     },
     {
       "displayName": "Peter Maude",
@@ -62,9 +86,9 @@
       "group": "web",
       "id": "human-user_3AONWcmlO5RS8dj3lRzQZtYXFxA",
       "kind": "human",
-      "lastSeenAt": "2026-10-06T12:18:11.247Z"
+      "lastSeenAt": "2026-10-06T14:37:07.635Z"
     }
   ],
   "tags": [],
-  "updatedAt": "2026-10-06T12:20:54.985Z"
+  "updatedAt": "2026-10-06T14:40:39.485Z"
 }
