@@ -5,35 +5,43 @@
       "clientType": "web",
       "displayName": "Peter Maude",
       "firstSeenAt": "2026-10-06T10:50:03.755Z",
-      "lastSeenAt": "2026-10-06T12:04:13.977Z"
+      "lastSeenAt": "2026-10-06T12:18:10.699Z"
     }
   ],
   "createdAt": "2026-10-06T10:50:03.696Z",
   "deployments": [],
   "filesEdited": [
     {
-      "editCount": 6,
+      "editCount": 8,
       "fileName": "RemoteThemeClient.swift",
       "filePath": "/Users/petermaude/Documents/repos/ripul/ripul-ios-sdk/Sources/RipulAgent/RemoteThemeClient.swift",
       "firstSeenAt": "2026-10-06T11:43:34.101Z",
-      "lastSeenAt": "2026-10-06T11:46:38.894Z",
+      "lastSeenAt": "2026-10-06T12:15:58.219Z",
       "toolName": "Edit"
     },
     {
-      "editCount": 6,
+      "editCount": 8,
       "fileName": "ThemeManagementScreen.swift",
       "filePath": "/Users/petermaude/Documents/repos/ripul/ripul-ios-sdk/Sources/RipulAgent/ThemeManagementScreen.swift",
       "firstSeenAt": "2026-10-06T11:43:37.282Z",
-      "lastSeenAt": "2026-10-06T11:46:38.702Z",
+      "lastSeenAt": "2026-10-06T12:15:58.068Z",
       "toolName": "Edit"
     },
     {
-      "editCount": 3,
+      "editCount": 4,
       "fileName": "ThemeEngine.swift",
       "filePath": "/Users/petermaude/Documents/repos/ripul/ripul-ios-sdk/Sources/RipulAgent/ThemeEngine.swift",
       "firstSeenAt": "2026-10-06T11:44:05.446Z",
-      "lastSeenAt": "2026-10-06T11:46:38.792Z",
+      "lastSeenAt": "2026-10-06T12:15:58.142Z",
       "toolName": "Edit"
+    },
+    {
+      "editCount": 2,
+      "fileName": "project_theme_edits_durable_draft.md",
+      "filePath": "/Users/petermaude/Documents/repos/ripul/.ripul/memories/project_theme_edits_durable_draft.md",
+      "firstSeenAt": "2026-10-06T12:20:54.853Z",
+      "lastSeenAt": "2026-10-06T12:20:54.985Z",
+      "toolName": "Write"
     }
   ],
   "id": "cli_59b195b1-10d9-4f4b-9f13-c2fef7aedc8a",
@@ -54,9 +62,9 @@
       "group": "web",
       "id": "human-user_3AONWcmlO5RS8dj3lRzQZtYXFxA",
       "kind": "human",
-      "lastSeenAt": "2026-10-06T12:04:14.244Z"
+      "lastSeenAt": "2026-10-06T12:18:11.247Z"
     }
   ],
   "tags": [],
-  "updatedAt": "2026-10-06T12:04:14.244Z"
+  "updatedAt": "2026-10-06T12:20:54.985Z"
 }
