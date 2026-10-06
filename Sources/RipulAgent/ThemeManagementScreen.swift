@@ -10,6 +10,8 @@ final class ThemeManagementModel: ObservableObject {
     @Published var published = false
     @Published var version = 0
     @Published private(set) var undoTitle: String?
+    @Published private(set) var history: [RipulThemeVersion] = []
+    @Published private(set) var historyNote: String?
     private var undoDraft: (before: Data, after: Data)?
     private(set) var baseline = Data()
     private(set) var etag: String?
@@ -103,17 +105,11 @@ final class ThemeManagementModel: ObservableObject {
             baseline = try remote?.authoritativeDocument ?? capture(nil)
             etag = remote?.authoritativeETag
             if let bytes = try? Data(contentsOf: draftURL), let draft = try? JSONDecoder().decode(Draft.self, from: bytes) {
-                baseline = draft.baseline; etag = draft.etag
-                if Self.canonical(draft.data) != nil, let live = try? capture(draft.data) {
-                    // The running app already shows the draft plus any later edit, so
-                    // take it as-is. Re-applying the saved draft would undo those edits.
-                    text = try RipulThemeManifest(data: live, etag: etag).formatted
-                    saveNow()
-                } else {
-                    text = draft.text
-                    sourceDirty = true
-                    applySource()
-                }
+                // Every live edit is saved into this draft as it happens
+                // (RipulThemeEngine.recordLocalEdit), so it is the complete theme.
+                text = draft.text; baseline = draft.baseline; etag = draft.etag
+                sourceDirty = true
+                applySource()
             } else {
                 text = try RipulThemeManifest(data: capture(nil), etag: etag).formatted
             }
@@ -155,6 +151,29 @@ final class ThemeManagementModel: ObservableObject {
             baseline = fresh.data; etag = fresh.etag; text = fresh.formatted
             sourceDirty = false; published = false; error = nil; version &+= 1; saveNow()
         } catch { self.error = error.localizedDescription }
+    }
+    /// The theme's earlier publications, for the people who may publish it.
+    func loadHistory() async {
+        guard let themeID else { return }
+        do { history = try await publisher.versions(id: themeID); historyNote = nil }
+        catch { history = []; historyNote = error.localizedDescription }
+    }
+    /// Is this the version the server is running now?
+    func isLive(_ version: RipulThemeVersion) -> Bool {
+        let strip = { (tag: String) in tag.hasPrefix("W/") ? String(tag.dropFirst(2)) : tag }
+        return etag.map(strip) == strip(version.etag)
+    }
+    /// Make the draft equal to an earlier publication. Nothing goes live until it is
+    /// reviewed and published, so the change list shows exactly what restoring undoes.
+    func restore(_ version: RipulThemeVersion) async {
+        guard let themeID, !busy, !sourceDirty else { return }
+        busy = true
+        do {
+            let document = try await publisher.document(id: themeID, version: version)
+            busy = false
+            try replaceReviewedDraft(document)
+            undoDraft = nil; undoTitle = nil; published = false
+        } catch { busy = false; self.error = error.localizedDescription }
     }
     var canUndoDiscard: Bool {
         !busy && !sourceDirty && undoDraft.map { Self.canonical(data) == Self.canonical($0.after) } == true
@@ -266,6 +285,7 @@ public struct RipulThemeManagementScreen: View {
     @State private var showSource = false
     @State private var reviewPublish = false
     @State private var confirmReload = false
+    @State private var pendingRestore: RipulThemeVersion?
     @Environment(\.dismiss) private var dismiss
 
     public init(baseURL: URL, tokenProvider: @escaping () -> String?) {
@@ -330,6 +350,25 @@ public struct RipulThemeManagementScreen: View {
                         .disabled(model.busy).accessibilityIdentifier("ThemeManagement.document")
                 }
                 if model.sourceDirty { Text("Apply the edits in Theme document before editing elements or publishing.").font(.footnote) }
+            }
+            if model.themeID != nil {
+                Section {
+                    if let note = model.historyNote { Text(note).font(.footnote).foregroundStyle(.secondary) }
+                    ForEach(model.history.prefix(30)) { version in
+                        Button { pendingRestore = version } label: {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(version.publishedAt.map { $0.formatted(date: .abbreviated, time: .shortened) } ?? "Unknown date")
+                                    .foregroundStyle(Color.primary)
+                                Text(model.isLive(version) ? "\(version.publishedBy) · live now" : version.publishedBy)
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                        .disabled(model.busy || model.sourceDirty || model.isLive(version))
+                        .accessibilityIdentifier("ThemeManagement.history.version")
+                    }
+                } header: { Text("History") } footer: {
+                    Text("Restore puts an earlier version in your draft. Review & Publish makes it live.")
+                }
             }
             Section {
                 NavigationLink("Text tokens and individual overrides") { RipulTextLibraryScreen() }
@@ -399,6 +438,14 @@ public struct RipulThemeManagementScreen: View {
         .confirmationDialog("Replace this draft with the server version?", isPresented: $confirmReload, titleVisibility: .visible) {
             Button("Reload and replace draft", role: .destructive) { Task { await model.reloadServer() } }
         }
+        .confirmationDialog("Restore this version?", isPresented: Binding(
+            get: { pendingRestore != nil }, set: { if !$0 { pendingRestore = nil } }
+        ), titleVisibility: .visible, presenting: pendingRestore) { version in
+            Button("Restore to draft", role: .destructive) { Task { await model.restore(version) } }
+        } message: { _ in
+            Text("Your unpublished changes are replaced by this version. Nothing goes live until you publish.")
+        }
+        .task(id: model.etag) { await model.loadHistory() }
     }
     private var sourceEditor: some View {
         NavigationStack {

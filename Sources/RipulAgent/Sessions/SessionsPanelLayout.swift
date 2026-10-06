@@ -16,6 +16,15 @@ extension EnvironmentValues {
 enum SessionsPanelLayout {
     static let bottomGap: CGFloat = 10
 
+    /// ConcentricRectangle and Edge.Corner.Style are "26.0" in the SDK, but
+    /// macOS 26.0 beta 25A5306g doesn't have them: naming them in a view's
+    /// type crashed Ripul there at launch (2026-10-06). 26.1 has them. Check
+    /// this before using `shape`, and keep it out of any view's concrete type.
+    static var hasConcentricShapes: Bool {
+        if #available(iOS 26.1, macOS 26.1, *) { return true }
+        return false
+    }
+
     @available(iOS 26.0, macOS 26.0, *)
     static var shape: ConcentricRectangle {
         ConcentricRectangle(

@@ -111,6 +111,11 @@ public struct GlassSessionsList: View {
     let onMoveUnifiedSession: (UnifiedSession, RemoteMachine) -> Void
     let onBatchArchive: ([UnifiedSession]) -> Void
     let onBatchDelete: ([UnifiedSession]) -> Void
+    /// Keys of the chats shared with a team on a team's Mac.
+    var teamSharedKeys: Set<String> = []
+    /// Nil unless the chat is on a Mac a team shares.
+    var teamSharing: (UnifiedSession) -> TeamChatSharing? = { _ in nil }
+    var onSetTeamShared: (UnifiedSession, Bool) -> Void = { _, _ in }
     var onDismissSheet: (() -> Void)? = nil
     var machineIcons: [String: String] = [:]
     var restartingMachineId: String? = nil
@@ -215,6 +220,9 @@ public struct GlassSessionsList: View {
         onMoveUnifiedSession: @escaping (UnifiedSession, RemoteMachine) -> Void,
         onBatchArchive: @escaping ([UnifiedSession]) -> Void,
         onBatchDelete: @escaping ([UnifiedSession]) -> Void,
+        teamSharedKeys: Set<String> = [],
+        teamSharing: @escaping (UnifiedSession) -> TeamChatSharing? = { _ in nil },
+        onSetTeamShared: @escaping (UnifiedSession, Bool) -> Void = { _, _ in },
         onDismissSheet: (() -> Void)? = nil,
         machineIcons: [String: String] = [:],
         restartingMachineId: String? = nil,
@@ -259,6 +267,9 @@ public struct GlassSessionsList: View {
         self.onMoveUnifiedSession = onMoveUnifiedSession
         self.onBatchArchive = onBatchArchive
         self.onBatchDelete = onBatchDelete
+        self.teamSharedKeys = teamSharedKeys
+        self.teamSharing = teamSharing
+        self.onSetTeamShared = onSetTeamShared
         self.onDismissSheet = onDismissSheet
         self.machineIcons = machineIcons
         self.restartingMachineId = restartingMachineId
@@ -521,6 +532,7 @@ public struct GlassSessionsList: View {
                             isSelectMode: isSelecting,
                             isSelected: selectedSessionIds.contains(session.id),
                             isGroupChat: isGroupChat(session),
+                            isTeamShared: !teamSharedKeys.isEmpty && session.matchKeys.contains(where: teamSharedKeys.contains),
                             onSessionAction: { action in
                                 handleSessionAction(action, session: session)
                             }
@@ -642,6 +654,19 @@ public struct GlassSessionsList: View {
             Label("Tags…", systemImage: "tag")
         }
         .uiKitIdentifier("GlassSessionsList.contextMenu.tagsButton")
+        // On a team's Mac a chat is private until whoever started it shares it.
+        if let team = teamSharing(session), team.canChange {
+            Button {
+                onSetTeamShared(session, !team.shared)
+            } label: {
+                if team.shared {
+                    Label("Make Private", systemImage: "lock")
+                } else {
+                    Label("Share with \(team.teamName)", systemImage: "person.3")
+                }
+            }
+            .uiKitIdentifier("GlassSessionsList.contextMenu.teamSharingButton")
+        }
         // Only Claude Code transcripts can be exported and resumed elsewhere.
         // The source is excluded by machineId; the name is a fallback for rows
         // that carry none (display names collide — "Mac").

@@ -141,7 +141,7 @@ public struct NewChatSheet: View {
                     Text("Folder")
                 } footer: {
                     if let machine = candidates.first(where: { $0.id == draft.machineID }), let team = machine.teamName {
-                        Text("Shared with \(team). Chats use this Mac's coding account and are visible to the team. Choose a separate working copy for independent edits. Mac-local history is available through Direct pairing.")
+                        Text("Shared with \(team). Chats use this Mac's coding account and stay private to you until you share one with the team. Colleagues work in the same folders, so choose a separate working copy for independent edits. Mac-local history is available through Direct pairing.")
                     }
                     Text(usingCustomFolder
                          ? (draft.connection == .direct ? "Work uses your chosen folder. History stays on the Mac." : "Work uses your chosen folder. History stays in Ripul cloud.")

@@ -317,7 +317,9 @@ extension AgentBridge {
                 providerLabel: item["providerLabel"] as? String,
                 model: item["model"] as? String,
                 hostChatId: item["hostChatId"] as? String,
-                machineId: machineId
+                machineId: machineId,
+                teamVisibility: item["teamVisibility"] as? String,
+                creatorUserId: item["creatorUserId"] as? String
             )
         }
         NSLog("[AgentBridge] listRemoteSessions: %d sessions on %@", parsed.count, machineId)

@@ -141,6 +141,8 @@ public struct UnifiedSessionRow: View {
     var isSelected: Bool = false
     /// Another person is in this chat. Shown as a group icon under the time.
     var isGroupChat: Bool = false
+    /// On a team's Mac, shared with the team by whoever started it.
+    var isTeamShared: Bool = false
     /// Lines the title may occupy. 1 everywhere except the agent screen's
     /// EXPANDED title lozenge, where showing more of a long title is the
     /// point of expanding — and growing this row's line count (rather than
@@ -164,6 +166,7 @@ public struct UnifiedSessionRow: View {
         isSelectMode: Bool = false,
         isSelected: Bool = false,
         isGroupChat: Bool = false,
+        isTeamShared: Bool = false,
         titleLineLimit: Int = 1,
         onSessionAction: ((SessionRowAction) -> Void)? = nil
     ) {
@@ -181,6 +184,7 @@ public struct UnifiedSessionRow: View {
         self.isSelectMode = isSelectMode
         self.isSelected = isSelected
         self.isGroupChat = isGroupChat
+        self.isTeamShared = isTeamShared
         self.titleLineLimit = titleLineLimit
         self.onSessionAction = onSessionAction
     }
@@ -598,6 +602,13 @@ public struct UnifiedSessionRow: View {
                     .foregroundStyle(.tertiary)
                     .accessibilityLabel("Group chat")
                     .uiKitIdentifier("UnifiedSessionRow.groupChatIcon")
+            }
+            if isTeamShared {
+                Image(systemName: "person.3.fill")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .accessibilityLabel("Shared with team")
+                    .uiKitIdentifier("UnifiedSessionRow.teamSharedIcon")
             }
         }
         .frame(height: 16)

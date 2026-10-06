@@ -188,12 +188,15 @@ public struct GlassPanelBackground: ViewModifier {
     public func body(content: Content) -> some View {
         #if os(iOS)
         if #available(iOS 26.0, *) {
-            if followsContainerBottomCorners {
+            if followsContainerBottomCorners, SessionsPanelLayout.hasConcentricShapes {
                 // Only the screen-bottom panel follows the display. Its top
                 // stays rounded, and corners away from a display edge (split
                 // columns, sheets) retain a 16pt minimum instead of squaring off.
+                // AnyView, so this body's type doesn't name ConcentricRectangle:
+                // SwiftUI resolves a body's whole type whichever branch runs,
+                // and on a 26.0 beta that type is missing (see hasConcentricShapes).
                 let shape = SessionsPanelLayout.shape
-                content.clipShape(shape).glassEffect(.clear, in: shape)
+                AnyView(content.clipShape(shape).glassEffect(.clear, in: shape))
             } else {
                 content.glassEffect(.clear, in: .rect(cornerRadius: 16))
             }

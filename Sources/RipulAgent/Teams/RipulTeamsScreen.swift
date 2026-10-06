@@ -703,7 +703,7 @@ struct RipulTeamDetailScreen: View {
         } header: {
             Text("Shared Hosts")
         } footer: {
-            Text("Accepted team members can start and continue chats using each Mac's files, tools and coding account. Find shared Macs in Agents. Stopping sharing ends command and chat access within 30 seconds; accepted jobs can finish.")
+            Text("Accepted team members can start chats using each Mac's files, tools and coding account. Each person's chats are private until they share one with the team. Find shared Macs in Agents. Stopping sharing ends command and chat access within 30 seconds; accepted jobs can finish.")
         }
     }
 

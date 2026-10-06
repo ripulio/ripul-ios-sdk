@@ -45,6 +45,8 @@ public struct RipulDepartmentActivity: Codable, Hashable {
         case "agent:interrupt": return "Interrupted a turn"
         case "agent:execCommand": return "Ran a command"
         case "agent:setWorkingDirectory": return "Changed working folder"
+        case "chat:share": return "Shared a chat with the team"
+        case "chat:unshare": return "Made a chat private"
         default: return "Updated the host"
         }
     }

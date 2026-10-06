@@ -343,6 +343,11 @@ public struct RemoteSessionInfo: Identifiable, Equatable, Codable {
     /// The machine this session was discovered on. Stamped client-side after the
     /// per-machine fetch so routing (archive, delete, restore) lands on the owner.
     public let machineId: String?
+    /// On a Mac a team shares: "team" when the team may use this chat, else
+    /// "private". Stamped by the relay; nil on a Mac that is not shared.
+    public var teamVisibility: String? = nil
+    /// On a Mac a team shares: the account that started this chat.
+    public var creatorUserId: String? = nil
 }
 
 /// A todo item owned by the signed-in user, surfaced to the native "Pick to do"

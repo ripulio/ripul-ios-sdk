@@ -160,7 +160,15 @@ public final class RipulSessionListModel {
     /// "moving" between machines. Display names are derived at rebuild time.
     @ObservationIgnored private var remoteSessionsByMachineId: [String: [RemoteSessionInfo]] = [:]
     /// Flattened view of `remoteSessionsByMachineId`, minus archived IDs.
-    @ObservationIgnored private var remoteSessions: [RemoteSessionInfo] = []
+    @ObservationIgnored private var remoteSessions: [RemoteSessionInfo] = [] {
+        didSet { indexTeamChats() }
+    }
+    /// Chats on a team's Mac, under every id the host gives them. Only a
+    /// shared Mac labels its rows, so this is empty for everyone else.
+    @ObservationIgnored private var teamChatsByKey: [String: RemoteSessionInfo] = [:]
+    /// The keys of the chats that are shared with a team. Observed, so a row
+    /// redraws when a chat is shared or taken back and nothing else changed.
+    public private(set) var teamSharedKeys: Set<String> = []
     @ObservationIgnored private var hasLoadedRemoteSessions = false
     /// Bulk map of sessionId → tags, fetched once per session load and injected
     /// into `UnifiedSession.build` so rows render tag lozenges.
@@ -952,6 +960,44 @@ public final class RipulSessionListModel {
         reportSessionFailure(error, action: .open, session: session)
         bridge.handleConsoleLog("ERROR: [SESSION-OPEN] sessionId=\(session.id) machineId=\(session.machineId ?? "unknown") error=\(error)")
         bridge.logSessionStartMarker("ios.open_session_failed", extra: "sessionId=\(session.id) error=\(error)")
+    }
+
+    // MARK: - Team sharing
+
+    private func indexTeamChats() {
+        var byKey: [String: RemoteSessionInfo] = [:]
+        var shared: Set<String> = []
+        for info in remoteSessions where info.teamVisibility != nil {
+            for key in [info.id, info.sourceChatId, info.hostChatId].compactMap({ $0 }) {
+                byKey[key] = info
+                if info.teamVisibility == "team" { shared.insert(key) }
+            }
+        }
+        teamChatsByKey = byKey
+        if shared != teamSharedKeys { teamSharedKeys = shared }
+    }
+
+    /// Nil unless this chat is on a Mac a team shares.
+    func teamSharing(for session: UnifiedSession) -> TeamChatSharing? {
+        guard !teamChatsByKey.isEmpty,
+              let info = session.matchKeys.lazy.compactMap({ self.teamChatsByKey[$0] }).first,
+              let machine = machines.first(where: { $0.machineId == info.machineId }),
+              let team = machine.teamName else { return nil }
+        let me = RipulAccountIdentity.subject(ofJWT: tokenProvider())
+        return TeamChatSharing(teamName: team, shared: info.teamVisibility == "team",
+                               canChange: me != nil && (info.creatorUserId ?? machine.userId) == me,
+                               ownerId: machine.userId, machineId: machine.machineId, chatId: info.hostChatId ?? info.id)
+    }
+
+    func setTeamShared(_ shared: Bool, session: UnifiedSession) {
+        guard let chat = teamSharing(for: session), chat.canChange, let token = tokenProvider() else { return }
+        Task {
+            if let refusal = await MachineDirectory.setChatShared(shared, chat: chat, token: token) {
+                openSessionError = refusal
+                return
+            }
+            await loadRemoteSessions()
+        }
     }
 
     // MARK: - Archive session

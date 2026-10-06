@@ -15,7 +15,7 @@ final class ThemePublisherTests: XCTestCase {
             return (Data(#"{"etag":"new-version"}"#.utf8), self.response(200))
         })
         let result = try await client.publish(id: "app-v1", data: original, replacing: "reviewed-version")
-        XCTAssertEqual(request?.url?.path, "/api/admin/app-themes/app-v1")
+        XCTAssertEqual(request?.url?.path, "/api/v1/app-themes/app-v1")
         XCTAssertEqual(request?.httpMethod, "PUT")
         XCTAssertEqual(request?.httpBody, original)
         XCTAssertEqual(request?.value(forHTTPHeaderField: "Authorization"), "Bearer test-token")
@@ -64,6 +64,54 @@ final class ThemePublisherTests: XCTestCase {
             do { _ = try await client.publish(id: "app", data: Data("{}".utf8), replacing: "old"); XCTFail("Must reject") }
             catch { XCTAssertFalse(error.localizedDescription.isEmpty) }
         }
+    }
+    func testHostLoginIsTriedFirstThenRipulSignInWhenRefused() async throws {
+        var sent: [URLRequest] = []
+        let client = RipulThemePublisher(baseURL: base, tokenProvider: { "ripul-token" },
+            credentials: { ["secret": "s", "secret-id": "7"] }, fetch: { request in
+                sent.append(request)
+                if request.value(forHTTPHeaderField: "secret") != nil {
+                    return (Data(#"{"error":{"message":"Publishing this theme needs the admin role on WAC App"}}"#.utf8), self.response(403))
+                }
+                return (Data(#"{"etag":"v2"}"#.utf8), self.response(200))
+            })
+        _ = try await client.publish(id: "app", data: Data("{}".utf8), replacing: "v1")
+        XCTAssertEqual(sent.count, 2)
+        XCTAssertEqual(sent[0].value(forHTTPHeaderField: "secret-id"), "7")
+        XCTAssertNil(sent[0].value(forHTTPHeaderField: "Authorization"), "The host login is sent on its own")
+        XCTAssertEqual(sent[1].value(forHTTPHeaderField: "Authorization"), "Bearer ripul-token")
+        XCTAssertNil(sent[1].value(forHTTPHeaderField: "secret"))
+    }
+    func testHostLoginAloneAndTheServersReasonForARefusal() async throws {
+        var calls = 0
+        let client = RipulThemePublisher(baseURL: base, tokenProvider: { nil },
+            credentials: { ["secret": "s"] }, fetch: { _ in
+                calls += 1
+                return (Data(#"{"error":{"message":"Publishing this theme needs the admin role on WAC App"}}"#.utf8), self.response(403))
+            })
+        do { _ = try await client.publish(id: "app", data: Data("{}".utf8), replacing: "v1"); XCTFail("Must reject") }
+        catch {
+            XCTAssertEqual(calls, 1)
+            XCTAssertTrue(error.localizedDescription.contains("needs the admin role on WAC App"))
+        }
+    }
+    func testHistoryListsVersionsAndFetchesOneDocument() async throws {
+        let client = RipulThemePublisher(baseURL: base, tokenProvider: { "t" }, fetch: { request in
+            switch request.url?.path {
+            case "/api/v1/app-themes/app/versions":
+                return (Data(#"{"versions":[{"id":9,"etag":"b","publishedAt":"2026-10-06T14:13:54.924Z","publishedBy":"eden@wac.rocks","bytes":20},{"id":3,"etag":"a","publishedAt":"2026-10-06T10:56:19.475Z","publishedBy":"wac:1","bytes":10}]}"#.utf8), self.response(200))
+            case "/api/v1/app-themes/app/versions/3":
+                return (Data(#"{"id":3,"document":{"title":"older","nested":{"x":1}}}"#.utf8), self.response(200))
+            default: return (Data(), self.response(404))
+            }
+        })
+        let versions = try await client.versions(id: "app")
+        XCTAssertEqual(versions.map(\.id), [9, 3])
+        XCTAssertEqual(versions[0].publishedBy, "eden@wac.rocks")
+        XCTAssertNotNil(versions[1].publishedAt)
+        let document = try await client.document(id: "app", version: versions[1])
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: document) as? [String: Any])
+        XCTAssertEqual(object["title"] as? String, "older")
     }
     func testReviewDistinguishesDeletionEmptyTextAndBooleanFromNumber() {
         let before = Data(#"{"a/b":"Old","deleted":true,"empty":"old","flag":false,"unchanged":{"x":1}}"#.utf8)
