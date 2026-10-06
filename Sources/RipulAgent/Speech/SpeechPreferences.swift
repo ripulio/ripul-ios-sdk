@@ -132,6 +132,12 @@ public enum SpeechPreferences {
         VoiceSendMode(rawValue: store.string(forKey: voiceSendModeKey) ?? "") ?? defaultVoiceSendMode
     }
 
+    /// Experimental: keep the mic open while Ripul talks, listening only for
+    /// "stop". Off by default until it is proven over the speaker. Personal,
+    /// like the send mode: saved in this app on this device.
+    public static let sayStopToInterruptKey = "voiceSayStopToInterrupt"
+    public static var sayStopToInterrupt: Bool { store.bool(forKey: sayStopToInterruptKey) }
+
     /// "apple" (default) or "elevenlabs". Profile ids use the web spelling
     /// ("apple-native"), normalized here.
     public static var dictationProviderId: String {

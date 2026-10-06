@@ -184,6 +184,10 @@ public struct GlassSessionsList: View {
     @State private var presentedPlan: (content: String, fileName: String)? = nil
     /// Session whose tags are being edited (drives the tags editor sheet).
     @State private var taggingSession: UnifiedSession? = nil
+    #if DEBUG
+    /// The outcome of a "Make Cold" row action, shown once (developer builds only).
+    @State private var makeColdResult: String? = nil
+    #endif
 
     public init(
         bridge: AgentBridge,
@@ -687,7 +691,53 @@ public struct GlassSessionsList: View {
         }
         .uiKitIdentifier("GlassSessionsList.contextMenu.removeFromRipulButton")
         }
+        #if DEBUG
+        if !session.isSharedGuest {
+            makeColdMenu(session)
+        }
+        #endif
     }
+
+    #if DEBUG
+    /// Developer builds only: put this chat back into the state of an old chat,
+    /// so its next open can be timed. Deletes nothing; opening it restores it.
+    @ViewBuilder
+    private func makeColdMenu(_ session: UnifiedSession) -> some View {
+        Menu {
+            Button("On This iPhone") { makeCold(session, includeMac: false, loseNextOpen: false) }
+            Button("On This iPhone and the Mac") { makeCold(session, includeMac: true, loseNextOpen: false) }
+            Button("Both, and Lose the Next Open") { makeCold(session, includeMac: true, loseNextOpen: true) }
+        } label: {
+            Label("Make Cold", systemImage: "snowflake")
+        }
+        .uiKitIdentifier("GlassSessionsList.contextMenu.makeColdMenu")
+    }
+
+    private func makeCold(_ session: UnifiedSession, includeMac: Bool, loseNextOpen: Bool) {
+        // The web store knows a CLI chat as cli_<uuid>; the row's metadata key is the bare uuid.
+        let key = session.metadataKey
+        let chatId = session.ripulSession?.id ?? (UUID(uuidString: key) != nil ? "cli_\(key)" : key)
+        Task {
+            let reply = await bridge.makeChatCold(chatId: chatId, machineId: session.machineId,
+                                                  includeMac: includeMac, loseNextOpen: loseNextOpen)
+            makeColdResult = Self.describeMakeCold(reply)
+        }
+    }
+
+    private static func describeMakeCold(_ reply: [String: Any]?) -> String {
+        guard let reply, reply["success"] as? Bool == true else {
+            return (reply?["error"] as? String) ?? "Could not make the chat cold."
+        }
+        var lines = ["This iPhone: cold."]
+        if let mac = reply["mac"] as? [String: Any] {
+            let name = mac["machine"] as? String ?? "Mac"
+            lines.append(mac["success"] as? Bool == true ? "\(name): dropped from memory." : "\(name): \(mac["error"] as? String ?? "not changed").")
+        }
+        if reply["network"] != nil { lines.append("The next open of this chat will lose its first request.") }
+        for note in reply["notes"] as? [String] ?? [] { lines.append(note) }
+        return lines.joined(separator: "\n")
+    }
+    #endif
 
     /// The user's configured quick-start shortcuts, resolved against the live
     /// catalog. Empty when the strip is switched off in Settings. Reading
@@ -1222,8 +1272,25 @@ public struct GlassSessionsList: View {
     }
 
     /// The dialogs and sheets the list presents.
-    private func presentations<Content: View>(on content: Content) -> some View {
+    /// Developer builds show the outcome of a "Make Cold" row action.
+    @ViewBuilder
+    private func makeColdAlert<Content: View>(on content: Content) -> some View {
+        #if DEBUG
+        content.alert("Make Cold", isPresented: Binding(
+            get: { makeColdResult != nil },
+            set: { if !$0 { makeColdResult = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(makeColdResult ?? "")
+        }
+        #else
         content
+        #endif
+    }
+
+    private func presentations<Content: View>(on content: Content) -> some View {
+        makeColdAlert(on: content)
         .confirmationDialog("Archive \(selectedSessionIds.count) sessions?", isPresented: $showBatchArchiveConfirm, titleVisibility: .visible) {
             Button("Archive \(selectedSessionIds.count) Sessions", role: .destructive) {
                 let sessions = selectedSessions

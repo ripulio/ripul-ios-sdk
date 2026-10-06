@@ -25,6 +25,9 @@ public struct RelayHostStatsView: View {
     @State private var fetchError: String?
     @State private var bridgeDiagnostics: BridgeDiagnostics = BridgeDiagnostics()
     @State private var commsEntries: [CommsEntry] = []
+    /// Routine (info) comms entries are hidden unless asked for: they explain
+    /// what happened around a problem, but are not problems themselves.
+    @State private var showRoutineComms = false
 
     /// Optional host-app section rendered right after Bridge diagnostics —
     /// the macOS app slots its persistent restart log in here.
@@ -45,10 +48,13 @@ public struct RelayHostStatsView: View {
             VStack(alignment: .leading, spacing: 16) {
                 header
 
+                // The verdict first: everything below is evidence for it.
+                summaryCard
+
                 // Always-visible diagnostics so the user can see WHY the
                 // host bridge is or isn't running, independent of whether
                 // there's any room data to render below.
-                sectionLabel("Bridge diagnostics")
+                sectionLabel("This device's relay connection")
                 bridgeDiagnosticsCard
 
                 if let topContent {
@@ -56,19 +62,19 @@ public struct RelayHostStatsView: View {
                 }
 
                 if let selfHost {
-                    sectionLabel("This machine (host self-metrics)")
+                    sectionLabel("Commands to this machine")
                     roomCard(selfHost, isSelf: true)
                 }
 
                 if !rooms.isEmpty {
-                    sectionLabel("Controller-side pings (this app → remote hosts)")
+                    sectionLabel("Other machines (pinged from here)")
                     ForEach(rooms) { room in
                         roomCard(room)
                     }
                 }
 
                 HStack(alignment: .firstTextBaseline, spacing: 12) {
-                    sectionLabel("Comms warnings & errors")
+                    sectionLabel("Comms log")
                     Spacer(minLength: 0)
                     if !commsEntries.isEmpty {
                         Button { copyCommsLog() } label: {
@@ -130,6 +136,88 @@ public struct RelayHostStatsView: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
             }
+        }
+    }
+
+    private var findings: [Finding] {
+        StatusSummary.findings(diagnostics: bridgeDiagnostics, selfHost: selfHost, rooms: rooms,
+                               comms: commsEntries, now: Date())
+    }
+
+    private var summaryCard: some View {
+        let all = findings
+        let problems = all.filter { $0.level >= .warn }
+        let worst = all.map(\.level).max()
+        let verdictColor: Color = worst == .error ? .red : worst == .warn ? .orange : (bridgeDiagnostics.hostStatusAvailable == nil ? .secondary : .green)
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: problems.isEmpty ? (bridgeDiagnostics.hostStatusAvailable == nil ? "hourglass" : "checkmark.seal.fill")
+                                                   : "exclamationmark.triangle.fill")
+                    .foregroundStyle(verdictColor)
+                Text(problems.isEmpty
+                     ? (bridgeDiagnostics.hostStatusAvailable == nil ? "Checking…" : "All clear")
+                     : "\(problems.count) thing\(problems.count == 1 ? "" : "s") need\(problems.count == 1 ? "s" : "") attention")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(verdictColor)
+            }
+            if problems.isEmpty, bridgeDiagnostics.hostStatusAvailable != nil {
+                Text(StatusSummary.allClearSentence(diagnostics: bridgeDiagnostics, rooms: rooms, comms: commsEntries, now: Date()))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            ForEach(all) { finding in
+                findingRow(finding)
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(cardBackground))
+        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(verdictColor.opacity(0.35), lineWidth: 1))
+        .textSelection(.enabled)
+    }
+
+    @ViewBuilder
+    private func findingRow(_ finding: Finding) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Circle()
+                .fill(finding.level.color)
+                .frame(width: 7, height: 7)
+                .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
+            VStack(alignment: .leading, spacing: 3) {
+                Text(finding.title)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(finding.level == .info ? .secondary : .primary)
+                Text(finding.detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let action = finding.action {
+                    findingActionButton(action)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func findingActionButton(_ action: FindingAction) -> some View {
+        switch action {
+        case .retryRelay:
+            Button {
+                Task { await bridge.retryRelayNow() }
+            } label: {
+                Label("Retry now", systemImage: "arrow.clockwise")
+            }
+            .font(.caption)
+            .buttonStyle(.borderless)
+        case .healWebContext:
+            Button {
+                Task { await bridge.healWebContext(reason: "manual heal from Relay Host Stats summary", force: true) }
+            } label: {
+                Label("Heal now", systemImage: "bandage")
+            }
+            .font(.caption)
+            .buttonStyle(.borderless)
         }
     }
 
@@ -201,6 +289,24 @@ public struct RelayHostStatsView: View {
 
             Divider()
 
+            if let stability = bridgeDiagnostics.stability {
+                VStack(alignment: .leading, spacing: 4) {
+                    if let connectedFor = stability.connectedForMs {
+                        diagRow("connected for", value: RelayStability.duration(connectedFor))
+                    } else if let downFor = stability.downForMs {
+                        diagRow("down for", value: "\(RelayStability.duration(downFor)), \(stability.downAttempts) attempt(s)",
+                                color: bridgeDiagnostics.statusColor == .secondary ? nil : bridgeDiagnostics.statusColor)
+                    }
+                    diagRow("drops (5 min / 1 h)", value: "\(stability.dropsLast5m) / \(stability.dropsLast1h)",
+                            color: stability.dropsLast5m >= RelayStability.unstableDrops ? .orange : nil)
+                    diagRow("last drop", value: stability.lastDropSummary)
+                    if let build = bridgeDiagnostics.build {
+                        diagRow("web build", value: build, mono: true)
+                    }
+                }
+            }
+
+            DisclosureGroup("Raw values") {
             VStack(alignment: .leading, spacing: 4) {
                 diagRow("getHostStatus.available", value: bridgeDiagnostics.hostStatusAvailable.map { $0 ? "true" : "false" } ?? "—",
                         color: (bridgeDiagnostics.hostStatusAvailable == false) ? .red : nil)
@@ -218,7 +324,8 @@ public struct RelayHostStatsView: View {
                 diagRow("registered", value: bridgeDiagnostics.registered.map { $0 ? "true" : "false" } ?? "—",
                         color: (bridgeDiagnostics.registered == false) ? .orange : nil)
                 diagRow("relayState", value: bridgeDiagnostics.relayState ?? "—",
-                        color: (bridgeDiagnostics.relayState != nil && bridgeDiagnostics.relayState != "connected") ? .orange : nil)
+                        color: (bridgeDiagnostics.relayState != nil && bridgeDiagnostics.relayState != "connected"
+                                && bridgeDiagnostics.statusColor != .secondary) ? bridgeDiagnostics.statusColor : nil)
                 diagRow("roomId", value: bridgeDiagnostics.roomId ?? "—", mono: true)
                 diagRow("machineName", value: bridgeDiagnostics.machineName ?? "—", mono: true)
                 diagRow("machineId", value: bridgeDiagnostics.machineId ?? "—", mono: true)
@@ -232,6 +339,10 @@ public struct RelayHostStatsView: View {
                 }
                 diagRow("rooms returned", value: "\(bridgeDiagnostics.diagRoomsCount)")
             }
+            .padding(.top, 4)
+            }
+            .font(.caption2)
+            .foregroundStyle(.secondary)
         }
         .padding(12)
         .background(
@@ -265,7 +376,7 @@ public struct RelayHostStatsView: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 healthBadge(room.health)
-                Text(room.roomId)
+                Text(room.title)
                     .font(.system(.subheadline, design: .monospaced))
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -330,11 +441,13 @@ public struct RelayHostStatsView: View {
             infoIcon("""
             HEALTHY — no dropped commands and no stalled turns. An idle host is healthy: pings and self-echo raise 'Frames in' without any commands, and that is expected.
 
-            WEDGED — agent commands from other devices reached the host between polls but were not dispatched. The host dropped them before execution (bridge disabled, relay not connected, or background API missing). This is the 'host looks online but won't accept messages' failure.
+            WEDGED — in the last 2 minutes, a command from another device reached the host and was dropped without running (bridge disabled, relay not connected at that moment, or background API missing). This is the 'host looks online but won't accept messages' failure. The comms log says which check dropped it.
 
-            STALLED — a turn is stuck: 30s+ at a setup step (loading the chat, saving the message, resolving the model), or running 5+ minutes in total. Same thresholds the host itself uses to log setup-stall / stuck.
+            STALLED — a turn is stuck: 30s+ at a setup step (loading the chat, saving the message, resolving the model), or 5+ minutes without producing anything while not waiting for you. Same rules the host itself uses to log setup-stall / stuck.
 
-            OFFLINE — the last ping failed (timeout, send error, disconnected). The WebSocket itself is down.
+            NOT ANSWERING — two or more pings in a row failed while the machine list still shows the machine online.
+
+            OFFLINE (grey) — pings fail and the machine list agrees the machine is offline: asleep or shut down, which is not a fault.
 
             Hosts on an older web build don't report command frames, so WEDGED can't be detected for them.
             """)
@@ -369,6 +482,19 @@ public struct RelayHostStatsView: View {
                 '—' means the host is on a web build that doesn't report this counter.
                 """
             )
+            if let dropped = room.droppedTotal {
+                statRow(
+                    "Commands dropped",
+                    value: "\(dropped)",
+                    detail: room.recentlyDropped ? "latest within 2 min" : nil,
+                    valueColor: dropped > 0 ? .orange : nil,
+                    tooltip: """
+                    Commands that reached this host and were dropped without being run or answered, since its page loaded: 'Command frames in' minus 'Commands drained'. Both are exact counters, so anything above 0 is real.
+
+                    The comms log names the check that dropped each one (command-dropped). The card shows WEDGED for 2 minutes after the latest drop.
+                    """
+                )
+            }
             statRow(
                 "Commands drained",
                 value: "\(room.messagesReceived)",
@@ -485,7 +611,7 @@ public struct RelayHostStatsView: View {
                 infoIcon("""
                 Per-chat list of agent commands currently being executed on the host. An entry appears when a command (agent:start or agent:resume) enters its execution chain and is removed when the chain's finally block fires.
 
-                Age shown per row is how long the command has been running. Agent turns routinely take 20-60s or more, so a row turns orange only when the turn is stalled: 30s+ at a setup step (see 'Chain breadcrumbs'), or 5+ minutes in total.
+                Age shown per row is how long the command has been running. Agent turns routinely run for many minutes, so a row turns orange only when the turn is stalled: 30s+ at a setup step (see 'Chain breadcrumbs'), or 5+ minutes without producing anything while not waiting for you. 'active … ago' is its last sign of life.
                 """)
             }
             ForEach(cmds) { cmd in
@@ -500,12 +626,26 @@ public struct RelayHostStatsView: View {
                         .lineLimit(1)
                         .truncationMode(.middle)
                     Spacer()
+                    if cmd.awaitingInput {
+                        Text("waiting for you")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    } else if let last = cmd.lastActivityAt {
+                        Text("active \(ageString(last, now: now)) ago")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
                     Text(ageString(cmd.startedAt, now: now))
                         .font(.system(.caption2, design: .monospaced))
                         .foregroundStyle(room.stallReason(for: cmd) != nil ? .orange : .secondary)
                 }
             }
         }
+    }
+
+    private func inFlightFor(_ chatId: String) -> InFlightRow? {
+        (selfHost?.inFlight ?? []).first { $0.chatId == chatId }
+            ?? rooms.lazy.flatMap(\.inFlight).first { $0.chatId == chatId }
     }
 
     @ViewBuilder
@@ -518,7 +658,7 @@ public struct RelayHostStatsView: View {
                 infoIcon("""
                 Per-chat breadcrumb of the most recent await boundary inside the execution chain. Setup steps: queued, chain-entered, ensureChatLoaded, initializeChatActions, saveUserMessage, ensureChatTab, getModelById. Turn steps: executeAgentWithPrompt (agent:start), resumeWithContext (agent:resume). Cleared when the chain's finally fires. Age is time at THIS step.
 
-                Setup steps settle in a few seconds, so a row turns orange at 30s — that await is hung ('ensureChatLoaded' points at IndexedDB, 'getModelById' at the model API). Turn steps are the agent actually working and turn orange only at 5 min.
+                Setup steps settle in a few seconds, so a row turns orange at 30s — that await is hung ('ensureChatLoaded' points at IndexedDB, 'getModelById' at the model API). Turn steps are the agent actually working and turn orange only after 5 min with no sign of life, never while the turn waits for you.
                 """)
             }
             ForEach(steps) { step in
@@ -535,7 +675,7 @@ public struct RelayHostStatsView: View {
                     Spacer()
                     Text(ageString(step.ts, now: now))
                         .font(.system(.caption2, design: .monospaced))
-                        .foregroundStyle(RoomStats.isStepStalled(step, now: now) ? .orange : .secondary)
+                        .foregroundStyle(RoomStats.isStepStalled(step, now: now, inFlight: inFlightFor(step.chatId)) ? .orange : .secondary)
                 }
             }
         }
@@ -620,7 +760,9 @@ public struct RelayHostStatsView: View {
                     detail: peaks.maxInFlightAgeMs >= 1
                         ? "\(peaks.maxInFlightAgeKind ?? "?") at '\(peaks.maxInFlightAgeStep ?? "?")' · \(absTime(peaks.maxInFlightAgeAt))"
                         : nil,
-                    warn: peaks.maxInFlightAgeMs >= RoomStats.turnStuckMs
+                    // Context, not a fault: long agent turns are normal. A turn
+                    // that went silent is counted under 'stuck' below.
+                    warn: false
                 )
                 peakRow(
                     "Max concurrent chains",
@@ -674,19 +816,51 @@ public struct RelayHostStatsView: View {
     }
 
     private var commsLogCard: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            if commsEntries.isEmpty {
-                Text("No comms warnings or errors recorded.")
+        let routineCount = commsEntries.filter(\.isRoutine).count
+        let visible = commsEntries.filter { showRoutineComms || !$0.isRoutine }.prefix(60)
+        let hourAgo = Date().timeIntervalSince1970 * 1000 - 3_600_000
+        let lastHour = commsEntries.filter { $0.ts >= hourAgo }
+        let errors = lastHour.filter(\.isError).count
+        let warnings = lastHour.filter { !$0.isError && !$0.isRoutine }.count
+        // Entries older than the host page's current load describe a previous
+        // run of it; they are history, not the present.
+        let pageLoadedAt = selfHost?.mountEpoch
+        let firstOlder = pageLoadedAt.flatMap { loaded in visible.firstIndex { $0.ts < loaded } }
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Text(errors + warnings == 0
+                     ? "No warnings or errors in the last hour"
+                     : "Last hour: \(errors) error\(errors == 1 ? "" : "s"), \(warnings) warning\(warnings == 1 ? "" : "s")")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
-            } else {
-                Text("\(commsEntries.count) recent · newest first · persists across relaunch")
+                    .foregroundStyle(errors > 0 ? .red : warnings > 0 ? .orange : .secondary)
+                Spacer(minLength: 0)
+                if routineCount > 0 {
+                    Button(showRoutineComms ? "Hide routine" : "Show \(routineCount) routine") {
+                        showRoutineComms.toggle()
+                    }
                     .font(.caption2)
-                    .foregroundStyle(.tertiary)
-                ForEach(commsEntries.prefix(40)) { e in
-                    commsRow(e)
+                    .buttonStyle(.borderless)
                 }
             }
+            if visible.isEmpty {
+                Text(commsEntries.isEmpty ? "Nothing recorded." : "Only routine entries recorded.")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+            ForEach(Array(visible.enumerated()), id: \.element.id) { index, e in
+                if index == firstOlder, let pageLoadedAt {
+                    Text("Before this page loaded at \(absTime(pageLoadedAt))")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.tertiary)
+                        .padding(.top, 4)
+                }
+                commsRow(e)
+                    .opacity(firstOlder.map { index >= $0 } == true ? 0.55 : 1)
+            }
+            Text("Newest first · kept across relaunches · info = routine, warn = recovered but worth a look, error = failed")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .padding(.top, 2)
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -702,29 +876,43 @@ public struct RelayHostStatsView: View {
     @ViewBuilder
     private func commsRow(_ e: CommsEntry) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Text(Self.timestampFormatter.string(from: Date(timeIntervalSince1970: e.ts / 1000)))
+            Text(commsTime(e.ts))
                 .font(.system(.caption2, design: .monospaced))
                 .foregroundStyle(.secondary)
-                .frame(width: 58, alignment: .leading)
+                .frame(width: 70, alignment: .leading)
             Text(e.source)
                 .font(.system(.caption2, design: .monospaced).weight(.semibold))
-                .foregroundStyle(e.isError ? .red : .orange)
-                .frame(width: 86, alignment: .leading)
+                .foregroundStyle(e.color)
+                .frame(width: 104, alignment: .leading)
                 .lineLimit(1)
-            Text(e.message)
+            Text(e.count > 1 ? "\(e.message)  ×\(e.count)" : e.message)
                 .font(.caption2)
-                .foregroundStyle(.primary)
-                .lineLimit(2)
+                .foregroundStyle(e.isRoutine ? .secondary : .primary)
+                .lineLimit(3)
                 .truncationMode(.tail)
             Spacer(minLength: 0)
         }
     }
 
+    /// Time of day for today's entries; the date too for anything older, so a
+    /// warning from yesterday can't pass for one from a minute ago.
+    private func commsTime(_ tsMs: Double) -> String {
+        let date = Date(timeIntervalSince1970: tsMs / 1000)
+        if Calendar.current.isDateInToday(date) { return Self.timestampFormatter.string(from: date) }
+        return Self.olderEntryFormatter.string(from: date)
+    }
+
+    private static let olderEntryFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "d MMM HH:mm"
+        return f
+    }()
+
     /// Copy ALL comms entries (newest-first) to the clipboard as plain text.
     private func copyCommsLog() {
         let text = commsEntries.map { e -> String in
             let ts = Self.timestampFormatter.string(from: Date(timeIntervalSince1970: e.ts / 1000))
-            return "\(ts)  [\(e.isError ? "ERROR" : "WARN")]  \(e.source)  \(e.message)"
+            return "\(ts)  [\(e.label)]  \(e.source)  \(e.message)\(e.count > 1 ? "  ×\(e.count)" : "")"
         }.joined(separator: "\n")
         #if os(macOS)
         NSPasteboard.general.clearContents()
@@ -893,6 +1081,9 @@ public struct RelayHostStatsView: View {
             diagnostics.roomId = hostStatus["roomId"] as? String
             diagnostics.machineName = hostStatus["machineName"] as? String
             diagnostics.machineId = hostStatus["machineId"] as? String
+            diagnostics.stability = ((hostStatus["health"] as? [String: Any])?["relayStability"] as? [String: Any])
+                .map(RelayStability.init)
+            diagnostics.build = hostStatus["build"] as? String
         } else {
             diagnostics.hostStatusAvailable = false
             diagnostics.hostStatusError = "callable returned nil (WKWebView eval failed or web view not ready)"
@@ -914,8 +1105,15 @@ public struct RelayHostStatsView: View {
                 for room in roomsArr {
                     guard let roomId = room["roomId"] as? String else { continue }
                     let pings = (room["pings"] as? [[String: Any]]) ?? []
-                    guard let last = pings.last else { continue }
-                    tmp.append(RoomStats(roomId: roomId, ping: last, previous: previousRooms[roomId]))
+                    // The newest ping can still be in flight (no reply, no error
+                    // yet); judge by the newest one that has settled.
+                    let settled = pings.filter { $0["receivedAt"] as? Double != nil || $0["error"] as? String != nil }
+                    guard let last = settled.last ?? pings.last else { continue }
+                    let failures = settled.reversed().prefix { $0["error"] as? String != nil }.count
+                    tmp.append(RoomStats(roomId: roomId, ping: last, previous: previousRooms[roomId],
+                                         displayName: room["displayName"] as? String,
+                                         presumedOnline: room["presumedOnline"] as? Bool,
+                                         consecutiveFailures: failures))
                 }
                 roomsOut = tmp.sorted { $0.sampleAt > $1.sampleAt }
             }
@@ -932,8 +1130,9 @@ public struct RelayHostStatsView: View {
             let machineName = (hostStatus["machineName"] as? String) ?? "this machine"
             let roomId = (hostStatus["roomId"] as? String) ?? "host:\(machineName)"
             if hostEnabled {
+                _ = relayState
                 selfOut = RoomStats(
-                    roomId: "\(machineName) — \(relayState)",
+                    roomId: machineName,
                     selfHealth: health,
                     underlyingRoomId: roomId,
                     previous: previousSelf
@@ -957,7 +1156,8 @@ public struct RelayHostStatsView: View {
                     severity: e["severity"] as? String ?? "warn",
                     source: source,
                     message: message,
-                    chatId: e["chatId"] as? String
+                    chatId: e["chatId"] as? String,
+                    count: (e["count"] as? NSNumber)?.intValue ?? 1
                 )
             }
         }
@@ -1023,8 +1223,49 @@ fileprivate struct RoomStats: Identifiable {
     let chainSteps: [ChainStepRow]
     let peaks: PeaksData?
     let queueDepth: [QueueDepthRow]
+    /// The machine's name from the registry (controller-side rooms only).
+    var displayName: String? = nil
+    /// Whether the machine registry thinks the machine is online. nil = unknown.
+    var presumedOnline: Bool? = nil
+    /// Settled pings in a row that failed, newest backwards.
+    var consecutiveFailures: Int = 0
+    /// Commands the host received and dropped since its bridge mounted
+    /// (command frames − commands drained; both are exact lifetime counters).
+    var droppedTotal: Int? = nil
+    /// When droppedTotal last grew, carried across polls so one drop stays
+    /// visible long enough to read instead of flashing for a single poll.
+    var lastDropSeenAt: Date? = nil
 
     var id: String { roomId }
+    var title: String { displayName ?? roomId }
+
+    /// How long a dropped command keeps the card in WEDGED.
+    static let dropVisibleSeconds: TimeInterval = 120
+    /// Lost pings in a row before a machine counts as not answering. One lost
+    /// ping is a hiccup on a phone network, not an outage.
+    static let offlineAfterFailures = 2
+
+    /// Fill in the drop bookkeeping from this sample and the previous poll.
+    mutating func trackDrops(previous: RoomStats?) {
+        guard let commandFramesReceived else { return }
+        let total = max(0, commandFramesReceived - messagesReceived)
+        droppedTotal = total
+        if let before = previous?.droppedTotal, total > before {
+            lastDropSeenAt = sampleAt
+        } else if previous == nil, total > 0, let mountEpoch,
+                  sampleAt.timeIntervalSince1970 - mountEpoch / 1000 < Self.dropVisibleSeconds {
+            lastDropSeenAt = sampleAt
+        } else if let before = previous?.droppedTotal, total < before {
+            lastDropSeenAt = nil // the bridge remounted and its counters reset
+        } else {
+            lastDropSeenAt = previous?.lastDropSeenAt
+        }
+    }
+
+    var recentlyDropped: Bool {
+        guard let lastDropSeenAt else { return false }
+        return Date().timeIntervalSince(lastDropSeenAt) < Self.dropVisibleSeconds
+    }
 
     /// Per-poll delta, nil when either side is missing or the counter went
     /// backwards (the bridge remounted and its counters reset).
@@ -1052,10 +1293,18 @@ fileprivate struct RoomStats: Identifiable {
     /// Breadcrumbs where the agent is actually working — long waits are normal.
     static let turnSteps: Set<String> = ["executeAgentWithPrompt", "resumeWithContext"]
 
-    static func isStepStalled(_ step: ChainStepRow, now: Date) -> Bool {
+    static func isStepStalled(_ step: ChainStepRow, now: Date, inFlight: InFlightRow? = nil) -> Bool {
         guard let ts = step.ts else { return false }
-        let age = now.timeIntervalSince1970 * 1000 - ts
-        return age >= (turnSteps.contains(step.step) ? turnStuckMs : setupStallMs)
+        let nowMs = now.timeIntervalSince1970 * 1000
+        guard turnSteps.contains(step.step) else { return nowMs - ts >= setupStallMs }
+        // A working turn is judged by silence, not age, and never while it
+        // waits on a person. Older hosts report no activity: fall back to age.
+        if let inFlight {
+            if inFlight.awaitingInput { return false }
+            let lastSign = max(ts, inFlight.lastActivityAt ?? 0, inFlight.startedAt ?? 0)
+            return nowMs - lastSign >= turnStuckMs
+        }
+        return nowMs - ts >= turnStuckMs
     }
 
     /// Commands that arrived between polls but were not dispatched. nil when the
@@ -1069,29 +1318,46 @@ fileprivate struct RoomStats: Identifiable {
     /// Why this in-flight command counts as stalled, or nil if it doesn't.
     func stallReason(for cmd: InFlightRow) -> String? {
         let now = sampleAt.timeIntervalSince1970 * 1000
+        if cmd.awaitingInput { return nil }
         if let step = chainSteps.first(where: { $0.chatId == cmd.chatId }),
            let ts = step.ts,
-           Self.isStepStalled(step, now: sampleAt) {
-            return "\(cmd.kind) on …\(cmd.chatId.suffix(8)) stuck \(Int((now - ts) / 1000))s at '\(step.step)'"
+           Self.isStepStalled(step, now: sampleAt, inFlight: cmd) {
+            if Self.turnSteps.contains(step.step) {
+                let lastSign = max(ts, cmd.lastActivityAt ?? 0, cmd.startedAt ?? 0)
+                return "\(cmd.kind) on …\(cmd.chatId.suffix(8)) has produced nothing for \(Int((now - lastSign) / 60_000)) min and isn't waiting for input"
+            }
+            return "\(cmd.kind) on …\(cmd.chatId.suffix(8)) stuck \(Int((now - ts) / 1000))s at setup step '\(step.step)'"
         }
-        if let started = cmd.startedAt, now - started >= Self.turnStuckMs {
-            return "\(cmd.kind) on …\(cmd.chatId.suffix(8)) running \(Int((now - started) / 60_000)) min — past the 5 min stuck threshold"
+        // No breadcrumb: only an old host without activity data falls back to age.
+        if cmd.lastActivityAt == nil, chainSteps.first(where: { $0.chatId == cmd.chatId }) == nil,
+           let started = cmd.startedAt, now - started >= Self.turnStuckMs {
+            return "\(cmd.kind) on …\(cmd.chatId.suffix(8)) running \(Int((now - started) / 60_000)) min with no breadcrumb"
         }
         return nil
     }
 
     var health: HealthStatus {
-        if let error {
-            return HealthStatus(label: "OFFLINE", color: .red, detail: error)
+        if error != nil && consecutiveFailures >= Self.offlineAfterFailures {
+            // An asleep or shut-down machine is not a fault of this app; only a
+            // machine the registry still thinks is up is worth a warning.
+            if presumedOnline == false {
+                return HealthStatus(label: "OFFLINE", color: .secondary,
+                                    detail: "Not answering, and the machine list agrees it's offline: probably asleep or shut down.")
+            }
+            return HealthStatus(label: "NOT ANSWERING", color: .orange,
+                                detail: "\(consecutiveFailures) pings in a row got no answer (\(error ?? "?")), though the machine list still shows it online. Its host page may be wedged or its network down.")
         }
         // Frames alone prove nothing — pings and self-echo raise them on an idle
         // host. Only commands that arrived and were NOT dispatched are a wedge.
-        if let dropped = droppedSinceLastSample, dropped > 0 {
+        if recentlyDropped, let droppedTotal {
             return HealthStatus(
                 label: "WEDGED",
                 color: .orange,
-                detail: "\(dropped) command(s) arrived but weren't dispatched — the host dropped them before execution (bridge disabled, relay not connected, or background API missing)."
+                detail: "Commands are arriving and being dropped unanswered (\(droppedTotal) since the page loaded). The comms log's command-dropped entries say which check dropped them."
             )
+        }
+        if error != nil {
+            return HealthStatus(label: "HEALTHY", color: .green, detail: "One ping went unanswered (\(error ?? "?")); the next will tell.")
         }
         let stalls = inFlight.compactMap { stallReason(for: $0) }
         if let first = stalls.first {
@@ -1139,7 +1405,8 @@ fileprivate struct RoomStats: Identifiable {
                 id: "\(idx)-\(c["chatId"] as? String ?? "")",
                 chatId: c["chatId"] as? String ?? "—",
                 kind: c["kind"] as? String ?? "—",
-                startedAt: c["startedAt"] as? Double
+                startedAt: c["startedAt"] as? Double,
+                raw: c
             )
         }
 
@@ -1155,10 +1422,15 @@ fileprivate struct RoomStats: Identifiable {
         self.peaks = PeaksData(selfHealth["peaks"] as? [String: Any])
         self.queueDepth = Self.parseQueueDepth(selfHealth)
         _ = underlyingRoomId
+        trackDrops(previous: previous)
     }
 
-    init(roomId: String, ping: [String: Any], previous: RoomStats?) {
+    init(roomId: String, ping: [String: Any], previous: RoomStats?,
+         displayName: String? = nil, presumedOnline: Bool? = nil, consecutiveFailures: Int = 0) {
         self.roomId = roomId
+        self.displayName = displayName
+        self.presumedOnline = presumedOnline
+        self.consecutiveFailures = consecutiveFailures
         self.error = ping["error"] as? String
         self.rttMs = (ping["rttMs"] as? Double).map { Int($0) }
         let sentAtMs = ping["sentAt"] as? Double ?? 0
@@ -1199,7 +1471,8 @@ fileprivate struct RoomStats: Identifiable {
                 id: "\(idx)-\(c["chatId"] as? String ?? "")",
                 chatId: c["chatId"] as? String ?? "—",
                 kind: c["kind"] as? String ?? "—",
-                startedAt: c["startedAt"] as? Double
+                startedAt: c["startedAt"] as? Double,
+                raw: c
             )
         }
 
@@ -1214,6 +1487,7 @@ fileprivate struct RoomStats: Identifiable {
         }
         self.peaks = PeaksData(host["peaks"] as? [String: Any])
         self.queueDepth = Self.parseQueueDepth(host)
+        trackDrops(previous: previous)
     }
 }
 
@@ -1261,6 +1535,18 @@ fileprivate struct InFlightRow: Identifiable {
     let chatId: String
     let kind: String
     let startedAt: Double?
+    /// Last sign of life from the turn; nil from hosts that don't report it.
+    var lastActivityAt: Double? = nil
+    var awaitingInput: Bool = false
+
+    init(id: String, chatId: String, kind: String, startedAt: Double?, raw: [String: Any] = [:]) {
+        self.id = id
+        self.chatId = chatId
+        self.kind = kind
+        self.startedAt = startedAt
+        self.lastActivityAt = (raw["lastActivityAt"] as? NSNumber)?.doubleValue
+        self.awaitingInput = raw["awaitingInput"] as? Bool ?? false
+    }
 }
 
 @available(iOS 16.0, macOS 13.0, *)
@@ -1332,8 +1618,227 @@ fileprivate struct CommsEntry: Identifiable {
     let source: String
     let message: String
     let chatId: String?
+    var count: Int = 1
 
     var isError: Bool { severity == "error" }
+    var isRoutine: Bool { severity == "info" }
+    var color: Color { isError ? .red : isRoutine ? .secondary : .orange }
+    var label: String { isError ? "ERROR" : isRoutine ? "INFO" : "WARN" }
+}
+
+/// One line of the summary: something true about the relay right now, how
+/// much it matters, and what to do about it.
+@available(iOS 16.0, macOS 13.0, *)
+fileprivate struct Finding: Identifiable {
+    enum Level: Int, Comparable {
+        case info, warn, error
+        static func < (a: Level, b: Level) -> Bool { a.rawValue < b.rawValue }
+        var color: Color { self == .error ? .red : self == .warn ? .orange : .secondary }
+    }
+    let id: String
+    let level: Level
+    let title: String
+    let detail: String
+    var action: FindingAction? = nil
+}
+
+fileprivate enum FindingAction {
+    case retryRelay
+    case healWebContext
+}
+
+/// Rolls every signal on the screen into findings. Each one is either a fault
+/// with something to do, or (info) context that explains a state someone might
+/// otherwise mistake for a fault. Nothing healthy produces a finding.
+@available(iOS 16.0, macOS 13.0, *)
+fileprivate enum StatusSummary {
+    /// Comms entries this recent count towards the summary.
+    static let recentCommsSeconds: Double = 15 * 60
+
+    static func findings(diagnostics d: BridgeDiagnostics, selfHost: RoomStats?, rooms: [RoomStats],
+                         comms: [CommsEntry], now: Date) -> [Finding] {
+        var out: [Finding] = []
+
+        switch d.statusLabel {
+        case "NO NATIVE CALLABLES", "BRIDGE NOT MOUNTED":
+            out.append(Finding(id: "bridge", level: .error, title: "The web app's host bridge isn't running",
+                               detail: d.diagnosis, action: .healWebContext))
+        case "HOST DISABLED":
+            out.append(Finding(id: "bridge", level: .info, title: "This device isn't hosting",
+                               detail: "Other devices can't send work here. That's expected on a phone; on a Mac, turn on Host in Settings → Server."))
+        case "NO ROOM REGISTERED":
+            out.append(Finding(id: "bridge", level: .warn, title: "Not registered with the relay yet", detail: d.diagnosis))
+        case "RELAY UNSTABLE":
+            out.append(Finding(id: "bridge", level: .warn,
+                               title: d.stability?.replacedBy != nil ? "Another connection is hosting as this machine" : "The relay connection keeps dropping",
+                               detail: d.diagnosis))
+        case "RELAY DOWN":
+            out.append(Finding(id: "bridge", level: .error, title: "Not connected to the relay", detail: d.diagnosis, action: .retryRelay))
+        default:
+            if d.statusColor == .red {
+                out.append(Finding(id: "bridge", level: .error, title: d.statusLabel.capitalized, detail: d.diagnosis, action: .retryRelay))
+            }
+        }
+
+        if let selfHost {
+            let health = selfHost.health
+            if health.label == "WEDGED" || health.label == "STALLED" {
+                out.append(Finding(id: "self", level: .warn,
+                                   title: health.label == "WEDGED" ? "Commands to this machine are being dropped" : "A turn on this machine is stuck",
+                                   detail: health.detail ?? ""))
+            }
+        }
+
+        for room in rooms {
+            let health = room.health
+            switch health.label {
+            case "NOT ANSWERING":
+                out.append(Finding(id: "room-\(room.roomId)", level: .warn, title: "\(room.title) isn't answering", detail: health.detail ?? ""))
+            case "OFFLINE":
+                out.append(Finding(id: "room-\(room.roomId)", level: .info, title: "\(room.title) is offline", detail: health.detail ?? ""))
+            case "WEDGED", "STALLED":
+                out.append(Finding(id: "room-\(room.roomId)", level: .warn,
+                                   title: health.label == "WEDGED" ? "\(room.title) is dropping commands" : "A turn on \(room.title) is stuck",
+                                   detail: health.detail ?? ""))
+            default:
+                break
+            }
+        }
+
+        // Recent log entries the cards above don't already account for.
+        let since = now.timeIntervalSince1970 * 1000 - recentCommsSeconds * 1000
+        let covered: Set<String> = out.contains { $0.id == "bridge" } ? ["socket-unstable", "socket-down"] : []
+        let recent = comms.filter { $0.ts >= since && !$0.isRoutine && !covered.contains($0.source) }
+        if !recent.isEmpty {
+            var counts: [(String, Int)] = []
+            for entry in recent {
+                if let i = counts.firstIndex(where: { $0.0 == entry.source }) { counts[i].1 += entry.count }
+                else { counts.append((entry.source, entry.count)) }
+            }
+            let list = counts.map { "\($0.1)× \($0.0)" }.joined(separator: ", ")
+            let hasError = recent.contains(where: \.isError)
+            out.append(Finding(id: "comms", level: hasError ? .error : .warn,
+                               title: hasError ? "Errors in the last 15 minutes" : "Warnings in the last 15 minutes",
+                               detail: "\(list). Details in the comms log below; the newest says \"\(recent[0].message)\"."))
+        }
+
+        return out.sorted { $0.level > $1.level }
+    }
+
+    /// The positive statement behind "All clear": what was checked, so a green
+    /// verdict is evidence rather than an absence of complaints.
+    static func allClearSentence(diagnostics d: BridgeDiagnostics, rooms: [RoomStats], comms: [CommsEntry], now: Date) -> String {
+        var parts: [String] = []
+        if let stability = d.stability, let up = stability.connectedForMs {
+            let drops = stability.dropsLast1h
+            parts.append("Relay connected for \(RelayStability.duration(up)), \(drops == 0 ? "no drops" : "\(drops) brief drop\(drops == 1 ? "" : "s")") in the last hour")
+        } else if d.relayState == "connected" {
+            parts.append("Relay connected")
+        }
+        let answering = rooms.filter { $0.health.label == "HEALTHY" }.map(\.title)
+        if !answering.isEmpty { parts.append("answering: \(answering.joined(separator: ", "))") }
+        parts.append("no warnings in the last 15 minutes")
+        return parts.joined(separator: "; ") + "."
+    }
+}
+
+/// The serving relay socket's recent history, as the web app's transport
+/// records it (`health.relayStability`, see transportStability.ts).
+@available(iOS 16.0, macOS 13.0, *)
+fileprivate struct RelayStability {
+    /// Recovered drops in five minutes that make a connection unstable. One or
+    /// two are ordinary; the web side logs a comms warning at the same count.
+    static let unstableDrops = 3
+    /// An outage shorter than this is a reconnect in progress, not a fault.
+    static let briefOutageSeconds: Double = 15
+
+    let connectedForMs: Double?
+    let downForMs: Double?
+    let downAttempts: Int
+    let dropsLast5m: Int
+    let dropsLast1h: Int
+    let lastDropReason: String?
+    /// The relay's close reason text when it closed the socket on purpose.
+    let lastDropCloseReason: String?
+    let lastDropPhase: String?
+    let lastDropAgoMs: Double?
+    let lastDropRecoveredInMs: Double?
+
+    init(_ raw: [String: Any]) {
+        func number(_ value: Any?) -> Double? { (value as? NSNumber)?.doubleValue }
+        connectedForMs = number(raw["connectedForMs"])
+        downForMs = number(raw["downForMs"])
+        downAttempts = Int(number(raw["downAttempts"]) ?? 0)
+        dropsLast5m = Int(number(raw["dropsLast5m"]) ?? 0)
+        dropsLast1h = Int(number(raw["dropsLast1h"]) ?? 0)
+        let last = raw["lastDrop"] as? [String: Any]
+        lastDropReason = last?["reason"] as? String
+        lastDropCloseReason = (last?["closeReason"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+        lastDropPhase = last?["phase"] as? String
+        lastDropAgoMs = number(last?["agoMs"])
+        lastDropRecoveredInMs = number(last?["recoveredInMs"])
+    }
+
+    static func duration(_ ms: Double) -> String {
+        let seconds = Int((ms / 1000).rounded())
+        if seconds < 60 { return "\(seconds)s" }
+        if seconds < 3600 { return "\(seconds / 60)m \(seconds % 60)s" }
+        return "\(seconds / 3600)h \((seconds % 3600) / 60)m"
+    }
+
+    /// The other connection named by the relay when it swapped this one out,
+    /// e.g. "Macbook pro, in-app browser tab, user credential".
+    var replacedBy: String? {
+        guard let text = lastDropCloseReason, text.hasPrefix("Replaced by new connection") else { return nil }
+        let detail = text.dropFirst("Replaced by new connection".count).trimmingCharacters(in: CharacterSet(charactersIn: ": "))
+        return detail.isEmpty ? "another connection (no detail)" : detail
+    }
+
+    /// What a transport failure reason means, in terms of who ended the socket.
+    static func explain(_ reason: String, closeReason: String? = nil) -> String {
+        if let closeReason {
+            if closeReason.hasPrefix("Replaced by new connection") {
+                return "the relay swapped it for another connection using this machine's identity"
+            }
+            if closeReason.hasPrefix("Superseded") { return "the relay closed it because a newer connection owns this identity" }
+            if closeReason.hasPrefix("Stale connection") {
+                return "the relay closed it after hearing nothing from it for 90s: this side's heartbeats stopped arriving"
+            }
+            if closeReason.hasPrefix("Authorization") { return "the relay closed it because its authorization expired or was revoked" }
+        }
+        switch reason {
+        case "close-1000":
+            return "the relay closed it deliberately (code 1000). It does that when another connection joins under this machine's host identity, so look for a second page or app hosting as this machine"
+        case "close-1008":
+            return "the relay refused or expired its authorization (code 1008)"
+        case "close-1011":
+            return "the relay hit an error on this socket (code 1011)"
+        case "close-1006", "socket-error":
+            return "the socket was cut without a close (\(reason)): a network interruption, or the relay restarting"
+        case "no-url":
+            return "no relay address could be built, usually because there was no auth token"
+        case "foreground", "network-change-probe":
+            return "the app rebuilt it itself after \(reason)"
+        default:
+            if reason.contains("timeout") { return "an attempt timed out (\(reason))" }
+            return reason
+        }
+    }
+
+    var lastDropSentence: String? {
+        guard let reason = lastDropReason else { return nil }
+        var sentence = "Last drop: \(Self.explain(reason, closeReason: lastDropCloseReason))"
+        if let lastDropPhase, lastDropPhase != "ready" { sentence += ", while still connecting (\(lastDropPhase))" }
+        if let recovered = lastDropRecoveredInMs { sentence += ". Back after \(Self.duration(recovered))" }
+        return sentence + "."
+    }
+
+    var lastDropSummary: String {
+        guard let reason = lastDropReason, let ago = lastDropAgoMs else { return "none recorded" }
+        let recovered = lastDropRecoveredInMs.map { ", back after \(Self.duration($0))" } ?? ", not yet recovered"
+        let why = lastDropCloseReason.map { " (\($0))" } ?? ""
+        return "\(Self.duration(ago)) ago: \(reason)\(why)\(recovered)"
+    }
 }
 
 /// Captured raw values from the two diagnostic JS callables on each poll,
@@ -1362,6 +1867,11 @@ fileprivate struct BridgeDiagnostics {
     /// used to describe with the same, usually-wrong, sentence.
     var probeHealth: String? = nil
     var probeDigest: String? = nil
+
+    /// The serving socket's recent drop history. nil from a web build that
+    /// predates it, in which case only the instantaneous state is known.
+    var stability: RelayStability? = nil
+    var build: String? = nil
 
     var diagnosis: String = ""
     var statusLabel: String = "Initialising…"
@@ -1421,15 +1931,71 @@ fileprivate struct BridgeDiagnostics {
             return
         }
 
-        if let rs = relayState, rs != "connected" {
-            statusLabel = "RELAY \(rs.uppercased())"
-            statusColor = (rs == "connecting" || rs == "reconnecting") ? .orange : .red
-            statusIcon = "wifi.exclamationmark"
-            diagnosis = "Host is enabled and has roomId=\(roomId ?? "?") but the relay WebSocket reports relayState=\(rs). Either the relay endpoint is unreachable, the auth token is rejected, or the connection is mid-handshake."
+        // One poll every few seconds sees a single instant. A socket that drops
+        // and is back in a second looks "reconnecting" to an unlucky poll, and
+        // one being knocked off every two seconds looks "connected" to most of
+        // them. So judge by the drop history when the web build supplies it.
+        let connected = relayState == "connected"
+        if let stability {
+            if stability.dropsLast5m >= RelayStability.unstableDrops, let other = stability.replacedBy {
+                statusLabel = "RELAY UNSTABLE"
+                statusColor = .orange
+                statusIcon = "person.2.slash"
+                diagnosis = "Two connections are taking turns as this machine: \(stability.dropsLast5m) swaps in the last 5 minutes. The relay keeps one connection per identity, and the last one to replace this page was: \(other). Close that page or app; while both run, this machine drops out for a second or two at every swap."
+                return
+            }
+            if stability.dropsLast5m >= RelayStability.unstableDrops {
+                statusLabel = "RELAY UNSTABLE"
+                statusColor = .orange
+                statusIcon = "exclamationmark.arrow.triangle.2.circlepath"
+                diagnosis = "\(connected ? "Connected right now, but the" : "The") relay socket has dropped \(stability.dropsLast5m) times in the last 5 minutes. Each drop leaves this machine unreachable until it reconnects."
+                    + (stability.lastDropSentence.map { " \($0)" } ?? "")
+                return
+            }
+            if connected {
+                statusLabel = "HEALTHY"
+                statusColor = .green
+                statusIcon = "checkmark.circle.fill"
+                diagnosis = ""
+                return
+            }
+            let downSeconds = (stability.downForMs ?? 0) / 1000
+            if stability.downForMs != nil && downSeconds < RelayStability.briefOutageSeconds {
+                // Not a warning: long-held sockets drop now and then, and this
+                // one is already on its way back.
+                statusLabel = "RECONNECTING"
+                statusColor = .secondary
+                statusIcon = "arrow.triangle.2.circlepath"
+                diagnosis = "Brief drop, reconnecting (\(Int(downSeconds))s so far)."
+                    + (stability.lastDropSentence.map { " \($0)" } ?? "")
+                return
+            }
+            if stability.downForMs != nil {
+                statusLabel = "RELAY DOWN"
+                statusColor = .red
+                statusIcon = "wifi.exclamationmark"
+                diagnosis = "Not connected for \(RelayStability.duration(stability.downForMs ?? 0)), after \(stability.downAttempts) failed attempt\(stability.downAttempts == 1 ? "" : "s"). This machine is unreachable from other devices."
+                    + (stability.lastDropSentence.map { " \($0)" } ?? "")
+                return
+            }
+            // Not connected and no outage on record: the first connection is
+            // still being made.
+            statusLabel = "CONNECTING"
+            statusColor = .secondary
+            statusIcon = "arrow.triangle.2.circlepath"
+            diagnosis = "Opening the first relay connection (relayState=\(relayState ?? "unknown"))."
             return
         }
 
-        if relayState == "connected" {
+        if let rs = relayState, rs != "connected" {
+            statusLabel = "RELAY \(rs.uppercased())"
+            statusColor = (rs == "connecting" || rs == "reconnecting") ? .secondary : .red
+            statusIcon = "wifi.exclamationmark"
+            diagnosis = "The relay socket is \(rs) at this instant. This web build reports no drop history, so the panel cannot tell a one-second reconnect from an outage."
+            return
+        }
+
+        if connected {
             statusLabel = "HEALTHY"
             statusColor = .green
             statusIcon = "checkmark.circle.fill"

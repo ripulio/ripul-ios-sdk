@@ -658,7 +658,7 @@ public enum RipulThemeEngine {
                 "Unknown scope '\(element)'. Call list_theme_scopes for valid ids."])
         }
         current.styleOverrides[kind.name, default: [:]][element, default: [:]][knob] = value
-        if let persistMutation { persistMutation(current) } else { adopt(current) }
+        commit()
     }
 
     /// Clear every per-element override on a scope (returns it to its assigned style).
@@ -668,7 +668,7 @@ public enum RipulThemeEngine {
                 "Unknown scope '\(element)'."])
         }
         current.styleOverrides[kind.name]?[element] = nil
-        if let persistMutation { persistMutation(current) } else { adopt(current) }
+        commit()
     }
 
     // MARK: - Colour-tier mutation (the SDK-owned colour screens' write path)
@@ -720,6 +720,29 @@ public enum RipulThemeEngine {
 
     private static func commit() {
         if let persistMutation { persistMutation(current) } else { adopt(current) }
+        recordLocalEdit()
+    }
+
+    @MainActor private static var localEditPending = false
+
+    /// Keep the running theme as this phone's saved draft, for an app following a server
+    /// theme. Without it a colour or style edit lived only in the host's blob, which the
+    /// next launch or server refresh replaced, and Review & Publish never saw it. Every
+    /// engine mutation calls this; a host calls it after its own theme writes. Edits in
+    /// the same main-thread turn are saved once.
+    public static func recordLocalEdit() {
+        let schedule = { @MainActor in
+            guard !localEditPending else { return }
+            localEditPending = true
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    localEditPending = false
+                    remoteTheme?.recordLocalEdit { try themeDocumentForPublishing(over: $0) }
+                }
+            }
+        }
+        if Thread.isMainThread { MainActor.assumeIsolated(schedule) }
+        else { DispatchQueue.main.async { MainActor.assumeIsolated(schedule) } }
     }
 
     // MARK: colour resolution (tagged at the chokepoints)
@@ -1022,7 +1045,7 @@ public enum RipulThemeEngine {
         var map = current.styleAssignments[kind] ?? [:]
         map[element] = style
         current.styleAssignments[kind] = map
-        if let persistMutation { persistMutation(current) } else { adopt(current) }
+        commit()
     }
 
     /// Clear an element's per-element overrides. Persists through the host, as above.
@@ -1030,7 +1053,7 @@ public enum RipulThemeEngine {
         var map = current.styleOverrides[kind] ?? [:]
         map[element] = nil
         current.styleOverrides[kind] = map
-        if let persistMutation { persistMutation(current) } else { adopt(current) }
+        commit()
     }
 
     // MARK: live repaint (UIKit walker)

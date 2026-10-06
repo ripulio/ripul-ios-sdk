@@ -159,6 +159,69 @@ final class RemoteThemeClientTests: XCTestCase {
         XCTAssertEqual(offline.authoritativeETag, "v2")
     }
 
+    func testLiveColourEditIsKeptAsDraftAcrossRefreshAndRelaunch() async throws {
+        let cache = directory()
+        let draftURL = cache.appendingPathComponent("draft.json")
+        let server = Data(#"{"title":"server","primitives":{"brand":"dark"}}"#.utf8)
+        let coloured = Data(#"{"title":"server","primitives":{"brand":"red"}}"#.utf8)
+        var current = Data()
+        var requests = 0
+        func makeClient() -> RipulRemoteThemeClient {
+            RipulRemoteThemeClient(url: url, fallback: fallback, cacheDirectory: cache, draftURL: draftURL,
+                validateAndApply: { current = $0 }, fetch: { _ in
+                    requests += 1
+                    return (Data(#"{"title":"newer server","primitives":{"brand":"dark"}}"#.utf8),
+                            self.response(etag: "v2"))
+                })
+        }
+        let first = makeClient()
+        try first.start(); await first.refresh() // let the launch fetch finish first
+        try first.acceptPublication(RipulThemeManifest(data: server, etag: "v1"))
+        let applied = current
+        try first.saveLocalEdit(coloured)
+        XCTAssertEqual(current, applied, "Recording an edit that is already live must not re-apply anything")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: draftURL.path))
+        let held = requests
+        await first.refresh()
+        XCTAssertEqual(requests, held, "A newer server version must not replace an unpublished colour edit")
+        first.stop()
+
+        let restarted = makeClient()
+        try restarted.start()
+        XCTAssertEqual(current, coloured, "The colour edit survives relaunch")
+        XCTAssertEqual(restarted.authoritativeDocument, server)
+        XCTAssertEqual(restarted.authoritativeETag, "v1", "Publishing stays conditional on the version edited")
+        try restarted.saveLocalEdit(server)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: draftURL.path),
+                       "Editing back to the published values leaves no draft")
+        let resumed = requests
+        await restarted.refresh()
+        XCTAssertEqual(requests, resumed + 1, "With no draft left, refreshes resume")
+        restarted.stop()
+    }
+
+    func testLocalEditYieldsToOpenEditorAndKeepsDraftUnderRepair() throws {
+        let cache = directory(), draftURL = cache.appendingPathComponent("draft.json")
+        let client = RipulRemoteThemeClient(url: url, fallback: fallback, cacheDirectory: cache, draftURL: draftURL,
+            validateAndApply: { _ in }, fetch: { _ in throw URLError(.notConnectedToInternet) })
+        try client.start(); defer { client.stop() }
+        let edit = Data(#"{"title":"edited"}"#.utf8)
+        let lease = client.beginEditing()
+        try client.saveLocalEdit(edit)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: draftURL.path), "The open editor owns the draft")
+        client.recordLocalEdit { _ in edit }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: draftURL.path))
+        client.endEditing(lease)
+        XCTAssertEqual(client.savedDraftDocument, edit, "An edit made under a host editor's lease is kept when it ends")
+        try FileManager.default.removeItem(at: draftURL)
+        try FileManager.default.createDirectory(at: cache, withIntermediateDirectories: true)
+        try JSONEncoder().encode(RipulThemeDraft(text: "{invalid", baseline: fallback, etag: nil))
+            .write(to: draftURL, options: .atomic)
+        try client.saveLocalEdit(edit)
+        XCTAssertEqual(try JSONDecoder().decode(RipulThemeDraft.self, from: Data(contentsOf: draftURL)).text,
+                       "{invalid", "Source being repaired in Theme Management is not overwritten")
+    }
+
     func testExplicitResetRemovesSavedPreviewAcrossRestart() async throws {
         let cache = directory(), draftURL = cache.appendingPathComponent("draft.json")
         try FileManager.default.createDirectory(at: cache, withIntermediateDirectories: true)

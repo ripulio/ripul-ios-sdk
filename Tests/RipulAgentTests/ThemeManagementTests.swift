@@ -135,6 +135,41 @@ final class ThemeManagementTests: XCTestCase {
         third.close(); remote.stop()
     }
 
+    func testOpeningReviewKeepsColourEditsMadeAfterATextDraft() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let texted = Data(#"{"title":"New","colour":"dark"}"#.utf8)
+        var live = Data(#"{"title":"New","colour":"red"}"#.utf8)
+        var applications = 0
+        let draftURL = folder.appendingPathComponent("draft.json")
+        let remote = RipulRemoteThemeClient(url: base.appendingPathComponent("v1/app-themes/app"),
+            fallback: original, cacheDirectory: folder.appendingPathComponent("cache"), draftURL: draftURL,
+            validateAndApply: { live = $0; applications += 1 },
+            fetch: { _ in throw URLError(.notConnectedToInternet) })
+        try remote.start(); defer { remote.stop() }
+        live = Data(#"{"title":"New","colour":"red"}"#.utf8)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try JSONEncoder().encode(RipulThemeDraft(text: String(decoding: texted, as: UTF8.self),
+            baseline: original, etag: "v1")).write(to: draftURL, options: .atomic)
+        let before = applications
+        let model = ThemeManagementModel(baseURL: base, tokenProvider: { "test" }, remote: remote,
+            draftURL: draftURL, capture: { draft in
+                // The host overlays what is running on the saved draft.
+                var json = try XCTUnwrap(JSONSerialization.jsonObject(with: draft ?? Data("{}".utf8)) as? [String: Any])
+                json["colour"] = "red"
+                return try JSONSerialization.data(withJSONObject: json)
+            })
+        model.start(); defer { model.close() }
+        XCTAssertEqual(applications, before, "Opening review must not re-apply the older saved draft")
+        XCTAssertEqual(ThemeManagementModel.canonical(live),
+                       ThemeManagementModel.canonical(Data(#"{"title":"New","colour":"red"}"#.utf8)))
+        XCTAssertEqual(ThemeManagementModel.canonical(model.data), ThemeManagementModel.canonical(live),
+                       "Review offers the colour edit alongside the text")
+        let saved = try JSONDecoder().decode(RipulThemeDraft.self, from: Data(contentsOf: draftURL))
+        XCTAssertEqual(ThemeManagementModel.canonical(saved.data), ThemeManagementModel.canonical(live))
+        XCTAssertEqual(saved.etag, "v1")
+    }
+
     func testEngineCapturePreservesHostExtrasAndClearsOnlyEditedMaps() throws {
         let kind = RipulStyleKind(name: "copy", scopes: [.init(id: "welcome", label: "Welcome")],
             knobs: [.init("text", "Text", .text(fallback: ""))], defaultTier: { _, _ in [:] },

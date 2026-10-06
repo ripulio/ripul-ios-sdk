@@ -20,6 +20,8 @@ import AppKit
 /// - Speaking: the completion prose is read aloud (ElevenLabs default voice,
 ///   Apple fallback). No barge-in in v1 — the mic is off while speaking,
 ///   which also prevents the speaker→mic feedback loop. Tap to interrupt.
+///   That includes the agent's own `speak` calls, which play as ambient
+///   speech during `.thinking` rather than as a `.speaking` readout.
 ///
 /// The class itself is availability-free (SDK floor < 26): all speech-layer
 /// use is behind #available with providers stored type-erased, mirroring
@@ -48,6 +50,7 @@ public final class VoiceModeController: ObservableObject {
             // frozen utterance still has audio loaded, and resuming it must
             // not have to re-derive that.
             if phase != .speaking, phase != .paused { playbackLive = false }
+            refreshStopListener()
             updateNowPlaying()
             // One line per genuine transition. `didSet` fires on same-value
             // assignment too, hence the guard. This is the spine of any
@@ -172,7 +175,10 @@ public final class VoiceModeController: ObservableObject {
     /// Stays true across a pause (the clip is loaded, merely frozen); only
     /// consulted while the phase is `.speaking`.
     @Published public private(set) var playbackLive = false {
-        didSet { updateNowPlaying() }
+        didSet {
+            updateNowPlaying()
+            refreshStopListener()
+        }
     }
     /// Adaptive noise floor (EMA of quiet frames) so the speech threshold
     /// tracks the room rather than a fixed constant.
@@ -186,6 +192,26 @@ public final class VoiceModeController: ObservableObject {
     /// Ambient speech (send acks, progress round-ups) — spoken without
     /// changing phase, so the thinking state machine keeps running.
     private var ambientBusy = false
+    /// True while ambient speech — the agent's own `speak` call, prose
+    /// narration, a round-up — is audibly playing. Phase stays `.thinking`
+    /// through it, so this is what lets the overlay offer "tap to skip" and
+    /// gives a tap or a pause something to act on. Agents answer through
+    /// `speak` on every voice turn, so without it nearly everything the user
+    /// heard could be neither skipped nor paused.
+    @Published public private(set) var ambientPlaybackLive = false {
+        didSet { refreshStopListener() }
+    }
+    /// Bumped whenever ambient speech is cut off or replaced, so a stale
+    /// utterance's callbacks can't clear a newer one's state, and a failed
+    /// skip can't fall back to Apple and read the text anyway.
+    private var ambientGeneration = 0
+    /// Ambient speech frozen by a pause from `.thinking`; resume continues it.
+    private var ambientPaused = false
+    /// The words of the utterance now playing, readout or ambient. The
+    /// stop-word listener ignores a command the phone is itself saying.
+    private var spokenNow = ""
+    /// `StopWordListener`, type-erased because the class is availability-free.
+    private var stopListener: AnyObject?
     /// Assistant prose already read aloud this turn — progress messages and
     /// the completion alike, so nothing is ever spoken twice.
     private var narratedMessageIds: Set<String> = []
@@ -347,6 +373,7 @@ public final class VoiceModeController: ObservableObject {
         cancelTasks()
         runningSink = nil
         stopAllSpeech()
+        clearAmbientState()
         // Forwarding stays on only if the debug scroller wants the channel.
         if let bridge {
             bridge.evaluateJavaScript("window.__ripulSetNativeChatForwarding?.(false, 'voice')")
@@ -458,6 +485,11 @@ public final class VoiceModeController: ObservableObject {
         case .speaking:
             stopAllSpeech()
             beginListening(keepText: false)
+        case .thinking where ambientBusy:
+            // The agent is talking while its turn runs: skip what it is
+            // saying. If the turn has already ended, the wait for this
+            // playback then opens the mic, just as after a readout.
+            stopAmbientSpeech()
         case .listening:
             sendUtterance()
         case .paused:
@@ -507,6 +539,11 @@ public final class VoiceModeController: ObservableObject {
             pausedFrom = .speaking
             phase = .paused
         case .thinking:
+            if ambientBusy {
+                // Hold the agent's words mid-sentence; resume continues them.
+                pauseAllSpeech()
+                ambientPaused = true
+            }
             pausedFrom = .thinking
             phase = .paused
         case .notice:
@@ -528,17 +565,25 @@ public final class VoiceModeController: ObservableObject {
             beginListening(keepText: true)
         case .speaking:
             phase = .speaking
-            if #available(iOS 26.0, macOS 26.0, *) {
-                (ttsProvider as? any NativeSpeechProviding)?.resumeSpeaking()
-                (ttsFallback as? any NativeSpeechProviding)?.resumeSpeaking()
-            }
+            resumeAllSpeech()
         case .thinking:
+            let heldAmbient = ambientPaused
+            ambientPaused = false
             if let reply = pendingReply {
                 pendingReply = nil
+                // The reply outranks the rest of a frozen narration line.
+                if heldAmbient { stopAmbientSpeech() }
                 speak(reply)
             } else if bridge?.isAgentRunning == true {
                 phase = .thinking
+                if heldAmbient { resumeAllSpeech() }
                 startThinkingTicker()
+            } else if heldAmbient {
+                // The turn ended while the agent's words were frozen: finish
+                // them, then listen.
+                phase = .thinking
+                resumeAllSpeech()
+                listenAfterAgentSpeech()
             } else {
                 // Turn finished while paused with nothing held back (the
                 // agent spoke pre-pause, or produced no prose) — listen.
@@ -565,7 +610,7 @@ public final class VoiceModeController: ObservableObject {
         // Interrupt any in-flight readout — a typed command is an explicit
         // barge-in, same as tapping while it speaks.
         stopAllSpeech()
-        ambientBusy = false
+        clearAmbientState()
         // The typed command replaces any half-heard transcript: it IS the
         // utterance, shown in the overlay's committed slot. sendUtterance
         // submits with modality "voice", marking the turn for speak-back.
@@ -593,6 +638,12 @@ public final class VoiceModeController: ObservableObject {
         guard #available(iOS 26.0, macOS 26.0, *) else { return }
         (ttsProvider as? any NativeSpeechProviding)?.pauseSpeaking()
         (ttsFallback as? any NativeSpeechProviding)?.pauseSpeaking()
+    }
+
+    private func resumeAllSpeech() {
+        guard #available(iOS 26.0, macOS 26.0, *) else { return }
+        (ttsProvider as? any NativeSpeechProviding)?.resumeSpeaking()
+        (ttsFallback as? any NativeSpeechProviding)?.resumeSpeaking()
     }
 
     // MARK: - Listening
@@ -955,7 +1006,7 @@ public final class VoiceModeController: ObservableObject {
         lastRoundupSecond = 0
         lastNarrationSecond = 0
         roundupStepBaseline = 0
-        ambientBusy = false
+        clearAmbientState()
         narratedMessageIds = []
         narrationQueue = []
         // Acknowledge that the message went in — silence after sending is the
@@ -1086,10 +1137,40 @@ public final class VoiceModeController: ObservableObject {
     /// previous ambient utterance is still playing; the reply speak path
     /// preempts ambient speech outright.
     private func stopAmbientSpeech() {
+        clearAmbientState()
         guard #available(iOS 26.0, macOS 26.0, *) else { return }
         (ttsProvider as? any NativeSpeechProviding)?.stopSpeaking()
         (ttsFallback as? any NativeSpeechProviding)?.stopSpeaking()
+    }
+
+    /// Forget ambient speech without touching the players — for callers that
+    /// have already stopped them, or are about to start a readout over them.
+    /// Bumping the generation keeps a stale utterance's callbacks out.
+    private func clearAmbientState() {
+        ambientGeneration += 1
         ambientBusy = false
+        ambientPlaybackLive = false
+        ambientPaused = false
+    }
+
+    /// Run the stop-word listener exactly while something is audibly playing
+    /// and the user has opted in. Called from every flag it depends on, so a
+    /// transition can't leave the mic open: `beginListening` sets `.listening`
+    /// before it reconfigures the session for capture, and this stops the
+    /// listener at that assignment.
+    private func refreshStopListener() {
+        guard #available(iOS 26.0, macOS 26.0, *) else { return }
+        let wanted = SpeechPreferences.sayStopToInterrupt
+            && ((phase == .speaking && playbackLive) || (phase == .thinking && ambientPlaybackLive))
+        if wanted, stopListener == nil { stopListener = StopWordListener() }
+        guard let listener = stopListener as? StopWordListener else { return }
+        if wanted, !listener.isRunning {
+            // Heard "stop": exactly what a tap does — a readout ends and the
+            // mic opens; the agent's own speech is skipped.
+            listener.start(speaking: spokenNow) { [weak self] in self?.handleTap() }
+        } else if !wanted, listener.isRunning {
+            listener.stop()
+        }
     }
 
     private func speakAmbient(_ text: String, force: Bool = false) {
@@ -1098,11 +1179,28 @@ public final class VoiceModeController: ObservableObject {
         // .listening, and swapping the category out from under a live capture
         // is exactly the teardown VoiceAudioSession exists to prevent.
         if phase != .listening { VoiceAudioSession.conversationPlayback() }
+        spokenNow = text
+        ambientGeneration += 1
+        let generation = ambientGeneration
         ambientBusy = true
         Task { @MainActor [weak self] in
             guard let self else { return }
             let done: @MainActor () -> Void = { [weak self] in
-                self?.ambientBusy = false
+                guard let self, self.ambientGeneration == generation else { return }
+                self.ambientBusy = false
+                self.ambientPlaybackLive = false
+            }
+            // `speak` returns once audio has started. A skip or pause that
+            // landed during synthesis could not reach a player that did not
+            // exist yet, so it is applied here, to the clip just begun.
+            let began: @MainActor () -> Void = { [weak self] in
+                guard let self else { return }
+                guard self.ambientGeneration == generation else {
+                    if !self.ambientBusy, self.phase != .speaking { self.stopAmbientSpeech() }
+                    return
+                }
+                self.ambientPlaybackLive = true
+                if self.ambientPaused { self.pauseAllSpeech() }
             }
             do {
                 guard let tts = self.ttsProvider as? any NativeSpeechProviding else {
@@ -1110,16 +1208,40 @@ public final class VoiceModeController: ObservableObject {
                 }
                 try await tts.speak(text: text, voiceId: nil,
                                     modelId: SpeechPreferences.ttsModelId(for: .acknowledgement), onPlaybackEnd: done)
+                began()
             } catch {
+                // Skipped or replaced mid-synthesis: the provider cancels, and
+                // falling back to Apple would read out what the user skipped.
+                guard self.ambientGeneration == generation else { return }
                 nerror("[VOICE] ambient TTS failed, falling back to Apple: \(error.localizedDescription)")
                 do {
                     guard let fallback = self.ttsFallback as? any NativeSpeechProviding else { throw error }
                     try await fallback.speak(text: text, voiceId: nil, onPlaybackEnd: done)
+                    began()
                 } catch {
                     nerror("[VOICE] ambient Apple fallback failed: \(error.localizedDescription)")
+                    guard self.ambientGeneration == generation else { return }
                     self.ambientBusy = false
                 }
             }
+        }
+    }
+
+    /// Open the mic once the agent's own closing words have finished playing,
+    /// or we'd transcribe our own speaker. A skip ends the wait early: it
+    /// clears `ambientBusy`, and the listener hears the mic-live tone.
+    private func listenAfterAgentSpeech() {
+        replyWaitTask?.cancel()
+        replyWaitTask = Task { @MainActor [weak self] in
+            do {
+                let finished = try await VoiceReplyWait.untilPlaybackEnds { [weak self] in
+                    guard let self, self.isActive, self.phase == .thinking else { return false }
+                    return self.ambientBusy
+                }
+                if !finished { self?.stopAmbientSpeech() }
+            } catch { return }
+            guard !Task.isCancelled, let self, self.phase == .thinking else { return }
+            self.beginListening(keepText: false)
         }
     }
 
@@ -1130,6 +1252,9 @@ public final class VoiceModeController: ObservableObject {
         // so this edge only fires on genuine turn completion.
         guard wasRunning, !running else { return }
         if phase == .paused, pausedFrom == .thinking {
+            // The agent answered through `speak`: there is no written reply to
+            // read, and resume finishes whatever the pause froze.
+            if VoiceModeCoordinator.shared.spokeThisTurn { return }
             // Finished while frozen: capture the reply quietly; resume speaks it.
             replyWaitTask?.cancel()
             replyWaitTask = Task { @MainActor [weak self] in
@@ -1149,20 +1274,7 @@ public final class VoiceModeController: ObservableObject {
         // (the tool description asks it to close with the answer). Reading
         // the written reply on top of that would say everything twice.
         if VoiceModeCoordinator.shared.spokeThisTurn {
-            replyWaitTask?.cancel()
-            replyWaitTask = Task { @MainActor [weak self] in
-                // Let the agent's closing utterance finish before reopening
-                // the mic, or we'd transcribe our own speaker.
-                do {
-                    let finished = try await VoiceReplyWait.untilPlaybackEnds { [weak self] in
-                        guard let self, self.isActive, self.phase == .thinking else { return false }
-                        return self.ambientBusy
-                    }
-                    if !finished { self?.stopAmbientSpeech() }
-                } catch { return }
-                guard !Task.isCancelled, let self, self.phase == .thinking else { return }
-                self.beginListening(keepText: false)
-            }
+            listenAfterAgentSpeech()
             return
         }
 
@@ -1234,7 +1346,7 @@ public final class VoiceModeController: ObservableObject {
         phase = .speaking
         // Preempt any in-flight ambient ack/round-up.
         stopAllSpeech()
-        ambientBusy = false
+        clearAmbientState()
         // stopAllSpeech() has just closed the mic, so the capture category is
         // no longer earning its keep — hand playback a real media session.
         VoiceAudioSession.conversationPlayback()
@@ -1255,6 +1367,7 @@ public final class VoiceModeController: ObservableObject {
             beginListening(keepText: false)
             return
         }
+        spokenNow = spoken
         Task { @MainActor [weak self] in
             guard let self else { return }
             let resume: @MainActor () -> Void = { [weak self] in

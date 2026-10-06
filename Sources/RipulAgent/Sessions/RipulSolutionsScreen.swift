@@ -112,6 +112,7 @@ public struct RipulSolutionsScreen: View {
     @State private var showingSiteKeys = false
     @State private var showingModels = false
     @State private var showingUsers = false
+    @State private var showingMessages = false
     @State private var showingVoiceProfiles = false
     @State private var showingMacros = false
     @State private var showingBuilds = false
@@ -296,6 +297,19 @@ public struct RipulSolutionsScreen: View {
                     }
                 }
             }
+            .sheet(isPresented: $showingMessages) {
+                NavigationStack {
+                    RipulMessagesScreen(
+                        baseURL: management.baseURL,
+                        tokenProvider: management.tokenProvider
+                    )
+                    .toolbar {
+                        ToolbarItem(placement: .topBarTrailing) {
+                            Button("Done") { showingMessages = false }
+                        }
+                    }
+                }
+            }
             .sheet(isPresented: $showingVoiceProfiles) {
                 NavigationStack {
                     VoiceProfilesScreen(
@@ -468,6 +482,16 @@ public struct RipulSolutionsScreen: View {
                             icon: "person.2",
                             identifier: "SolutionManagement.users"
                         ) { showingUsers = true }
+
+                        // Same directory, same permission: the server gates
+                        // `/admin/notifications/*` on admin:manage_users too.
+                        Divider().padding(.leading, 44)
+                        row(
+                            title: "Messages",
+                            subtitle: "Push a notification to people or teams",
+                            icon: "paperplane",
+                            identifier: "SolutionManagement.messages"
+                        ) { showingMessages = true }
                     }
 
                     Divider().padding(.leading, 44)

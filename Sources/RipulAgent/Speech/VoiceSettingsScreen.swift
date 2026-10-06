@@ -1,4 +1,5 @@
 import SwiftUI
+import Speech
 
 /// Voice & speech hub — reached from the root of Settings (promoted out of
 /// Debug once voice grew real user-facing controls). Dictation provider,
@@ -16,6 +17,7 @@ public struct VoiceSettingsScreen: View {
     // shows a selection the app is not actually using.
     @AppStorage(SpeechPreferences.voiceModeStyleKey, store: SpeechPreferences.store) private var voiceModeStyle = "compact"
     @AppStorage(SpeechPreferences.voiceSendModeKey, store: SpeechPreferences.store) private var voiceSendMode = SpeechPreferences.defaultVoiceSendMode.rawValue
+    @AppStorage(SpeechPreferences.sayStopToInterruptKey, store: SpeechPreferences.store) private var sayStopToInterrupt = false
     @AppStorage(SpeechPreferences.speechLanguageKey, store: SpeechPreferences.store) private var speechLanguage = "en"
     @AppStorage(SpeechPreferences.speechKeytermsKey, store: SpeechPreferences.store) private var speechKeyterms = "Ripul"
     @AppStorage(SpeechPreferences.speechPaceKey, store: SpeechPreferences.store) private var speechPace = 1.0
@@ -124,6 +126,21 @@ public struct VoiceSettingsScreen: View {
                 Text(voiceSendMode == VoiceSendMode.sendCommand.rawValue
                      ? "Finish with \"Send command\" and pause briefly. The closing phrase is removed before sending. Other pauses let you keep thinking; you can also tap Send. Saved in this app on this device."
                      : "Messages send automatically when you pause speaking. You can also tap Send. Saved in this app on this device.")
+            }
+
+            Section {
+                Toggle("Say \"Stop\" to interrupt", isOn: $sayStopToInterrupt)
+                    .uiKitIdentifier("VoiceSettingsScreen.sayStopToInterrupt")
+                    .onChange(of: sayStopToInterrupt) { _, on in
+                        // The listener uses on-device recognition, which needs
+                        // this permission even when dictation uses ElevenLabs.
+                        // Ask here rather than mid-readout.
+                        if on { SFSpeechRecognizer.requestAuthorization { _ in } }
+                    }
+            } header: {
+                Text("Interrupting")
+            } footer: {
+                Text("Experimental. While Ripul is talking, the microphone stays on and listens only for \"stop\", \"pause\" or \"wait\", using speech recognition on this device. Tapping always works. Saved in this app on this device.")
             }
 
             Section {

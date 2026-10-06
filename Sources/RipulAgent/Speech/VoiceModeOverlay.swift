@@ -93,6 +93,9 @@ struct VoiceModeOverlay: View {
         case .listening:
             return controller.listeningStatus
         case .sending: return "Sending…"
+        // The agent's own `speak` calls play while the turn runs, and a tap
+        // skips them just as it skips a readout — so say so.
+        case .thinking where controller.ambientPlaybackLive: return "Speaking — tap to skip"
         case .thinking: return "Working… \(formattedElapsed)"
         // Likewise never claim to be speaking during the synthesis round-trip —
         // "tap to skip" over silence reads as a hang.
@@ -479,6 +482,7 @@ struct VoiceModeCompactPanel: View {
         switch controller.phase {
         case .listening: return controller.listeningStatus
         case .sending: return "Sending…"
+        case .thinking where controller.ambientPlaybackLive: return "Speaking — tap to skip"
         case .thinking:
             let minutes = controller.thinkingSeconds / 60
             let seconds = controller.thinkingSeconds % 60

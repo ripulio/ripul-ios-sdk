@@ -14,6 +14,15 @@ import SwiftUI
 /// of the screen, which is where the grid appears. Direction is a parameter
 /// rather than a second implementation, so the thresholds, the axis arbitration
 /// and the commit rules cannot drift apart between them.
+///
+/// ## The chrome's own drag
+/// A drag toward the edge the chrome sits on opens nothing. A host that wants
+/// it — the Browser pushes its address bar down into the compact pill — passes
+/// `onChromeDrag`, and the same recogniser hands it the drag once the axis
+/// locks that way. With `chromeTakesPull` it takes the pull toward the middle
+/// too, for chrome with a step of its own before the overview: the Browser's
+/// minimised bar comes back first, and the next pull opens the overview. A
+/// second recogniser for either would race this one.
 @available(iOS 15.0, *)
 public struct ScreenSwitcherPullModifier: ViewModifier {
     public enum Direction {
@@ -27,6 +36,20 @@ public struct ScreenSwitcherPullModifier: ViewModifier {
         func travel(_ dy: CGFloat) -> CGFloat { self == .down ? dy : -dy }
     }
 
+    /// A vertical drag the host takes for its chrome, in points toward the
+    /// edge the chrome sits on, from where the axis locked: negative the other
+    /// way. A frame that stalls is not caught up afterwards (see `chromeLast`),
+    /// so the chrome can trail the finger but never jumps to it.
+    public enum ChromeDrag {
+        /// The axis locked, toward the edge (a push) or away from it (a pull).
+        case began(towardEdge: Bool)
+        case moved(CGFloat)
+        /// `predicted` is where the system projects the finger would come to rest.
+        case ended(CGFloat, predicted: CGFloat)
+        /// The system took the touch, or the gesture was switched off under it.
+        case cancelled
+    }
+
     let enabled: Bool
     let direction: Direction
     let allowsHorizontal: Bool
@@ -35,8 +58,15 @@ public struct ScreenSwitcherPullModifier: ViewModifier {
     /// thumb, for instance. Everywhere else stays simultaneous so no other
     /// screen's behaviour moves.
     var highPriority: Bool = false
+    /// The drag toward the edge. Nil leaves it to whatever is underneath.
+    var onChromeDrag: ((ChromeDrag) -> Void)? = nil
+    /// The pull toward the middle goes to `onChromeDrag` too, not the overview.
+    var chromeTakesPull: Bool = false
 
-    private enum Axis { case undecided, vertical, horizontal }
+    private enum Axis { case undecided, vertical, horizontal, chrome }
+
+    /// Every vertical drag is the host's: no overview to warm, no snapshot.
+    private var hostTakesPull: Bool { chromeTakesPull && onChromeDrag != nil }
 
     @Environment(\.screenSwitcher) private var switcher
     @State private var axis: Axis = .undecided
@@ -85,16 +115,31 @@ public struct ScreenSwitcherPullModifier: ViewModifier {
     /// for it to interrupt.
     @State private var prepared: UIImage?
 
+    /// The chrome drag's last event, by the event's own clock, and its travel
+    /// before anything was absorbed. When events are further apart than a
+    /// stall, whatever the finger did across the gap is absorbed into the
+    /// offset instead of drawn in one frame — the snap the origin exists to
+    /// prevent, arriving by another route. A hitch anywhere (the first frame
+    /// of a heavy layout, a capture) would otherwise land as a jump to the thumb.
+    @State private var chromeLast: (time: Date, travel: CGFloat)?
+    @State private var chromeAbsorbed: CGFloat = 0
+    /// Two frames at 60Hz. A moving finger reports far more often than this.
+    private let stallGap: TimeInterval = 0.034
+
     public init(
         enabled: Bool = true,
         direction: Direction = .down,
         allowsHorizontal: Bool = true,
-        highPriority: Bool = false
+        highPriority: Bool = false,
+        onChromeDrag: ((ChromeDrag) -> Void)? = nil,
+        chromeTakesPull: Bool = false
     ) {
         self.enabled = enabled
         self.direction = direction
         self.allowsHorizontal = allowsHorizontal
         self.highPriority = highPriority
+        self.onChromeDrag = onChromeDrag
+        self.chromeTakesPull = chromeTakesPull
     }
 
     /// The strip is window-wide, so travel is measured against the window and
@@ -106,12 +151,18 @@ public struct ScreenSwitcherPullModifier: ViewModifier {
         // Keep the same content tree when editing disables this gesture.
         // Returning plain content here replaced the composer's UITextView
         // immediately after it became first responder, dropping the keyboard.
-        let gesturesEnabled = enabled && switcher != nil
+        // The chrome drag needs no switcher, so a host without one still has it.
+        let gesturesEnabled = enabled && (switcher != nil || onChromeDrag != nil)
         let mask: GestureMask = gesturesEnabled ? .all : .subviews
         // 3, not 8: this is only where SwiftUI starts reporting the drag. The
         // axis has its own threshold below, so waiting here bought nothing but
         // delay before anything could happen at all.
-        let drag = DragGesture(minimumDistance: 3)
+        //
+        // Global when the chrome follows its drag: that moves the view this is
+        // attached to, and a translation measured in its own space would
+        // include the response to the last event. Everywhere else the view
+        // stands still under the snapshot, and stays exactly as it was.
+        let drag = DragGesture(minimumDistance: 3, coordinateSpace: onChromeDrag == nil ? .local : .global)
             .updating($tracking) { _, state, _ in
                 guard gesturesEnabled else { return }
                 if !state {
@@ -122,16 +173,27 @@ public struct ScreenSwitcherPullModifier: ViewModifier {
                 state = true
             }
             .onChanged { value in
-                guard gesturesEnabled, let switcher else { return }
+                guard gesturesEnabled else { return }
                 if axis == .undecided {
                     let dx = value.translation.width
                     let dy = value.translation.height
                     // Before the threshold, not after: this is the only moment
                     // in the gesture when a stall is free.
-                    if prepared == nil { prepared = ScreenSnapshotter.capture(window: switcher.owningWindow) }
+                    //
+                    // Not for a drag already heading the chrome's way, which
+                    // needs no picture. A quick swipe's first report is often
+                    // past the threshold, so the capture and the lock land on
+                    // the same event and the stall is the chrome's first frame.
+                    let chromeBound = onChromeDrag != nil && abs(dy) >= abs(dx)
+                        && (hostTakesPull || direction.travel(dy) < 0)
+                    if prepared == nil, let switcher, !chromeBound {
+                        prepared = ScreenSnapshotter.capture(window: switcher.owningWindow)
+                    }
                     guard max(abs(dx), abs(dy)) >= decisionDistance else { return }
 
-                    if direction.travel(dy) > 0, abs(dy) > abs(dx) {
+                    let vertical = abs(dy) > abs(dx)
+                    let toward = direction.travel(dy) > 0
+                    if let switcher, vertical, toward, !hostTakesPull {
                         axis = .vertical
                         origin = value.translation
                         // Before the first progress is computed, so the ramp's
@@ -139,11 +201,19 @@ public struct ScreenSwitcherPullModifier: ViewModifier {
                         // change under it.
                         switcher.calibrate(windowHeight: screenHeight)
                         switcher.beginInteractive(snapshot: prepared)
-                    } else if allowsHorizontal, abs(dx) > abs(dy) {
+                    } else if let switcher, allowsHorizontal, abs(dx) > abs(dy) {
                         axis = .horizontal
                         origin = value.translation
                         cancelWarmup()
                         switcher.beginSlide(snapshot: prepared)
+                    } else if let onChromeDrag, vertical, !toward || hostTakesPull {
+                        axis = .chrome
+                        origin = value.translation
+                        chromeLast = (value.time, 0)
+                        chromeAbsorbed = 0
+                        // The warm overview stays until the finger lifts:
+                        // unmounting it here would be a stall on this frame.
+                        onChromeDrag(.began(towardEdge: !toward))
                     } else {
                         return
                     }
@@ -156,9 +226,16 @@ public struct ScreenSwitcherPullModifier: ViewModifier {
 
                 switch axis {
                 case .vertical:
-                    switcher.updateInteractive(translation: direction.travel(dy))
+                    switcher?.updateInteractive(translation: direction.travel(dy))
                 case .horizontal:
-                    switcher.updateSlide(translation: dx, width: screenWidth)
+                    switcher?.updateSlide(translation: dx, width: screenWidth)
+                case .chrome:
+                    let travel = -direction.travel(dy)
+                    if let last = chromeLast, value.time.timeIntervalSince(last.time) > stallGap {
+                        chromeAbsorbed += travel - last.travel
+                    }
+                    chromeLast = (value.time, travel)
+                    onChromeDrag?(.moved(travel - chromeAbsorbed))
                 case .undecided:
                     break
                 }
@@ -169,7 +246,7 @@ public struct ScreenSwitcherPullModifier: ViewModifier {
                 axis = .undecided
                 origin = .zero
                 cancelWarmup()
-                guard gesturesEnabled, let switcher else { return }
+                guard gesturesEnabled else { return }
 
                 // Origin-relative like the live updates. Velocity is a
                 // difference of the two, so the shift cancels there and the
@@ -181,12 +258,16 @@ public struct ScreenSwitcherPullModifier: ViewModifier {
                 case .vertical:
                     let toward = direction.travel(dy)
                     let predicted = direction.travel(py)
-                    switcher.endInteractive(translation: toward, velocity: predicted - toward)
+                    switcher?.endInteractive(translation: toward, velocity: predicted - toward)
                 case .horizontal:
-                    switcher.endSlide(
+                    switcher?.endSlide(
                         predicted: value.predictedEndTranslation.width - start.width,
                         width: screenWidth
                     )
+                case .chrome:
+                    // Shifted alike, so the flick's velocity survives.
+                    onChromeDrag?(.ended(-direction.travel(dy) - chromeAbsorbed,
+                                         predicted: -direction.travel(py) - chromeAbsorbed))
                 case .undecided:
                     break
                 }
@@ -198,7 +279,8 @@ public struct ScreenSwitcherPullModifier: ViewModifier {
         // behaves as a tap.
         let warm = DragGesture(minimumDistance: 0)
             .updating($touching) { _, state, _ in
-                guard gesturesEnabled, let switcher else { return }
+                // Nothing to warm when no pull can open the overview.
+                guard gesturesEnabled, let switcher, !hostTakesPull else { return }
                 if !state {
                     warmed = true
                     switcher.prepareToOpen()
@@ -217,6 +299,7 @@ public struct ScreenSwitcherPullModifier: ViewModifier {
                 guard !active else { return }
                 // Focus can cancel a touch without delivering onEnded.
                 cancelWarmup()
+                if axis == .chrome { onChromeDrag?(.cancelled) }
                 axis = .undecided
                 origin = .zero
                 prepared = nil
@@ -240,6 +323,7 @@ public struct ScreenSwitcherPullModifier: ViewModifier {
         switch axis {
         case .vertical: switcher?.cancelInteractive()
         case .horizontal: switcher?.cancelSlide()
+        case .chrome: onChromeDrag?(.cancelled)
         case .undecided: return
         }
         axis = .undecided
@@ -262,13 +346,17 @@ public extension View {
         _ direction: ScreenSwitcherPullModifier.Direction,
         enabled: Bool = true,
         allowsHorizontal: Bool = true,
-        highPriority: Bool = false
+        highPriority: Bool = false,
+        onChromeDrag: ((ScreenSwitcherPullModifier.ChromeDrag) -> Void)? = nil,
+        chromeTakesPull: Bool = false
     ) -> some View {
         modifier(ScreenSwitcherPullModifier(
             enabled: enabled,
             direction: direction,
             allowsHorizontal: allowsHorizontal,
-            highPriority: highPriority
+            highPriority: highPriority,
+            onChromeDrag: onChromeDrag,
+            chromeTakesPull: chromeTakesPull
         ))
     }
 }

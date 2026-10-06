@@ -11,7 +11,7 @@ import Foundation
 ///
 /// Deliberately recreates the exact sequence `OnboardingUITests
 /// .testDoneDismissesOnboardingAndRevealsSignIn` already proves works
-/// unattended (walk 4 onboarding pages via Continue, tap Done, land on
+/// unattended (walk 5 onboarding pages via Continue, tap Done, land on
 /// sign-in) — driven through the macro system instead of raw XCUITest calls,
 /// so the proof is against known-good app behavior rather than a guess about
 /// what an untested screen does.
@@ -30,13 +30,15 @@ public enum RipulMacroFixtures {
             + "revealing the sign-in screen.",
         steps: [
             MacroStep(kind: .tap, selector: MacroSelector(id: "OnboardingView.continueButton"),
-                     recordedLabel: "Tap Continue (page 1 of 5)"),
+                     recordedLabel: "Tap Continue (page 1 of 6)"),
             MacroStep(kind: .tap, selector: MacroSelector(id: "OnboardingView.continueButton"),
-                     recordedLabel: "Tap Continue (page 2 of 5)"),
+                     recordedLabel: "Tap Continue (page 2 of 6)"),
             MacroStep(kind: .tap, selector: MacroSelector(id: "OnboardingView.continueButton"),
-                     recordedLabel: "Tap Continue (page 3 of 5)"),
+                     recordedLabel: "Tap Continue (page 3 of 6)"),
             MacroStep(kind: .tap, selector: MacroSelector(id: "OnboardingView.continueButton"),
-                     recordedLabel: "Tap Continue (page 4 of 5)"),
+                     recordedLabel: "Tap Continue (page 4 of 6)"),
+            MacroStep(kind: .tap, selector: MacroSelector(id: "OnboardingView.continueButton"),
+                     recordedLabel: "Tap Continue (page 5 of 6)"),
             MacroStep(kind: .tap, selector: MacroSelector(id: "OnboardingView.doneButton"),
                      recordedLabel: "Tap Done"),
         ],

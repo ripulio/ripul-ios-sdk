@@ -72,7 +72,9 @@ public enum VoiceAudioSession {
         guard isHeld else { return }
         #if os(iOS)
         let session = AVAudioSession.sharedInstance()
-        guard session.category != .playAndRecord else { return }
+        // Mode too: playback with the stop-word mic open is `.playAndRecord`
+        // without voice processing, and capture needs its echo cancellation.
+        guard session.category != .playAndRecord || session.mode != .videoChat else { return }
         try? session.setCategory(
             .playAndRecord,
             mode: .videoChat,
@@ -95,10 +97,25 @@ public enum VoiceAudioSession {
     ///
     /// `.playback` with `.spokenAudio` is plain media audio — full level, media
     /// volume, no echo-cancellation attenuation.
+    ///
+    /// With "Say stop to interrupt" on, playback keeps an input route for the
+    /// stop-word listener: `.playAndRecord` in the DEFAULT mode, which runs no
+    /// voice processing, so playback should keep media level and the volume
+    /// buttons — the thing to confirm on a phone. A2DP rather than HFP, so
+    /// AirPods stay at full quality; the phone's own mic does the listening.
     public static func conversationPlayback() {
         guard isHeld else { return }
         #if os(iOS)
         let session = AVAudioSession.sharedInstance()
+        if SpeechPreferences.sayStopToInterrupt {
+            guard session.category != .playAndRecord || session.mode != .default else { return }
+            try? session.setCategory(.playAndRecord, mode: .default,
+                                     options: [.duckOthers, .defaultToSpeaker, .allowBluetoothA2DP])
+            try? session.setActive(true, options: [])
+            preferSpeakerOverReceiver("playback+mic")
+            nlog("[VOICE] playback session (stop word): vol=\(session.outputVolume) route=\(session.currentRoute.outputs.map(\.portType.rawValue).joined(separator: ","))")
+            return
+        }
         guard session.category != .playback else { return }
         try? session.setCategory(.playback, mode: .spokenAudio, options: [.duckOthers])
         try? session.setActive(true, options: [])

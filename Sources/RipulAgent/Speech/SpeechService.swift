@@ -339,7 +339,7 @@ public final class SpeechService: NSObject, ObservableObject {
 
     /// Locale for transcription: the speech-language preference when set
     /// (mapped to a concrete region), otherwise the device locale.
-    private static func preferredTranscriptionLocale() -> Locale {
+    static func preferredTranscriptionLocale() -> Locale {
         let language = SpeechPreferences.speechLanguage
         guard language != "auto", !language.isEmpty else { return Locale.current }
         let mapped: [String: String] = [
@@ -351,7 +351,7 @@ public final class SpeechService: NSObject, ObservableObject {
 
     /// Ensures the on-device transcription model for the locale is installed,
     /// downloading it on first use (one-time, size varies by language).
-    private static func ensureModel(for transcriber: SpeechTranscriber, locale: Locale) async throws {
+    static func ensureModel(for transcriber: SpeechTranscriber, locale: Locale) async throws {
         let tag = locale.identifier(.bcp47)
         if verifiedLocales.contains(tag) { return }
         let supported = await SpeechTranscriber.supportedLocales

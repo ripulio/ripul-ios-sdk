@@ -33,6 +33,7 @@ public final class RipulRemoteThemeClient {
     private var generation = UUID()
     private var editors: Set<UUID> = []
     private var hasLocalPreview = false
+    private var deferredCapture: ((Data?) throws -> Data)?
     private static let maximumBytes = 512 * 1024
 
     public var authoritativeDocument: Data { accepted?.data ?? fallback }
@@ -44,7 +45,11 @@ public final class RipulRemoteThemeClient {
     }
     public func endEditing(_ lease: UUID) {
         editors.remove(lease)
-        if editors.isEmpty { refreshInBackground() }
+        guard editors.isEmpty else { return }
+        // A host editor holding a lease (Home cards) changes the live theme without
+        // owning a draft of its own: keep the result before refreshes resume.
+        if let capture = deferredCapture { deferredCapture = nil; recordLocalEdit(capture) }
+        refreshInBackground()
     }
     /// Preview through the host's complete apply path without publishing or changing
     /// the server baseline. Keep it visible after the editor closes.
@@ -52,6 +57,53 @@ public final class RipulRemoteThemeClient {
         try accept(data)
         stop() // An already-running fetch must not overwrite this preview either.
         hasLocalPreview = try canonical(data) != canonical(authoritativeDocument)
+    }
+
+    /// The saved draft's document, when there is one. nil when absent or unreadable.
+    var savedDraftDocument: Data? {
+        guard let bytes = try? Data(contentsOf: draftURL),
+              let draft = try? JSONDecoder().decode(RipulThemeDraft.self, from: bytes) else { return nil }
+        return draft.data
+    }
+
+    /// Keep an edit that is ALREADY LIVE as the saved draft, so it survives relaunch and
+    /// server refreshes and is offered for publishing like a text edit. Nothing is
+    /// re-applied. An open editor owns the draft, so this yields to its lease; a draft
+    /// whose source is not valid JSON is being repaired in Theme Management and is kept.
+    func saveLocalEdit(_ document: Data) throws {
+        guard editors.isEmpty else { return }
+        let existing: RipulThemeDraft?
+        if FileManager.default.fileExists(atPath: draftURL.path) {
+            existing = try JSONDecoder().decode(RipulThemeDraft.self, from: Data(contentsOf: draftURL))
+            if let existing, (try? canonical(existing.data)) == nil { return }
+        } else { existing = nil }
+        let baseline = existing?.baseline ?? authoritativeDocument
+        if try canonical(document) == canonical(baseline) {
+            try removeSavedDraft()
+            hasLocalPreview = false
+            return
+        }
+        _ = try RipulThemeManifest(data: document, etag: nil)
+        let draft = RipulThemeDraft(text: String(decoding: document, as: UTF8.self), baseline: baseline,
+                                    etag: existing.map { $0.etag } ?? authoritativeETag)
+        try FileManager.default.createDirectory(at: draftURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try JSONEncoder().encode(draft).write(to: draftURL, options: .atomic)
+        stop() // An already-running fetch must not replace the edit.
+        hasLocalPreview = true
+    }
+
+    /// `saveLocalEdit` over the complete live document, as `capture` builds it on top of
+    /// the saved draft. A failure keeps the edit live and is reported in `lastError`.
+    func recordLocalEdit(_ capture: @escaping (Data?) throws -> Data) {
+        guard editors.isEmpty else { deferredCapture = capture; return }
+        do { try saveLocalEdit(capture(savedDraftDocument)) }
+        catch { lastError = "Could not save this theme edit on the phone: \(error.localizedDescription)" }
+    }
+
+    /// Theme Management saved or removed the draft itself: refreshes follow that state.
+    func noteSavedDraft(hasChanges: Bool) {
+        hasLocalPreview = hasChanges
+        if hasChanges { stop() }
     }
 
     private func canonical(_ data: Data) throws -> Data {

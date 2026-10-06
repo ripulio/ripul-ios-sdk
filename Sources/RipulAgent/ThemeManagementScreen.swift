@@ -103,9 +103,17 @@ final class ThemeManagementModel: ObservableObject {
             baseline = try remote?.authoritativeDocument ?? capture(nil)
             etag = remote?.authoritativeETag
             if let bytes = try? Data(contentsOf: draftURL), let draft = try? JSONDecoder().decode(Draft.self, from: bytes) {
-                text = draft.text; baseline = draft.baseline; etag = draft.etag
-                sourceDirty = true
-                applySource()
+                baseline = draft.baseline; etag = draft.etag
+                if Self.canonical(draft.data) != nil, let live = try? capture(draft.data) {
+                    // The running app already shows the draft plus any later edit, so
+                    // take it as-is. Re-applying the saved draft would undo those edits.
+                    text = try RipulThemeManifest(data: live, etag: etag).formatted
+                    saveNow()
+                } else {
+                    text = draft.text
+                    sourceDirty = true
+                    applySource()
+                }
             } else {
                 text = try RipulThemeManifest(data: capture(nil), etag: etag).formatted
             }
@@ -209,9 +217,14 @@ final class ThemeManagementModel: ObservableObject {
     private func saveNow() {
         guard !baseline.isEmpty else { return }
         do {
-            if !hasChanges { try? FileManager.default.removeItem(at: draftURL); return }
+            if !hasChanges {
+                try? FileManager.default.removeItem(at: draftURL)
+                remote?.noteSavedDraft(hasChanges: false)
+                return
+            }
             try FileManager.default.createDirectory(at: draftURL.deletingLastPathComponent(), withIntermediateDirectories: true)
             try JSONEncoder().encode(Draft(text: text, baseline: baseline, etag: etag)).write(to: draftURL, options: .atomic)
+            remote?.noteSavedDraft(hasChanges: true)
         } catch { self.error = "Could not save this draft on the phone: " + error.localizedDescription }
     }
 }
