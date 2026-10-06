@@ -31,31 +31,16 @@ public struct CommandResolver: Sendable {
         self.timeout = timeout
     }
 
-    public static var isModelAvailable: Bool {
-        #if canImport(FoundationModels)
-        if #available(iOS 26, macOS 26, *) { return SystemLanguageModel.default.isAvailable }
-        #endif
-        return false
-    }
+    public static var isModelAvailable: Bool { OnDeviceModel.isUsable }
 
     /// Why the model cannot be used, in words, or nil when it can.
-    public static var modelUnavailableReason: String? {
-        #if canImport(FoundationModels)
-        if #available(iOS 26, macOS 26, *) {
-            let model = SystemLanguageModel.default
-            return model.isAvailable ? nil : "\(model.availability)"
-        }
-        return "needs iOS 26 or macOS 26"
-        #else
-        return "FoundationModels is not in this SDK"
-        #endif
-    }
+    public static var modelUnavailableReason: String? { OnDeviceModel.unusableReason }
 
     /// The model's context window, when there is one. 4096 is the iOS 26
     /// generation; 8192 is iOS 27's.
     public static var modelContextSize: Int? {
         #if canImport(FoundationModels)
-        if #available(iOS 26, macOS 26, *), SystemLanguageModel.default.isAvailable {
+        if #available(iOS 26, macOS 26, *), OnDeviceModel.isUsable {
             return SystemLanguageModel.default.contextSize
         }
         #endif
@@ -65,7 +50,7 @@ public struct CommandResolver: Sendable {
     /// Pay the model load before someone speaks, not while they wait.
     public static func prewarm() {
         #if canImport(FoundationModels)
-        if #available(iOS 26, macOS 26, *), SystemLanguageModel.default.isAvailable {
+        if #available(iOS 26, macOS 26, *), OnDeviceModel.isUsable {
             LanguageModelSession().prewarm()
         }
         #endif
@@ -119,7 +104,7 @@ public struct CommandResolver: Sendable {
             return empty
         }
         #if canImport(FoundationModels)
-        if #available(iOS 26, macOS 26, *), SystemLanguageModel.default.isAvailable {
+        if #available(iOS 26, macOS 26, *), OnDeviceModel.isUsable {
             return await ModelDecider(registry: registry, timeout: timeout)
                 .resolve(trimmed, map: map, snapshot: snapshot)
         }

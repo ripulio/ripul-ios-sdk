@@ -60,10 +60,14 @@ public final class RipulRemoteThemeClient {
     }
 
     /// The saved draft's document, when there is one. nil when absent or unreadable.
-    var savedDraftDocument: Data? {
+    var savedDraftDocument: Data? { savedDraft?.document }
+
+    /// This phone's unpublished theme: the saved draft, and the server version (and its
+    /// ETag) it was edited from. nil when nothing is waiting to publish.
+    public var savedDraft: (document: Data, baseline: Data, etag: String?)? {
         guard let bytes = try? Data(contentsOf: draftURL),
               let draft = try? JSONDecoder().decode(RipulThemeDraft.self, from: bytes) else { return nil }
-        return draft.data
+        return (draft.data, draft.baseline, draft.etag)
     }
 
     /// Keep an edit that is ALREADY LIVE as the saved draft, so it survives relaunch and
