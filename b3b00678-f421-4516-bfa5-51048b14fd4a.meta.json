@@ -89,6 +89,96 @@
       "sha": "29f7dcde92d631fb8c85e5e921f12d66761ce783",
       "subject": "Plan log: the body-text task's notes and its close",
       "timestamp": "2026-10-11T18:40:03.000Z"
+    },
+    {
+      "repo": "ripul",
+      "sha": "47a97f6fc1edb934e104f66a2093e4991c070e6e",
+      "subject": "Theme: a migrated text and list are left untouched until a theme names their colours",
+      "timestamp": "2026-10-11T21:24:31.000Z"
+    },
+    {
+      "repo": "ripul",
+      "sha": "711c04d3d36d0538f56cb4154b85fa413af698a0",
+      "subject": "Paper and navy, lists and text: the session screens read the theme's surfaces and text colour",
+      "timestamp": "2026-10-11T21:27:52.000Z"
+    },
+    {
+      "repo": "ripul",
+      "sha": "34086d23b2e5a73673468baf042bc33d1acaa88e",
+      "subject": "Paper and navy, lists and text: the SDK's screens A to M",
+      "timestamp": "2026-10-11T21:27:53.000Z"
+    },
+    {
+      "repo": "ripul",
+      "sha": "30706b4c9cfddb9a5f34e5b261029b5069ab456b",
+      "subject": "Paper and navy, lists and text: the SDK's screens N to Z",
+      "timestamp": "2026-10-11T21:27:55.000Z"
+    },
+    {
+      "repo": "ripul",
+      "sha": "3c0c2e632907d8f83dd551388921b5696e123649",
+      "subject": "Paper and navy, lists and text: the SDK's top-level screens",
+      "timestamp": "2026-10-11T21:27:57.000Z"
+    },
+    {
+      "repo": "ripul",
+      "sha": "8b296ec1fcd35507d7132fe51c8a84d62f7227da",
+      "subject": "Paper and navy, lists and text: the app's screens A to L",
+      "timestamp": "2026-10-11T21:31:03.000Z"
+    },
+    {
+      "repo": "ripul",
+      "sha": "11815dd25bdcc3cfd4af57570491f95b152be318",
+      "subject": "Paper and navy, lists and text: the app's screens M to R",
+      "timestamp": "2026-10-11T21:31:05.000Z"
+    },
+    {
+      "repo": "ripul",
+      "sha": "462f95b022e007f5697b41001877fb788f0bad5b",
+      "subject": "Paper and navy, lists and text: the app's screens S to Z",
+      "timestamp": "2026-10-11T21:31:07.000Z"
+    },
+    {
+      "repo": "ripul",
+      "sha": "b46e2ea32988fd463277e12a109404debb79b2e8",
+      "subject": "Paper and navy, lists and text: the shared and browser screens",
+      "timestamp": "2026-10-11T21:31:08.000Z"
+    },
+    {
+      "repo": "ripul",
+      "sha": "a22bd2f1bb3dd1ac4492b002a5d8019123679781",
+      "subject": "Paper and navy: a second trial look for Ripul's app, the brand document plus the website's grounds, surfaces, separators and ink",
+      "timestamp": "2026-10-11T21:32:01.000Z"
+    },
+    {
+      "repo": "ripul",
+      "sha": "846d4290d7f8c33eb516a870d46ac19455250953",
+      "subject": "Theme root: a window's root draws the theme's canvas behind a screen with no ground of its own",
+      "timestamp": "2026-10-11T21:53:27.000Z"
+    },
+    {
+      "repo": "ripul",
+      "sha": "9df2480c29007cd0b91bde90f10f84fc8f0e6f95",
+      "subject": "Paper and navy: a test that the document reaches the chat's palette, and the lint reads a window's root as the root",
+      "timestamp": "2026-10-11T21:54:14.000Z"
+    },
+    {
+      "repo": "ripul",
+      "sha": "7d3e8e851077c0b9f964f1b69b39243cd8f63daa",
+      "subject": "Theming: the page, the contract, the skill and the guide for 0.7.176 (ripulText, a window's canvas, the paper and navy document)",
+      "timestamp": "2026-10-11T22:09:53.000Z"
+    },
+    {
+      "repo": "ripul",
+      "sha": "13b097c9b5e1a5f94aad7d11c9b358ba3a6fae30",
+      "subject": "chore(sdk): stamp ripulSDKVersion 0.7.176",
+      "timestamp": "2026-10-11T22:09:53.000Z"
+    },
+    {
+      "repo": "ripul-ios-sdk",
+      "sha": "d3d48c12f3d2bb34fcc9176167afd45a4b7ab23b",
+      "subject": "Release v0.7.176 — sync from monorepo RipulAgent SDK",
+      "timestamp": "2026-10-11T22:12:10.000Z"
     }
   ],
   "contributors": [
@@ -97,7 +187,7 @@
       "clientType": "web",
       "displayName": "Peter Maude",
       "firstSeenAt": "2026-10-11T13:18:57.499Z",
-      "lastSeenAt": "2026-10-11T18:00:33.095Z"
+      "lastSeenAt": "2026-10-11T21:22:43.782Z"
     }
   ],
   "createdAt": "2026-10-11T13:18:57.510Z",
@@ -176,6 +266,11 @@
       "id": "dep_mv44pem1_tvn9",
       "target": "pages",
       "timestamp": "2026-10-11T18:00:34.238Z"
+    },
+    {
+      "id": "dep_mv488w78_mxk8",
+      "target": "ios",
+      "timestamp": "2026-10-11T19:39:41.548Z"
     }
   ],
   "filesEdited": [
@@ -207,11 +302,11 @@
       "group": "web",
       "id": "human-user_3AONWcmlO5RS8dj3lRzQZtYXFxA",
       "kind": "human",
-      "lastSeenAt": "2026-10-11T18:00:33.699Z"
+      "lastSeenAt": "2026-10-11T21:22:43.896Z"
     }
   ],
   "tags": [
     "plan:theme-aware-codebase@mdvaea"
   ],
-  "updatedAt": "2026-10-11T18:40:35.147Z"
+  "updatedAt": "2026-10-11T22:12:19.302Z"
 }
