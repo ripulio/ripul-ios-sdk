@@ -1,0 +1,47 @@
+#!/usr/bin/env python3
+"""The Ripul SDK's theme tools, for any app that links the package.
+
+  ripul-theme migrate <file or directory>...   rewrite call sites to theme tokens; nothing changes on screen
+  ripul-theme check [<file or directory>...]   list the fonts and colours still written at the call site
+  ripul-theme lint [<git range>]               check that a migration diff kept every value
+  ripul-theme usage-map                        in an Xcode build phase: write the View Explorer's token map
+
+`ripul-theme <command> --help` says more. docs/theming-for-hosts.md is the page for an
+app adopting the theme; docs/theming.md is the full contract.
+"""
+import pathlib
+import sys
+
+sys.dont_write_bytecode = True
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+
+
+def main(argv) -> int:
+    command, rest = (argv[0], argv[1:]) if argv else ("", [])
+    if command == "migrate":
+        import theme_rewrite
+        if not rest or "--help" in rest:
+            print(theme_rewrite.__doc__)
+            return 0
+        return theme_rewrite.main(rest)
+    if command == "lint":
+        import theme_rewrite
+        return theme_rewrite.main(["--lint", *rest])
+    if command == "check":
+        import theme_check
+        if "--help" in rest:
+            print(theme_check.__doc__)
+            return 0
+        return theme_check.main(rest)
+    if command == "usage-map":
+        import theme_usage_map
+        if "--help" in rest:
+            print(theme_usage_map.__doc__)
+            return 0
+        return theme_usage_map.main(rest)
+    print(__doc__)
+    return 0 if command in ("", "help", "--help", "-h") else 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

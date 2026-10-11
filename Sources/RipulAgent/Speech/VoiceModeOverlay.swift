@@ -34,16 +34,25 @@ private struct AudioRoutePicker: UIViewRepresentable {
 ///
 /// Each frame is drawn from a shared clock, so a limit changes how often the
 /// motion is sampled and nothing else. The small orb in the panel is 30
-/// points across and needs fewer than the full-screen one.
+/// points across, stays up for minutes, and needs fewer than the full-screen
+/// one. The full-screen orb is the one thing on its screen and is not up for
+/// long: at 15 a second it moved in steps (Peter, 11 October 2026), so it has
+/// 30.
 ///
 /// `-perfOff orbLimit` at launch (debug builds) draws at the display's rate
-/// again, to measure what the limit saves on one build.
+/// again, and `-perfOrbFps <n>` draws both orbs n times a second, to measure
+/// what a limit saves on one build.
 enum VoiceOrbFrames {
-    static let fullScreen: Double = 15
+    static let fullScreen: Double = 30
     static let compact: Double = 10
 
     static func limit(_ shipped: Double) -> Double? {
-        PerfSwitch.isOff("orbLimit") ? nil : shipped
+        if PerfSwitch.isOff("orbLimit") { return nil }
+        #if DEBUG
+        let tried = UserDefaults.standard.double(forKey: "perfOrbFps")
+        if tried >= 1 { return tried }
+        #endif
+        return shipped
     }
 }
 

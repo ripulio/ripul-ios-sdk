@@ -49,6 +49,13 @@ extension RipulTheme {
         }
     }
 
+    /// Set the bars already in one window, for a window that appears under a themed
+    /// family. Main thread only.
+    static func restyleSystemText(in window: UIWindow) {
+        guard hasThemedTextFamily else { return }
+        restyle(window, SystemTextFonts())
+    }
+
     private static func restyle(_ view: UIView, _ fonts: SystemTextFonts?) {
         if let bar = view as? UINavigationBar {
             bar.titleTextAttributes = fonts?.attributes(\.title)

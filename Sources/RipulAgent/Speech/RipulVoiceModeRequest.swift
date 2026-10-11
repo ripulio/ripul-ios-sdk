@@ -22,11 +22,17 @@ public enum RipulVoiceModeRequest {
     /// Whether the waiting request is for a command session.
     public static var pendingCommands = false
 
+    /// Whether the waiting request is for the full-screen conversation, not the
+    /// panel beside the chat. A request by voice is for the panel; a test that
+    /// measures the full-screen orb asks for this (`ripul://voice-mode?screen=full`).
+    public static var pendingFullScreen = false
+
     /// `commands` opens a command session: every finished sentence is offered
     /// to `commandRouter` before it is sent to the agent, and a sentence ends
     /// on a pause alone. See `CommandOutcome`.
-    public static func start(commands: Bool = false) {
+    public static func start(commands: Bool = false, fullScreen: Bool = false) {
         pendingCommands = commands
+        pendingFullScreen = fullScreen
         pending = true
         NotificationCenter.default.post(name: notification, object: nil)
     }

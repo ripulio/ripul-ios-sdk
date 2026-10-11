@@ -6,7 +6,7 @@ import CoreGraphics
 // SwiftUI draws into layers, so the view a person selects in the View Explorer holds no
 // colour and no font to read back. The source does: an identified element is a view
 // expression ending in `.uiKitIdentifier("…")`, and the accessors in that expression are
-// what it is drawn with. `ripul-native-app/scripts/theme_usage_map.py` reads them at build
+// what it is drawn with. `tools/ripul-theme usage-map` reads them at build
 // time and writes a map from identifier to tokens, which the app bundles as
 // `ripul-theme-usage.json`. This file reads that map and says what each token resolves to
 // in the live theme. It has no UIKit, so it is tested on macOS.

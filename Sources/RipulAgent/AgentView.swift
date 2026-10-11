@@ -241,6 +241,8 @@ public struct AgentView<TopBar: View>: View {
         RipulVoiceModeRequest.pending = false
         let commands = RipulVoiceModeRequest.pendingCommands ? RipulVoiceModeRequest.commandRouter : nil
         RipulVoiceModeRequest.pendingCommands = false
+        let fullScreen = RipulVoiceModeRequest.pendingFullScreen
+        RipulVoiceModeRequest.pendingFullScreen = false
         bridge.handleConsoleLog("LOG: [VOICE] siri request honored - entering hands-free mode"
             + (commands == nil ? "" : " as a command session"))
 
@@ -255,7 +257,7 @@ public struct AgentView<TopBar: View>: View {
             // talk is a request to converse ALONGSIDE the chat, and the
             // preference resolves through three layers (device override,
             // web-pushed profile, SDK fallback) that this path cannot see.
-            voiceMode.start(bridge: bridge, tokenProvider: tokenProvider, presentation: .compact,
+            voiceMode.start(bridge: bridge, tokenProvider: tokenProvider, presentation: fullScreen ? .fullscreen : .compact,
                             commands: commands)
         }
     }

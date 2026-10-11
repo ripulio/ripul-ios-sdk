@@ -8,7 +8,7 @@ import UIKit
 // it and no call site declares anything:
 //
 //  - A SwiftUI element is looked up by its identifier in the build's theme usage map
-//    (`RipulThemeUsage.swift`; written by `theme_usage_map.py` in the app's build).
+//    (`RipulThemeUsage.swift`; written by `tools/ripul-theme usage-map` in the app's build).
 //  - A view with no identifier of its own gets the nearest identified element around it,
 //    and the answer says so.
 //  - A UIKit view holds its font and colour, so they are read off it and compared with
@@ -111,7 +111,7 @@ public final class RipulBaseTokenProvider: RipulTokenProvider {
             }
         } else if drawn.isEmpty {
             notes.append("This build carries no theme usage map, so the tokens of a SwiftUI element cannot be named. "
-                + "The app's build writes it with scripts/theme_usage_map.py: regenerate the project and rebuild.")
+                + "The app's build writes it with one Run Script phase: \"<the RipulAgent package>/tools/ripul-theme\" usage-map (docs/theming-for-hosts.md).")
         }
         return RipulAppearanceReadout(bindings: bindings, note: notes.isEmpty ? nil : notes.joined(separator: " "), provider: self)
     }

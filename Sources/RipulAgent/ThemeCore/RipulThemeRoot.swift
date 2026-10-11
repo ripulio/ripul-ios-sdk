@@ -22,7 +22,25 @@ import UIKit
 extension View {
     /// Make this tree follow the theme: the accent as tint, the theme's body font as the
     /// default font, and a redraw when the theme changes.
-    public func ripulThemeRoot() -> some View { modifier(RipulThemeRootModifier()) }
+    ///
+    /// A host that names its theme in Info.plist (`RipulTheme`) writes only this, and one
+    /// that names none keeps the system look.
+    public func ripulThemeRoot() -> some View {
+        RipulTheme.installIfNeeded()
+        return modifier(RipulThemeRootModifier())
+    }
+
+    /// The root of a host's own tree, naming its theme: `<name>.json` in the app's
+    /// bundle. This one line is the host's whole setup. The SDK finds the document,
+    /// registers the bundled fonts it names, keeps a choice made with `RipulTheme.select`
+    /// between launches, and falls back to this document, then to the system look, when
+    /// one is missing or refused (docs/theming-for-hosts.md).
+    public func ripulThemeRoot(theme name: String) -> some View {
+        // Here and not in the modifier's body: this runs when the parent's body does,
+        // before any view below it reads a font or a colour.
+        RipulTheme.install(theme: name)
+        return modifier(RipulThemeRootModifier())
+    }
 }
 
 private struct RipulThemeRootModifier: ViewModifier {
@@ -41,6 +59,19 @@ private struct RipulThemeRootModifier: ViewModifier {
             .onReceive(NotificationCenter.default.publisher(for: .ripulThemeDidChange)) { _ in
                 revision += 1
             }
+            .modifier(RipulThemeLinks())
+    }
+}
+
+/// `<the app's scheme>://theme?name=<name>` switches the theme, in a Debug build of any
+/// host. A store build has no such door: there the host calls `RipulTheme.select`.
+private struct RipulThemeLinks: ViewModifier {
+    func body(content: Content) -> some View {
+        #if DEBUG
+        content.onOpenURL { RipulTheme.handleThemeLink($0) }
+        #else
+        content
+        #endif
     }
 }
 
@@ -73,18 +104,34 @@ private struct RipulWindowTint: UIViewRepresentable {
         override func didMoveToWindow() {
             super.didMoveToWindow()
             apply()
+            // A tab bar built with the window takes its labels' font from no appearance
+            // setting (measured on iOS 27.0: at launch under a themed family the labels
+            // were the system's, and after a change while running the theme's). Its items
+            // exist a turn after the window does, so they are set then.
+            guard let window, RipulTheme.hasThemedTextFamily else { return }
+            DispatchQueue.main.async { [weak window] in
+                if let window { RipulTheme.restyleSystemText(in: window) }
+            }
         }
 
         /// Only ever touches a window's tint while the theme has an accent of its own,
-        /// and puts back "inherit" when it stops having one.
+        /// and puts back what it had when it stops having one.
         func apply() {
             guard let window else { return }
             if RipulTheme.isDefault(.accent) {
-                if didSet { window.tintColor = nil; didSet = false }
+                if didSet { window.tintColor = Self.appAccent; didSet = false }
             } else {
                 window.tintColor = RipulTheme.platformColor(RipulTheme.color(.accent))
                 didSet = true
             }
+        }
+
+        /// The app's own accent, when its asset catalogue names one. SwiftUI gives that
+        /// colour to the window as its tint, so "inherit" does not bring it back: after a
+        /// themed accent, a nil tint left every tinted control system blue until the next
+        /// launch (measured on iOS 27.0). nil, which is "inherit", for an app with none.
+        private static var appAccent: UIColor? {
+            (Bundle.main.object(forInfoDictionaryKey: "NSAccentColorName") as? String).flatMap { UIColor(named: $0) }
         }
     }
 }
@@ -99,3 +146,30 @@ private struct RipulWindowTint: View {
     var body: some View { EmptyView() }
 }
 #endif
+
+// MARK: - Choosing a theme
+
+/// A picker of the bundled themes, for a host's settings: one line where it wants the
+/// choice offered. It lists every theme document in the bundle by the document's own
+/// name, changes the running app, and keeps the choice.
+public struct RipulThemePicker: View {
+    private let title: String
+    private let systemTitle: String?
+
+    /// - Parameters:
+    ///   - title: the picker's label.
+    ///   - systemTitle: the row for the system look; nil to leave it out.
+    public init(_ title: String = "Theme", systemTitle: String? = "System") {
+        self.title = title
+        self.systemTitle = systemTitle
+    }
+
+    public var body: some View {
+        Picker(title, selection: Binding(get: { RipulTheme.selectedTheme }, set: { RipulTheme.select($0) })) {
+            if let systemTitle { Text(systemTitle).tag(RipulTheme.systemThemeName) }
+            ForEach(RipulTheme.bundledThemes) { theme in
+                Text(theme.title).tag(theme.name)
+            }
+        }
+    }
+}

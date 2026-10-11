@@ -7,10 +7,17 @@ what Ripul's theme document looks like, and how to check your work. If you
 need a token, role or rule that is not here, ask the foundation owner (a
 comment on the plan's Foundation section): do not invent one.
 
+**An app of your own that links the package starts at
+[theming-for-hosts.md](theming-for-hosts.md)**, which names none of this
+repository's paths. This file is the full contract behind it.
+
 Nothing in this file is pending. Where a thing is not built, it says so.
 
-The code is in `Sources/RipulAgent/ThemeCore/` (four files, compiling on iOS
-and macOS). The tests are `Tests/RipulAgentTests/RipulThemeCoreTests.swift`.
+The code is in `Sources/RipulAgent/ThemeCore/` (compiling on iOS and macOS).
+The tools are in `tools/` and travel with the package: `tools/ripul-theme`
+with `migrate`, `check`, `lint` and `usage-map`. The commands below under
+`ripul-native-app/scripts/` are this repository's own wrappers of them, which
+add its file layout, its streams and their baselines. The tests are `Tests/RipulAgentTests/RipulThemeCoreTests.swift`.
 
 ## The one idea
 
@@ -240,7 +247,9 @@ Navigation titles (large and inline, so sheet titles too), segmented
 controls and tab bar labels are set through UIKit's appearance settings by
 `RipulTheme.applySystemTextAppearance()`, which `adopt` and `resetToDefaults`
 call. It does nothing until a theme names a text family, restyles the bars
-already on screen when one does, and puts every setting back to "not set"
+already on screen when one does (and those of a window that appears later:
+a tab bar built with its window takes its labels' font from no appearance
+setting, so the root sets them a turn after the window appears), and puts every setting back to "not set"
 when the family returns to the system's. Not reached: alerts, menus, swipe
 action labels, a menu picker's value, and a navigation title on Mac
 Catalyst, which the Mac draws in the window's toolbar.
@@ -514,6 +523,13 @@ The older contract still works: a view that reads
 
 ## What the root reaches
 
+A root also puts back the app's own accent. When the theme stops naming an
+accent it sets the window's tint to the colour the app's asset catalogue names
+(`NSAccentColorName`), or to nil where there is none: SwiftUI gives that colour
+to the window itself, so a nil tint after a themed one left every tinted
+control system blue until the next launch (found by a host's trial, fixed and
+measured on iOS 27.0, 11 October 2026).
+
 `ripulThemeRoot()` is on both of the app's window groups, on the content of
 `ripulSheet(isPresented:)` and `ripulSheet(item:)`, in
 `ripulThemedHostingController`, and on 14 of the SDK's 24 hosting
@@ -628,7 +644,9 @@ theme ships on Catalyst.
 
 ## Checking your work
 
-All from the repository root.
+All from the repository root. These are this repository's wrappers; a host
+runs the same tools as `ripul-theme migrate`, `check`, `lint` and `usage-map`
+([theming-for-hosts.md](theming-for-hosts.md)).
 
 **1. Rewrite the mechanical cases.**
 
@@ -640,7 +658,12 @@ python3 ripul-native-app/scripts/rewrite_theme_tokens.py <file or directory>
 It rewrites text-style fonts with their weight and chained calls, the
 monospaced forms, fixed sizes whose view it can see is a `Text` or an
 `Image`, and the hierarchy styles in both forms. It leaves named colours,
-mixed ternaries and fixed sizes it cannot place. Its output over the whole
+mixed ternaries and fixed sizes it cannot place. It also rewrites a wrapped
+system colour (`Color(.systemBackground)`, `UIColor.label`) to its role or its
+system form and `.buttonStyle(.borderedProminent)` to
+`.ripulProminentButtonStyle()`, and with `--named` the named colours by the
+closed table (added for hosts on 11 October 2026; this repository's own
+migration was finished by hand before that). Its output over the whole
 SDK (1,814 lines) compiles for iOS and macOS.
 
 **2. Do the rest by the closed table.**
@@ -794,7 +817,9 @@ It sets no canvas, surface or text colour, and no size but the display
 role's, so each other style keeps the platform's own size.
 
 **The fonts** are in `theme/fonts/`, copied into the app as the folder `fonts`
-and registered at launch by `RipulAppTheme.registerFonts()` in every build.
+and registered by the SDK when a document that names their family is put in
+use (`RipulTheme.install` and `select`), so a build on the default document
+registers none.
 `theme/fonts/SOURCES.md` says where each file came from; the licences are
 beside them.
 
@@ -829,10 +854,11 @@ Nothing registers this and no call site declares anything. The identifier and
 the accessor were already in the source.
 
 **How it knows.** SwiftUI draws into layers, so the view that was tapped holds
-no colour and no font. `ripul-native-app/scripts/theme_usage_map.py` reads the
-source at build time: every `.uiKitIdentifier("…")` and
-`.accessibilityIdentifier("…")`, and the accessors in the view expression it
-ends. The app's Debug build writes the result into the bundle as
+no colour and no font. `tools/ripul-theme usage-map` reads the source at build
+time: every `.uiKitIdentifier("…")` and `.accessibilityIdentifier("…")`, every
+modifier of a host's own that hands its parameter to one of those (found, not
+declared: `.identified("…")`, and in this repository `.cmsInspectorID(…)`),
+and the accessors in the view expression it ends. The app's Debug build writes the result into the bundle as
 `ripul-theme-usage.json`, and `RipulBaseTokenProvider` (SDK) looks the selected
 element's identifier up in it and resolves each token against the live theme.
 
@@ -927,8 +953,10 @@ turns it off with `RipulTokenInspector.answersForBaseVocabulary = false`.
 - The explorer does not resolve an element drawn in the keyboard's overlay (the
   chat composer's buttons): it finds only the screen's identifier, and the
   section says so.
-- Only an app whose build runs the script has a map. A host that does not sees
-  the SDK's own screens without tokens, and the section says the map is missing.
+- Only an app whose build runs the tool has a map: one Run Script phase of one
+  line (theming-for-hosts.md, step 7). A host without it sees the SDK's own
+  screens without tokens, and the section says the map is missing and gives
+  the line.
 - Debug builds only.
 - Reading only. The explorer cannot change a base token: see Limits.
 
@@ -943,13 +971,20 @@ The tests are `Tests/RipulAgentTests/RipulThemeUsageTests.swift`.
 ## For the theme's owner
 
 ```swift
+RipulTheme.install(theme: "ripul-theme")   // name the bundled document; the SDK finds it, registers its
+                                           // fonts, keeps a choice and falls back (theming-for-hosts.md)
+RipulTheme.select("ripul-theme-brand")     // switch while running, and keep the choice
 try RipulTheme.adopt(documentData: data)   // a whole document; throws and changes nothing if it is refused
 RipulTheme.resetToDefaults()               // back to the system look
 RipulTheme.color(.accent)                  // the resolved value, light and dark
 RipulTheme.isDefault(.accent)
 ```
 
-The app does this in `ripul-native-app/iOS/RipulAppTheme.swift`. The base
+The app names its document in `ripul-native-app/iOS/RipulAppApp.swift`, in one
+call. Until 11 October 2026 it had a loader of its own (`RipulAppTheme.swift`,
+64 lines: find, read, adopt, keep the choice, register fonts); that is now the
+SDK's, for every host, and the file is gone. The choice is kept under the same
+key, `ripul.theme.document`, so a phone that had chosen a document kept it. The base
 vocabulary is separate from the host engine (`RipulThemeEngine`): a host's
 `configure` does not touch it.
 
@@ -962,8 +997,9 @@ stays a map of strings), and a colour reference may be `system:<name>` or
 
 - **The theme editor cannot edit these tokens.** It writes one hex over a
   pair and cannot choose a system colour or a font. A look is tried by
-  loading a document. There is no list of documents in the app's settings:
-  the switch is the launch argument and the URL above.
+  loading a document. There is no list of documents in Ripul's settings:
+  the switch is the launch argument and the URL above. The SDK has the picker
+  (`RipulThemePicker`) for a host that wants one.
 - **The widgets and the Live Activity** do not link the SDK and are not
   themed.
 - **A custom family and Dynamic Type.** A themed role with a size uses

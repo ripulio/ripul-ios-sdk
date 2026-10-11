@@ -1,5 +1,8 @@
 # Ripul AI Agent — iOS Reference App
 
+To give your own app's fonts and colours a theme (one JSON document, light and
+dark, switchable while the app runs), see [A theme for your app](docs/theming-for-hosts.md).
+
 For public runtime theme manifests, instant local fallback, and publishing without
 an app rebuild, see [Backend-hosted themes](docs/remote-themes.md).
 
