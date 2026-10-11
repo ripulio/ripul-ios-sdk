@@ -106,6 +106,32 @@ final class RipulThemeRedirectTextTests: XCTestCase {
         XCTAssertNotEqual(RipulThemeRedirect.text(verbatim: "Hello") { true }, Text(verbatim: "Hello"))
     }
 
+    func testEveryOtherWayOfMakingATextIsItselfWithNoTheme() {
+        let markdown = (try? AttributedString(markdown: "A [link](https://example.com)")) ?? AttributedString("A link")
+        let date = Date(timeIntervalSince1970: 0)
+        XCTAssertEqual(RipulThemeRedirect.text(attributed: markdown) { true }, Text(markdown))
+        XCTAssertEqual(RipulThemeRedirect.text(exactly: "Hello") { true }, Text(verbatim: "Hello"))
+        XCTAssertEqual(RipulThemeRedirect.text(date, style: .time) { true }, Text(date, style: .time))
+        XCTAssertEqual(RipulThemeRedirect.text(3, format: .number) { true }, Text(3, format: .number))
+    }
+
+    func testEveryOtherWayOfMakingATextTakesTheThemeWhereItIsBare() throws {
+        try RipulTheme.adopt(documentData: Data(##"{"roles":{"text":"#1C2540"}}"##.utf8))
+        let markdown = AttributedString("A paragraph")
+        let date = Date(timeIntervalSince1970: 0)
+        XCTAssertNotEqual(RipulThemeRedirect.text(attributed: markdown) { true }, Text(markdown))
+        XCTAssertEqual(RipulThemeRedirect.text(attributed: markdown) { false }, Text(markdown))
+        XCTAssertNotEqual(RipulThemeRedirect.text(exactly: "Hello") { true }, Text(verbatim: "Hello"))
+        XCTAssertNotEqual(RipulThemeRedirect.text(date, style: .time) { true }, Text(date, style: .time))
+        XCTAssertNotEqual(RipulThemeRedirect.text(3, format: .number) { true }, Text(3, format: .number))
+        XCTAssertEqual(RipulThemeRedirect.text(3, format: .number) { false }, Text(3, format: .number))
+    }
+
+    func testAnAttributedStringIsTheOnlyAttributedContent() {
+        let content: any RipulThemeAttributedContent = AttributedString("x")
+        XCTAssertEqual(content.ripulAttributedString, AttributedString("x"))
+    }
+
     func testAThemeThatNamesNoTextColourLeavesTextAlone() throws {
         try RipulTheme.adopt(documentData: Data(##"{"roles":{"accent":"#24386B"}}"##.utf8))
         XCTAssertEqual(RipulThemeRedirect.text("Hello") { true }, Text("Hello"))

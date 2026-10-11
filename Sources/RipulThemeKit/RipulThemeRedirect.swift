@@ -19,6 +19,17 @@ import UIKit
 // Nothing here runs for a host that does not switch the plug-in on.
 // The template is `tools/redirect/RipulThemeRedirect.swift.txt`.
 
+/// What `Text(anAttributedString)` is given, as the generated file sees it. Only
+/// `AttributedString` is one. It exists so that a string literal, which could be read as
+/// an attributed string, cannot match the generated initialiser and stays a localised key.
+public protocol RipulThemeAttributedContent {
+    var ripulAttributedString: AttributedString { get }
+}
+
+extension AttributedString: RipulThemeAttributedContent {
+    public var ripulAttributedString: AttributedString { self }
+}
+
 public enum RipulThemeRedirect {
 
     // MARK: fonts
@@ -195,9 +206,82 @@ public enum RipulThemeRedirect {
         themed(Text(content), isBare)
     }
 
+    /// `Text(anAttributedString)`: markdown, and any text with links or runs of its own.
+    /// A run that has a colour of its own keeps it.
+    public static func text(attributed content: AttributedString, isBare: () -> Bool) -> Text {
+        themed(Text(content), isBare)
+    }
+
+    /// `Text(verbatim:)`.
+    public static func text(exactly content: String, isBare: () -> Bool) -> Text {
+        themed(Text(verbatim: content), isBare)
+    }
+
+    /// `Text(date, style: .time)`.
+    public static func text(_ date: Date, style: Text.DateStyle, isBare: () -> Bool) -> Text {
+        themed(Text(date, style: style), isBare)
+    }
+
+    /// `Text(value, format: .number)`.
+    public static func text<F: FormatStyle>(_ input: F.FormatInput, format: F, isBare: () -> Bool) -> Text
+    where F.FormatInput: Equatable, F.FormatOutput == String {
+        themed(Text(input, format: format), isBare)
+    }
+
+    /// `Label("Title", systemImage: "star")`: the title in the theme's text colour where
+    /// the label has no colour of its own. Its icon is left as the system draws it.
+    public static func label(_ title: LocalizedStringKey, systemImage name: String, isBare: () -> Bool) -> Label<Text, Image> {
+        guard !RipulTheme.isDefault(.text), isBare() else { return Label(title, systemImage: name) }
+        return Label { Text(title).foregroundStyle(RipulColorStyle(role: .text)) } icon: { Image(systemName: name) }
+    }
+
+    /// The same for a title that is a string.
+    public static func label(verbatim title: String, systemImage name: String, isBare: () -> Bool) -> Label<Text, Image> {
+        guard !RipulTheme.isDefault(.text), isBare() else { return Label(title, systemImage: name) }
+        return Label { Text(title).foregroundStyle(RipulColorStyle(role: .text)) } icon: { Image(systemName: name) }
+    }
+
+    /// `Label("Title", image: "asset")`.
+    public static func label(_ title: LocalizedStringKey, image name: String, isBare: () -> Bool) -> Label<Text, Image> {
+        guard !RipulTheme.isDefault(.text), isBare() else { return Label(title, image: name) }
+        return Label { Text(title).foregroundStyle(RipulColorStyle(role: .text)) } icon: { Image(name) }
+    }
+
+    /// The same for a title that is a string.
+    public static func label(verbatim title: String, image name: String, isBare: () -> Bool) -> Label<Text, Image> {
+        guard !RipulTheme.isDefault(.text), isBare() else { return Label(title, image: name) }
+        return Label { Text(title).foregroundStyle(RipulColorStyle(role: .text)) } icon: { Image(name) }
+    }
+
     private static func themed(_ text: Text, _ isBare: () -> Bool) -> Text {
         guard !RipulTheme.isDefault(.text), isBare() else { return text }
         return text.foregroundStyle(RipulColorStyle(role: .text))
+    }
+
+    // MARK: prominent buttons
+
+    /// `.buttonStyle(.borderedProminent)` in the host's source. Where the button takes
+    /// the theme's accent as its fill (it has no `.tint` of its own, and no view round it
+    /// gives it one), its label is drawn in the theme's `onAccent`. A button the host
+    /// tints itself keeps the system's white label: its fill is not the theme's.
+    @ViewBuilder
+    public static func prominentButton<Content: View>(_ content: Content, takesTheAccent: () -> Bool) -> some View {
+        if RipulTheme.isDefault(.onAccent) || !takesTheAccent() {
+            content.buttonStyle(.borderedProminent)
+        } else {
+            content.ripulProminentButtonStyle()
+        }
+    }
+
+    /// `.buttonStyle(.glassProminent)`, likewise.
+    @available(iOS 26.0, macOS 26.0, *)
+    @ViewBuilder
+    public static func glassProminentButton<Content: View>(_ content: Content, takesTheAccent: () -> Bool) -> some View {
+        if RipulTheme.isDefault(.onAccent) || !takesTheAccent() {
+            content.buttonStyle(.glassProminent)
+        } else {
+            content.ripulGlassProminentButtonStyle()
+        }
     }
 
     // MARK: the root

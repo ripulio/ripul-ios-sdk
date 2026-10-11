@@ -137,18 +137,32 @@ def usage_map(sources) -> str:
 TEXT_MARK = "[/*BARE-TEXT*/:]"
 
 
-def bare_text(sources) -> str:
-    """The lines on which a text has no colour of its own, as a Swift dictionary literal."""
+BUTTON_MARK = "[/*ACCENT-BUTTONS*/:]"
+
+
+def line_table(make, sources, what) -> str:
+    """A {file: [lines]} table as a Swift dictionary literal."""
     try:
-        import theme_text
-        table = theme_text.site_table([p for p in sources if p.name != "RipulThemeRedirect.swift"])
+        table = make([p for p in sources if p.name != "RipulThemeRedirect.swift"])
     except Exception as error:  # an aid to the theme: it never stops a build
-        print(f"warning: ripul-theme redirect: no list of texts: {error}", file=sys.stderr)
+        print(f"warning: ripul-theme redirect: no list of {what}: {error}", file=sys.stderr)
         table = {}
     if not table:
         return "[:]"
     rows = [f'        "{name}": [{", ".join(str(n) for n in lines)}],' for name, lines in sorted(table.items()) if '"' not in name]
     return "[\n" + "\n".join(rows) + "\n    ]"
+
+
+def bare_text(sources) -> str:
+    """The lines on which a text or a label has no colour of its own."""
+    import theme_text
+    return line_table(theme_text.site_table, sources, "texts")
+
+
+def accent_buttons(sources) -> str:
+    """The lines of the prominent buttons that take the theme's accent as their fill."""
+    import theme_text
+    return line_table(theme_text.button_table, sources, "buttons")
 
 
 def swift_files(roots):
@@ -194,7 +208,7 @@ def generate(sources, template: str = None):
                     break
         drop.update(range(index, end + 1))
     out = [line for i, line in enumerate(lines) if i not in drop]
-    out = "\n".join(out).replace(USAGE_MARK, usage_map(sources)).replace(TEXT_MARK, bare_text(sources)).split("\n")
+    out = "\n".join(out).replace(USAGE_MARK, usage_map(sources)).replace(TEXT_MARK, bare_text(sources)).replace(BUTTON_MARK, accent_buttons(sources)).split("\n")
     if left:
         note = ["", "// Left out, because this target declares its own:"]
         note += [f"//   {key.replace('static ', '')}  ({name})" for key, name in sorted(set(left))]

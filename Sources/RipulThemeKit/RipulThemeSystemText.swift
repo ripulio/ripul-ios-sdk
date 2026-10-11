@@ -8,6 +8,10 @@ import UIKit
 // font beside it (docs/theming.md, "Text the system draws"). UIKit's appearance settings
 // reach them. They are set only while a theme names a text family, and put back to "not
 // set" when it stops naming one, so with no theme nothing here is ever touched.
+//
+// A navigation title's colour goes the same way: it is UIKit's label colour, which no
+// SwiftUI style reaches, so under a theme that names `text` the large and the inline
+// title are given it. Tab and segment labels keep the colours the system gives each state.
 
 extension RipulTheme {
     /// Main thread only.
@@ -15,8 +19,12 @@ extension RipulTheme {
     private static var textSizeObserver: NSObjectProtocol?
 
     /// Called on the main thread whenever the theme changes.
+    /// True when a theme names a text family or a text colour: either changes what the
+    /// system's own titles should be drawn with.
+    static var hasThemedSystemText: Bool { hasThemedTextFamily || !isDefault(.text) }
+
     static func applySystemTextAppearance() {
-        let themed = hasThemedTextFamily
+        let themed = hasThemedSystemText
         guard themed || systemTextIsThemed else { return }
         systemTextIsThemed = themed
 
@@ -39,11 +47,11 @@ extension RipulTheme {
         }
 
         // The sizes are read once, so read them again when the text size setting changes.
-        if themed, textSizeObserver == nil {
+        if hasThemedTextFamily, textSizeObserver == nil {
             textSizeObserver = NotificationCenter.default.addObserver(
                 forName: UIContentSizeCategory.didChangeNotification, object: nil, queue: .main
             ) { _ in applySystemTextAppearance() }
-        } else if !themed, let observer = textSizeObserver {
+        } else if !hasThemedTextFamily, let observer = textSizeObserver {
             NotificationCenter.default.removeObserver(observer)
             textSizeObserver = nil
         }
@@ -52,7 +60,7 @@ extension RipulTheme {
     /// Set the bars already in one window, for a window that appears under a themed
     /// family. Main thread only.
     static func restyleSystemText(in window: UIWindow) {
-        guard hasThemedTextFamily else { return }
+        guard hasThemedSystemText else { return }
         restyle(window, SystemTextFonts())
     }
 
@@ -73,16 +81,23 @@ extension RipulTheme {
         for subview in view.subviews { restyle(subview, fonts) }
     }
 
-    /// The system's own size and weight for each, in the theme's family.
+    /// The system's own size and weight for each, in the theme's family when a theme
+    /// names one, and the theme's text colour for the two titles when it names that.
     private struct SystemTextFonts {
+        let family = RipulTheme.hasThemedTextFamily
+        let ink: UIColor? = RipulTheme.isDefault(.text) ? nil : UIColor.ripul(.text)
         let title = UIFont.ripul(.headline)
         let largeTitle = UIFont.ripul(.largeTitle, weight: .bold)
         let segment = UIFont.ripul(.footnote, weight: .medium)
         let selectedSegment = UIFont.ripul(.footnote, weight: .semibold)
         let tab = UIFont.ripul(size: 10, weight: .medium)
 
-        func attributes(_ font: KeyPath<SystemTextFonts, UIFont>) -> [NSAttributedString.Key: Any] {
-            [.font: self[keyPath: font]]
+        /// nil, which is "not set", when the theme says nothing about this text.
+        func attributes(_ font: KeyPath<SystemTextFonts, UIFont>) -> [NSAttributedString.Key: Any]? {
+            var out: [NSAttributedString.Key: Any] = [:]
+            if family { out[.font] = self[keyPath: font] }
+            if let ink, font == \SystemTextFonts.title || font == \SystemTextFonts.largeTitle { out[.foregroundColor] = ink }
+            return out.isEmpty ? nil : out
         }
     }
 }

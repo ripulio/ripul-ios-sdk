@@ -191,6 +191,18 @@ def a_view_of_its_own(f, pos):
     return False
 
 
+def colours_after(f, pos, close):
+    """True when the view that starts at `pos` and closes its arguments at `close` has a colour
+    in its own chain, is half of an expression, or is coloured by something round it."""
+    names, end = chain_after(f, close + 1)
+    if COLOURING.intersection(names):
+        return True
+    after = f.code[end:end + 40].lstrip()
+    if after.startswith("+") or after.startswith("?") or after.startswith(":"):
+        return True
+    return coloured_by_something_else(f, pos)
+
+
 def bare_texts(f):
     """[(position of `Text`, position just after its closing bracket)] for each text with no colour."""
     code, match = f.code, f.match
@@ -200,16 +212,71 @@ def bare_texts(f):
         close = match.get(o)
         if close is None or not a_view_of_its_own(f, m.start()):
             continue
-        names, end = chain_after(f, close + 1)
-        if COLOURING.intersection(names):
-            continue
-        after = code[end:end + 40].lstrip()
-        if after.startswith("+") or after.startswith("?") or after.startswith(":"):
-            continue
-        if coloured_by_something_else(f, m.start()):
-            continue
-        found.append((m.start(), close + 1))
+        if not colours_after(f, m.start(), close):
+            found.append((m.start(), close + 1))
     return found
+
+
+LABEL = re.compile(r"(?<![\w.])Label\(")
+
+
+def bare_labels(f):
+    """[position of `Label`] for each `Label("Title", systemImage: …)` or `image:` with no colour.
+    Only the plug-in themes these: a colour written on a label would colour its icon too."""
+    code, match = f.code, f.match
+    found = []
+    for m in LABEL.finditer(code):
+        o = m.end() - 1
+        close = match.get(o)
+        if close is None or not a_view_of_its_own(f, m.start()):
+            continue
+        if not re.search(r"\b(?:systemImage|image)\s*:", code[o:close]):
+            continue
+        if not colours_after(f, m.start(), close):
+            found.append(m.start())
+    return found
+
+
+PROMINENT = re.compile(r"\.buttonStyle\(\s*\.(?:borderedProminent|glassProminent)\s*\)")
+
+
+def accent_buttons(f):
+    """[position of `.buttonStyle(.borderedProminent)`] for each button that has no `.tint`
+    in its own chain and none on a view round it: its fill is the theme's accent."""
+    code = f.code
+    found = []
+    for m in PROMINENT.finditer(code):
+        start = f.chain_start(m.start())
+        names, end = chain_after(f, m.end())
+        own = code[start:end]
+        if re.search(r"\.tint\(", own):
+            continue
+        if tinted_from_outside(f, start):
+            continue
+        found.append(m.start())
+    return found
+
+
+def tinted_from_outside(f, pos):
+    """True when a view that encloses `pos` in the same expression has a `.tint(`."""
+    code, match = f.code, f.match
+    i, hops = pos - 1, 0
+    while i >= 0 and hops < 60:
+        c = code[i]
+        if c in ")]}":
+            i = match.get(i, i) - 1
+            continue
+        if c == "{":
+            name, _, end = callee_of_brace(f, i)
+            if name:
+                names, _ = chain_after(f, end)
+                if "tint" in names:
+                    return True
+            hops += 1
+        elif c in "([":
+            hops += 1
+        i -= 1
+    return False
 
 
 def read(path):
@@ -256,9 +323,10 @@ def coloured_from_outside(files):
     return coloured
 
 
-def analyse(paths):
+def analyse(paths, labels=False):
     """{path: (File, [(start of `Text`, just after its closing bracket)])} for the app's
-    files read together, so that a view coloured where it is used is known in its own file."""
+    files read together, so that a view coloured where it is used is known in its own file.
+    With `labels`, each entry also holds the bare labels: (File, texts, [start of `Label`])."""
     files = [(path, read(path)) for path in paths]
     files = [(path, f) for path, f in files if f is not None]
     coloured = coloured_from_outside([f for _, f in files])
@@ -266,21 +334,25 @@ def analyse(paths):
     for path, f in files:
         ranges = [(m.end() - 1, f.match[m.end() - 1]) for m in VIEW_TYPE.finditer(f.code)
                   if m.group(1) in coloured and (m.end() - 1) in f.match]
-        sites = [(a, b) for a, b in bare_texts(f) if not any(o < a < c for o, c in ranges)]
-        out[path] = (f, sites)
+        inside = lambda a: any(o < a < c for o, c in ranges)
+        sites = [(a, b) for a, b in bare_texts(f) if not inside(a)]
+        if labels:
+            out[path] = (f, sites, [a for a in bare_labels(f) if not inside(a)])
+        else:
+            out[path] = (f, sites)
     return out
 
 
-def whole_lines(f, sites):
-    """The lines on which every `Text(` is one with no colour."""
+def whole_lines(f, sites, labels=()):
+    """The lines on which every `Text(` and every `Label(` is one with no colour."""
     bare = {}
-    for start, _ in sites:
+    for start in [a for a, _ in sites] + list(labels):
         bare[f.line(start)] = bare.get(f.line(start), 0) + 1
     whole = []
     for number, count in sorted(bare.items()):
         a = f.starts[number - 1]
         b = f.starts[number] if number < len(f.starts) else len(f.code)
-        if len(re.findall(r"(?<![\w.])Text\(", f.code[a:b])) == count:
+        if len(re.findall(r"(?<![\w.])(?:Text|Label)\(", f.code[a:b])) == count:
             whole.append(number)
     return whole
 
@@ -299,12 +371,25 @@ def swift_files(targets):
 
 
 def site_table(sources):
-    """{file name: [lines]} for the plug-in's generated file."""
+    """{file name: [lines]} for the plug-in's generated file: texts and labels with no colour."""
     table = {}
-    for path, (f, sites) in analyse(sources).items():
-        whole = whole_lines(f, sites)
+    for path, (f, sites, labels) in analyse(sources, labels=True).items():
+        whole = whole_lines(f, sites, labels)
         if whole:
             table[pathlib.Path(path).name] = whole
+    return table
+
+
+def button_table(sources):
+    """{file name: [lines]} of the prominent buttons whose fill is the theme's accent."""
+    table = {}
+    for path in sources:
+        f = read(path)
+        if f is None:
+            continue
+        lines = sorted({f.line(p) for p in accent_buttons(f)})
+        if lines:
+            table[pathlib.Path(path).name] = lines
     return table
 
 

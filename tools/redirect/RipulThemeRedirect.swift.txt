@@ -10,7 +10,8 @@
 //   RIPUL_THEME_NO_ROOT     keep SwiftUI's WindowGroup; put `.ripulThemeRoot()` on your root yourself
 //   RIPUL_THEME_NO_STYLES   keep SwiftUI's foregroundStyle; the hierarchy styles stay the system's
 //   RIPUL_THEME_NO_LISTS    keep SwiftUI's List, Form and Section; lists stay the system's
-//   RIPUL_THEME_NO_TEXT     keep SwiftUI's Text initialisers; text with no colour stays the system's
+//   RIPUL_THEME_NO_TEXT     keep SwiftUI's Text and Label initialisers; text with no colour stays the system's
+//   RIPUL_THEME_NO_BUTTONS  keep SwiftUI's prominent button styles; their labels stay white
 
 import SwiftUI
 import RipulThemeKit
@@ -123,6 +124,105 @@ extension Text {
     @_disfavoredOverload
     init(_ content: String, ripulFile: String = #fileID, ripulLine: UInt = #line) {
         self = RipulThemeRedirect.text(verbatim: content) { ripulThemeRedirectBareText[ripulFile]?.contains(ripulLine) == true }
+    }
+
+    // The forms below have an exact match in SwiftUI, which would be chosen over one that
+    // also takes a line. So each is declared twice: SwiftUI's own signature, which hides
+    // SwiftUI's and is marked as the one to avoid, and the one with the line, which is
+    // then the one chosen.
+    @_disfavoredOverload
+    init(_ attributedContent: AttributedString) {
+        self = RipulThemeRedirect.text(attributed: attributedContent) { false }
+    }
+
+    // Through a protocol only `AttributedString` meets: a string literal could be read as
+    // an attributed string, and must stay a localised key.
+    init<A: RipulThemeAttributedContent>(_ attributedContent: A, ripulFile: String = #fileID, ripulLine: UInt = #line) {
+        self = RipulThemeRedirect.text(attributed: attributedContent.ripulAttributedString) { ripulThemeRedirectBareText[ripulFile]?.contains(ripulLine) == true }
+    }
+
+    @_disfavoredOverload
+    init(verbatim content: String) {
+        self = RipulThemeRedirect.text(exactly: content) { false }
+    }
+
+    init(verbatim content: String, ripulFile: String = #fileID, ripulLine: UInt = #line) {
+        self = RipulThemeRedirect.text(exactly: content) { ripulThemeRedirectBareText[ripulFile]?.contains(ripulLine) == true }
+    }
+
+    @_disfavoredOverload
+    init(_ date: Date, style: Text.DateStyle) {
+        self = RipulThemeRedirect.text(date, style: style) { false }
+    }
+
+    init(_ date: Date, style: Text.DateStyle, ripulFile: String = #fileID, ripulLine: UInt = #line) {
+        self = RipulThemeRedirect.text(date, style: style) { ripulThemeRedirectBareText[ripulFile]?.contains(ripulLine) == true }
+    }
+
+    @_disfavoredOverload
+    init<F>(_ input: F.FormatInput, format: F) where F: FormatStyle, F.FormatInput: Equatable, F.FormatOutput == String {
+        self = RipulThemeRedirect.text(input, format: format) { false }
+    }
+
+    init<F>(_ input: F.FormatInput, format: F, ripulFile: String = #fileID, ripulLine: UInt = #line)
+    where F: FormatStyle, F.FormatInput: Equatable, F.FormatOutput == String {
+        self = RipulThemeRedirect.text(input, format: format) { ripulThemeRedirectBareText[ripulFile]?.contains(ripulLine) == true }
+    }
+}
+
+// A label's title, by the same lines. Its icon is left as the system draws it.
+extension Label where Title == Text, Icon == Image {
+    @_disfavoredOverload
+    init(_ titleKey: LocalizedStringKey, systemImage name: String) {
+        self = RipulThemeRedirect.label(titleKey, systemImage: name) { false }
+    }
+
+    init(_ titleKey: LocalizedStringKey, systemImage name: String, ripulFile: String = #fileID, ripulLine: UInt = #line) {
+        self = RipulThemeRedirect.label(titleKey, systemImage: name) { ripulThemeRedirectBareText[ripulFile]?.contains(ripulLine) == true }
+    }
+
+    @_disfavoredOverload
+    init(_ title: String, systemImage name: String, ripulFile: String = #fileID, ripulLine: UInt = #line) {
+        self = RipulThemeRedirect.label(verbatim: title, systemImage: name) { ripulThemeRedirectBareText[ripulFile]?.contains(ripulLine) == true }
+    }
+
+    @_disfavoredOverload
+    init(_ titleKey: LocalizedStringKey, image name: String) {
+        self = RipulThemeRedirect.label(titleKey, image: name) { false }
+    }
+
+    init(_ titleKey: LocalizedStringKey, image name: String, ripulFile: String = #fileID, ripulLine: UInt = #line) {
+        self = RipulThemeRedirect.label(titleKey, image: name) { ripulThemeRedirectBareText[ripulFile]?.contains(ripulLine) == true }
+    }
+
+    @_disfavoredOverload
+    init(_ title: String, image name: String, ripulFile: String = #fileID, ripulLine: UInt = #line) {
+        self = RipulThemeRedirect.label(verbatim: title, image: name) { ripulThemeRedirectBareText[ripulFile]?.contains(ripulLine) == true }
+    }
+}
+#endif
+
+// MARK: Prominent buttons
+
+#if !RIPUL_THEME_NO_BUTTONS
+/// The lines on which a prominent button style is given to a button that has no `.tint`
+/// of its own and none from a view round it: its fill is the theme's accent, so its label
+/// is drawn in the theme's `onAccent`. A button you tint yourself is left alone.
+private let ripulThemeRedirectAccentButtons: [String: Set<UInt>] = {
+    let lines: [String: [UInt]] = [/*ACCENT-BUTTONS*/:]
+    let module = String(#fileID.prefix { $0 != "/" }) + "/"
+    return Dictionary(uniqueKeysWithValues: lines.map { (module + $0.key, Set($0.value)) })
+}()
+
+// The style's own type, where SwiftUI's takes any style: the closer match is chosen.
+extension View {
+    func buttonStyle(_ style: BorderedProminentButtonStyle, ripulFile: String = #fileID, ripulLine: UInt = #line) -> some View {
+        RipulThemeRedirect.prominentButton(self) { ripulThemeRedirectAccentButtons[ripulFile]?.contains(ripulLine) == true }
+    }
+
+    @available(iOS 26.0, macOS 26.0, *)
+    func buttonStyle(_ style: GlassProminentButtonStyle, ripulFile: String = #fileID, ripulLine: UInt = #line) -> some View {
+        RipulThemeRedirect.glassProminentButton(self) { ripulThemeRedirectAccentButtons[ripulFile]?.contains(ripulLine) == true }
     }
 }
 #endif

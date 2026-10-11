@@ -40,9 +40,10 @@ only by naming it.
 There are two ways to adopt the theme. The numbered steps below are the first:
 you move your call sites to tokens, with a command that does most of it. This
 section is the second: you change settings and add files, and no line of your
-Swift changes. It is in the package from release 0.7.172, and from 0.7.174 it
-also reaches text with no colour, lists and your own colours. It has been
-measured on one app. It is where to start: the numbered steps are for an app
+Swift changes. It is in the package from release 0.7.172; from 0.7.174 it
+also reaches text with no colour, lists and your own colours; and from 0.7.175
+markdown and every other kind of text, a label's title, a prominent button's
+label and a navigation title's colour. It has been measured on one app. It is where to start: the numbered steps are for an app
 that wants what this does not reach.
 
 What you do:
@@ -93,7 +94,10 @@ returns exactly what SwiftUI's would have. Nothing is added to your repository.
 | `Color(.systemBackground)`, `Color(.systemGroupedBackground)`, `Color(.secondarySystemGroupedBackground)` | `canvas`, `surfaceSunken`, `surface` |
 | `Color.red`, `.foregroundStyle(.orange)`, green, blue, gray | `danger`, `warning`, `success`, `info`, `neutral` |
 | `Color("BrandNavy")`, a colour of your asset catalogue | a role of that name, once a document names it (step 2, "Your own colours") |
-| a `Text` with no colour of its own | the `text` role. The build reads your source for each such text and the generated file carries their lines, so a new text is themed without anyone adding it |
+| a `Text` with no colour of its own, however it is made: `Text("…")`, `Text(aString)`, `Text(anAttributedString)` and so markdown, `Text(verbatim:)`, `Text(date, style:)`, `Text(value, format:)` | the `text` role. The build reads your source for each such text and the generated file carries their lines, so a new text is themed without anyone adding it |
+| the title of `Label("Title", systemImage: …)` or `image:` with no colour of its own | the `text` role. Its icon is left as the system draws it |
+| `.buttonStyle(.borderedProminent)` and `.glassProminent` on a button with no `.tint` of its own and none from a view round it | the label in `onAccent`. A button you tint yourself keeps the system's white label: its fill is your colour, not the theme's accent |
+| a navigation title, large and inline | the `text` role, beside the text family |
 | `List { … }`, `Form { … }` | the ground in `surfaceSunken`, the rows in `surface`, the separators in `separator` |
 | `Section("Title") { … }`, `Section { … } header: { … } footer: { … }` | the header and footer in the text family and in `textSecondary` |
 | `WindowGroup { … }` | the theme root, with no line written: the accent, the body font for text with none, navigation titles, tab bar labels |
@@ -113,10 +117,9 @@ across files: its texts are left alone. To see the list:
 
 **What it does not reach.** These stay the system's under a theme:
 
-- a text made any other way than `Text("…")` or `Text(aString)`:
-  `Text(verbatim:)`, a date or a number with a format, an `AttributedString`,
-  `Text(a) + Text(b)`, a `Label("Title", systemImage:)`'s title, a
-  `TextField`'s text;
+- a text made a way the generated file does not declare again: a date range
+  or a timer, `Text(a) + Text(b)`, a `Label { … } icon: { … }` whose title is
+  not a `Text` written there, and a `TextField`'s text;
 - a text coloured through something the build cannot see: a view kept in a
   property and coloured where the property is used, a `ViewModifier` or a
   style of your own that colours its content. Such a text is themed where it
@@ -126,7 +129,7 @@ across files: its texts are left alone. To see the list:
   log names it and SwiftUI's own is used for that name in the whole target;
 - a row's swipe actions and selection highlight, which stay the system's, and
   a `Section` inside a `Picker` or a `Menu`, whose header takes the family;
-- a prominent button's label (`onAccent`);
+- the label of a prominent button you tint yourself, as above;
 - a hierarchy style given to `fill`, `stroke` or `background`, and one passed
   through a variable of a generic type;
 - white and black, and a colour of your own that is not read as
@@ -145,8 +148,9 @@ across files: its texts are left alone. To see the list:
 - `WindowGroup(for:)` and a UIKit app delegate are not covered: put
   `.ripulThemeRoot()` on the root yourself and add `RIPUL_THEME_NO_ROOT` to the
   target's Swift compilation conditions. `RIPUL_THEME_NO_STYLES` leaves
-  `foregroundStyle` alone, `RIPUL_THEME_NO_TEXT` leaves `Text`, and
-  `RIPUL_THEME_NO_LISTS` leaves `List`, `Form` and `Section`.
+  `foregroundStyle` alone, `RIPUL_THEME_NO_TEXT` leaves `Text` and `Label`,
+  `RIPUL_THEME_NO_LISTS` leaves `List`, `Form` and `Section`, and
+  `RIPUL_THEME_NO_BUTTONS` leaves the prominent button styles.
 - A `List`, `Form` or `Section` in your own files is the generated type, not
   SwiftUI's. Used as a view it behaves as SwiftUI's does; a line that names
   the type (`let list: List<Never, Text>`) must say `SwiftUI.List`.
@@ -158,11 +162,14 @@ across files: its texts are left alone. To see the list:
   imported one of the same name and type, is how the Swift compiler behaves
   (measured with Swift 6.4, Xcode 27.1, in Swift 5 and Swift 6 language
   modes). The language's documentation does not promise it. `Text` leans on
-  a second such behaviour: of two initialisers that both fit, the one whose
-  first parameter is the closer match is chosen, and SwiftUI's string form is
-  marked as the one to avoid, so the generated one is marked the same way
+  two more. Of two initialisers that both fit, the one whose first parameter
+  is the closer match is chosen, and SwiftUI's string form is marked as the
+  one to avoid, so the generated one is marked the same way
   (`@_disfavoredOverload`, an attribute the compiler has and does not
-  document).
+  document). And where SwiftUI has an exact match (`Text(verbatim:)`, an
+  attributed string, a date, a format, a label), the generated file declares
+  that exact form again, marked as the one to avoid, which hides SwiftUI's and
+  lets the form that carries the line be chosen.
 
 The two ways mix: a file you have migrated calls the accessors directly, and
 the rest goes through the generated file.
@@ -635,9 +642,10 @@ and the lists and text colours of step 4 are the usual rest.
   menus, progress bars, sliders, the selected tab and alert buttons; the text
   family on form rows, buttons, navigation titles (large and inline),
   segmented controls and tab bar labels.
-- **Not reached:** the colour of a large navigation title and of a section
-  header (the family is); alerts' text, menus, swipe action labels, a menu
-  picker's value; a navigation title on Mac Catalyst.
+- **Reached from 0.7.175, with no edit:** the colour of a navigation title,
+  large and inline, under a theme that names `text`.
+- **Not reached:** alerts' text, menus, swipe action labels, a menu picker's
+  value; a navigation title on Mac Catalyst.
 - **Under a themed accent, things that had no colour take it:** toolbar
   buttons, a swipe action with no tint, a toggle's on colour.
 - A document cannot ask for a font feature (lining figures, for one).
@@ -648,8 +656,7 @@ and the lists and text colours of step 4 are the usual rest.
 ## Not built
 
 - **Editing a theme in the app.** A look is tried by loading a document.
-- **A font feature in the document** (lining figures, for one), and the colour
-  of a large navigation title.
+- **A font feature in the document** (lining figures, for one).
 - The widgets and other extensions of an app are not themed unless they link
   the package and install the theme themselves.
 

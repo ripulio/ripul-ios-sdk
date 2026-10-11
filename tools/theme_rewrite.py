@@ -337,6 +337,7 @@ CONTROL_IDENTITIES = [
     (re.compile(r"\.ripulThemedList(?:Rows)?\(\)"), ""),
     # Not a token: the notification's name.
     (re.compile(r"\.ripulThemeDidChange\b"), ".themeDidChange"),
+    (re.compile(r"\.ripulAttributedString\b"), ".attributedString"),
 ]
 
 

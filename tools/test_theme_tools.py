@@ -202,6 +202,46 @@ class Tools(unittest.TestCase):
         self.assertEqual(theme_rewrite.skeleton('Text("bare").foregroundStyle(.ripul(.text))'), theme_rewrite.skeleton('Text("bare")'))
         self.assertEqual(theme_rewrite.skeleton("}.ripulThemedList()"), theme_rewrite.skeleton("}"))
 
+    def test_labels_and_accent_buttons_are_found_for_the_plug_in(self):
+        import theme_text
+        import theme_redirect
+        path = self.folder / "App" / "More.swift"
+        path.write_text(
+            'import SwiftUI\n'
+            'struct More: View {\n'
+            '    var body: some View {\n'
+            '        VStack {\n'
+            '            Label("Dogs welcome", systemImage: "pawprint")\n'                 # 5: a bare label
+            '            Label("Tinted", systemImage: "star").foregroundStyle(.tint)\n'    # 6: has a colour
+            '            Label { Text("built") } icon: { Image(systemName: "x") }\n'       # 7: its text is a Text of its own
+            '            Text(verbatim: "exact")\n'                                        # 8
+            '            Text(paragraph.markdown)\n'                                       # 9
+            '            Button("Book") {}\n'
+            '                .buttonStyle(.borderedProminent)\n'                           # 11: takes the accent
+            '            Button("Pay") {}\n'
+            '                .buttonStyle(.borderedProminent)\n'                           # 13: tinted by the app
+            '                .tint(.red)\n'
+            '            Button("Go") {}.buttonStyle(.glassProminent)\n'                   # 15: takes the accent
+            '        }\n'
+            '        Form {\n'
+            '            Button("Save") {}.buttonStyle(.borderedProminent)\n'              # 18: the form tints it
+            '        }\n'
+            '        .tint(.green)\n'
+            '    }\n'
+            '}\n')
+        self.assertEqual(theme_text.site_table([path]), {"More.swift": [5, 7, 8, 9]})
+        self.assertEqual(theme_text.button_table([path]), {"More.swift": [11, 15]})
+        text, _ = theme_redirect.generate([path])
+        self.assertTrue('"More.swift": [5, 7, 8, 9],' in text)
+        self.assertTrue('"More.swift": [11, 15],' in text)
+        self.assertNotIn("/*ACCENT-BUTTONS*/", text)
+        # migrate --text writes a line on a text, never on a label: there it would colour the icon.
+        self.run_tool("migrate", "--text", "App/More.swift")
+        after = path.read_text()
+        self.assertIn('Label("Dogs welcome", systemImage: "pawprint")\n', after)
+        self.assertIn('Text(verbatim: "exact").foregroundStyle(.ripul(.text))', after)
+        self.assertIn('Text(paragraph.markdown).foregroundStyle(.ripul(.text))', after)
+
     def test_the_build_phase_writes_only_in_debug(self):
         import os
         out = self.folder / "Products" / "App.app"

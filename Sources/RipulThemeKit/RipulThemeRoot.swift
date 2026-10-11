@@ -129,7 +129,7 @@ private struct RipulWindowTint: UIViewRepresentable {
             // setting (measured on iOS 27.0: at launch under a themed family the labels
             // were the system's, and after a change while running the theme's). Its items
             // exist a turn after the window does, so they are set then.
-            guard let window, RipulTheme.hasThemedTextFamily else { return }
+            guard let window, RipulTheme.hasThemedSystemText else { return }
             DispatchQueue.main.async { [weak window] in
                 if let window { RipulTheme.restyleSystemText(in: window) }
             }
