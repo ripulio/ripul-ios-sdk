@@ -94,6 +94,22 @@ extension RipulTheme {
         if !installed { install() }
     }
 
+    /// The install of a host that wrote no line (`RipulThemeRedirect.root`): the theme
+    /// Info.plist names, or the bundle's only theme document when it names none. With two
+    /// or more documents and no name, the system look, and a line in the log saying why.
+    static func installForRedirect() {
+        libraryLock.lock()
+        let installed = library.installed
+        libraryLock.unlock()
+        if installed { return }
+        if Bundle.main.object(forInfoDictionaryKey: infoPlistKey) is String { install(); return }
+        let themes = bundledThemes
+        if themes.count > 1 {
+            NSLog("[RipulTheme] %d theme documents in the bundle and none named: add the Info.plist key %@", themes.count, infoPlistKey)
+        }
+        install(theme: themes.count == 1 ? themes[0].name : nil)
+    }
+
     /// Forget everything `install` and `select` did but the kept choice. Tests only.
     static func resetLibraryForTests() {
         libraryLock.lock(); library = Library(); libraryLock.unlock()

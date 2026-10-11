@@ -160,6 +160,10 @@ public struct UnifiedSessionRow: View {
     var startedChats: Int = 0
     var startedChatsClosed: Bool = false
     var startedChatsNeedLooking: Bool = false
+    /// The chats put away under this one. A family put away is one row, so
+    /// this row says what theirs would: that one is mid-turn, and when one of
+    /// them was last active.
+    var startedChatsPutAway: [UnifiedSession] = []
     /// Tapping the row's icon puts the started chats away, or brings them back.
     var onToggleStartedChats: (() -> Void)? = nil
     var onSessionAction: ((SessionRowAction) -> Void)? = nil
@@ -186,6 +190,7 @@ public struct UnifiedSessionRow: View {
         startedChats: Int = 0,
         startedChatsClosed: Bool = false,
         startedChatsNeedLooking: Bool = false,
+        startedChatsPutAway: [UnifiedSession] = [],
         onToggleStartedChats: (() -> Void)? = nil,
         onSessionAction: ((SessionRowAction) -> Void)? = nil
     ) {
@@ -210,18 +215,16 @@ public struct UnifiedSessionRow: View {
         self.startedChats = startedChats
         self.startedChatsClosed = startedChatsClosed
         self.startedChatsNeedLooking = startedChatsNeedLooking
+        self.startedChatsPutAway = startedChatsPutAway
         self.onToggleStartedChats = onToggleStartedChats
         self.onSessionAction = onSessionAction
     }
 
-    /// Live turn phase for this row. Reads `sessionStore.sessionPhases` at
-    /// body-eval time — only sessions that are currently open as a Ripul
-    /// tab have a phase (closed / offline JSONL rows return nil). Keyed by
-    /// the tab's `sourceChatId`, which matches the `chatId` carried on
-    /// lifecycle events.
-    private var phase: AgentTurnPhase? {
-        guard let sourceChatId = session.ripulSession?.sourceChatId else { return nil }
-        return sessionStore.turnPhase(for: sourceChatId)
+    /// How many of the chats put away under this one are mid-turn, each read
+    /// as this row's own is, so a head and the rows it stands for cannot
+    /// disagree.
+    private var startedChatsRunning: Int {
+        startedChatsPutAway.reduce(0) { sessionStore.isRunning($1) ? $0 + 1 : $0 }
     }
 
     /// Whether this session's last agent turn has gone unlooked-at.
@@ -272,7 +275,19 @@ public struct UnifiedSessionRow: View {
 
     /// Best-known "last active" time. Checks live bridge events, the
     /// resolved session-id cache (for cold start), and scanner file mtime.
+    ///
+    /// With its started chats put away, the time is the family's: that of
+    /// whichever chat in it was active last. Each is read through its own
+    /// cell, as this row's is, so the time moves with a chat that is working.
     private var effectiveLastActive: Date {
+        var best = liveLastActive(of: session)
+        for started in startedChatsPutAway { best = max(best, liveLastActive(of: started)) }
+        if let t = cachedLastActive { best = max(best, t) }
+        return best
+    }
+
+    /// A chat's scanned time, moved on by a live event under any of its names.
+    private func liveLastActive(of session: UnifiedSession) -> Date {
         var best = session.lastUsed
         if let ripul = session.ripulSession {
             if let t = sessionStore.lastActive(for: ripul.id) { best = max(best, t) }
@@ -281,7 +296,6 @@ public struct UnifiedSessionRow: View {
         for key in session.matchKeys {
             if let t = sessionStore.lastActive(for: key) { best = max(best, t) }
         }
-        if let t = cachedLastActive { best = max(best, t) }
         return best
     }
 
@@ -675,15 +689,24 @@ public struct UnifiedSessionRow: View {
     /// A group chat's icon shares the slot at its trailing edge, so it sits
     /// under the time and holds still while the busy icon comes and goes
     /// beside it.
+    ///
+    /// A chat whose started chats are put away is busy while one of them is:
+    /// their rows are not there to say so, and a family that is put away is
+    /// one row.
     @ViewBuilder
     private var runningIndicatorSlot: some View {
+        // The live phase of a chat open here; for one that is not, what its Mac's list said.
+        let ownRunning = sessionStore.isRunning(session)
+        let startedRunning = startedChatsRunning
+        let isRunning = ownRunning || startedRunning > 0
         HStack(spacing: 4) {
-            if phase == .running {
+            if isRunning {
                 // Core Animation, not a SwiftUI symbol effect: see
                 // RenderServerPulsingSymbol for the per-frame cost that has.
                 RunningIndicatorSymbol(systemName: runningIndicatorIcon)
                     .accessibilityElement()
-                    .accessibilityLabel("Running")
+                    .accessibilityLabel(ownRunning ? "Running"
+                        : "\(startedRunning) started \(startedRunning == 1 ? "chat" : "chats") running")
                     .transition(.opacity)
                     .uiKitIdentifier("UnifiedSessionRow.phaseIndicator.running")
             }
@@ -703,7 +726,7 @@ public struct UnifiedSessionRow: View {
             }
         }
         .frame(height: 16)
-        .animation(.easeInOut(duration: 0.175), value: phase == .running)
+        .animation(.easeInOut(duration: 0.175), value: isRunning)
     }
 
     @ViewBuilder

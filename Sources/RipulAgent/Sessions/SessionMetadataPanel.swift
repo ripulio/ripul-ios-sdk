@@ -23,6 +23,7 @@ public struct SessionMetadataPanel: View {
     @State private var anchorList: (chatId: String, anchors: [AgentBridge.HumanChatAnchor])?
 
     // Section expansion
+    @State private var milestonesExpanded = true
     @State private var messagesExpanded = true
     @State private var messagesSearch = ""
     @State private var filesExpanded = true
@@ -48,6 +49,8 @@ public struct SessionMetadataPanel: View {
     public var body: some View {
         ScrollView {
             VStack(spacing: 12) {
+                // First, since "where am I?" is the question a long chat raises.
+                milestonesSection
                 descriptionSection
                 messagesSection
                 modelSection
@@ -84,10 +87,12 @@ public struct SessionMetadataPanel: View {
             await loadAnchors(chatId, waitForChat: true)
         }
         // A turn starting means a message was just sent; ending means the
-        // chat settled. Either way the anchor list may have grown.
+        // chat settled. Either way the anchor list may have grown, and the
+        // agent may have recorded a milestone or made commits.
         .onChange(of: bridge.isAgentRunning) {
             guard let chatId = session?.sourceChatId else { return }
             Task { await loadAnchors(chatId) }
+            Task { await refreshMetadata(chatId) }
         }
         .onChange(of: debugExpanded) { _, expanded in
             if expanded && storage == nil {
@@ -104,6 +109,14 @@ public struct SessionMetadataPanel: View {
         guard !Task.isCancelled else { return }
         metadata = loaded
         loading = false
+    }
+
+    /// Reload without the loading state, so the panel does not blink. A reply
+    /// that lands after the chat changed is dropped.
+    private func refreshMetadata(_ chatId: String) async {
+        guard let loaded = await bridge.getSessionMetadata(sessionId: chatId) else { return }
+        guard !Task.isCancelled, session?.sourceChatId == chatId else { return }
+        metadata = loaded
     }
 
     /// `waitForChat`: a chat just switched to may not be in the page's memory
@@ -138,6 +151,21 @@ public struct SessionMetadataPanel: View {
             if let updated = await bridge.patchSessionMetadata(sessionId: sessionId, patch: patch) {
                 metadata = updated
             }
+        }
+    }
+
+    // MARK: - Milestones
+
+    @ViewBuilder
+    private var milestonesSection: some View {
+        if metadata != nil {
+            SessionMilestonesSection(
+                bridge: bridge,
+                story: metadata?.story,
+                latestAnchor: anchors.last,
+                isExpanded: $milestonesExpanded,
+                patch: patch
+            )
         }
     }
 
@@ -797,7 +825,7 @@ public struct SessionMetadataPanel: View {
     // MARK: - Empty State
 
     private var emptyState: some View {
-        Text("Session milestones will appear here as you work \u{2014} files edited, deployments, and more.")
+        Text("Files edited, deployments and more will appear here as you work.")
             .font(.ripul(.subheadline))
             .foregroundStyle(.ripul(.textTertiary))
             .multilineTextAlignment(.center)

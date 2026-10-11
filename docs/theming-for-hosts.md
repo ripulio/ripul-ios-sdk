@@ -13,6 +13,20 @@ migration command leaves for a person to decide. Everything else is the SDK's.
 
 Where a thing is not built, this page says so. The list is at the end.
 
+**If an agent is doing the work,** give it the procedure first: what to measure
+before the first edit, which level to start at, where to stop and ask, and how
+to prove nothing moved. It is a skill file in this package,
+`tools/skills/theme-an-app/SKILL.md`, and one command copies it to where a
+coding agent in your repository finds it (`.claude/skills` for Claude Code,
+`.agents/skills` for Codex):
+
+```bash
+<the package checkout>/tools/ripul-theme install-skill <your repository>
+```
+
+An agent running inside Ripul reads the same text as the `theming` guide of its
+`ripul_guide` tool. This page is the reference that procedure points to.
+
 ## The idea
 
 Every token has a default that is the system value you write today.
@@ -20,6 +34,97 @@ Every token has a default that is the system value you write today.
 `.secondary` style. So moving a call site to a token changes no pixel, and an
 app with no theme document looks exactly as it did. A document changes a token
 only by naming it.
+
+## With no change to your source
+
+There are two ways to adopt the theme. The numbered steps below are the first:
+you move your call sites to tokens, with a command that does most of it. This
+section is the second: you change settings and add files, and no line of your
+Swift changes. It is in the package from release 0.7.172, and it has been
+measured on one app. It is where to start: the numbered steps are for an app
+that wants what this does not reach.
+
+What you do:
+
+1. Add the package to the app target, as in step 1 below, without the root
+   line.
+2. Put your theme document and font files in the bundle (steps 2 and 3).
+3. Switch on the package's build-tool plug-in, `RipulThemeRedirect`, for the app
+   target: in Xcode, the target's Build Phases, "Run Build Tool Plug-ins", add
+   it. In an XcodeGen `project.yml`:
+
+   ```yaml
+       buildToolPlugins:
+         - plugin: RipulThemeRedirect
+           package: RipulAgent
+   ```
+4. Allow the plug-in to run. Xcode asks once, "Trust & Enable". A command-line
+   build passes `-skipPackagePluginValidation` to `xcodebuild`; without it the
+   build fails with the one line `Validate plug-in “RipulThemeRedirect” in
+   package “ripul-ios-sdk”` (measured with the package fetched by version; a
+   package added by local path needs neither). Add the flag to your build
+   scripts too.
+
+With one theme document in the bundle, that document is the app's theme. With
+several, name one with the Info.plist key `RipulTheme`.
+
+**How it works.** On every build the plug-in writes one Swift file into the
+build folder, and Xcode compiles it into your app's own module. The file
+declares SwiftUI's names again: `Font.body` and the other text styles,
+`Font.system(size:)`, `Color.red`, `Color(.systemBackground)`,
+`.foregroundStyle(.secondary)`, `WindowGroup`. Inside your module your
+declaration of a name is chosen over SwiftUI's, so your existing `.font(.body)`
+calls the generated one, which is one call into the SDK. With no theme each
+returns exactly what SwiftUI's would have. Nothing is added to your repository.
+
+**What it reaches,** with no edit:
+
+| You wrote | It follows |
+|---|---|
+| `.font(.body)`, `.font(.caption.weight(.semibold))`, `Font.body` | the type role of that name |
+| `.font(.system(size: 14, weight: .medium))` | the text family at that size |
+| `.system(.title, design: .serif)`, `.system(size: 22, design: .serif)`, and your own helper built on them | the display family, once a theme names one; the system's serif until then, with no second document |
+| `design: .monospaced` | the code family |
+| a font on an `Image` | nothing: a symbol keeps its system size |
+| `.foregroundStyle(.secondary)` and the other hierarchy styles | the text roles |
+| `Color(.systemBackground)`, `Color(.systemGroupedBackground)`, `Color(.secondarySystemGroupedBackground)` | `canvas`, `surfaceSunken`, `surface` |
+| `Color.red`, `.foregroundStyle(.orange)`, green, blue, gray | `danger`, `warning`, `success`, `info`, `neutral` |
+| `WindowGroup { … }` | the theme root, with no line written: the accent, the body font for text with none, navigation titles, tab bar labels |
+| identified elements | the View Explorer names their tokens (Debug builds), with no build phase |
+
+**What it does not reach.** These stay the system's under a theme, where the
+migration command or a line of yours would have reached them:
+
+- text with no colour of its own, as in "What it leaves for you", 1;
+- lists, section headers and empty states, as in 2 and 3;
+- a prominent button's label (`onAccent`);
+- a hierarchy style given to `fill`, `stroke` or `background`, and one passed
+  through a variable of a generic type;
+- a colour of your own (`Color("BrandNavy")`), and white and black;
+- UIKit code (`UIFont.preferredFont`, `UIColor.label`);
+- a `Label`'s icon, which takes its size from the label's font as before.
+
+**What can go wrong.**
+
+- A name you already declare (`extension Font { static var caption }`, a type
+  called `WindowGroup`) is left out of the generated file and yours is used.
+  The generator reads text, not types; one it misses is a compile error naming
+  both places.
+- A target is redirected only if the plug-in is on for it. A framework of your
+  own needs it switched on too.
+- `WindowGroup(for:)` and a UIKit app delegate are not covered: put
+  `.ripulThemeRoot()` on the root yourself and add `RIPUL_THEME_NO_ROOT` to the
+  target's Swift compilation conditions. `RIPUL_THEME_NO_STYLES` leaves
+  `foregroundStyle` alone.
+- A font or colour kept in a `static let` is read once and does not follow a
+  switch while the app runs.
+- The rule this rests on, that a module's own declaration is preferred to an
+  imported one of the same name and type, is how the Swift compiler behaves
+  (measured with Swift 6.4, Xcode 27.1, in Swift 5 and Swift 6 language
+  modes). The language's documentation does not promise it.
+
+The two ways mix: a file you have migrated calls the accessors directly, and
+the rest goes through the generated file.
 
 ## 1. Add the package and name your theme
 
@@ -163,7 +268,8 @@ $RIPUL_THEME migrate --named <your source folder>             # change it
 ```
 
 Every rewrite is to the token whose default is the value it replaces, so
-nothing moves on screen. It rewrites:
+nothing moves on screen. It adds no import: each file it rewrote needs
+`import RipulAgent`, or the app one `@_exported import RipulAgent`. It rewrites:
 
 | You wrote | It writes |
 |---|---|
@@ -176,6 +282,7 @@ nothing moves on screen. It rewrites:
 | `Color(.systemBackground)`, `UIColor.systemBackground`, `UIColor.label` | `Color.ripul(.canvas)`, `UIColor.ripul(.canvas)`, `UIColor.ripul(.text)` |
 | any other system colour, `Color(.systemGray5)` | the system form, `Color.ripul(system: .systemGray5)`: drawn as before, never themed |
 | `.buttonStyle(.borderedProminent)` | `.ripulProminentButtonStyle()`: its label is drawn in `onAccent` under a theme |
+| `.buttonStyle(.glassProminent)` | `.ripulGlassProminentButtonStyle()`, likewise |
 | with `--named`: `Color.red`, `.foregroundStyle(.orange)` | `Color.ripul(.danger)`, `.foregroundStyle(.ripul(.warning))` |
 | with `--named`: `.white`, `.black`, `.yellow` and the other hues | the system form, `.ripul(system: .white)` |
 
@@ -185,6 +292,11 @@ Then see what is left, and check the change:
 $RIPUL_THEME check <your source folder>     # every font and colour still written directly; exit 1 while any is left
 $RIPUL_THEME lint                           # the working tree's diff: did each replacement keep its value?
 ```
+
+`lint` knows the lines `migrate` writes. A line you added by hand in the same
+diff (the root line, a list modifier) it reports as "the hunk adds and removes
+different numbers of lines": that is the lint not knowing the line, not a
+moved value.
 
 ### What it leaves for you
 
@@ -223,7 +335,9 @@ yet do for you.
 6. **Fonts the command could not place:** a fixed size on a view that is
    neither a `Text` nor an `Image`, a font held in a property
    (`var titleFont: Font { .caption }` becomes `.ripul(.caption)`), `.rounded`
-   and `.serif` designs. `check` lists them.
+   and `.serif` designs, a font helper of your own (`static func serif(…) ->
+   Font`), and with `--named` a `.black.opacity(…)` inside a gradient or a
+   shadow. `check` lists them.
 7. **Colours that are data** (a category's colour, a chart's, a brand mark):
    mark the line `// theme-exempt: <reason>` and leave it.
 
@@ -270,8 +384,9 @@ refused.
 
 Two more ways in, for a developer and for tests, with no code:
 
-- **A launch argument:** `-ripul.theme.document <name>` (the choice is a
-  `UserDefaults` key of that name).
+- **A launch argument:** `-ripul.theme.document <name>`, with `system` for the
+  system look. It is the `UserDefaults` key the choice is kept under, and as
+  an argument it lasts for that one launch: nothing is stored.
 - **A link, in a Debug build only:** `<your app's scheme>://theme?name=<name>`,
   with `name=system` for the system look. The root handles it. A store build
   ignores it; pass a URL to `RipulTheme.handleThemeLink(_:)` yourself if you
@@ -326,9 +441,13 @@ and `--explain <identifier>` for one element.
 
 ## 8. Check that nothing moved
 
-Before the first edit, take screenshots of your screens in light and dark.
-After the migration, with no document or an empty one, take them again and
-compare them pixel for pixel. They should be the same. Where they are not, a
+Before the first edit (so before step 1, though it is written here), take
+screenshots of your screens in light and dark, and take the whole set twice:
+on iOS 26 and later a glass control differs between two captures of one build,
+and the second set shows you which screens do that. After the migration, with
+no document or an empty one, or launched with `-ripul.theme.document system`,
+take them again and compare them pixel for pixel. Apart from those screens
+they should be the same. Where they are not, a
 replacement was a judgement and not an identity: `lint` names most of those,
 and the lists and text colours of step 4 are the usual rest.
 
@@ -381,5 +500,5 @@ Color.ripul(.danger)              // where a Color is required
 .ripul(system: .systemGray5)      // a system colour, never themed
 .ripul(accentOr: .info)
 UIColor.ripul(.canvas)   UIFont.ripul(.caption)
-.ripulTextStyle(.eyebrow)   .ripulProminentButtonStyle()   Section(themed:)   ContentUnavailableView(themed:)
+.ripulTextStyle(.eyebrow)   .ripulProminentButtonStyle()   .ripulGlassProminentButtonStyle()   Section(themed:)   ContentUnavailableView(themed:)
 ```

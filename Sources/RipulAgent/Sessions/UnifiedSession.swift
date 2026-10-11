@@ -67,6 +67,11 @@ public struct UnifiedSession: Identifiable, Codable {
     /// list shows such a chat under the chat that started it, so its title
     /// does not have to say where it came from.
     public let startedBy: SessionStartedBy?
+    /// Whether the chat's own Mac said it was mid-turn when its list was last
+    /// read. It is all a device knows of a chat it has not opened: the live
+    /// phase in `SessionListStore` only reaches chats open here as a tab. Not
+    /// kept in the cache, where it would be a claim about a turn long over.
+    public let runningOnHost: Bool
 
     public var isOpenInRipul: Bool { ripulSession != nil || cachedIsOpen }
 
@@ -146,6 +151,7 @@ public struct UnifiedSession: Identifiable, Codable {
         // first real scan claim it.
         titleFromScan = try c.decodeIfPresent(Bool.self, forKey: .titleFromScan) ?? false
         startedBy = try c.decodeIfPresent(SessionStartedBy.self, forKey: .startedBy)
+        runningOnHost = false
         ripulSession = nil
     }
 
@@ -163,10 +169,12 @@ public struct UnifiedSession: Identifiable, Codable {
         cachedIsOpen: Bool? = nil,
         titleFromScan: Bool = false,
         startedBy: SessionStartedBy? = nil,
+        runningOnHost: Bool = false,
         ripulSession: ChatSession?
     ) {
         self.titleFromScan = titleFromScan
         self.startedBy = startedBy
+        self.runningOnHost = runningOnHost
         self.id = id; self.title = title; self.lastUsed = lastUsed
         self.hasKnownActivity = hasKnownActivity
         self.gitBranch = gitBranch; self.messageCount = messageCount
@@ -219,6 +227,7 @@ public struct UnifiedSession: Identifiable, Codable {
             // longer scan-titled; without a new title the provenance stands.
             titleFromScan: newTitle == nil ? titleFromScan : false,
             startedBy: startedBy,
+            runningOnHost: runningOnHost,
             ripulSession: match
         )
     }
@@ -268,6 +277,7 @@ public struct UnifiedSession: Identifiable, Codable {
             cachedIsOpen: cachedIsOpen,
             titleFromScan: titleFromScan,
             startedBy: startedBy,
+            runningOnHost: runningOnHost,
             ripulSession: ripulSession
         )
     }
@@ -284,6 +294,7 @@ public struct UnifiedSession: Identifiable, Codable {
             cachedIsOpen: cachedIsOpen,
             titleFromScan: titleFromScan,
             startedBy: startedBy,
+            runningOnHost: runningOnHost,
             ripulSession: ripulSession
         )
     }
@@ -302,6 +313,7 @@ public struct UnifiedSession: Identifiable, Codable {
             cachedIsOpen: cachedIsOpen,
             titleFromScan: titleFromScan,
             startedBy: startedBy,
+            runningOnHost: runningOnHost,
             ripulSession: ripulSession
         )
     }
@@ -367,6 +379,7 @@ public struct UnifiedSession: Identifiable, Codable {
             cachedIsOpen: keepOpen ? true : cachedIsOpen,
             // Who started a chat never changes; a scan that could not say keeps what was known.
             startedBy: startedBy ?? previous.startedBy,
+            runningOnHost: runningOnHost,
             ripulSession: ripulSession
         )
     }
@@ -552,6 +565,7 @@ public struct UnifiedSession: Identifiable, Codable {
                 metadataKey: canonicalKey(r.sourceChatId),
                 titleFromScan: true,
                 startedBy: r.startedBy,
+                runningOnHost: r.isRunning,
                 ripulSession: ripulMatch
             ))
         }
@@ -660,6 +674,8 @@ extension UnifiedSession: Equatable {
         lhs.tags == rhs.tags &&
         // Decides where the row sits: under the chat that started it, or by itself.
         lhs.startedBy == rhs.startedBy &&
+        // Draws the running mark on a chat this device has not opened.
+        lhs.runningOnHost == rhs.runningOnHost &&
         // Both affect session-list state: projectPath re-roots the folder tree,
         // cachedIsOpen is half of `isOpenInRipul`. Omitting
         // them let a rebuild that ONLY corrects one of them be dropped by the

@@ -111,5 +111,92 @@ class Tools(unittest.TestCase):
         self.assertEqual(sorted(json.loads((out / "ripul-theme-usage.json").read_text())["elements"]), ["stay.cottage", "stay.dogs"])
 
 
+
+class Skill(unittest.TestCase):
+    """The "theme an app" skill: one text, installed into a repository and served as a guide."""
+
+    SKILL = TOOLS / "skills" / "theme-an-app" / "SKILL.md"
+
+    def test_install_skill_copies_it_where_each_agent_looks(self):
+        with tempfile.TemporaryDirectory() as folder:
+            subprocess.run([sys.executable, str(TOOLS / "ripul-theme"), "install-skill", folder], check=True, capture_output=True)
+            for home in (".claude/skills", ".agents/skills"):
+                self.assertEqual((pathlib.Path(folder) / home / "theme-an-app" / "SKILL.md").read_text(), self.SKILL.read_text())
+
+    def test_the_skill_says_what_it_is_and_names_only_what_the_package_ships(self):
+        text = self.SKILL.read_text()
+        self.assertTrue(text.startswith("---\nname: theme-an-app\ndescription: "))
+        # The public package leaves out scripts/, and nothing of Ripul's own repository is in it.
+        for absent in ("scripts/", "ripul-native-app", "chrome-extension"):
+            self.assertNotIn(absent, text)
+
+    def test_the_ripul_guide_is_the_same_text(self):
+        # In Ripul's own repository the `theming` guide of ripul_guide is this file without
+        # its front matter (chrome-extension/scripts/sync-theming-guide.mjs writes it).
+        guide = TOOLS.parent.parent / "chrome-extension" / "public" / "guides" / "theming.md"
+        if not guide.exists():
+            self.skipTest("the released package has no guide beside it")
+        body = self.SKILL.read_text().split("\n---\n", 1)[1].lstrip("\n")
+        self.assertEqual(guide.read_text(), body, "run: node chrome-extension/scripts/sync-theming-guide.mjs")
+
+
+UNEDITED = '''import SwiftUI
+
+extension View {
+    func identified(_ name: String) -> some View { uiKitIdentifier(name) }
+}
+
+extension Font {
+    static var caption: Font { .custom("Georgia", size: 12) }
+    static func system(size: CGFloat) -> Font { .custom("Georgia", size: size) }
+}
+
+struct WindowGroup {}
+
+struct Stay: View {
+    var body: some View {
+        Text("Montauk").font(.title).foregroundStyle(.secondary).identified("stay.cottage")
+    }
+}
+'''
+
+
+class Redirect(unittest.TestCase):
+    """The file the RipulThemeRedirect plug-in generates for a host that edits nothing."""
+
+    def generate(self, source):
+        import theme_redirect
+        with tempfile.TemporaryDirectory() as folder:
+            app = pathlib.Path(folder) / "App"
+            app.mkdir()
+            (app / "Stay.swift").write_text(source)
+            return theme_redirect.generate([app / "Stay.swift"])
+
+    def test_every_name_is_declared_for_a_host_with_none_of_its_own(self):
+        text, left = self.generate("import SwiftUI\nstruct A {}\n")
+        self.assertEqual(left, [])
+        for name in ("static var body: Font", "static var caption: Font", "static func system(size: CGFloat",
+                     "static var red: Color", "struct WindowGroup<Content: View>: Scene",
+                     "func foregroundStyle(_ style: HierarchicalShapeStyle)"):
+            self.assertIn(name, text)
+
+    def test_a_name_the_host_declares_is_left_out_and_the_rest_stay(self):
+        text, left = self.generate(UNEDITED)
+        self.assertEqual(sorted(k for k, _ in left), ["WindowGroup", "static Font.caption"])
+        self.assertNotIn("static var caption: Font", text)
+        self.assertNotIn("struct WindowGroup<Content: View>: Scene", text)
+        # A different parameter list is an overload, not a clash.
+        self.assertIn("static func system(size: CGFloat, weight: Font.Weight? = nil, design: Font.Design? = nil)", text)
+        self.assertIn("static var caption2: Font", text)
+        self.assertEqual(text.count("{"), text.count("}"))
+
+    def test_the_map_names_tokens_for_source_nobody_edited(self):
+        text, _ = self.generate(UNEDITED)
+        body = text.split('#"""\n', 1)[1].split('\n"""#', 1)[0]
+        tokens = json.loads(body)["elements"]["stay.cottage"][0]["tokens"]
+        self.assertIn(("type", "title"), [(t["k"], t.get("role")) for t in tokens])
+        self.assertIn(("colour", "textSecondary"), [(t["k"], t.get("role")) for t in tokens])
+
+
 if __name__ == "__main__":
     unittest.main()

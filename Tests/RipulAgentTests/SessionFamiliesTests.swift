@@ -5,14 +5,19 @@ final class SessionFamiliesTests: XCTestCase {
     private let now = Date(timeIntervalSince1970: 1_791_630_000)
 
     /// A chat as the host's list gives it. `startedBy` names the starter the way the host does.
+    /// - Parameter starterMachine: The starter is on another Mac, so this chat's Mac names it with that Mac's id in front.
     private func chat(_ name: String, minutesAgo: Double, startedBy starter: String? = nil,
                       machine: String? = "mac", rowKnown: Bool = true,
-                      folder: String? = nil, branch: String? = nil) -> UnifiedSession {
+                      folder: String? = nil, branch: String? = nil, starterOn starterMachine: String? = nil) -> UnifiedSession {
         UnifiedSession(
             id: "claude-cli:\(name)", title: name, lastUsed: now.addingTimeInterval(-minutesAgo * 60),
             gitBranch: branch, messageCount: nil, projectName: folder, provider: "claude-cli", providerLabel: nil,
             machineName: machine, machineId: machine, matchKeys: ["claude-cli:\(name)", name, "cli_\(name)"],
-            startedBy: starter.map { SessionStartedBy(agentId: "cli_\($0)", sessionId: rowKnown ? "claude-cli:\($0)" : nil, title: $0) },
+            startedBy: starter.map {
+                // A Mac has no row for a chat on another Mac, so it can only give the id.
+                if let starterMachine { return SessionStartedBy(agentId: "\(starterMachine)/cli_\($0)", sessionId: nil, title: $0) }
+                return SessionStartedBy(agentId: "cli_\($0)", sessionId: rowKnown ? "claude-cli:\($0)" : nil, title: $0)
+            },
             ripulSession: nil)
     }
 
@@ -81,23 +86,96 @@ final class SessionFamiliesTests: XCTestCase {
         XCTAssertEqual(layout.folds.keys.first, "claude-cli:task7", "The control follows the family's last row")
     }
 
+    func testAQuietChatWithAWorkingChatUnderItIsNotFoldedAway() {
+        var sessions = [chat("lead", minutesAgo: 100)]
+        for index in 1...7 { sessions.append(chat("task\(index)", minutesAgo: Double(index), startedBy: "lead")) }
+        // The sixth is quiet and past the three that are shown, and a chat it started is mid-turn.
+        sessions.append(chat("deep", minutesAgo: 60, startedBy: "task6"))
+        let layout = arrange(sessions, working: ["deep"])
+        XCTAssertEqual(layout.visible.map(\.title), ["lead", "task1", "task2", "task3", "task6", "deep"],
+                       "Folding the sixth away would take the working chat under it out of sight")
+        XCTAssertEqual(layout.folds, ["claude-cli:deep": .init(parentId: "claude-cli:lead", count: 3, isOpen: false)])
+    }
+
     func testAHeadCanPutItsStartedChatsAwayAndSaysHowMany() {
         let sessions = [
             chat("lead", minutesAgo: 100), chat("a", minutesAgo: 1, startedBy: "lead"), chat("b", minutesAgo: 2, startedBy: "lead"),
             chat("under a", minutesAgo: 3, startedBy: "a"), chat("other", minutesAgo: 50),
         ]
         let shown = arrange(sessions)
-        XCTAssertEqual(shown.heads, ["claude-cli:lead": .init(started: 3, isClosed: false, needsLooking: false)], "Only the chat at the head of a family is a head")
+        XCTAssertEqual(shown.heads, ["claude-cli:lead": .init(started: 3, isClosed: false, needsLooking: false, putAway: [])], "Only the chat at the head of a family is a head")
 
         let closed = arrange(sessions, closed: ["claude-cli:lead"], working: ["under a"])
         XCTAssertEqual(closed.visible.map(\.title), ["lead", "other"], "The family keeps its place with its chats put away")
         XCTAssertEqual(closed.all.count, 5, "Put away is not gone: the host is still told of them")
-        XCTAssertEqual(closed.heads["claude-cli:lead"], .init(started: 3, isClosed: true, needsLooking: true), "A working chat out of sight is flagged on the head")
+        XCTAssertEqual(closed.heads["claude-cli:lead"]?.started, 3)
+        XCTAssertEqual(closed.heads["claude-cli:lead"]?.needsLooking, true, "A working chat out of sight, however deep, is flagged on the head")
         XCTAssertTrue(closed.folds.isEmpty)
         XCTAssertFalse(arrange(sessions, closed: ["claude-cli:lead"]).heads["claude-cli:lead"]!.needsLooking)
 
         // A search shows every match, whatever was put away.
         XCTAssertEqual(arrange(sessions, closed: ["claude-cli:lead"], folds: false).visible.count, 5)
+    }
+
+    func testEveryChatThatHasStartedOthersKnowsTheChatsUnderIt() {
+        let layout = arrange([
+            chat("lead", minutesAgo: 100), chat("a", minutesAgo: 1, startedBy: "lead"), chat("b", minutesAgo: 2, startedBy: "lead"),
+            chat("under a", minutesAgo: 3, startedBy: "a"), chat("under under a", minutesAgo: 4, startedBy: "under a"),
+            chat("alone", minutesAgo: 50),
+        ])
+        // What goes with a chat when it is archived: all of it, from wherever in the family the chat is.
+        XCTAssertEqual(layout.under["claude-cli:lead"]?.map(\.title), ["a", "under a", "under under a", "b"])
+        XCTAssertEqual(layout.under["claude-cli:a"]?.map(\.title), ["under a", "under under a"])
+        XCTAssertEqual(layout.under["claude-cli:under a"]?.map(\.title), ["under under a"])
+        XCTAssertNil(layout.under["claude-cli:b"])
+        XCTAssertNil(layout.under["claude-cli:alone"])
+    }
+
+    func testTheArchiveKeepsAChatWithTheChatsItStarted() {
+        func archived(_ name: String, daysAgo: Double, machine: String = "machine-studio", startedBy: SessionStartedBy? = nil) -> AgentBridge.ArchivedSessionInfo {
+            .init(id: "claude-cli:\(name)", displayName: name, projectName: "ripul", archivedAt: now.addingTimeInterval(-daysAgo * 86_400),
+                  provider: "claude-cli", machineId: machine, startedBy: startedBy)
+        }
+        let rows = [
+            archived("newest", daysAgo: 1),
+            // Archived on the MacBook, started by the chat on the Studio: the MacBook names it with the Studio's id.
+            archived("panels", daysAgo: 2, machine: "machine-macbook", startedBy: .init(agentId: "machine-studio/cli_design", title: "design (Studio)")),
+            archived("under panels", daysAgo: 3, machine: "machine-macbook", startedBy: .init(agentId: "cli_panels", sessionId: "claude-cli:panels", title: "panels")),
+            archived("rows", daysAgo: 4, startedBy: .init(agentId: "cli_design", sessionId: "claude-cli:design", title: "design")),
+            archived("design", daysAgo: 9),
+            // Its starter is still in the list, not in the archive.
+            archived("orphan", daysAgo: 5, startedBy: .init(agentId: "cli_live", title: "A live chat")),
+        ]
+        let layout = ArchivedSessionFamilies.arrange(rows)
+        // The family sits where its most recently archived chat would: after "newest", before "orphan".
+        XCTAssertEqual(layout.rows.map(\.displayName), ["newest", "design", "panels", "under panels", "rows", "orphan"])
+        XCTAssertEqual(layout.rows.map { layout.depth(of: $0) }, [0, 0, 1, 2, 1, 0])
+        XCTAssertEqual(layout.under(rows[4]).map(\.displayName), ["panels", "under panels", "rows"], "What comes back with the chat")
+        XCTAssertEqual(layout.under(rows[1]).map(\.displayName), ["under panels"])
+        XCTAssertTrue(layout.under(rows[5]).isEmpty)
+        XCTAssertEqual(layout.rows.last?.startedBy?.title, "A live chat", "A chat whose starter is not archived can still say whose it is")
+
+        // The same id archived on two Macs is two rows, each with its own.
+        let twice = ArchivedSessionFamilies.arrange([archived("design", daysAgo: 1), archived("design", daysAgo: 2, machine: "machine-macbook"),
+                                                    archived("rows", daysAgo: 3, machine: "machine-macbook", startedBy: .init(agentId: "cli_design"))])
+        XCTAssertEqual(twice.rows.map(\.machineId), ["machine-studio", "machine-macbook", "machine-macbook"])
+        XCTAssertEqual(twice.rows.map { twice.depth(of: $0) }, [0, 0, 1])
+    }
+
+    func testAHeadIsGivenTheChatsPutAwayUnderItToSpeakFor() {
+        let sessions = [
+            chat("lead", minutesAgo: 100), chat("a", minutesAgo: 1, startedBy: "lead"), chat("b", minutesAgo: 2, startedBy: "lead"),
+            chat("under a", minutesAgo: 3, startedBy: "a"), chat("under under a", minutesAgo: 4, startedBy: "under a"),
+            chat("alone", minutesAgo: 50),
+        ]
+        // Put away, their rows cannot say they are mid-turn or when they last spoke, so the
+        // head's row is handed every one of them, however deep, and none that is not its own.
+        let closed = arrange(sessions, closed: ["claude-cli:lead"])
+        XCTAssertEqual(closed.heads["claude-cli:lead"]?.putAway.map(\.title), ["a", "under a", "under under a", "b"])
+        // Shown, each speaks on its own row, and the head only for itself.
+        XCTAssertEqual(arrange(sessions).heads["claude-cli:lead"]?.putAway, [])
+        // A search shows the rows again.
+        XCTAssertEqual(arrange(sessions, closed: ["claude-cli:lead"], folds: false).heads["claude-cli:lead"]?.putAway, [])
     }
 
     func testAStartedChatSaysWhereItWorksOnlyWhenThatDiffersFromTheChatAboveIt() {
@@ -133,6 +211,78 @@ final class SessionFamiliesTests: XCTestCase {
         let layout = arrange([chat("design", minutesAgo: 10, machine: "studio"), chat("panels", minutesAgo: 1, startedBy: "design", machine: "macbook")])
         XCTAssertEqual(layout.visible.map(\.title), ["panels", "design"])
         XCTAssertTrue(layout.depth.isEmpty)
+    }
+
+    func testAChatStartedFromAnotherMacSitsUnderItsStarterThere() {
+        // An agent on the Studio started two chats on the MacBook. The MacBook names their
+        // starter with the Studio's id in front, and that says which Mac's row to look for.
+        let layout = arrange([
+            chat("design", minutesAgo: 60, machine: "machine-studio", folder: "ripul", branch: "main"),
+            chat("panels", minutesAgo: 1, startedBy: "design", machine: "machine-macbook", folder: "ripul", branch: "main", starterOn: "machine-studio"),
+            chat("rows", minutesAgo: 2, startedBy: "design", machine: "machine-macbook", starterOn: "machine-studio"),
+            chat("under panels", minutesAgo: 3, startedBy: "panels", machine: "machine-macbook", folder: "ripul", branch: "main"),
+            chat("other", minutesAgo: 30, machine: "machine-macbook"),
+        ])
+        XCTAssertEqual(layout.visible.map(\.title), ["design", "panels", "under panels", "rows", "other"])
+        XCTAssertEqual(layout.depth, ["claude-cli:panels": 1, "claude-cli:under panels": 2, "claude-cli:rows": 1])
+        XCTAssertEqual(layout.heads["claude-cli:design"]?.started, 3)
+        XCTAssertEqual(layout.sharesFolder, ["claude-cli:panels", "claude-cli:under panels"], "The same repository on another Mac is not said again")
+        XCTAssertEqual(layout.sharesBranch, ["claude-cli:panels", "claude-cli:under panels"])
+
+        // Put away, the head speaks for the chats on the other Mac as for any others.
+        let closed = arrange(layout.all, closed: ["claude-cli:design"])
+        XCTAssertEqual(closed.heads["claude-cli:design"]?.putAway.map(\.title), ["panels", "under panels", "rows"])
+    }
+
+    func testAnIdThatNamesAMacIsOnlyMatchedOnThatMac() {
+        // The starter is on the Studio, which is not listed. A chat of the same id on a third Mac is not it.
+        let layout = arrange([
+            chat("design", minutesAgo: 10, machine: "machine-mini"),
+            chat("panels", minutesAgo: 1, startedBy: "design", machine: "machine-macbook", starterOn: "machine-studio"),
+        ])
+        XCTAssertEqual(layout.visible.map(\.title), ["panels", "design"])
+        XCTAssertTrue(layout.depth.isEmpty)
+    }
+
+    func testTheStarterIsTheChatOnTheSameMacWhenAnotherMacHasTheSameId() {
+        // A chat moved between Macs leaves its id on both. The copy on the other Mac comes first in the list.
+        let copy = UnifiedSession(
+            id: "claude-cli:design-on-studio", title: "design on studio", lastUsed: now, gitBranch: nil, messageCount: nil,
+            projectName: nil, provider: "claude-cli", providerLabel: nil, machineName: "studio", machineId: "machine-studio",
+            matchKeys: ["cli_design"], startedBy: nil, ripulSession: nil)
+        let layout = arrange([
+            copy,
+            chat("design", minutesAgo: 10, machine: "machine-macbook"),
+            chat("panels", minutesAgo: 1, startedBy: "design", machine: "machine-macbook", rowKnown: false),
+        ])
+        XCTAssertEqual(layout.visible.map(\.title), ["design on studio", "design", "panels"])
+        XCTAssertEqual(layout.depth, ["claude-cli:panels": 1])
+        XCTAssertEqual(layout.heads.keys.map { $0 }, ["claude-cli:design"])
+    }
+
+    @MainActor
+    func testAChatNotOpenHereIsRunningWhenItsMacSaysSo() {
+        let store = SessionListStore()
+        func row(_ name: String, onHost: Bool, tab: Bool) -> UnifiedSession {
+            UnifiedSession(
+                id: "claude-cli:\(name)", title: name, lastUsed: now, gitBranch: nil, messageCount: nil, projectName: nil,
+                provider: "claude-cli", providerLabel: nil, machineName: "mac", machineId: "mac", runningOnHost: onHost,
+                ripulSession: tab ? ChatSession(id: name, sourceChatId: name, displayName: name, createdAt: now) : nil)
+        }
+        // A chat an agent has just started is open on no device: all there is to go on is its Mac's list.
+        XCTAssertTrue(store.isRunning(row("started", onHost: true, tab: false)))
+        XCTAssertTrue(store.isWorkingOrAsking(row("started", onHost: true, tab: false)), "So it is not folded away either")
+        XCTAssertFalse(store.isRunning(row("quiet", onHost: false, tab: false)))
+        // One open here has a live phase, which is newer than any list.
+        store.sessionPhases = ["live": .running, "over": .completed, "asking": .awaitingInput]
+        XCTAssertTrue(store.isRunning(row("live", onHost: false, tab: true)))
+        XCTAssertFalse(store.isRunning(row("over", onHost: true, tab: true)), "A list read before the turn ended does not outvote the phase")
+        XCTAssertFalse(store.isRunning(row("asking", onHost: false, tab: true)))
+        XCTAssertTrue(store.isWorkingOrAsking(row("asking", onHost: false, tab: true)))
+        // The flag is not kept in the cache, where it would outlive the turn.
+        let cached = try? JSONDecoder().decode(UnifiedSession.self, from: JSONEncoder().encode(row("started", onHost: true, tab: false)))
+        XCTAssertEqual(cached?.runningOnHost, false)
+        XCTAssertNotEqual(row("a", onHost: true, tab: false), row("a", onHost: false, tab: false), "A change must redraw the row")
     }
 
     func testTheStarterIsFoundByItsChatIdWhenTheHostCouldNotNameItsRow() {

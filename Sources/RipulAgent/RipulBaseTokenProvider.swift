@@ -47,7 +47,7 @@ public final class RipulBaseTokenProvider: RipulTokenProvider {
     /// The map in the app's bundle, read once. nil when the build carries none.
     private lazy var map: RipulThemeUsageMap? = {
         guard let url = Bundle.main.url(forResource: RipulThemeUsageMap.resourceName, withExtension: "json"),
-              let data = try? Data(contentsOf: url) else { return nil }
+              let data = try? Data(contentsOf: url) else { return RipulThemeRedirect.usageMap }
         return RipulThemeUsageMap(data: data)
     }()
 

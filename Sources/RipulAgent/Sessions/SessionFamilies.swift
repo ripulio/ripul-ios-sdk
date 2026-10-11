@@ -26,6 +26,10 @@ struct SessionFamilies: Equatable {
         let isClosed: Bool
         /// Closed, with a chat under it that is working or asking.
         let needsLooking: Bool
+        /// Closed: the chats under it, in family order. Their rows are not
+        /// there, so the head's row says for them what theirs would: that one
+        /// is mid-turn, and when one of them was last active.
+        let putAway: [UnifiedSession]
     }
 
     /// Every row in family order, including those folded away.
@@ -39,6 +43,9 @@ struct SessionFamilies: Equatable {
     let folds: [String: Fold]
     /// By the id of each chat that has started others.
     let heads: [String: Head]
+    /// By the id of each chat that has started others, at any depth: every
+    /// chat under it, in family order. What goes with it when it is archived.
+    let under: [String: [UnifiedSession]]
     /// Started chats in the same folder as the chat they sit under. The row
     /// above already names it, so only a chat working somewhere else says where.
     let sharesFolder: Set<String>
@@ -56,7 +63,7 @@ struct SessionFamilies: Equatable {
     ///   - closed: Heads of families whose started chats the person has put away.
     ///   - folds: False shows every row, as a search must: a match may be a folded chat.
     ///   - recency: A row's place in time; larger is more recent. Called once a row.
-    ///   - mustShow: A started chat that may not be folded away.
+    ///   - mustShow: A started chat that may not be folded away. Called once a started chat.
     static func arrange(
         _ sessions: [UnifiedSession],
         open: Set<String> = [],
@@ -72,17 +79,31 @@ struct SessionFamilies: Equatable {
         // Who is under whom. Only a list with a started chat pays for the index.
         var parent = [Int?](repeating: nil, count: sessions.count)
         if sessions.contains(where: { $0.startedBy != nil }) {
-            var rowByKey: [String: Int] = [:]
+            // A chat moved between Macs leaves its id on both, so an id can name several rows.
+            var rowsByKey: [String: [Int]] = [:]
             for (index, session) in sessions.enumerated() {
-                for key in [session.id] + session.matchKeys where rowByKey[key] == nil { rowByKey[key] = index }
+                for key in [session.id] + session.matchKeys where rowsByKey[key]?.last != index { rowsByKey[key, default: []].append(index) }
             }
             for (index, session) in sessions.enumerated() {
-                guard let starter = session.startedBy,
-                      let found = [starter.sessionId, starter.agentId].compactMap({ $0 }).lazy.compactMap({ rowByKey[$0] }).first,
-                      found != index else { continue }
-                // An id means something on the Mac that issued it and nothing on another.
-                if let here = session.machineId, let there = sessions[found].machineId, here != there { continue }
-                parent[index] = found
+                guard let starter = session.startedBy else { continue }
+                // An id means something on the Mac that issued it and nothing on
+                // another: the starter is looked for on this chat's own Mac, or,
+                // when another Mac's agent started it, on the Mac its id names.
+                var wanted: [(key: String, machineId: String?)] = []
+                if let row = starter.sessionId { wanted.append((row, session.machineId)) }
+                if let other = SessionFamilies.onAnotherMac(starter.agentId) {
+                    wanted.append((other.id, other.machineId))
+                } else {
+                    wanted.append((starter.agentId, session.machineId))
+                }
+                parent[index] = wanted.lazy.compactMap { want in
+                    rowsByKey[want.key]?.first { found in
+                        guard found != index else { return false }
+                        // A row with no Mac, or a chat with none, cannot be told apart by one.
+                        guard let here = want.machineId, let there = sessions[found].machineId else { return true }
+                        return here == there
+                    }
+                }.first
             }
             // Two chats naming each other would each wait for the other to be placed.
             for index in sessions.indices {
@@ -100,6 +121,18 @@ struct SessionFamilies: Equatable {
         for index in sessions.indices {
             if let above = parent[index] { children[above].append(index) } else { heads.append(index) }
         }
+
+        // A started chat stays in sight while it must be shown, or a chat under
+        // it must: folding it away would take that one with it.
+        var staysShown = [Bool](repeating: false, count: sessions.count)
+        @discardableResult
+        func mark(_ index: Int) -> Bool {
+            var stays = mustShow(sessions[index])
+            for child in children[index] where mark(child) { stays = true }
+            staysShown[index] = stays
+            return stays
+        }
+        for head in heads { for child in children[head] { mark(child) } }
 
         // A family sits where its most recently active member would.
         var recencyOfFamily = ownRecency
@@ -123,24 +156,25 @@ struct SessionFamilies: Equatable {
         var depth: [String: Int] = [:]
         var folds: [String: Fold] = [:]
         var headsById: [String: Head] = [:]
+        var under: [String: [UnifiedSession]] = [:]
         var sharesFolder: Set<String> = []
         var sharesBranch: Set<String> = []
         all.reserveCapacity(sessions.count)
         visible.reserveCapacity(sessions.count)
 
-        /// Places a chat and everything under it. Returns how many chats are
-        /// under it, and whether any of them is working or asking.
+        /// Places a chat and everything under it. Returns how many chats are under it.
         @discardableResult
-        func place(_ index: Int, level: Int, shown: Bool) -> (under: Int, asking: Bool) {
+        func place(_ index: Int, level: Int, shown: Bool) -> Int {
             let session = sessions[index]
             all.append(session)
+            let firstUnder = all.count
             if shown { visible.append(session) }
             if level > 0 { depth[session.id] = min(level, deepest) }
 
             let started = children[index].sorted { a, b in
                 recencyOfFamily[a] != recencyOfFamily[b] ? recencyOfFamily[a] > recencyOfFamily[b] : lastUsedOfFamily[a] > lastUsedOfFamily[b]
             }
-            guard !started.isEmpty else { return (0, false) }
+            guard !started.isEmpty else { return 0 }
 
             // Put away by the person. A search still shows every match.
             let isClosed = level == 0 && foldsFamilies && closed.contains(session.id)
@@ -149,7 +183,7 @@ struct SessionFamilies: Equatable {
             var folded: Set<Int> = []
             var fold: Fold?
             if level == 0 && foldsFamilies && !isClosed {
-                let quiet = started.filter { !mustShow(sessions[$0]) }
+                let quiet = started.filter { !staysShown[$0] }
                 let beyond = Array(quiet.dropFirst(quietShown))
                 // A control costs a row: it has to hide at least two to earn it.
                 if beyond.count >= 2 {
@@ -158,25 +192,59 @@ struct SessionFamilies: Equatable {
                     fold = Fold(parentId: session.id, count: beyond.count, isOpen: isOpen)
                 }
             }
-            var under = 0
-            var asking = false
+            var count = 0
             for child in started {
                 if sessions[child].projectName == session.projectName {
                     sharesFolder.insert(sessions[child].id)
                     if sessions[child].gitBranch == session.gitBranch { sharesBranch.insert(sessions[child].id) }
                 }
-                let below = place(child, level: level + 1, shown: shown && !isClosed && !folded.contains(child))
-                under += 1 + below.under
-                asking = asking || below.asking || mustShow(sessions[child])
+                count += 1 + place(child, level: level + 1, shown: shown && !isClosed && !folded.contains(child))
             }
+            // Everything placed since this chat is under it.
+            let chatsUnder = Array(all[firstUnder...])
+            under[session.id] = chatsUnder
             if let fold, shown, let last = visible.last { folds[last.id] = fold }
-            if level == 0 { headsById[session.id] = Head(started: under, isClosed: isClosed, needsLooking: isClosed && asking) }
-            return (under, asking)
+            if level == 0 {
+                headsById[session.id] = Head(started: count, isClosed: isClosed,
+                                             needsLooking: isClosed && started.contains { staysShown[$0] },
+                                             putAway: isClosed ? chatsUnder : [])
+            }
+            return count
         }
         for head in heads { place(head, level: 0, shown: true) }
 
-        return SessionFamilies(all: all, visible: visible, depth: depth, folds: folds, heads: headsById,
+        return SessionFamilies(all: all, visible: visible, depth: depth, folds: folds, heads: headsById, under: under,
                                sharesFolder: sharesFolder, sharesBranch: sharesBranch)
+    }
+}
+
+extension SessionListStore {
+    /// Whether a chat is mid-turn, as far as this device can tell. One open
+    /// here as a tab has a live phase. One that is not has only what its own
+    /// Mac said when its list was last read, and a chat an agent has just
+    /// started is nearly always one nobody has opened here.
+    func isRunning(_ session: UnifiedSession) -> Bool {
+        guard let chatId = session.ripulSession?.sourceChatId else { return session.runningOnHost }
+        return turnPhase(for: chatId) == .running
+    }
+
+    /// Mid-turn, or stopped to ask its person something: what a list must not fold out of sight.
+    func isWorkingOrAsking(_ session: UnifiedSession) -> Bool {
+        guard let chatId = session.ripulSession?.sourceChatId else { return session.runningOnHost }
+        return isWorkingOrAsking(chatId)
+    }
+}
+
+extension SessionFamilies {
+    /// An agent on another Mac, as the Mac that was told of it names it:
+    /// `machine-608A…/cli_<uuid>` (the web app's `remoteAgents.ts`). Chat ids
+    /// and machine ids hold no slash, so no id of the Mac itself has this form.
+    static func onAnotherMac(_ id: String) -> (machineId: String, id: String)? {
+        let prefix = "machine-"
+        guard id.hasPrefix(prefix), let cut = id.firstIndex(of: "/") else { return nil }
+        let machineId = id[..<cut], local = id[id.index(after: cut)...]
+        guard machineId.count > prefix.count, !local.isEmpty else { return nil }
+        return (String(machineId), String(local))
     }
 }
 

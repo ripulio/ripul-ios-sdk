@@ -1520,6 +1520,34 @@ public final class RipulSessionListModel {
         }
     }
 
+    /// Restore several archives one after another: a chat and the chats it
+    /// started. Each is on its own Mac, so one that fails does not stop the
+    /// rest, and what failed is said once at the end.
+    public func restoreArchivedSessions(_ sessions: [AgentBridge.ArchivedSessionInfo]) {
+        guard dataSource == nil, !sessions.isEmpty else { return }
+
+        Task {
+            defer { restoringArchivedSessionId = nil }
+            var failures: [String] = []
+            for session in sessions {
+                restoringArchivedSessionId = session.id
+                guard let machineId = session.machineId,
+                      let machine = machines.first(where: { $0.machineId == machineId }), machine.isOnline else {
+                    failures.append("\(session.displayName): its Mac is not connected")
+                    continue
+                }
+                let (success, error) = await bridge.restoreArchivedSession(machineId: machine.machineId, sessionId: session.id)
+                if success {
+                    archivedSessions.removeAll { $0.id == session.id && $0.machineId == session.machineId }
+                } else {
+                    failures.append("\(session.displayName): \(error ?? "restore failed")")
+                }
+            }
+            await loadRemoteSessions()
+            if !failures.isEmpty { openSessionError = "Could not restore:\n• " + failures.joined(separator: "\n• ") }
+        }
+    }
+
     public func deleteArchivedSession(_ session: AgentBridge.ArchivedSessionInfo) {
         guard dataSource == nil else { return }
         Task {

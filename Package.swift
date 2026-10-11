@@ -15,6 +15,9 @@ let package = Package(
         // RipulAgent, so an app can adopt it without the agent stack — and so
         // nothing Ripul-specific can leak in.
         .library(name: "RipulCommands", targets: ["RipulCommands"]),
+        // The theme for a host that changes none of its source: a build-tool plug-in a
+        // host switches on for its app target. Opt-in; a host that does not is untouched.
+        .plugin(name: "RipulThemeRedirect", targets: ["RipulThemeRedirect"]),
     ],
     dependencies: [
         .package(url: "https://github.com/gonzalezreal/swift-markdown-ui.git", from: "2.4.1"),
@@ -41,6 +44,7 @@ let package = Package(
             dependencies: ["RipulAgent"]
         ),
         .target(name: "RipulCommands"),
+        .plugin(name: "RipulThemeRedirect", capability: .buildTool()),
         .testTarget(
             name: "RipulCommandsTests",
             dependencies: ["RipulCommands"]

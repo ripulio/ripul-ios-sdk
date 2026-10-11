@@ -24,6 +24,7 @@ files under the project's folder and the SDK's own screens, and writes
   ripul-theme usage-map --explain <id>     the entry for one identifier, as JSON
   ripul-theme usage-map --no-sdk           leave the SDK's own screens out
   ripul-theme usage-map --always           write it in any configuration
+  ripul-theme usage-map --redirect         the source is unedited and themed by the RipulThemeRedirect plug-in
 
 A host's own identifier modifier is followed. A function that hands its own parameter to
 `uiKitIdentifier` or `accessibilityIdentifier`, as in
@@ -597,17 +598,23 @@ def public(token, f, extra=None):
     return out
 
 
-def build(roots, base=None):
-    """`roots`: directories, absolute or relative to `base`. A file is named relative to
-    `base` where it is under it, and to the folder that holds the SDK where it is the SDK's."""
+def build(roots, base=None, redirect=False):
+    """`roots`: directories or Swift files, absolute or relative to `base`. A file is named
+    relative to `base` where it is under it, and to the folder that holds the SDK where it
+    is the SDK's.
+
+    `redirect`: the host's source is unedited and follows the theme through the
+    `RipulThemeRedirect` plug-in. Each of its files is read as the migration would have
+    left it, so `.font(.body)` is the `body` role here as it is when the app runs. Line
+    numbers are the source's own: the migration never adds or removes a line."""
     base = pathlib.Path(base or os.getcwd()).resolve()
     read = []
     seen = set()
     for root in roots:
         top = (base / root) if not pathlib.Path(root).is_absolute() else pathlib.Path(root)
         top = top.resolve()
-        for path in sorted(top.rglob("*.swift")):
-            inside = path.relative_to(top).parts[:-1]
+        for path in ([top] if top.is_file() else sorted(top.rglob("*.swift"))):
+            inside = path.relative_to(top).parts[:-1] if not top.is_file() else ()
             if path in seen or any(part in SKIP_DIRS or part.startswith("build-") for part in inside):
                 continue
             seen.add(path)
@@ -615,6 +622,12 @@ def build(roots, base=None):
                 src = path.read_text(encoding="utf-8")
             except (OSError, UnicodeDecodeError):
                 continue
+            if redirect and SDK_SOURCES not in path.parents:
+                import theme_rewrite
+                src = theme_rewrite.rewrite(src, named=True)[0]
+                # The redirect leaves a button's style alone, where the migration changes it.
+                src = src.replace(".ripulGlassProminentButtonStyle()", ".buttonStyle(.glassProminent)")
+                src = src.replace(".ripulProminentButtonStyle()", ".buttonStyle(.borderedProminent)")
             rel = str(path)
             for anchor in (base, SDK.parent):
                 try:
@@ -897,7 +910,7 @@ def main(argv) -> int:
     if "--no-sdk" not in argv and SDK_SOURCES.is_dir():
         roots = roots + [str(SDK_SOURCES)]
     try:
-        result, stats = build(roots, base)
+        result, stats = build(roots, base, redirect="--redirect" in argv)
     except Exception as error:
         print(f"warning: theme usage map not written: {error}", file=sys.stderr)
         result, stats = {"schema": 1, "elements": {}}, {}

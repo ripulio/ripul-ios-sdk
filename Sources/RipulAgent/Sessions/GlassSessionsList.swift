@@ -187,6 +187,8 @@ public struct GlassSessionsList: View {
     /// `bridge.getGroupChatIds()`. Kept across a failed read rather than emptied.
     @State private var groupChatKeys: Set<String> = []
     @State private var showBatchArchiveConfirm = false
+    /// A chat about to be archived that has started others: the person is asked whether they go with it.
+    @State private var archivingFamily: ArchivingFamily?
     @State private var showBatchDeleteConfirm = false
     @State private var leavingInvitedSession: UnifiedSession? = nil
     @State private var quickLaunchLoading: String?
@@ -522,11 +524,13 @@ public struct GlassSessionsList: View {
                         { await refresh(); await refreshGroupChats() }
                     },
                     row: { session in
+                      // The chats put away under this one: its row speaks for them.
+                      let putAway = families.heads[session.id]?.putAway ?? []
                       VStack(alignment: .leading, spacing: 0) {
                         UnifiedSessionRow(
                             sessionStore: sessionStore,
                             session: session,
-                            cachedLastActive: lastActiveBySessionId[session.id],
+                            cachedLastActive: ([session] + putAway).compactMap { lastActiveBySessionId[$0.id] }.max(),
                             // Spinner runs while navigating — keyed on navigatingToSessionId
                             // (cleared after slide animation) rather than openingUnifiedSessionId
                             // (cleared before onSelect fires, too early for the sweep + animation).
@@ -553,6 +557,7 @@ public struct GlassSessionsList: View {
                             startedChats: families.heads[session.id]?.started ?? 0,
                             startedChatsClosed: families.heads[session.id]?.isClosed ?? false,
                             startedChatsNeedLooking: families.heads[session.id]?.needsLooking ?? false,
+                            startedChatsPutAway: putAway,
                             onToggleStartedChats: {
                                 if closedFamilies.contains(session.id) { closedFamilies.remove(session.id) } else { closedFamilies.insert(session.id) }
                             },
@@ -579,7 +584,7 @@ public struct GlassSessionsList: View {
                         .tint(Color.ripul(.warning))
                         } else if cloudFeatures {
                         Button {
-                            onArchiveUnifiedSession(session)
+                            archive(session)
                         } label: {
                             Label("Archive", systemImage: "archivebox.fill")
                         }
@@ -662,7 +667,7 @@ public struct GlassSessionsList: View {
         .uiKitIdentifier("GlassSessionsList.contextMenu.removeInvitedButton")
         } else if cloudFeatures {
         Button {
-            onArchiveUnifiedSession(session)
+            archive(session)
         } label: {
             Label("Archive", systemImage: "archivebox")
         }
@@ -1039,10 +1044,7 @@ public struct GlassSessionsList: View {
             folds: !isSearching && !activeGroupFilter && activeProjectFilter == nil && activeTagFilter == nil,
             isPinned: { sessionStore.isPinned(anyOf: $0.readStateKeys) },
             recency: sortBucket(for:),
-            mustShow: { session in
-                guard let chatId = session.ripulSession?.sourceChatId else { return false }
-                return sessionStore.isWorkingOrAsking(chatId)
-            }
+            mustShow: { sessionStore.isWorkingOrAsking($0) }
         )
     }
 
@@ -1376,8 +1378,46 @@ public struct GlassSessionsList: View {
         #endif
     }
 
+    /// A chat to archive, and the chats under it that can go with it.
+    private struct ArchivingFamily {
+        let session: UnifiedSession
+        let started: [UnifiedSession]
+        /// How many of them are mid-turn, said before they are put away.
+        let working: Int
+    }
+
+    /// Archives a chat. One that has started others asks first whether they
+    /// go with it: left behind, they stand in the list with no chat above them.
+    private func archive(_ session: UnifiedSession) {
+        // Every chat, not what a search or filter leaves: a started chat that
+        // does not match is still this chat's.
+        let layout = SessionFamilies.arrange(unifiedSessions, folds: false, recency: { _ in 0 })
+        let started = (layout.under[session.id] ?? []).filter { !$0.isSharedGuest }
+        guard !started.isEmpty else { return onArchiveUnifiedSession(session) }
+        archivingFamily = ArchivingFamily(session: session, started: started,
+                                          working: started.filter { sessionStore.isRunning($0) }.count)
+    }
+
     private func presentations<Content: View>(on content: Content) -> some View {
         makeColdAlert(on: content)
+        .confirmationDialog(
+            archivingFamily.map { "Archive “\($0.session.title)”?" } ?? "",
+            isPresented: Binding(get: { archivingFamily != nil }, set: { if !$0 { archivingFamily = nil } }),
+            titleVisibility: .visible,
+            presenting: archivingFamily
+        ) { family in
+            let count = family.started.count
+            Button("Archive With Its \(count) Started Chat\(count == 1 ? "" : "s")", role: .destructive) {
+                // The started chats first, deepest first, so the chat itself is the last to go.
+                onBatchArchive(family.started.reversed() + [family.session])
+            }
+            Button("Archive This Chat Only") { onArchiveUnifiedSession(family.session) }
+            Button("Cancel", role: .cancel) {}
+        } message: { family in
+            let count = family.started.count
+            Text("It started \(count) chat\(count == 1 ? " that is" : "s that are") still in the list."
+                 + (family.working == 0 ? "" : " \(family.working) of them \(family.working == 1 ? "is" : "are") working."))
+        }
         .confirmationDialog("Archive \(selectedSessionIds.count) sessions?", isPresented: $showBatchArchiveConfirm, titleVisibility: .visible) {
             Button("Archive \(selectedSessionIds.count) Sessions", role: .destructive) {
                 let sessions = selectedSessions

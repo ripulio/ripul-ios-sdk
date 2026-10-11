@@ -5,6 +5,8 @@
   ripul-theme check [<file or directory>...]   list the fonts and colours still written at the call site
   ripul-theme lint [<git range>]               check that a migration diff kept every value
   ripul-theme usage-map                        in an Xcode build phase: write the View Explorer's token map
+  ripul-theme redirect --out <file> <dir>...   what the RipulThemeRedirect plug-in runs: the file that themes unedited source
+  ripul-theme install-skill [<repository>]     copy the "theme an app" skill to where a coding agent in that repository finds it
 
 `ripul-theme <command> --help` says more. docs/theming-for-hosts.md is the page for an
 app adopting the theme; docs/theming.md is the full contract.
@@ -13,7 +15,54 @@ import pathlib
 import sys
 
 sys.dont_write_bytecode = True
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+TOOLS = pathlib.Path(__file__).resolve().parent
+sys.path.insert(0, str(TOOLS))
+
+SKILL = "theme-an-app"
+# Where each agent looks for a skill inside a repository. Claude Code reads .claude/skills
+# and Codex reads .agents/skills (both seen listing a skill placed there, Claude Code
+# 2.1.283 and Codex 0.159.3, October 2026).
+SKILL_HOMES = {"claude": ".claude/skills", "codex": ".agents/skills"}
+INSTALL_SKILL_HELP = """Copy the "theme an app" skill into a repository, for a coding agent working there.
+
+  ripul-theme install-skill                    into the current directory, for every agent below
+  ripul-theme install-skill <repository>       into that repository
+  ripul-theme install-skill --agent claude     only .claude/skills/theme-an-app/SKILL.md   (Claude Code)
+  ripul-theme install-skill --agent codex      only .agents/skills/theme-an-app/SKILL.md   (Codex)
+
+The skill is the procedure for giving an app a theme with this package: what to measure
+first, the level that changes no source, the theme document and its fonts, the migration,
+and the proof that nothing moved. It is a copy: run this again after moving to a newer
+release of the package. An agent that reads neither folder can be pointed at the file.
+"""
+
+
+def install_skill(rest) -> int:
+    if "--help" in rest or "-h" in rest:
+        print(INSTALL_SKILL_HELP)
+        return 0
+    agents = list(SKILL_HOMES)
+    if "--agent" in rest:
+        at = rest.index("--agent")
+        chosen = rest[at + 1] if at + 1 < len(rest) else ""
+        if chosen != "all" and chosen not in SKILL_HOMES:
+            print(f"ripul-theme install-skill: --agent takes one of: {', '.join(SKILL_HOMES)}, all", file=sys.stderr)
+            return 2
+        agents = list(SKILL_HOMES) if chosen == "all" else [chosen]
+        rest = rest[:at] + rest[at + 2:]
+    repository = pathlib.Path(rest[0] if rest else ".").resolve()
+    if not repository.is_dir():
+        print(f"ripul-theme install-skill: {repository} is not a directory", file=sys.stderr)
+        return 2
+    source = TOOLS / "skills" / SKILL / "SKILL.md"
+    text = source.read_text(encoding="utf-8")
+    for agent in agents:
+        target = repository / SKILL_HOMES[agent] / SKILL / "SKILL.md"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text, encoding="utf-8")
+        print(f"ripul-theme install-skill: wrote {target.relative_to(repository)} ({agent})")
+    print(f'Ask the agent to "use the {SKILL} skill", or just to give the app a theme. Commit the files if the team should have them.')
+    return 0
 
 
 def main(argv) -> int:
@@ -39,6 +88,14 @@ def main(argv) -> int:
             print(theme_usage_map.__doc__)
             return 0
         return theme_usage_map.main(rest)
+    if command == "redirect":
+        import theme_redirect
+        if not rest or "--help" in rest:
+            print(theme_redirect.__doc__)
+            return 0
+        return theme_redirect.main(rest)
+    if command == "install-skill":
+        return install_skill(rest)
     print(__doc__)
     return 0 if command in ("", "help", "--help", "-h") else 2
 

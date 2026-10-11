@@ -40,6 +40,16 @@ extension AgentBridge {
         /// The machine the archive was discovered on — required to route the restore
         /// call back to the correct host. Stamped client-side after the per-machine fetch.
         public let machineId: String?
+        /// The agent that started this chat, when one did. The archive shows
+        /// it under that chat, and the two can be brought back together.
+        public let startedBy: SessionStartedBy?
+
+        public init(id: String, displayName: String, projectName: String?, archivedAt: Date, provider: String?,
+                    machineId: String?, startedBy: SessionStartedBy? = nil) {
+            self.id = id; self.displayName = displayName; self.projectName = projectName
+            self.archivedAt = archivedAt; self.provider = provider; self.machineId = machineId
+            self.startedBy = startedBy
+        }
     }
 
     /// List archived sessions across all .archive/ directories on the host.
@@ -69,7 +79,8 @@ extension AgentBridge {
                 projectName: projectName,
                 archivedAt: Date(timeIntervalSince1970: archivedAtMs / 1000),
                 provider: provider,
-                machineId: machineId
+                machineId: machineId,
+                startedBy: SessionStartedBy(wire: s["startedBy"])
             )
         }
         NSLog("[AgentBridge] listArchivedSessions: %d sessions on %@", parsed.count, machineId)

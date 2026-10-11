@@ -41,6 +41,54 @@ extension AgentBridge {
         }
     }
 
+    /// Where in the chat a milestone was reached: a message, a moment, or both.
+    public struct MilestoneAnchor: Hashable {
+        public let correlationId: String?
+        /// Epoch milliseconds.
+        public let ts: Double
+    }
+
+    /// A commit the chat made.
+    public struct StoryCommit: Hashable, Identifiable {
+        public let sha: String
+        public let subject: String
+        public let repo: String
+        public let timestamp: String?
+        public var id: String { sha }
+    }
+
+    /// Something the chat achieved, with the commits and deployments that
+    /// went into it. The page brackets those (`storyFromMetadata`); nothing
+    /// here works them out again.
+    public struct StoryMilestone: Hashable, Identifiable {
+        public let id: String
+        public let title: String
+        public let detail: String?
+        /// "delivered" or "decided".
+        public let kind: String
+        public let at: String
+        public let anchor: MilestoneAnchor?
+        /// Where its stretch of work began: the previous milestone's anchor.
+        public let startAnchor: MilestoneAnchor?
+        /// A person wrote or changed it.
+        public let persons: Bool
+        /// "3 commits · 1 iPhone build", or empty.
+        public let summary: String
+        public let commits: [StoryCommit]
+        public let deployments: [DeploymentEntry]
+
+        public var isDecided: Bool { kind == "decided" }
+    }
+
+    /// A chat's milestones, newest first, and the work since the last one.
+    public struct ChatStory: Hashable {
+        public let goal: String?
+        public let openSummary: String
+        public let milestones: [StoryMilestone]
+
+        public var isEmpty: Bool { goal == nil && openSummary.isEmpty && milestones.isEmpty }
+    }
+
     /// Full session metadata fetched from the API.
     public struct SessionMetadata {
         public let id: String
@@ -54,13 +102,15 @@ extension AgentBridge {
         public let modelHistory: [String]
         public let createdAt: String?
         public let updatedAt: String?
+        /// Nil when the page is on a build from before milestones.
+        public let story: ChatStory?
     }
 
     /// Fetch full session metadata from the API for a live session.
     public func getSessionMetadata(sessionId: String) async -> SessionMetadata? {
         let reply = await callPage("__ripulGetSessionMetadata", [sessionId], .ifMissing("{ error: 'not ready' }"))
         guard let raw = reply.dictionary?["metadata"] as? [String: Any] else { return nil }
-        return Self.parseSessionMetadata(raw)
+        return Self.parseSessionMetadata(raw, story: reply.dictionary?["story"] as? [String: Any])
     }
 
     /// Per-chat storage breakdown — total bytes + top buckets by tool/method.
@@ -125,9 +175,23 @@ extension AgentBridge {
     }
 
     /// Scroll the chat to one message by its correlationId. A message the
-    /// scroller hasn't loaded is a no-op.
+    /// scroller hasn't loaded is a no-op: there is no time to page back to.
     public func scrollToChatMessage(correlationId: String) {
         Task { _ = await callPage("__ripulScrollToChatMessage", [correlationId]) }
+    }
+
+    /// Scroll the chat to an anchor: a message, a moment (epoch milliseconds),
+    /// or both. Given a time, the page loads older history until the anchor is
+    /// there, and says so in the chat if that part is gone.
+    public func scrollToChatAnchor(correlationId: String?, ts: Double?) {
+        let id: Any = correlationId ?? NSNull()
+        let time: Any = ts ?? NSNull()
+        Task { _ = await callPage("__ripulScrollToChatMessage", [id, time]) }
+    }
+
+    /// Scroll the chat to where a milestone was reached.
+    public func scrollToChatAnchor(_ anchor: MilestoneAnchor) {
+        scrollToChatAnchor(correlationId: anchor.correlationId, ts: anchor.ts)
     }
 
     /// A single tool entry returned by `__ripulGetResolvedToolsForSession`.
@@ -209,11 +273,60 @@ extension AgentBridge {
     public func patchSessionMetadata(sessionId: String, patch: [String: Any]) async -> SessionMetadata? {
         let reply = await callPage("__ripulPatchSessionMetadata", [sessionId, patch], .ifMissing("{ error: 'not ready' }"))
         guard let raw = reply.dictionary?["metadata"] as? [String: Any] else { return nil }
-        return Self.parseSessionMetadata(raw)
+        return Self.parseSessionMetadata(raw, story: reply.dictionary?["story"] as? [String: Any])
+    }
+
+    private static func parseAnchor(_ raw: Any?) -> MilestoneAnchor? {
+        guard let dict = raw as? [String: Any], let ts = (dict["ts"] as? NSNumber)?.doubleValue else { return nil }
+        return MilestoneAnchor(correlationId: dict["correlationId"] as? String, ts: ts)
+    }
+
+    private static func parseDeployments(_ raw: Any?) -> [DeploymentEntry] {
+        (raw as? [[String: Any]])?.compactMap { entry -> DeploymentEntry? in
+            guard let target = entry["target"] as? String else { return nil }
+            return DeploymentEntry(
+                id: entry["id"] as? String ?? UUID().uuidString,
+                target: target,
+                timestamp: entry["timestamp"] as? String
+            )
+        } ?? []
+    }
+
+    /// Parse the story the page bracketed (`storyFromMetadata`).
+    static func parseChatStory(_ raw: [String: Any]?) -> ChatStory? {
+        guard let raw else { return nil }
+        let milestones = (raw["milestones"] as? [[String: Any]])?.compactMap { entry -> StoryMilestone? in
+            guard let id = entry["id"] as? String, let title = entry["title"] as? String else { return nil }
+            let commits = (entry["commits"] as? [[String: Any]])?.compactMap { commit -> StoryCommit? in
+                guard let sha = commit["sha"] as? String else { return nil }
+                return StoryCommit(
+                    sha: sha,
+                    subject: commit["subject"] as? String ?? "",
+                    repo: commit["repo"] as? String ?? "",
+                    timestamp: commit["timestamp"] as? String
+                )
+            } ?? []
+            return StoryMilestone(
+                id: id,
+                title: title,
+                detail: entry["detail"] as? String,
+                kind: entry["kind"] as? String ?? "delivered",
+                at: entry["at"] as? String ?? "",
+                anchor: parseAnchor(entry["anchor"]),
+                startAnchor: parseAnchor(entry["startAnchor"]),
+                persons: entry["persons"] as? Bool ?? false,
+                summary: entry["summary"] as? String ?? "",
+                commits: commits,
+                deployments: parseDeployments(entry["deployments"])
+            )
+        } ?? []
+        let goal = (raw["goal"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+        let open = raw["open"] as? [String: Any]
+        return ChatStory(goal: goal, openSummary: open?["summary"] as? String ?? "", milestones: milestones)
     }
 
     /// Parse a raw JSON dictionary into a SessionMetadata.
-    private static func parseSessionMetadata(_ raw: [String: Any]) -> SessionMetadata {
+    private static func parseSessionMetadata(_ raw: [String: Any], story: [String: Any]? = nil) -> SessionMetadata {
         let filesEdited = (raw["filesEdited"] as? [[String: Any]])?.compactMap { entry -> FileEditEntry? in
             guard let name = entry["fileName"] as? String else { return nil }
             return FileEditEntry(
@@ -234,14 +347,7 @@ extension AgentBridge {
             )
         } ?? []
 
-        let deployments = (raw["deployments"] as? [[String: Any]])?.compactMap { entry -> DeploymentEntry? in
-            guard let target = entry["target"] as? String else { return nil }
-            return DeploymentEntry(
-                id: entry["id"] as? String ?? UUID().uuidString,
-                target: target,
-                timestamp: entry["timestamp"] as? String
-            )
-        } ?? []
+        let deployments = parseDeployments(raw["deployments"])
 
         let contributors = (raw["contributors"] as? [[String: Any]])?.compactMap { entry -> ContributorEntry? in
             guard let clientId = entry["clientId"] as? String,
@@ -278,7 +384,8 @@ extension AgentBridge {
             model: raw["model"] as? String,
             modelHistory: raw["modelHistory"] as? [String] ?? [],
             createdAt: raw["createdAt"] as? String,
-            updatedAt: raw["updatedAt"] as? String
+            updatedAt: raw["updatedAt"] as? String,
+            story: parseChatStory(story)
         )
     }
 }
