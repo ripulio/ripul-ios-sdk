@@ -5,7 +5,7 @@
       "clientType": "web",
       "displayName": "Peter Maude",
       "firstSeenAt": "2026-10-11T08:11:23.458Z",
-      "lastSeenAt": "2026-10-11T08:28:44.443Z"
+      "lastSeenAt": "2026-10-11T08:44:38.393Z"
     }
   ],
   "createdAt": "2026-10-11T08:11:23.625Z",
@@ -49,11 +49,11 @@
       "group": "web",
       "id": "human-user_3AONWcmlO5RS8dj3lRzQZtYXFxA",
       "kind": "human",
-      "lastSeenAt": "2026-10-11T08:28:44.570Z"
+      "lastSeenAt": "2026-10-11T08:44:38.531Z"
     }
   ],
   "tags": [
     "plan:theme-aware-codebase@mdvaea"
   ],
-  "updatedAt": "2026-10-11T08:28:44.570Z"
+  "updatedAt": "2026-10-11T09:05:21.556Z"
 }
