@@ -1,0 +1,102 @@
+{
+  "contributors": [
+    {
+      "clientId": "web-user_3AONWcmlO5RS8dj3lRzQZtYXFxA",
+      "clientType": "web",
+      "displayName": "Peter Maude",
+      "firstSeenAt": "2026-10-10T10:03:55.666Z",
+      "lastSeenAt": "2026-10-11T07:36:10.171Z"
+    }
+  ],
+  "createdAt": "2026-10-10T10:03:55.610Z",
+  "deployments": [
+    {
+      "id": "dep_mv2aqx7n_xkh9",
+      "target": "macos",
+      "timestamp": "2026-10-10T11:14:09.315Z"
+    },
+    {
+      "id": "dep_mv2aqxba_xeup",
+      "target": "macos",
+      "timestamp": "2026-10-10T11:14:09.429Z"
+    },
+    {
+      "id": "dep_mv2axbto_kjch",
+      "target": "macos",
+      "timestamp": "2026-10-10T11:19:08.063Z"
+    },
+    {
+      "id": "dep_mv2h6hl8_maz3",
+      "target": "macos",
+      "timestamp": "2026-10-10T14:14:13.124Z"
+    },
+    {
+      "id": "dep_mv2jxm9h_szko",
+      "target": "macos",
+      "timestamp": "2026-10-10T15:31:18.201Z"
+    },
+    {
+      "id": "dep_mv2jxm9i_tmlf",
+      "target": "macos",
+      "timestamp": "2026-10-10T15:31:18.382Z"
+    },
+    {
+      "id": "dep_mv2lmrmu_ihuc",
+      "target": "macos",
+      "timestamp": "2026-10-10T16:18:51.107Z"
+    },
+    {
+      "id": "dep_mv2pslon_v9lz",
+      "target": "macos",
+      "timestamp": "2026-10-10T18:15:21.958Z"
+    },
+    {
+      "id": "dep_mv3ihyv2_ao6g",
+      "target": "macos",
+      "timestamp": "2026-10-11T07:38:54.537Z"
+    }
+  ],
+  "filesEdited": [
+    {
+      "editCount": 7,
+      "fileName": "theme-aware-codebase.md",
+      "filePath": "/Users/petermaude/Documents/ripul/docs/plans/theme-aware-codebase.md",
+      "firstSeenAt": "2026-10-10T10:44:15.306Z",
+      "lastSeenAt": "2026-10-10T18:15:21.801Z",
+      "toolName": "Write"
+    },
+    {
+      "editCount": 6,
+      "fileName": "feedback_finish_the_release_chain.md",
+      "filePath": "/Users/petermaude/.claude/projects/-Users-petermaude-Documents-ripul/memory/feedback_finish_the_release_chain.md",
+      "firstSeenAt": "2026-10-10T18:07:51.315Z",
+      "lastSeenAt": "2026-10-11T07:39:04.867Z",
+      "toolName": "Write"
+    }
+  ],
+  "id": "cli_afe2bbcd-ec7b-40bb-a0ee-8265f88d52db",
+  "modelHistory": [],
+  "notes": [],
+  "participants": [
+    {
+      "displayName": "Claude",
+      "firstSeenAt": "2026-10-10T10:03:55.589Z",
+      "group": "Local · Claude Code CLI",
+      "id": "claude-cli-raw-synthetic",
+      "kind": "agent",
+      "lastSeenAt": "2026-10-11T07:36:10.072Z"
+    },
+    {
+      "displayName": "Peter Maude",
+      "firstSeenAt": "2026-10-10T10:03:55.767Z",
+      "group": "web",
+      "id": "human-user_3AONWcmlO5RS8dj3lRzQZtYXFxA",
+      "kind": "human",
+      "lastSeenAt": "2026-10-11T07:36:10.243Z"
+    }
+  ],
+  "tags": [
+    "plan:theme-aware-codebase@mdvaea"
+  ],
+  "updatedAt": "2026-10-11T07:39:04.867Z"
+}
