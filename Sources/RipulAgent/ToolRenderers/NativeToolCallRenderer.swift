@@ -30,11 +30,13 @@ struct NativeToolCallRenderer: View {
                 NativeToolSection(title: "Task") { Markdown(content.string("prompt", "message", "task")) }
                 NativeToolParameters(args: content.args, excluding: ["description", "subagent_type", "agent_type", "family", "prompt", "message", "task"])
                 NativeToolResultView(content: content, title: "Response")
+            case .agentComms: NativeAgentCommsToolView(content: content)
+            case .agentList: NativeAgentListToolView(content: content)
             case .tools: NativeDiscoveredToolsView(content: content)
             case .host:
                 if let object = content.output?.objectValue {
-                    Label(object.string("machineName") ?? "Host", systemImage: "desktopcomputer").font(.headline)
-                    if let state = object.string("relayState") { Text("Relay: \(state)").foregroundStyle(.secondary) }
+                    Label(object.string("machineName") ?? "Host", systemImage: "desktopcomputer").font(.ripul(.headline))
+                    if let state = object.string("relayState") { Text("Relay: \(state)").foregroundStyle(.ripul(.textSecondary)) }
                     NativeToolValueView(value: .object(object.filter { !["machineName", "relayState"].contains($0.key) }))
                 } else { NativeToolResultView(content: content) }
                 NativeToolParameters(args: content.args)
@@ -58,10 +60,10 @@ private struct NativeTerminalToolView: View {
         let presentation = content.call.commandPresentation
         let command = presentation?.command ?? content.string("command", "cmd", "CommandLine", "chars")
         let description = content.string("description", "Description")
-        if !description.isEmpty, description != summaryTitle { Text(description).font(.subheadline) }
+        if !description.isEmpty, description != summaryTitle { Text(description).font(.ripul(.subheadline)) }
         if command.isEmpty {
             NativeToolSection(title: "Running command") {
-                Text("Read output from the running command").foregroundStyle(.secondary)
+                Text("Read output from the running command").foregroundStyle(.ripul(.textSecondary))
             }
         } else if let source = presentation?.source, let language = presentation?.language {
             NativeToolCodeBlock(text: source, title: "Script", numbered: true, syntax: .language(language), identifier: "NativeTool.command")
@@ -69,7 +71,7 @@ private struct NativeTerminalToolView: View {
             NativeToolCodeBlock(text: command, title: "Command", syntax: .shell, commandBreakLines: presentation?.commandBreakLines ?? [], commandPipeLines: presentation?.commandPipeLines ?? [], identifier: "NativeTool.command")
         }
         let directory = content.string("workdir", "cwd", "working_directory")
-        if !directory.isEmpty { Label(directory, systemImage: "folder").font(.caption).textSelection(.enabled) }
+        if !directory.isEmpty { Label(directory, systemImage: "folder").font(.ripul(.caption)).textSelection(.enabled) }
         NativeToolParameters(args: content.args, excluding: ["command", "cmd", "CommandLine", "chars", "description", "Description", "workdir", "cwd", "working_directory"])
         NativeToolResultView(content: content, title: "Output", textSyntax: .automatic)
     }
@@ -103,12 +105,12 @@ private struct NativeEditToolView: View {
             else if !files.isEmpty {
                 ForEach(Array(files.enumerated()), id: \.offset) { _, file in
                     NativeToolPath(path: file.path)
-                    Text(file.kind).font(.caption).foregroundStyle(.secondary)
+                    Text(file.kind).font(.ripul(.caption)).foregroundStyle(.ripul(.textSecondary))
                     if let lines = file.lines { NativeToolDiffView(lines: lines, path: file.path, includesPrefix: true) }
-                    else { Text("No diff was recorded for this file.").foregroundStyle(.secondary) }
+                    else { Text("No diff was recorded for this file.").foregroundStyle(.ripul(.textSecondary)) }
                     NativeToolParameters(args: file.fields)
                 }
-            } else { Text(content.running ? "Waiting for file changes…" : "No patch was recorded.").foregroundStyle(.secondary) }
+            } else { Text(content.running ? "Waiting for file changes…" : "No patch was recorded.").foregroundStyle(.ripul(.textSecondary)) }
         } else if let chunks = content.args["_chunks"]?.toolArray ?? content.args["edits"]?.toolArray {
             ForEach(Array(chunks.enumerated()), id: \.offset) { index, chunk in
                 let fields = chunk.objectValue ?? [:]
@@ -122,7 +124,7 @@ private struct NativeEditToolView: View {
             NativeToolDiffView(lines: NativeToolDiffLine.compare(
                 old: content.string("old_string", "TargetContent"), new: content.string("new_string", "ReplacementContent")), path: content.filePath)
         }
-        if content.args.bool("replace_all") == true { Label("Replace all occurrences", systemImage: "arrow.triangle.2.circlepath").font(.caption) }
+        if content.args.bool("replace_all") == true { Label("Replace all occurrences", systemImage: "arrow.triangle.2.circlepath").font(.ripul(.caption)) }
         NativeToolParameters(args: content.args, excluding: ["file_path", "path", "TargetFile", "old_string", "new_string", "TargetContent", "ReplacementContent", "replace_all", "_chunks", "ReplacementChunks", "edits", "patch", "input", "patch_text", "changes"])
         // The durable Codex result repeats the same file map already drawn above.
         if content.args["changes"] == nil || content.output != content.args["changes"] { NativeToolResultView(content: content) }
@@ -142,15 +144,15 @@ private struct NativeToolDiffView: View {
         let added = lines.filter { $0.kind == .added }.count
         let removed = lines.filter { $0.kind == .removed }.count
         NativeToolSection(title: "Changes") {
-            Text(added == 0 && removed == 0 ? "No changes" : "\(added) added · \(removed) removed").font(.caption).foregroundStyle(.secondary)
+            Text(added == 0 && removed == 0 ? "No changes" : "\(added) added · \(removed) removed").font(.ripul(.caption)).foregroundStyle(.ripul(.textSecondary))
             LazyVStack(alignment: .leading, spacing: 0) {
                 ForEach(Array(lines.prefix(visibleLines).enumerated()), id: \.offset) { index, line in
-                    let color: Color = line.kind == .added ? .green : line.kind == .removed ? .red : .secondary
+                    let color: Color = line.kind == .added ? .green : line.kind == .removed ? .red : .ripul(.textSecondary) // theme-exempt: diff colours are data
                     HStack(alignment: .top, spacing: 8) {
                         if !includesPrefix { Text(line.kind == .added ? "+" : line.kind == .removed ? "−" : " ").foregroundStyle(color) }
                         Text(highlightedRequest == request && index < highlighted.count && !line.text.isEmpty ? highlighted[index] : AttributedString(line.text.isEmpty ? " " : line.text)).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .font(.system(.caption, design: .monospaced)).padding(.horizontal, 8).padding(.vertical, 3)
+                    .font(.ripul(.caption, family: .code)).padding(.horizontal, 8).padding(.vertical, 3)
                     .background(line.kind == .context ? Color.clear : color.opacity(0.12))
                 }
                 if lines.count > visibleLines { Button("Show more changes") { visibleLines += 200 }.padding(8) }
@@ -170,18 +172,18 @@ private struct NativeSearchToolView: View {
     @State private var visibleRows = 100
     var body: some View {
         let pattern = content.string("pattern", "Query", "query")
-        Label(pattern.isEmpty ? "All files" : pattern, systemImage: "magnifyingglass").font(.system(.body, design: .monospaced)).textSelection(.enabled)
+        Label(pattern.isEmpty ? "All files" : pattern, systemImage: "magnifyingglass").font(.ripul(.body, family: .code)).textSelection(.enabled)
         let path = content.string("path", "SearchPath", "DirectoryPath")
-        if !path.isEmpty { Label(path, systemImage: "folder").font(.caption).textSelection(.enabled) }
+        if !path.isEmpty { Label(path, systemImage: "folder").font(.ripul(.caption)).textSelection(.enabled) }
         let value = content.output?.objectValue?["files"] ?? content.output
         if let text = ToolValue.plainText(value) {
             let lines = text.components(separatedBy: "\n").filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
             NativeToolSection(title: "Matches") {
-                Text(lines.isEmpty ? "No matches found" : "\(lines.count) results").font(.caption).foregroundStyle(.secondary)
+                Text(lines.isEmpty ? "No matches found" : "\(lines.count) results").font(.ripul(.caption)).foregroundStyle(.ripul(.textSecondary))
                 LazyVStack(alignment: .leading, spacing: 10) {
                     ForEach(Array(lines.prefix(visibleRows).enumerated()), id: \.offset) { _, line in
-                        Label { Text(line).font(.system(.caption, design: .monospaced)).textSelection(.enabled) }
-                            icon: { Image(systemName: content.kind == .glob ? "doc" : "text.magnifyingglass").foregroundStyle(.secondary) }
+                        Label { Text(line).font(.ripul(.caption, family: .code)).textSelection(.enabled) }
+                            icon: { Image(systemName: content.kind == .glob ? "doc" : "text.magnifyingglass").foregroundStyle(.ripul(.textSecondary)) }
                     }
                     if lines.count > visibleRows { Button("Show more matches") { visibleRows += 200 } }
                 }.accessibilityIdentifier("NativeTool.matches")
@@ -197,18 +199,18 @@ private struct NativeTodoToolView: View {
         let todos = content.args["todos"]?.toolArray ?? content.args["plan"]?.toolArray ?? []
         let completed = todos.filter { $0.objectValue?.string("status") == "completed" }.count
         NativeToolSection(title: "Tasks") {
-            ProgressView(value: Double(completed), total: Double(max(todos.count, 1))) { Text("\(completed) of \(todos.count) completed").font(.caption) }
+            ProgressView(value: Double(completed), total: Double(max(todos.count, 1))) { Text("\(completed) of \(todos.count) completed").font(.ripul(.caption)) }
             ForEach(Array(todos.enumerated()), id: \.offset) { _, todo in
                 let fields = todo.objectValue ?? [:]
                 let state = fields.string("status") ?? "pending"
                 Label {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(fields.string("content") ?? fields.string("step") ?? "Task").strikethrough(state == "completed")
-                        if state == "in_progress", let active = fields.string("activeForm") { Text(active).font(.caption).foregroundStyle(.secondary) }
+                        if state == "in_progress", let active = fields.string("activeForm") { Text(active).font(.ripul(.caption)).foregroundStyle(.ripul(.textSecondary)) }
                     }
                 } icon: {
                     Image(systemName: state == "completed" ? "checkmark.circle.fill" : state == "in_progress" ? "play.circle" : "circle")
-                        .foregroundStyle(state == "completed" ? Color.green : state == "in_progress" ? .blue : .secondary)
+                        .foregroundStyle(state == "completed" ? Color.ripul(.success) : state == "in_progress" ? Color.ripul(.info) : Color.ripul(.textSecondary))
                 }
             }
         }.accessibilityIdentifier("NativeTool.todos")
@@ -223,7 +225,7 @@ private struct NativeWebToolView: View {
         let address = content.string("url", "uri")
         let query = content.string("query", "search_term")
         if !query.isEmpty { Label(query, systemImage: "magnifyingglass").textSelection(.enabled) }
-        if content.kind == .http { Text(content.string("method").isEmpty ? "GET" : content.string("method").uppercased()).font(.headline) }
+        if content.kind == .http { Text(content.string("method").isEmpty ? "GET" : content.string("method").uppercased()).font(.ripul(.headline)) }
         if let url = URL(string: address), ["http", "https"].contains(url.scheme) { Link(address, destination: url).textSelection(.enabled) }
         let prompt = content.string("prompt", "question")
         if !prompt.isEmpty { Text(prompt).textSelection(.enabled) }
@@ -234,9 +236,9 @@ private struct NativeWebToolView: View {
                     let fields = match.objectValue ?? [:]
                     VStack(alignment: .leading, spacing: 6) {
                         if let address = fields.string("url"), let url = URL(string: address), ["http", "https"].contains(url.scheme) {
-                            Link(fields.string("title") ?? address, destination: url).font(.headline)
+                            Link(fields.string("title") ?? address, destination: url).font(.ripul(.headline))
                         }
-                        if let snippet = fields.string("snippet") ?? fields.string("description") { Text(snippet).font(.callout).textSelection(.enabled) }
+                        if let snippet = fields.string("snippet") ?? fields.string("description") { Text(snippet).font(.ripul(.callout)).textSelection(.enabled) }
                     }
                     Divider()
                 }
@@ -253,12 +255,12 @@ private struct NativeDiscoveredToolsView: View {
         NativeToolParameters(args: content.args)
         if let tools = content.output?.objectValue?["tools"]?.toolArray {
             NativeToolSection(title: "\(tools.count) tools available") {
-                if let message = content.output?.objectValue?.string("message") { Text(message).foregroundStyle(.secondary) }
+                if let message = content.output?.objectValue?.string("message") { Text(message).foregroundStyle(.ripul(.textSecondary)) }
                 ForEach(Array(tools.enumerated()), id: \.offset) { _, tool in
                     let fields = tool.objectValue ?? [:]
                     VStack(alignment: .leading, spacing: 6) {
-                        Label(ToolValue.title(fields.string("name") ?? "Tool"), systemImage: "wrench").font(.headline)
-                        if let description = fields.string("description") { Text(description).font(.callout).textSelection(.enabled) }
+                        Label(ToolValue.title(fields.string("name") ?? "Tool"), systemImage: "wrench").font(.ripul(.headline))
+                        if let description = fields.string("description") { Text(description).font(.ripul(.callout)).textSelection(.enabled) }
                         NativeToolParameters(args: fields, excluding: ["name", "description"], title: "Definition")
                     }
                     Divider()

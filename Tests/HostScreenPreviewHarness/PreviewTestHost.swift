@@ -15,6 +15,9 @@ struct PreviewTestHost: App {
             } else if ProcessInfo.processInfo.arguments.contains("--tool-strip-ui-tests") {
                 NativeToolStripHarnessSurface()
                     .preferredColorScheme(ProcessInfo.processInfo.arguments.contains("--light-appearance") ? .light : .dark)
+            } else if ProcessInfo.processInfo.arguments.contains("--session-families-ui-tests") {
+                SessionFamiliesHarness()
+                    .preferredColorScheme(ProcessInfo.processInfo.arguments.contains("--light-appearance") ? .light : .dark)
             } else if ProcessInfo.processInfo.arguments.contains("--code-width-ui-tests") {
                 ToolCodeWidthHarnessSurface()
             } else if ProcessInfo.processInfo.arguments.contains("--tool-details-ui-tests") {
@@ -109,6 +112,7 @@ private struct ToolDetailsHarnessSurface: View {
                         "rendererName": fixture["rendererName"]!,
                         "renderArguments": chosen == nil ? ["description": examples[number - 1].0, "command": examples[number - 1].1] : fixture["renderArguments"]!,
                         "commandPresentation": fixture["commandPresentation"] ?? NSNull(),
+                        "agentComms": fixture["agentComms"] ?? NSNull(),
                         "result": chosen == nil ? "Result for call \(number)" : text(fixture["result"]!),
                         "diagnostics": text(["toolName": fixture["toolName"]!, "arguments": fixture["args"]!, "status": "success", "duration": 42.5, "background": false, "error": NSNull()]),
                     ] as [String: Any] },

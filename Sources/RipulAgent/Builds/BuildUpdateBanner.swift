@@ -78,13 +78,13 @@ public struct RipulBuildUpdateBanner: View {
     private func bar(for build: RipulBuild) -> some View {
         HStack(spacing: 12) {
             Image(systemName: "arrow.down.circle.fill")
-                .font(.title2)
+                .font(.ripulIcon(.title2))
 
             VStack(alignment: .leading, spacing: 1) {
                 Text("New build available")
-                    .font(.headline)
+                    .font(.ripul(.headline))
                 Text(subtitle(for: build))
-                    .font(.caption)
+                    .font(.ripul(.caption))
                     .opacity(0.85)
             }
 
@@ -99,24 +99,24 @@ public struct RipulBuildUpdateBanner: View {
                     pendingInstall = build
                 } label: {
                     Text("Install")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(Color.orange)
+                        .font(.ripul(.subheadline, weight: .semibold))
+                        .foregroundStyle(Color.ripul(.warning))
                         .padding(.horizontal, 14)
                         .padding(.vertical, 7)
-                        .background(.white, in: Capsule())
+                        .background(.ripul(system: .white), in: Capsule())
                 }
                 .buttonStyle(.plain)
                 .uiKitIdentifier("SettingsScreen.buildUpdateBanner.installButton")
             } else {
                 Image(systemName: "chevron.right")
-                    .font(.footnote.weight(.semibold))
+                    .font(.ripulIcon(.footnote, weight: .semibold))
                     .opacity(0.8)
             }
         }
-        .foregroundStyle(.white)
+        .foregroundStyle(.ripul(.onAccent))
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
-        .background(Color.orange, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .background(Color.ripul(.warning), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         // The whole bar is the "show me" target; the Install button consumes its
         // own taps, so the two never fight.
         .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))

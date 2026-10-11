@@ -109,7 +109,7 @@
       let _ = MainThreadSampler.count("DeclarativeEmbed.body")
       VStack(alignment: .leading, spacing: 14) {
         if let snapshot = state.snapshot {
-          if !snapshot.error.isEmpty { Text(snapshot.error).font(.callout).foregroundStyle(.red) }
+          if !snapshot.error.isEmpty { Text(snapshot.error).font(.ripul(.callout)).foregroundStyle(.ripul(.danger)) }
           NativeArtefactFields(
             fields: snapshot.definition.inputSchema, values: state.values, focus: $focused,
             onChange: state.change
@@ -123,7 +123,7 @@
               if snapshot.busy { ProgressView() }
               Text(snapshot.definition.presentation.runLabel)
             }.frame(maxWidth: .infinity)
-          }.buttonStyle(.borderedProminent)
+          }.ripulProminentButtonStyle()
             .disabled(snapshot.busy || !snapshot.canRun)
             .uiKitIdentifier("NativeArtefact.run")
           ForEach(Array(snapshot.outputRows.enumerated()), id: \.offset) { _, row in

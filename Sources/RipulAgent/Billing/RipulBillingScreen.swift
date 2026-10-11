@@ -246,21 +246,21 @@ public struct RipulBillingScreen: View {
             if let error = model.surfaceError {
                 Section {
                     Label(error.summary, systemImage: "exclamationmark.triangle")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
+                        .font(.ripul(.footnote))
+                        .foregroundStyle(.ripul(.textSecondary))
                         .uiKitIdentifier("RipulBilling.error.summary")
                     ForEach(error.links, id: \.absoluteString) { link in
                         Link(destination: link) {
                             Label((link.host ?? "") + link.path, systemImage: "arrow.up.forward.app")
-                                .font(.footnote)
+                                .font(.ripul(.footnote))
                         }
                         .uiKitIdentifier("RipulBilling.error.link")
                     }
                     if let detail = error.detail {
                         DisclosureGroup {
                             Text(detail)
-                                .font(.caption2.monospaced())
-                                .foregroundStyle(.secondary)
+                                .font(.ripul(.caption2, family: .code))
+                                .foregroundStyle(.ripul(.textSecondary))
                                 .lineLimit(16)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .textSelection(.enabled)
@@ -268,13 +268,13 @@ public struct RipulBillingScreen: View {
                                 UIPasteboard.general.string = "\(error.summary)\n\n\(detail)"
                             } label: {
                                 Label("Copy error details", systemImage: "doc.on.doc")
-                                    .font(.footnote)
+                                    .font(.ripul(.footnote))
                             }
                             .uiKitIdentifier("RipulBilling.error.copy")
                         } label: {
                             Text("Advanced")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
+                                .font(.ripul(.footnote))
+                                .foregroundStyle(.ripul(.textSecondary))
                         }
                         .uiKitIdentifier("RipulBilling.error.advanced")
                     }
@@ -284,8 +284,8 @@ public struct RipulBillingScreen: View {
             if model.siteKeys.isEmpty && !model.loading {
                 Section {
                     Text("No site key is linked to a CMS portal. Row billing binds a portal's queries, so link a key first.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
+                        .font(.ripul(.footnote))
+                        .foregroundStyle(.ripul(.textSecondary))
                 }
             } else {
                 if model.siteKeys.count > 1 {
@@ -308,12 +308,12 @@ public struct RipulBillingScreen: View {
         .navigationTitle("Row Billing")
         .refreshable { await model.load() }
         .task { await model.load() }
-        .sheet(item: $editing) { target in
+        .ripulSheet(item: $editing) { target in
             NavigationStack {
                 RipulBillingRuleEditorView(model: model, rule: target.rule)
             }
         }
-        .sheet(isPresented: $creatingPlan) {
+        .ripulSheet(isPresented: $creatingPlan) {
             NavigationStack {
                 RipulBillingPlanSheet(model: model) {
                     creatingPlan = false
@@ -346,14 +346,14 @@ public struct RipulBillingScreen: View {
     private var accountSection: some View {
         Section {
             if !model.accountLoaded {
-                HStack { ProgressView(); Text("Loading…").font(.footnote).foregroundStyle(.secondary) }
+                HStack { ProgressView(); Text("Loading…").font(.ripul(.footnote)).foregroundStyle(.ripul(.textSecondary)) }
             } else if let platform = model.platform, !platform.secretKeyConfigured {
                 Label(
                     "Row billing isn't provisioned on this platform yet. One deploy-time step remains: set BILLING_STRIPE_SECRET_KEY on the worker (wrangler secret put, from chrome-extension/packages/api). Everything else provisions itself at runtime from here.",
                     systemImage: "key.slash"
                 )
-                .font(.footnote)
-                .foregroundStyle(.secondary)
+                .font(.ripul(.footnote))
+                .foregroundStyle(.ripul(.textSecondary))
             } else if let platform = model.platform, !platform.webhookConfigured {
                 Button {
                     Task { await model.provision() }
@@ -371,8 +371,8 @@ public struct RipulBillingScreen: View {
                     "Stripe Connect isn't enabled on the platform account yet — a one-time signup in the Stripe dashboard. Accounts can't be created until it's done; pull to refresh here afterwards.",
                     systemImage: "point.3.connected.trianglepath.dotted"
                 )
-                .font(.footnote)
-                .foregroundStyle(.secondary)
+                .font(.ripul(.footnote))
+                .foregroundStyle(.ripul(.textSecondary))
                 Link(destination: URL(string: "https://dashboard.stripe.com/connect")!) {
                     Label("Enable Connect in the Stripe dashboard", systemImage: "arrow.up.forward.app")
                 }
@@ -384,10 +384,10 @@ public struct RipulBillingScreen: View {
                         .frame(width: 24)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(accountLabel(account))
-                            .font(.subheadline.weight(.medium))
+                            .font(.ripul(.subheadline, weight: .medium))
                         Text(account.stripeAccountId + (account.livemode ? "" : " · test mode"))
-                            .font(.caption.monospaced())
-                            .foregroundStyle(.secondary)
+                            .font(.ripul(.caption, family: .code))
+                            .foregroundStyle(.ripul(.textSecondary))
                     }
                 }
                 if account.onboardingState == "onboarding" || account.onboardingState == "restricted" {
@@ -418,8 +418,8 @@ public struct RipulBillingScreen: View {
                         "Charges are enabled but payouts are not — money accumulates in Stripe and never reaches the bank until payouts are enabled in the Stripe dashboard.",
                         systemImage: "exclamationmark.triangle"
                     )
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+                    .font(.ripul(.footnote))
+                    .foregroundStyle(.ripul(.textSecondary))
                 }
             } else {
                 Button {
@@ -437,13 +437,13 @@ public struct RipulBillingScreen: View {
                     .uiKitIdentifier("RipulBilling.connectExisting")
                 }
             }
-        } header: {
+        } header: { RipulSectionHeader {
             Text("Stripe account")
-        } footer: {
+        } } footer: { RipulSectionFooter {
             if model.account == nil && model.accountLoaded {
                 Text("Onboarding is Stripe-hosted and entirely self-serve: the account is the tenant's own — merchant of record, full dashboard; Ripul never holds funds and takes no fee. Opens in the browser; pull to refresh here afterwards.")
             }
-        }
+        } }
     }
 
     /// "Start over" — unbind so the create/connect choice comes back. The
@@ -513,9 +513,9 @@ public struct RipulBillingScreen: View {
 
     private func accountTint(_ account: RipulBillingAccount) -> AnyShapeStyle {
         switch account.onboardingState {
-        case "active": return AnyShapeStyle(.green)
-        case "revoked": return AnyShapeStyle(.red)
-        default: return AnyShapeStyle(.orange)
+        case "active": return AnyShapeStyle(.ripul(.success))
+        case "revoked": return AnyShapeStyle(.ripul(.danger))
+        default: return AnyShapeStyle(.ripul(.warning))
         }
     }
 
@@ -538,16 +538,16 @@ public struct RipulBillingScreen: View {
                     .frame(width: 24)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(title)
-                        .font(.subheadline)
-                        .foregroundStyle(.primary)
+                        .font(.ripul(.subheadline))
+                        .foregroundStyle(.ripul(.text))
                     Text(subtitle)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .font(.ripul(.caption))
+                        .foregroundStyle(.ripul(.textSecondary))
                 }
                 Spacer()
                 Image(systemName: "arrow.up.forward")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
+                    .font(.ripulIcon(.caption))
+                    .foregroundStyle(.ripul(.textTertiary))
             }
             .contentShape(Rectangle())
         }
@@ -585,11 +585,11 @@ public struct RipulBillingScreen: View {
                 url: stripeDashboardURL("webhooks"),
                 id: "RipulBilling.links.webhooks"
             )
-        } header: {
+        } header: { RipulSectionHeader {
             Text("Stripe dashboard")
-        } footer: {
+        } } footer: { RipulSectionFooter {
             Text("Opens the platform's Stripe dashboard in the browser\(model.platform?.mode == "test" ? " (test mode)" : "").")
-        }
+        } }
     }
 
     // MARK: Rules
@@ -601,8 +601,8 @@ public struct RipulBillingScreen: View {
                 VStack(alignment: .leading, spacing: 4) {
                     ForEach(model.lastSaveWarnings, id: \.self) { warning in
                         Label(warning, systemImage: "exclamationmark.triangle")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
+                            .font(.ripul(.footnote))
+                            .foregroundStyle(.ripul(.textSecondary))
                     }
                 }
             }
@@ -615,8 +615,8 @@ public struct RipulBillingScreen: View {
             }
             if model.rules.isEmpty && model.accountLoaded {
                 Text("No billing rules yet.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+                    .font(.ripul(.footnote))
+                    .foregroundStyle(.ripul(.textSecondary))
             }
             Button {
                 editing = EditorTarget(rule: nil)
@@ -632,31 +632,31 @@ public struct RipulBillingScreen: View {
             }
             .disabled(model.account?.onboardingState != "active")
             .uiKitIdentifier("RipulBilling.createPlan")
-        } header: {
+        } header: { RipulSectionHeader {
             Text("Billing rules")
-        } footer: {
+        } } footer: { RipulSectionFooter {
             Text("Billing is in arrears: Checkout captures the card but charges nothing — each period's invoice bills that period's peak quantity. Revenue and failed payments live in the tenant's own Stripe dashboard.")
-        }
+        } }
     }
 
     @ViewBuilder
     private func ruleRow(_ rule: RipulBillingRule) -> some View {
         HStack(spacing: 10) {
             Image(systemName: rule.dryRun ? "eye" : "bolt.fill")
-                .foregroundStyle(rule.status == "active" && !rule.dryRun ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
+                .foregroundStyle(rule.status == "active" && !rule.dryRun ? AnyShapeStyle(.tint) : AnyShapeStyle(.ripul(.textSecondary)))
                 .frame(width: 24)
             VStack(alignment: .leading, spacing: 2) {
                 Text(rule.name)
-                    .font(.subheadline.weight(.semibold))
+                    .font(.ripul(.subheadline, weight: .semibold))
                 Text("\(rule.status)\(rule.dryRun ? " · dry run" : "") · \(rule.subjectQuery) · \(model.priceLabel(for: rule.stripePriceId))\(rule.trialDays.map { " · \($0)-day trial" } ?? "")")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(.ripul(.caption))
+                    .foregroundStyle(.ripul(.textSecondary))
                     .lineLimit(2)
             }
             Spacer()
             Image(systemName: "chevron.right")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
+                .font(.ripulIcon(.caption))
+                .foregroundStyle(.ripul(.textTertiary))
         }
         .contentShape(Rectangle())
     }
@@ -683,8 +683,8 @@ struct RipulBillingRuleEditorView: View {
                 Section {
                     ForEach(saveErrors, id: \.self) { error in
                         Label(error, systemImage: "xmark.octagon")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
+                            .font(.ripul(.footnote))
+                            .foregroundStyle(.ripul(.textSecondary))
                     }
                 }
             }
@@ -698,9 +698,9 @@ struct RipulBillingRuleEditorView: View {
                 }
                 Toggle("Dry run", isOn: $input.dryRun)
                     .uiKitIdentifier("RipulBilling.editor.dryRun")
-            } footer: {
+            } footer: { RipulSectionFooter {
                 Text("Dry run is shadow mode: the billing engine computes and logs every push it would make, and pushes nothing to Stripe. The natural first step for a new rule.")
-            }
+            } }
 
             Section {
                 Picker("Subject query", selection: $input.subjectQuery) {
@@ -718,11 +718,11 @@ struct RipulBillingRuleEditorView: View {
                 TextField("Display name column (optional)", text: $input.displayNameColumn)
                     .autocorrectionDisabled()
                     .textInputAutocapitalization(.never)
-            } header: {
+            } header: { RipulSectionHeader {
                 Text("Subject — which rows get billed")
-            } footer: {
+            } } footer: { RipulSectionFooter {
                 Text("Each row matching the subject query becomes one Stripe subscriber. The primary key must stay stable for years — it links the row to its subscription.")
-            }
+            } }
 
             Section {
                 Picker("Relationship", selection: $input.quantityRelationshipId) {
@@ -743,21 +743,21 @@ struct RipulBillingRuleEditorView: View {
                         .autocorrectionDisabled()
                         .textInputAutocapitalization(.never)
                 }
-            } header: {
+            } header: { RipulSectionHeader {
                 Text("Quantity — what each row pays for")
-            } footer: {
+            } } footer: { RipulSectionFooter {
                 if (model.cmsRefs?.relationships ?? []).isEmpty {
                     Text("No \u{201C}Many rows (server rollup)\u{201D} relationships exist on the linked portal — create one in the designer first.")
                 } else {
                     Text("The related set is aggregated per subject row, server-side, one grouped query per cycle.")
                 }
-            }
+            } }
 
             Section {
                 if model.prices.isEmpty {
                     Text("No recurring Prices on the connected account yet. Create a METERED Price backed by a Billing Meter with \u{201C}Last\u{201D} aggregation in the Stripe dashboard, then pull to refresh.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
+                        .font(.ripul(.footnote))
+                        .foregroundStyle(.ripul(.textSecondary))
                 }
                 ForEach(model.prices) { price in
                     Button {
@@ -767,15 +767,15 @@ struct RipulBillingRuleEditorView: View {
                         HStack {
                             VStack(alignment: .leading, spacing: 1) {
                                 Text(price.displayLabel)
-                                    .foregroundStyle(price.isMetered ? .primary : .secondary)
+                                    .foregroundStyle(price.isMetered ? .ripul(.text) : .ripul(.textSecondary))
                                 if !price.isMetered {
                                     Text("Licensed — rules need a metered Price")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
+                                        .font(.ripul(.caption))
+                                        .foregroundStyle(.ripul(.textSecondary))
                                 } else if let event = price.meterEventName {
                                     Text("Meter event: \(event)")
-                                        .font(.caption.monospaced())
-                                        .foregroundStyle(.secondary)
+                                        .font(.ripul(.caption, family: .code))
+                                        .foregroundStyle(.ripul(.textSecondary))
                                 }
                             }
                             Spacer()
@@ -789,11 +789,11 @@ struct RipulBillingRuleEditorView: View {
                     .buttonStyle(.plain)
                     .disabled(!price.isMetered)
                 }
-            } header: {
+            } header: { RipulSectionHeader {
                 Text("Price — authored in the Stripe dashboard")
-            } footer: {
+            } } footer: { RipulSectionFooter {
                 Text("The period's peak bills, in arrears — one invoice per period, no mid-period charges. The meter's event name is read from the Price at push time.")
-            }
+            } }
 
             Section {
                 HStack {
@@ -805,11 +805,11 @@ struct RipulBillingRuleEditorView: View {
                         .frame(maxWidth: 120)
                         .uiKitIdentifier("RipulBilling.editor.trialDays")
                 }
-            } header: {
+            } header: { RipulSectionHeader {
                 Text("Free trial")
-            } footer: {
+            } } footer: { RipulSectionFooter {
                 Text("Optional. New sign-ups start with this many free days (1–730) before the first billing period. Leave empty for no trial.")
-            }
+            } }
         }
         .uiKitIdentifier("RipulBilling.editor")
         .navigationTitle(rule == nil ? "New rule" : "Edit rule")
@@ -921,22 +921,22 @@ struct RipulBillingPlanSheet: View {
                     Text("Yearly").tag("year")
                 }
                 .uiKitIdentifier("RipulBillingPlan.interval")
-            } footer: {
+            } footer: { RipulSectionFooter {
                 Text("Creates the Meter, Product and metered Price on the connected Stripe account — the account owner's objects, in their dashboard. Ripul takes no cut.")
-            }
+            } }
             if let localError {
                 Section {
                     Label(localError, systemImage: "exclamationmark.triangle")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
+                        .font(.ripul(.footnote))
+                        .foregroundStyle(.ripul(.textSecondary))
                 }
             }
             if let createdPriceId {
                 Section {
                     Label("Plan created — pick it in a new rule.", systemImage: "checkmark.seal")
                     Text(model.priceLabel(for: createdPriceId))
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
+                        .font(.ripul(.footnote))
+                        .foregroundStyle(.ripul(.textSecondary))
                 }
             }
         }

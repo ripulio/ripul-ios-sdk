@@ -21,7 +21,7 @@ struct PlanFileSheet: View {
         NavigationStack {
             ScrollView {
                 Text(contents.isEmpty ? "The file contents are not available from this web build." : contents)
-                    .font(.system(.footnote, design: .monospaced))
+                    .font(.ripul(.footnote, family: .code))
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(16)
@@ -36,7 +36,7 @@ struct PlanFileSheet: View {
                     Button("Done") { dismiss() }
                 }
                 ToolbarItem(placement: .primaryAction) {
-                    Menu {
+                    Menu { MenuIcons {
                         Button {
                             Self.copyToPasteboard(path)
                         } label: {
@@ -48,7 +48,7 @@ struct PlanFileSheet: View {
                             Label("Copy contents", systemImage: "doc.on.doc")
                         }
                         .disabled(contents.isEmpty)
-                    } label: {
+                    }} label: {
                         Label("Copy", systemImage: "doc.on.doc")
                     }
                     .uiKitIdentifier("PlanFileSheet.copyMenu")

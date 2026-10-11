@@ -81,6 +81,7 @@ public struct AgentWebView: NSViewRepresentable {
         config.userContentController.addUserScript(Self.installationIdentityScript)
         config.userContentController.addUserScript(Self.nativeBuildScript)
         config.userContentController.addUserScript(Self.hostPreferencesScript())
+        config.userContentController.addUserScript(Self.appearanceScript())
         if let handoff = Self.handoffScript(configuration) {
             config.userContentController.addUserScript(handoff)
         }
@@ -476,7 +477,9 @@ private struct AgentWebViewRepresentable: UIViewControllerRepresentable {
         config.userContentController.addUserScript(bridgeScript)
         config.userContentController.addUserScript(AgentWebView.installationIdentityScript)
         config.userContentController.addUserScript(AgentWebView.nativeBuildScript)
+        config.userContentController.addUserScript(AgentWebView.trackpadScrollScript)
         config.userContentController.addUserScript(AgentWebView.hostPreferencesScript())
+        config.userContentController.addUserScript(AgentWebView.appearanceScript())
         if let handoff = AgentWebView.handoffScript(configuration) {
             config.userContentController.addUserScript(handoff)
         }
@@ -486,6 +489,11 @@ private struct AgentWebViewRepresentable: UIViewControllerRepresentable {
         config.userContentController.add(context.coordinator, name: "agentNetwork")
         config.userContentController.add(context.coordinator, name: "agentStartup")
         config.userContentController.add(context.coordinator, name: "curtainLowered")
+        #if targetEnvironment(macCatalyst)
+        // The user content controller keeps the handler alive.
+        CatalystClipboardBridge(baseHost: configuration.baseURL.host, standalone: configuration.standalone)
+            .install(in: config.userContentController)
+        #endif
 
         // Inject font-face declarations for any requested font families
         if let families = configuration.fontFamilies, !families.isEmpty {
@@ -587,7 +595,7 @@ private struct AgentWebViewRepresentable: UIViewControllerRepresentable {
         // false keeps the current transparent behaviour so glass shows through.
         let opaqueWeb = AgentBridge.opaqueWebView
         webView.isOpaque = opaqueWeb
-        let webBg: UIColor = opaqueWeb ? .systemBackground : .clear
+        let webBg: UIColor = opaqueWeb ? .ripul(.canvas) : .clear
         webView.backgroundColor = webBg
         webView.scrollView.backgroundColor = webBg
         // Under-page layer, FILE-VIEWER WEB VIEW ONLY. nil defaults to white for
@@ -599,11 +607,11 @@ private struct AgentWebViewRepresentable: UIViewControllerRepresentable {
         if configuration.fileViewerPath != nil {
             switch configuration.theme {
             case .dark:
-                webView.underPageBackgroundColor = .black
+                webView.underPageBackgroundColor = .ripul(system: .black)
             case .light:
-                webView.underPageBackgroundColor = .white
+                webView.underPageBackgroundColor = .ripul(system: .white)
             case .system:
-                webView.underPageBackgroundColor = .systemBackground
+                webView.underPageBackgroundColor = .ripul(.canvas)
             }
         }
         // Prevent the scroll view from adding automatic content insets for
@@ -1098,6 +1106,15 @@ extension AgentWebView {
         forMainFrameOnly: true
     )
 
+    /// Tells the page that this shell gives trackpad scrolls over a
+    /// sideways-only scroller to the chat (`FullBleedWebView`), so the page
+    /// applies the sideways part of the gesture itself.
+    public static let trackpadScrollScript = WKUserScript(
+        source: "window.__ripulTrackpadScrollsChat = true;",
+        injectionTime: .atDocumentStart,
+        forMainFrameOnly: true
+    )
+
     /// The native build the shell was compiled from, exposed so it can be read
     /// rather than guessed at.
     ///
@@ -1145,6 +1162,31 @@ extension AgentWebView {
         guard let json = configuration.handoffJSON else { return nil }
         return WKUserScript(source: "window.__ripulHandoff = \(json);",
                             injectionTime: .atDocumentStart, forMainFrameOnly: true)
+    }
+
+    /// Tells the page whether the app is light or dark, before the page runs.
+    ///
+    /// The page otherwise learns this only from WebKit's `prefers-color-scheme`,
+    /// and on Mac Catalyst that answer was wrong for a chat nobody had clicked
+    /// in: with the Mac set to light, chats drew dark until a click gave the
+    /// web view focus, when the page asked again and got the right answer
+    /// (Peter, 9 October 2026). The app knows its own appearance, so it says so.
+    /// `AgentBridge.setTheme` keeps the value current when the appearance changes.
+    public static func appearanceScript() -> WKUserScript {
+        WKUserScript(
+            source: "window.__ripulNativeAppearance = '\(currentAppearanceIsDark ? "dark" : "light")';",
+            injectionTime: .atDocumentStart,
+            forMainFrameOnly: true
+        )
+    }
+
+    /// The app's appearance now, read on the main thread where web views are made.
+    static var currentAppearanceIsDark: Bool {
+        #if os(macOS)
+        return NSApp?.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        #else
+        return UITraitCollection.current.userInterfaceStyle == .dark
+        #endif
     }
 
     /// Exposes the native mirror of host-mode prefs (hostEnabled / machineName)

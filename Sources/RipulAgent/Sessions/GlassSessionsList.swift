@@ -64,6 +64,9 @@ public struct SessionsListCallbacks {
 public struct RipulListedSession: Equatable {
     public let id: String
     public let title: String
+
+    /// The most rows a host is told about.
+    public static let limit = 100
 }
 
 @available(iOS 26.0, macOS 26.0, *)
@@ -165,6 +168,10 @@ public struct GlassSessionsList: View {
     @State private var sessionsExpanded = true
     @State private var isSelecting = false
     @State private var selectedSessionIds: Set<String> = []
+    /// Heads of families whose started chats are all shown; see `SessionFamilies`.
+    @State private var openFamilies: Set<String> = []
+    /// Heads of families whose started chats the person has put away by tapping the head's icon.
+    @State private var closedFamilies: Set<String> = []
     #if os(iOS)
     @Environment(\.ripulBottomBarFrame) private var bottomBar
     @State private var actionBarNavigationClearance: CGFloat = 0
@@ -445,7 +452,12 @@ public struct GlassSessionsList: View {
     }
 
     @ViewBuilder
-    private func sessionsPanelSection(sessions: [UnifiedSession]) -> some View {
+    private func sessionsPanelSection(families: SessionFamilies) -> some View {
+        let sessions = families.visible
+        return sessionsPanel(sessions: sessions, families: families)
+    }
+
+    private func sessionsPanel(sessions: [UnifiedSession], families: SessionFamilies) -> some View {
         GlassSectionPanel(
             title: "Sessions",
             isExpanded: $sessionsExpanded,
@@ -510,6 +522,7 @@ public struct GlassSessionsList: View {
                         { await refresh(); await refreshGroupChats() }
                     },
                     row: { session in
+                      VStack(alignment: .leading, spacing: 0) {
                         UnifiedSessionRow(
                             sessionStore: sessionStore,
                             session: session,
@@ -528,15 +541,32 @@ public struct GlassSessionsList: View {
                             isDeleting: deletingUnifiedSessionId == session.id,
                             isDeletingFromHost: deletingUnifiedSessionId == session.id && deletingFromHost,
                             machineIcon: session.machineName.flatMap { machineIcons[$0] },
-                            hideProjectName: activeProjectFilter != nil,
+                            // A started chat says where it is working only when that
+                            // differs from the chat it sits under.
+                            hideProjectName: activeProjectFilter != nil || families.sharesFolder.contains(session.id),
+                            hideBranch: families.sharesBranch.contains(session.id),
                             isSelectMode: isSelecting,
                             isSelected: selectedSessionIds.contains(session.id),
                             isGroupChat: isGroupChat(session),
                             isTeamShared: !teamSharedKeys.isEmpty && session.matchKeys.contains(where: teamSharedKeys.contains),
+                            familyDepth: families.depth[session.id] ?? 0,
+                            startedChats: families.heads[session.id]?.started ?? 0,
+                            startedChatsClosed: families.heads[session.id]?.isClosed ?? false,
+                            startedChatsNeedLooking: families.heads[session.id]?.needsLooking ?? false,
+                            onToggleStartedChats: {
+                                if closedFamilies.contains(session.id) { closedFamilies.remove(session.id) } else { closedFamilies.insert(session.id) }
+                            },
                             onSessionAction: { action in
                                 handleSessionAction(action, session: session)
                             }
                         )
+                        // The end of a family with more started chats than it shows.
+                        if let fold = families.folds[session.id] {
+                            SessionFamilyFoldButton(fold: fold) {
+                                if fold.isOpen { openFamilies.remove(fold.parentId) } else { openFamilies.insert(fold.parentId) }
+                            }
+                        }
+                      }
                     },
                     swipe: { session in
                         if session.isSharedGuest {
@@ -546,7 +576,7 @@ public struct GlassSessionsList: View {
                             Label("Remove", systemImage: "minus.circle.fill")
                         }
                         .uiKitIdentifier("GlassSessionsList.sessions.swipeRemoveInvitedButton")
-                        .tint(.orange)
+                        .tint(Color.ripul(.warning))
                         } else if cloudFeatures {
                         Button {
                             onArchiveUnifiedSession(session)
@@ -554,7 +584,7 @@ public struct GlassSessionsList: View {
                             Label("Archive", systemImage: "archivebox.fill")
                         }
                         .uiKitIdentifier("GlassSessionsList.sessions.swipeArchiveButton")
-                        .tint(.orange)
+                        .tint(Color.ripul(.warning))
                         }
                     },
                     rowMenu: { session in
@@ -674,7 +704,7 @@ public struct GlassSessionsList: View {
             m.isOnline && (session.machineId.map { $0 != m.machineId } ?? (m.displayName != session.machineName))
         }
         if !moveTargets.isEmpty {
-            Menu {
+            Menu { MenuIcons {
                 ForEach(moveTargets) { target in
                     Button {
                         onMoveUnifiedSession(session, target)
@@ -683,7 +713,7 @@ public struct GlassSessionsList: View {
                     }
                     .uiKitIdentifier("GlassSessionsList.contextMenu.moveTarget")
                 }
-            } label: {
+            }} label: {
                 Label("Move to Machine…", systemImage: "arrow.right.circle")
             }
             .uiKitIdentifier("GlassSessionsList.contextMenu.moveMenu")
@@ -728,11 +758,11 @@ public struct GlassSessionsList: View {
     /// so its next open can be timed. Deletes nothing; opening it restores it.
     @ViewBuilder
     private func makeColdMenu(_ session: UnifiedSession) -> some View {
-        Menu {
+        Menu { MenuIcons {
             Button("On This iPhone") { makeCold(session, includeMac: false, loseNextOpen: false) }
             Button("On This iPhone and the Mac") { makeCold(session, includeMac: true, loseNextOpen: false) }
             Button("Both, and Lose the Next Open") { makeCold(session, includeMac: true, loseNextOpen: true) }
-        } label: {
+        }} label: {
             Label("Make Cold", systemImage: "snowflake")
         }
         .uiKitIdentifier("GlassSessionsList.contextMenu.makeColdMenu")
@@ -919,7 +949,7 @@ public struct GlassSessionsList: View {
     /// switch. The caller hides it when there is nothing to choose between.
     @ViewBuilder
     private var projectFilterMenu: some View {
-        Menu {
+        Menu { MenuIcons {
             if hasGroupChats {
                 Picker("Filter by Chats", selection: $groupChatsOnly) {
                     Text("All Chats").tag(false)
@@ -948,31 +978,31 @@ public struct GlassSessionsList: View {
                 .pickerStyle(.inline)
                 .uiKitIdentifier("GlassSessionsList.sessions.tagFilterPicker")
             }
-        } label: {
+        }} label: {
             HStack(spacing: 5) {
                 Image(systemName: "line.3.horizontal.decrease")
-                    .font(.caption2.weight(.bold))
+                    .font(.ripulIcon(.caption2, weight: .bold))
                 Text(filterLabel)
-                    .font(.subheadline.weight(.semibold))
+                    .font(.ripul(.subheadline, weight: .semibold))
                     .lineLimit(1)
                     .truncationMode(.tail)
                 Image(systemName: "chevron.down")
-                    .font(.caption2.weight(.bold))
+                    .font(.ripulIcon(.caption2, weight: .bold))
             }
-            .foregroundStyle(hasActiveFilter ? Color.accentColor : Color.secondary)
+            .foregroundStyle(hasActiveFilter ? Color.accentColor : Color.ripul(.textSecondary))
             .padding(.horizontal, 14)
             .padding(.vertical, 7)
             .background(
                 Capsule(style: .continuous)
                     .fill(hasActiveFilter
                         ? Color.accentColor.opacity(0.15)
-                        : Color.primary.opacity(0.06))
+                        : Color.ripul(.text).opacity(0.06))
             )
             .overlay(
                 Capsule(style: .continuous)
                     .stroke(hasActiveFilter
                         ? Color.accentColor.opacity(0.4)
-                        : Color.primary.opacity(0.12), lineWidth: 1)
+                        : Color.ripul(.text).opacity(0.12), lineWidth: 1)
             )
             .frame(maxWidth: 220)
             .contentShape(Capsule(style: .continuous))
@@ -981,6 +1011,43 @@ public struct GlassSessionsList: View {
     }
 
     private var filteredSessions: [UnifiedSession] {
+        let base = matchingSessions
+        // Re-sort incorporating live activity timestamps from the bridge.
+        // Uses quantized time (30s buckets) so two concurrently active
+        // sessions don't swap on every alternating tool call.
+        // Pinned rows first, each group in recency order.
+        let pinned = Set(base.filter { sessionStore.isPinned(anyOf: $0.readStateKeys) }.map(\.id))
+        return base.sorted { a, b in
+            let pa = pinned.contains(a.id), pb = pinned.contains(b.id)
+            if pa != pb { return pa }
+            let ta = sortBucket(for: a)
+            let tb = sortBucket(for: b)
+            if ta != tb { return ta > tb }
+            // Within the same bucket, preserve scanner order (stable).
+            return a.lastUsed > b.lastUsed
+        }
+    }
+
+    /// The rows in the order they are drawn: the same pinned-then-recent order,
+    /// with a chat an agent started under the chat that started it. A search or
+    /// a filter shows every match, since a match may be a folded chat.
+    private var sessionFamilies: SessionFamilies {
+        SessionFamilies.arrange(
+            matchingSessions,
+            open: openFamilies,
+            closed: closedFamilies,
+            folds: !isSearching && !activeGroupFilter && activeProjectFilter == nil && activeTagFilter == nil,
+            isPinned: { sessionStore.isPinned(anyOf: $0.readStateKeys) },
+            recency: sortBucket(for:),
+            mustShow: { session in
+                guard let chatId = session.ripulSession?.sourceChatId else { return false }
+                return sessionStore.isWorkingOrAsking(chatId)
+            }
+        )
+    }
+
+    /// The sessions the header's filters and the search leave, in no order.
+    private var matchingSessions: [UnifiedSession] {
         let trimmed = searchText.trimmingCharacters(in: .whitespaces)
         var base = unifiedSessions
         // Chats + project + tag filters (header dropdown) — applied before the text search.
@@ -1001,20 +1068,7 @@ public struct GlassSessionsList: View {
                     || (s.gitBranch?.lowercased().contains(q) ?? false)
             }
         }
-        // Re-sort incorporating live activity timestamps from the bridge.
-        // Uses quantized time (30s buckets) so two concurrently active
-        // sessions don't swap on every alternating tool call.
-        // Pinned rows first, each group in recency order.
-        let pinned = Set(base.filter { sessionStore.isPinned(anyOf: $0.readStateKeys) }.map(\.id))
-        return base.sorted { a, b in
-            let pa = pinned.contains(a.id), pb = pinned.contains(b.id)
-            if pa != pb { return pa }
-            let ta = sortBucket(for: a)
-            let tb = sortBucket(for: b)
-            if ta != tb { return ta > tb }
-            // Within the same bucket, preserve scanner order (stable).
-            return a.lastUsed > b.lastUsed
-        }
+        return base
     }
 
     /// Best-known "last active" time for a session. Checks (in order):
@@ -1071,7 +1125,7 @@ public struct GlassSessionsList: View {
                 }
                 .uiKitIdentifier("SessionListScreen.batch.archiveButton")
                 .buttonStyle(.plain)
-                .foregroundStyle(.orange)
+                .foregroundStyle(.ripul(.warning))
                 .glassEffect(.clear.interactive(), in: .capsule)
 
                 Button {
@@ -1090,7 +1144,7 @@ public struct GlassSessionsList: View {
                 }
                 .uiKitIdentifier("SessionListScreen.batch.deleteButton")
                 .buttonStyle(.plain)
-                .foregroundStyle(.red)
+                .foregroundStyle(.ripul(.danger))
                 .glassEffect(.clear.interactive(), in: .capsule)
             }
             .padding(.bottom, 16)
@@ -1154,17 +1208,25 @@ public struct GlassSessionsList: View {
         let _ = ChatSlideProbe.markBody("GlassSessionsList") { Self._printChanges() }
         // Share one filter/sort between rendering and host context. Publish at
         // this root, including when the list is empty or its panel is collapsed.
-        let sessions = filteredSessions
-        let listedSessions = sessions.prefix(3).map { RipulListedSession(id: $0.id, title: $0.title) }
+        // One layout for rendering and host context: folded chats are not
+        // drawn, but a host may still be asked to open one by name.
+        let families = sessionFamilies
+        let sessions = families.all
+        // A hundred, not the three Siri reads out: a host that resolves "open
+        // the chat about X" can only choose from what it is told about, and at
+        // three it could never reach the fourth row (measured 9 October 2026:
+        // a chat on screen was passed to the agent as unknown). A host that
+        // wants fewer takes a prefix.
+        let listedSessions = sessions.prefix(RipulListedSession.limit).map { RipulListedSession(id: $0.id, title: $0.title) }
         // In three parts, each checked by the compiler on its own. As one expression (the
         // panels and some twenty modifiers) the compiler gave it up on one Mac and not on
         // another: "unable to type-check this expression in reasonable time", in WAC's
         // simulator build of 0.7.165 on the MacBook, after it had built on the Mac Studio.
-        presentations(on: lifecycle(on: panels(sessions: sessions), listedSessions: listedSessions))
+        presentations(on: lifecycle(on: panels(families: families), listedSessions: listedSessions))
     }
 
     /// The list in each of its states: nothing yet, connecting, and the panels.
-    private func panels(sessions: [UnifiedSession]) -> some View {
+    private func panels(families: SessionFamilies) -> some View {
         ZStack(alignment: .bottom) {
             // The Invites panel is rendered in EVERY state below. An invited
             // guest with no machine and no chats yet is exactly the account
@@ -1182,8 +1244,8 @@ public struct GlassSessionsList: View {
                             .uiKitIdentifier("GlassSessionsList.onboarding")
                     } else {
                         Text("No machines or sessions yet.")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
+                            .font(.ripul(.subheadline))
+                            .foregroundStyle(.ripul(.textSecondary))
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                             .uiKitIdentifier("GlassSessionsList.onboarding")
                     }
@@ -1194,8 +1256,8 @@ public struct GlassSessionsList: View {
                     VStack(spacing: 12) {
                         ProgressView()
                         Text("Connecting…")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
+                            .font(.ripul(.subheadline))
+                            .foregroundStyle(.ripul(.textSecondary))
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .transition(.opacity)
@@ -1213,7 +1275,7 @@ public struct GlassSessionsList: View {
                             .layoutPriority(1)
                     }
                     invitesSlot
-                    sessionsPanelSection(sessions: sessions)
+                    sessionsPanelSection(families: families)
                         .frame(maxHeight: .infinity, alignment: .top)
                 }
                 .padding(.horizontal, 16)
@@ -1346,7 +1408,7 @@ public struct GlassSessionsList: View {
         } message: {
             Text("You will need a new invitation to join again.")
         }
-        .sheet(isPresented: Binding(
+        .ripulSheet(isPresented: Binding(
             get: { presentedPlan != nil },
             set: { if !$0 { presentedPlan = nil } }
         )) {
@@ -1354,7 +1416,7 @@ public struct GlassSessionsList: View {
                 PlanSheetView(content: plan.content, fileName: plan.fileName)
             }
         }
-        .sheet(item: $taggingSession) { session in
+        .ripulSheet(item: $taggingSession) { session in
             SessionTagsEditor(session: session, suggestions: recentTags) { newTags in
                 taggingSession = nil
                 Task {

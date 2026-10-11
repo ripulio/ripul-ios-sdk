@@ -71,27 +71,27 @@ struct RipulInvitesPanel: View {
                         HStack(spacing: 12) {
                             if isSelectingInvites {
                                 Image(systemName: selectedInviteTokens.contains(invite.token) ? "checkmark.circle.fill" : "circle")
-                                    .font(.title3)
-                                    .foregroundStyle(selectedInviteTokens.contains(invite.token) ? Color.accentColor : .secondary)
+                                    .font(.ripulIcon(.title3))
+                                    .foregroundStyle(selectedInviteTokens.contains(invite.token) ? Color.accentColor : Color.ripul(.textSecondary))
                                     .animation(.easeInOut(duration: 0.15), value: selectedInviteTokens.contains(invite.token))
                                     .uiKitIdentifier("GlassSessionsList.invites.selectionCheckmark")
                             }
 
                             Image(systemName: "envelope.badge")
-                                .font(.system(size: 16))
-                                .foregroundStyle(.blue)
+                                .font(.ripulIcon(size: 16))
+                                .foregroundStyle(.ripul(.info))
                                 .frame(width: 28)
                                 .uiKitIdentifier("GlassSessionsList.invites.envelopeIcon")
 
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(invite.displayLabel)
-                                    .font(.body)
-                                    .foregroundStyle(.primary)
+                                    .font(.ripul(.body))
+                                    .foregroundStyle(.ripul(.text))
                                     .lineLimit(1)
                                     .uiKitIdentifier("GlassSessionsList.invites.displayLabel")
                                 Text(invite.accepted == true ? "Joined chat" : "From \(invite.inviterName ?? "someone")")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
+                                    .font(.ripul(.caption))
+                                    .foregroundStyle(.ripul(.textSecondary))
                                     .uiKitIdentifier("GlassSessionsList.invites.inviterName")
                             }
 
@@ -103,14 +103,14 @@ struct RipulInvitesPanel: View {
                                         ProgressView()
                                             .controlSize(.small)
                                         Text("Joining…")
-                                            .font(.caption.weight(.semibold))
-                                            .foregroundStyle(.secondary)
+                                            .font(.ripul(.caption, weight: .semibold))
+                                            .foregroundStyle(.ripul(.textSecondary))
                                     }
                                     .uiKitIdentifier("GlassSessionsList.invites.joiningLabel")
                                 } else {
                                     Text(invite.accepted == true ? "Open" : "Join")
-                                        .font(.caption.weight(.semibold))
-                                        .foregroundStyle(joiningToken == nil ? .blue : .secondary)
+                                        .font(.ripul(.caption, weight: .semibold))
+                                        .foregroundStyle(joiningToken == nil ? Color.ripul(.info) : Color.ripul(.textSecondary))
                                         .uiKitIdentifier("GlassSessionsList.invites.joinLabel")
                                 }
                             }
@@ -127,13 +127,13 @@ struct RipulInvitesPanel: View {
                                 Task { await join(invite) }
                             }
                         }
-                        .contextMenu {
+                        .contextMenu { MenuIcons {
                             if invite.accepted == true {
                                 Button("Leave chat", systemImage: "rectangle.portrait.and.arrow.right", role: .destructive) {
                                     leavingInvite = invite
                                 }
                             }
-                        }
+                        }}
                         .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                             if !isSelectingInvites {
                                 Button(role: .destructive) {
@@ -154,7 +154,11 @@ struct RipulInvitesPanel: View {
                 }
                 .listStyle(.plain)
                 .scrollContentBackground(.hidden)
-                .frame(minHeight: CGFloat(inviteManager.invites.count) * 48, maxHeight: 240)
+                // A row's height each, up to five rows, then it scrolls. This was
+                // `minHeight: rows * 48, maxHeight: 240`: past five invites the
+                // minimum beat the maximum, the panel grew a row per invite and
+                // the list no longer fitted the screen.
+                .frame(height: min(CGFloat(inviteManager.invites.count) * 48, 240))
             }
 
             if let joinError {
@@ -162,10 +166,10 @@ struct RipulInvitesPanel: View {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .uiKitIdentifier("GlassSessionsList.invites.joinErrorIcon")
                     Text(joinError)
-                        .font(.caption)
+                        .font(.ripul(.caption))
                         .uiKitIdentifier("GlassSessionsList.invites.joinErrorText")
                 }
-                .foregroundStyle(.orange)
+                .foregroundStyle(.ripul(.warning))
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 16)
                 .transition(.opacity)
@@ -189,7 +193,7 @@ struct RipulInvitesPanel: View {
                 }
                 .uiKitIdentifier("SessionListScreen.batch.removeInvitesButton")
                 .buttonStyle(.plain)
-                .foregroundStyle(.red)
+                .foregroundStyle(.ripul(.danger))
                 .glassEffect(.clear.interactive(), in: .capsule)
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
@@ -227,7 +231,7 @@ struct RipulInvitesPanel: View {
 
         let result = await bridge.joinShareLink(token: invite.token)
         guard let tabId = result.tabId else {
-            joinError = result.error ?? "Couldn't join that session."
+            joinError = result.error.map(Self.readable) ?? "Couldn't join that session."
             return
         }
 
@@ -251,6 +255,15 @@ struct RipulInvitesPanel: View {
         // row or using the batch Remove. Refreshing flips the row from
         // "Join" to "Open"; nothing waits on it.
         Task { await inviteManager.fetchInvites() }
+    }
+
+    /// A join that failed because the page did not answer comes back as one of
+    /// the bridge's codes, or in WebKit's own words. Say it the way the rest of
+    /// the app does. Anything else is the server's or the web app's sentence.
+    static func readable(_ error: String) -> String {
+        let pageCodes = ["web-context-dead:", "web-crashed:", "callables-absent:", "not-ready:", "no-web-view:"]
+        guard pageCodes.contains(where: { error.hasPrefix($0) }) || error.contains("unsupported type") else { return error }
+        return ConnectionDiagnosis.classify(rawError: error, phase: nil).summary + ". Try again in a few seconds."
     }
 
     /// Poll `bridge.sessions` for the joined tab. ~10s is generous next to the

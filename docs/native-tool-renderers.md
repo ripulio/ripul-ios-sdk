@@ -72,6 +72,8 @@ progress indicators, and image sheets rather than mounting the web components.
 | TodoWrite, update_plan | Progress and task states |
 | Web search/fetch, HTTP | Query, URL, method, result links/snippets or Markdown response |
 | Agent tools | Task description, Markdown prompt, response |
+| Agent comms: send, start, wait, archive | The agent's name with its model's glyph and colour, where the call stands, the task or message and the reply as Markdown; ids, handles and settings under Details |
+| Agent comms: list | One row per agent: state, CLI and model, last active as of the call, what it is doing, folder and branch; messages in flight and other Macs; ids and the rest under Details |
 | Tool discovery, host status | Tool names/descriptions or machine/relay state with expandable fields |
 | Screenshots/images | Image preview and enlargement |
 | Other tools | Labelled values and expandable structured fields |
@@ -116,6 +118,40 @@ the original `toolName` and serialized arguments/result. `NativeToolContent`
 selects a renderer and unwraps MCP text/structured-content envelopes while
 preserving recorded null, false, zero, and empty outputs.
 
+## Agent comms
+
+`send_to_agent`, `spawn_agent`, `await_agent`, `archive_agent` and `list_agents`
+address each other by ids and handles. A person reads them for who was asked
+what, and what came back, so the panels lead with that and keep every id,
+handle, model id and setting under **Details**. Nothing is dropped: Details
+holds them labelled, and Call information still has the raw call.
+
+The card's facts are not worked out in Swift. `toolCallDetails.ts` sends
+`agentComms` with each of the four card calls: the verb ("Started", "Message
+to", "Waiting on", "Reply from", "Archived"), the target's name, model id,
+CLI label and Mac, the text sent, the status with its tone, the reply, why the
+CLI was picked, and the labelled Details rows. It is the same presentation the
+web card draws (`agentCommsPresentation.ts`), so the two cannot disagree. Swift
+adds only what is native: `ModelIdentity` turns the model id into the glyph,
+colour and label the session list uses.
+
+An agent is named in this order: the title this client's own tab has for it,
+then what the chat's own earlier calls said of it, then a short form of its id.
+The second step is what works on a phone, which has no tab for an agent on the
+Mac: a start and a list name an agent, and a send and a wait say which agent a
+handle belongs to, so `await_agent {handle}` can say who it is waiting on before
+any result is in. `agentDirectory` in `toolCallDetails.ts` reads those results
+from the chat's actions each time the details are built.
+
+`list_agents` needs nothing from the web: `NativeAgentList` reads the recorded
+result. Times are told as of the call ("5 min ago" means five minutes before the
+list was taken), because the sheet is a record. A result that is not a list, such
+as an error, falls back to the labelled fields.
+
+A call with no `agentComms` (a web build from before the card) shows its task or
+message and the result as labelled fields. Its heading is the tool's name and
+its subtitle the task or message, never an id.
+
 To add a tool family, register names in `NativeToolRendererKind.resolve`, add its
 view to `NativeToolCallRenderer`, and compose `NativeToolSection`,
 `NativeToolCodeBlock`, `NativeToolParameters`, and `NativeToolValueView`. Keep
@@ -155,4 +191,4 @@ bash scripts/test-host-screen-preview.sh <simulator-UDID> -only-testing:HostPrev
 
 Also build the native app's `RipulApp` (iOS) and `RipulMac` schemes against the
 local SDK package. UI attachments cover commands, source, edits, Codex patches,
-searches, logs, tasks, evaluation, and viewing repeated calls together.
+searches, logs, tasks, evaluation, agent comms, and viewing repeated calls together.

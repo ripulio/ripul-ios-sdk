@@ -46,12 +46,12 @@ public struct RipulBuildsScreen<ExtraSections: View>: View {
             if let error = store.lastError {
                 Section {
                     Label(error, systemImage: "exclamationmark.triangle")
-                        .foregroundStyle(.secondary)
-                } footer: {
+                        .foregroundStyle(.ripul(.textSecondary))
+                } footer: { RipulSectionFooter {
                     // Saying "no builds" when the fetch failed would be a lie,
                     // and the kind that reads as "nothing was ever published".
                     Text("Showing the last build list that loaded, which may be out of date.")
-                }
+                } }
             }
 
             ForEach(store.feed?.channels ?? []) { channel in
@@ -61,7 +61,7 @@ public struct RipulBuildsScreen<ExtraSections: View>: View {
             if store.feed?.channels.isEmpty == true {
                 Section {
                     Text("No builds have been published yet.")
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(.ripul(.textSecondary))
                 }
             }
         }
@@ -97,13 +97,13 @@ public struct RipulBuildsScreen<ExtraSections: View>: View {
             LabeledContent("Version", value: RipulBuildFeedStore.runningVersion)
             runningBuildRow(RipulBuildFeedStore.runningBuild)
             statusRow
-        } header: {
+        } header: { RipulSectionHeader {
             Text("This app")
-        } footer: {
+        } } footer: { RipulSectionFooter {
             if store.ownChannel == nil && store.feed != nil {
                 Text("No published channel matches this app's bundle id (\(RipulBuildFeedStore.runningBundleId)), so there is nothing to compare against.")
             }
-        }
+        } }
     }
 
     /// The running build, decoded to a date, with the exact stamp kept beneath
@@ -114,8 +114,8 @@ public struct RipulBuildsScreen<ExtraSections: View>: View {
             VStack(alignment: .trailing, spacing: 1) {
                 Text(RipulBuildNumber.displayRunning(build))
                 Text(build)
-                    .font(.caption2.monospacedDigit())
-                    .foregroundStyle(.tertiary)
+                    .font(.ripul(.caption2).monospacedDigit())
+                    .foregroundStyle(.ripul(.textTertiary))
             }
         }
     }
@@ -126,15 +126,15 @@ public struct RipulBuildsScreen<ExtraSections: View>: View {
         case .unknown:
             LabeledContent("Status") {
                 if store.isLoading {
-                    Text("Checking…").foregroundStyle(.secondary)
+                    Text("Checking…").foregroundStyle(.ripul(.textSecondary))
                 } else {
-                    Text("Unknown").foregroundStyle(.secondary)
+                    Text("Unknown").foregroundStyle(.ripul(.textSecondary))
                 }
             }
         case .upToDate:
             LabeledContent("Status") {
                 Label("Latest", systemImage: "checkmark.circle.fill")
-                    .foregroundStyle(.green)
+                    .foregroundStyle(.ripul(.success))
             }
         case .updateAvailable(let build):
             LabeledContent("Status") {
@@ -142,7 +142,7 @@ public struct RipulBuildsScreen<ExtraSections: View>: View {
                     "Build from \(RipulBuildNumber.display(build.build, relative: false)) available",
                     systemImage: "arrow.down.circle.fill"
                 )
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(.ripul(.warning))
             }
             // The whole point of the status check is acting on it — make the
             // newest build installable from here, not just from its row in the
@@ -168,9 +168,9 @@ public struct RipulBuildsScreen<ExtraSections: View>: View {
             ForEach(channel.builds) { build in
                 buildRow(build, in: channel)
             }
-        } header: {
+        } header: { RipulSectionHeader {
             Text(channel.title)
-        } footer: {
+        } } footer: { RipulSectionFooter {
             // The distinction users actually need before tapping Install, and
             // the one no install page ever stated.
             if store.installReplacesRunningApp(channel) {
@@ -178,7 +178,7 @@ public struct RipulBuildsScreen<ExtraSections: View>: View {
             } else {
                 Text("Bundle \(channel.bundleId) — installs alongside this app as a separate icon.")
             }
-        }
+        } }
     }
 
     @ViewBuilder
@@ -186,10 +186,10 @@ public struct RipulBuildsScreen<ExtraSections: View>: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .firstTextBaseline) {
                 Text(RipulBuildNumber.display(build.build))
-                    .font(.body)
+                    .font(.ripul(.body))
                 if isRunning(build, in: channel) {
                     Text("RUNNING")
-                        .font(.caption2.weight(.bold))
+                        .font(.ripul(.caption2, weight: .bold))
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
                         .background(.tint.opacity(0.15), in: Capsule())
@@ -200,8 +200,8 @@ public struct RipulBuildsScreen<ExtraSections: View>: View {
 
             if let notes = build.notes, !notes.isEmpty {
                 Text(notes)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
+                    .font(.ripul(.callout))
+                    .foregroundStyle(.ripul(.textSecondary))
             }
 
             HStack(spacing: 8) {
@@ -217,8 +217,8 @@ public struct RipulBuildsScreen<ExtraSections: View>: View {
                     Text(date, style: .relative)
                 }
             }
-            .font(.caption)
-            .foregroundStyle(.tertiary)
+            .font(.ripul(.caption))
+            .foregroundStyle(.ripul(.textTertiary))
         }
         .padding(.vertical, 2)
     }
@@ -257,7 +257,7 @@ private struct InstallButtonStyle: ViewModifier {
     func body(content: Content) -> some View {
         #if os(iOS)
         if #available(iOS 26.0, *) {
-            content.buttonStyle(.glassProminent)
+            content.ripulGlassProminentButtonStyle()
         } else {
             content.buttonStyle(.bordered)
         }

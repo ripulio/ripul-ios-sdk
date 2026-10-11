@@ -27,7 +27,67 @@ public enum RipulOpenSessionRequest {
 
     public static func open(sessionId: String) {
         pendingSessionId = sessionId
+        opening = (sessionId, .now)
         NotificationCenter.default.post(name: notification, object: nil)
+    }
+
+    // MARK: Waiting for the chat to be on screen
+    //
+    // A request is fire-and-forget, which is right for Siri and a deep link:
+    // nothing follows them. An agent's tool is different. "Send this to the
+    // deploy chat" is an open and then a send, and a send that does not wait
+    // goes to whichever chat was on screen before. So a caller can wait, and is
+    // told when the list has put the chat in front — by the list, through the
+    // same open a tapped row makes, rather than by guessing at a delay.
+
+    /// How long a request is treated as still under way. An open that fails
+    /// reports through the list's own error notice, not here, so without a
+    /// limit one failure would hold every later wait.
+    public static let openingLimit: Duration = .seconds(20)
+
+    private static var opening: (sessionId: String, since: ContinuousClock.Instant)?
+    private static var waiters: [UUID: (sessionId: String, continuation: CheckedContinuation<String?, Never>)] = [:]
+
+    /// Ask for a chat and wait until it is the one on screen.
+    ///
+    /// `request` does the asking once the wait is in place — the app's own
+    /// navigation, which lands on the list and ends in `open(sessionId:)`.
+    /// Returns the open tab's id, or nil when the chat did not open in time:
+    /// its machine is offline, or it is no longer listed.
+    @MainActor
+    public static func whenOpened(_ sessionId: String, timeout: Duration = openingLimit,
+                                  request: @MainActor () -> Void) async -> String? {
+        let token = UUID()
+        return await withCheckedContinuation { continuation in
+            waiters[token] = (sessionId, continuation)
+            request()
+            Task { @MainActor in
+                try? await Task.sleep(for: timeout)
+                waiters.removeValue(forKey: token)?.continuation.resume(returning: nil)
+            }
+        }
+    }
+
+    /// Wait for an open that is under way, if there is one. For an action that
+    /// works on "the current chat" — start talking, stop the agent — so that
+    /// run straight after "open the deploy chat" it means the deploy chat.
+    @MainActor
+    public static func settled() async {
+        guard let opening else { return }
+        let left = openingLimit - (ContinuousClock.now - opening.since)
+        guard left > .zero else { return }
+        _ = await whenOpened(opening.sessionId, timeout: left) {}
+    }
+
+    /// The list reports a requested chat as on screen (`tabId`), or as one it
+    /// has stopped trying to open (nil).
+    @MainActor
+    static func finished(_ sessionId: String, tabId: String?) {
+        if opening?.sessionId == sessionId { opening = nil }
+        for (token, waiter) in waiters where waiter.sessionId == sessionId {
+            waiters.removeValue(forKey: token)
+            waiter.continuation.resume(returning: tabId)
+        }
     }
 }
 

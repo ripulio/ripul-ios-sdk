@@ -79,7 +79,7 @@ public struct RipulProfileScreen<PlanContent: View>: View {
                 HStack(spacing: 8) {
                     ProgressView()
                     Text("Checking…")
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(.ripul(.textSecondary))
                 }
             } else {
                 ProviderKeyRow(
@@ -121,14 +121,14 @@ public struct RipulProfileScreen<PlanContent: View>: View {
 
             if let secretsError {
                 Text(secretsError)
-                    .font(.caption)
-                    .foregroundStyle(.red)
+                    .font(.ripul(.caption))
+                    .foregroundStyle(.ripul(.danger))
             }
-        } header: {
+        } header: { RipulSectionHeader {
             Text("Service Keys")
-        } footer: {
+        } } footer: { RipulSectionFooter {
             Text(serviceKeysFooter)
-        }
+        } }
     }
 
     /// The footer answers the only question this section really raises: what

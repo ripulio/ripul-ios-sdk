@@ -4,7 +4,7 @@ import Foundation
 /// bridge supplies the web normalizer's canonical name; aliases here also cover
 /// CLI-native tools that intentionally keep their own names in the web stream.
 enum NativeToolRendererKind: String {
-    case terminal, read, write, edit, patch, grep, glob, logs, evaluate, todos, web, agent, http, tools, host, image, fields
+    case terminal, read, write, edit, patch, grep, glob, logs, evaluate, todos, web, agent, agentComms, agentList, http, tools, host, image, fields
 
     static func resolve(_ toolName: String) -> Self {
         let name = toolName.replacingOccurrences(of: "^functions[._]+", with: "", options: .regularExpression)
@@ -22,7 +22,9 @@ enum NativeToolRendererKind: String {
         case "device_evaluate", "browser_run_js", "executecode", "runcode", "exec": return .evaluate
         case "todowrite", "update_plan": return .todos
         case "websearch", "webfetch", "web_search", "web_fetch", "search", "getpagesummary": return .web
-        case "agent", "task", "runagent", "spawn_agent", "parallelagents": return .agent
+        case "agent", "task", "runagent", "parallelagents": return .agent
+        case "send_to_agent", "spawn_agent", "await_agent", "archive_agent": return .agentComms
+        case "list_agents": return .agentList
         case "httprequest", "http_request": return .http
         case "iphone_inspect", "agentdiscovery", "device_list_targets": return .tools
         case "host_get_host_status": return .host
@@ -104,6 +106,20 @@ struct NativeToolSummary {
             heading = description ?? "Run agent"
             detail = first("prompt", "message", "task")
             symbol = "person.crop.circle"
+        case .agentComms:
+            if let shown = call.agentComms {
+                heading = "\(shown.verb) \(shown.target.name)"
+                detail = (shown.sent ?? shown.reply).map { Self.plain(String($0.prefix(600))) } ?? shown.status.text
+            } else {
+                // A web build from before the card: lead with what was asked, never the ids.
+                heading = description ?? ToolDisplayName.format(call.toolName)
+                detail = first("task", "message")
+            }
+            symbol = "bubble.left.and.bubble.right"
+        case .agentList:
+            heading = ["running": "Running agents", "all": "All agents"][first("status") ?? ""] ?? "Recent agents"
+            detail = first("machine").map { "On \($0)" }
+            symbol = "bubble.left.and.bubble.right"
         case .todos:
             let tasks = args["todos"]?.toolArray ?? args["plan"]?.toolArray ?? []
             let active = tasks.first { $0.objectValue?.string("status") == "in_progress" }?.objectValue
@@ -140,6 +156,12 @@ struct NativeToolSummary {
         let secondary = detail.flatMap(Self.compact)
         subtitle = secondary == title ? nil : secondary
         isCode = (kind == .terminal && call.commandPresentation == nil) || kind == .evaluate
+    }
+
+    /// Markdown for a one-line preview: its marks read as noise in a subtitle.
+    private static func plain(_ markdown: String) -> String {
+        markdown.replacingOccurrences(of: "(?m)^\\s{0,3}(#{1,6}|[-*+]|\\d+\\.)\\s+", with: "", options: .regularExpression)
+            .replacingOccurrences(of: "\\*\\*|`", with: "", options: .regularExpression)
     }
 
     private static func compact(_ value: String) -> String? {

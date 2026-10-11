@@ -366,9 +366,9 @@ public struct RipulThemeManagementScreen: View {
                         .disabled(model.busy || model.sourceDirty || model.isLive(version))
                         .accessibilityIdentifier("ThemeManagement.history.version")
                     }
-                } header: { Text("History") } footer: {
+                } header: { RipulSectionHeader { Text("History") } } footer: { RipulSectionFooter {
                     Text("Restore puts an earlier version in your draft. Review & Publish makes it live.")
-                }
+                } }
             }
             Section {
                 NavigationLink("Text tokens and individual overrides") { RipulTextLibraryScreen() }
@@ -418,23 +418,23 @@ public struct RipulThemeManagementScreen: View {
                     .accessibilityIdentifier("ThemeManagement.nativeLabel." + item.id)
                 }
                 if elements.isEmpty && nativeElements.isEmpty && labels.isEmpty { Text(search.isEmpty ? "No theme elements match this filter." : "No matching elements.").foregroundStyle(.secondary) }
-            } header: { Text("Elements (\(elements.count + nativeElements.count + labels.count))") }
+            } header: { RipulSectionHeader { Text("Elements (\(elements.count + nativeElements.count + labels.count))") } }
         }
         .searchable(text: $search, prompt: "Find an element or its text")
         .navigationTitle("Theme")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
-                Menu {
+                Menu { MenuIcons {
                     Button("Reload server version", role: .destructive) { confirmReload = true }
                         .disabled(model.themeID == nil || model.busy)
-                } label: { Image(systemName: "ellipsis.circle") }
+                }} label: { Image(systemName: "ellipsis.circle") }
             }
             ToolbarItem(placement: .topBarTrailing) { Button("Done") { model.close(); dismiss() }.disabled(model.busy) }
         }
         .onReceive(NotificationCenter.default.publisher(for: .ripulThemeDidChange)) { _ in model.captureChanges() }
-        .sheet(isPresented: $showSource) { sourceEditor }
-        .sheet(isPresented: $reviewPublish) { ThemePublishReviewScreen(model: model) }
+        .ripulSheet(isPresented: $showSource) { sourceEditor }
+        .ripulSheet(isPresented: $reviewPublish) { ThemePublishReviewScreen(model: model) }
         .confirmationDialog("Replace this draft with the server version?", isPresented: $confirmReload, titleVisibility: .visible) {
             Button("Reload and replace draft", role: .destructive) { Task { await model.reloadServer() } }
         }
@@ -486,7 +486,7 @@ private struct ThemeManagedElementScreen: View {
                         working: RipulThemeEngine.current.styleOverrides[kind.name]?[scope.id] ?? [:],
                         inherited: RipulThemeEngine.resolvedStyle(kind: kind.name, element: scope.id),
                         onChange: { RipulThemeEngine.setOverrides(kind: kind.name, element: scope.id, knobs: $0) })
-                } footer: { Text("These are the same values used by the in-app editor and View Explorer.") }
+                } footer: { RipulSectionFooter { Text("These are the same values used by the in-app editor and View Explorer.") } }
             }
             .navigationTitle(scope.label).navigationBarTitleDisplayMode(.inline)
             .onReceive(NotificationCenter.default.publisher(for: .ripulThemeDidChange)) { _ in version &+= 1 }

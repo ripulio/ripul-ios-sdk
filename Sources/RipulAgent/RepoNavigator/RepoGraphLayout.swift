@@ -112,6 +112,8 @@ public struct RepoGraphLayout: Sendable {
             if let head = refs.first(where: { $0.isHead && $0.type == .branch }) { return head.name }
             if let branch = refs.first(where: { $0.type == .branch }) { return branch.name }
             if let tag = refs.first(where: { $0.type == .tag }) { return tag.name }
+            // A remote's branch before its HEAD pointer, which is no branch.
+            if let remote = refs.first(where: { $0.type == .remote && !$0.isRemoteHeadPointer }) { return remote.name }
             if let remote = refs.first(where: { $0.type == .remote }) { return remote.name }
             return nil
         }

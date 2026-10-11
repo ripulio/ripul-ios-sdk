@@ -65,12 +65,12 @@ public struct ExpandedChatTitleContent: View {
             ForEach(metadata) { row in
                 HStack(spacing: 6) {
                     Image(systemName: row.icon)
-                        .font(.system(size: 10))
-                        .foregroundStyle(.secondary)
+                        .font(.ripulIcon(size: 10))
+                        .foregroundStyle(.ripul(.textSecondary))
                         .frame(width: 14, alignment: .center)
                     Text(row.text)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
+                        .font(.ripul(.caption2))
+                        .foregroundStyle(.ripul(.textSecondary))
                         .lineLimit(1)
                 }
                 .uiKitIdentifier("ExpandedChatTitleContent.metadataRow.\(row.icon)")
@@ -105,11 +105,11 @@ public struct ExpandedChatTitleContent: View {
         Button(action: action) {
             HStack(spacing: 4) {
                 Image(systemName: icon)
-                    .font(.system(size: 10, weight: .semibold))
+                    .font(.ripulIcon(size: 10, weight: .semibold))
                 Text(label)
-                    .font(.caption2.weight(.medium))
+                    .font(.ripul(.caption2, weight: .medium))
             }
-            .foregroundStyle(.primary)
+            .foregroundStyle(.ripul(.text))
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
             // Equal shares of the pinned width — three controls that keep

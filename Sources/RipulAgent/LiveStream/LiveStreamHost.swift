@@ -1018,7 +1018,7 @@ final class LiveStreamIndicator {
         created.backgroundColor = .clear
         let root = UIViewController()
         root.view.backgroundColor = .clear
-        let host = UIHostingController(rootView: LiveStreamIndicatorPill(model: model))
+        let host = UIHostingController(rootView: LiveStreamIndicatorPill(model: model).ripulThemeRoot())
         host.view.backgroundColor = .clear
         host.sizingOptions = .intrinsicContentSize
         root.addChild(host)
@@ -1089,14 +1089,14 @@ struct LiveStreamIndicatorPill: View {
         Group {
             if model.isOpen {
                 HStack(spacing: 8) {
-                    Circle().fill(Color.red).frame(width: 8, height: 8)
+                    Circle().fill(Color.ripul(.danger)).frame(width: 8, height: 8)
                     Text(model.text)
-                        .font(.footnote.weight(.semibold))
+                        .font(.ripul(.footnote, weight: .semibold))
                         .lineLimit(1)
                     Button("Stop") { model.onStop() }
-                        .font(.footnote.weight(.bold))
-                        .buttonStyle(.borderedProminent)
-                        .tint(.red)
+                        .font(.ripul(.footnote, weight: .bold))
+                        .ripulProminentButtonStyle()
+                        .tint(Color.ripul(.danger))
                         .controlSize(.mini)
                         .uiKitIdentifier("LiveStreamIndicator.stop")
                 }
@@ -1106,8 +1106,8 @@ struct LiveStreamIndicatorPill: View {
             } else {
                 Button { model.open() } label: {
                     HStack(spacing: 4) {
-                        Circle().fill(Color.red).frame(width: 6, height: 6)
-                        Text("Live").font(.caption2.weight(.semibold))
+                        Circle().fill(Color.ripul(.danger)).frame(width: 6, height: 6)
+                        Text("Live").font(.ripul(.caption2, weight: .semibold))
                     }
                     .padding(.horizontal, 8)
                     .padding(.vertical, 3)

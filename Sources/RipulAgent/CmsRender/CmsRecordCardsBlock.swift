@@ -436,7 +436,7 @@ struct CmsRecordCardsBlockView: View {
             }
             .buttonStyle(.plain)
         }
-        .sheet(isPresented: $showPickerSheet) {
+        .ripulSheet(isPresented: $showPickerSheet) {
             pickerSheet(rows: rows, schema: schema)
         }
     }

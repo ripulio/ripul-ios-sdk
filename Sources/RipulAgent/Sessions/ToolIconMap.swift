@@ -212,6 +212,11 @@ enum ToolIconMap {
         "git_commit": "point.topleft.down.to.point.bottomright.curvepath",
         "resume_from_commit": "clock.arrow.circlepath",
         "consult_agent": "bubble.left.and.bubble.right",
+        "list_agents": "bubble.left.and.bubble.right",
+        "send_to_agent": "bubble.left.and.bubble.right",
+        "spawn_agent": "bubble.left.and.bubble.right",
+        "await_agent": "bubble.left.and.bubble.right",
+        "archive_agent": "bubble.left.and.bubble.right",
 
         // Device tools (iPhone inspection + voice)
         "iphone_inspect": "iphone",

@@ -131,6 +131,10 @@ public final class RipulSessionListModel {
     /// which read a successful move's "working directory not found" as "That
     /// machine isn't in your list".
     public var infoNotice: String?
+    /// The move running or just finished. The move sheet shows it.
+    public var moveState: MoveChatState?
+    /// The sheet was put away while the move runs; it comes back with the result.
+    public var moveSheetHidden = false
     public var restartingMachineId: String?
     public var restartSucceededId: String?
     public private(set) var archivedSessions: [AgentBridge.ArchivedSessionInfo] = []
@@ -219,6 +223,9 @@ public final class RipulSessionListModel {
     @ObservationIgnored private var savedLastActiveTimes: [String: Date]?
     @ObservationIgnored private var machineRefreshTimer: Timer?
     @ObservationIgnored private var lifecycleObservers: [NSObjectProtocol] = []
+    /// The read a Mac's pushed change asked for, and whether another change came during it.
+    @ObservationIgnored private var remoteChangeReload: Task<Void, Never>?
+    @ObservationIgnored private var remoteChangePending = false
 
     private static let lastActiveTimeCacheKey = "ripulLastActiveTimeByChatId"
     /// Resolved last-active times keyed by UnifiedSession.id — stable across
@@ -362,6 +369,39 @@ public final class RipulSessionListModel {
             self?.remoteSessionArchived(sessionId: note.userInfo?["sessionId"] as? String,
                                         chatId: note.userInfo?["chatId"] as? String)
         })
+        lifecycleObservers.append(NotificationCenter.default.addObserver(
+            forName: AgentBridge.remoteSessionsChangedNotification,
+            object: bridge, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.remoteSessionsChanged() }
+        })
+    }
+
+    /// A Mac's chats changed in a way this device's copy of its list does not
+    /// show: a chat was started there, or one this device has never opened
+    /// started or stopped. Read the lists again.
+    ///
+    /// One read for a burst of changes, and not more often than every few
+    /// seconds: a busy Mac changes state many times a minute, and each read
+    /// rebuilds the list. A change that arrives while a read is under way or
+    /// just done is not lost; one more read follows.
+    private func remoteSessionsChanged() {
+        // Both show in the once-a-minute [PERFMIN] line: how often a Mac asked, and how often it cost a read.
+        MainThreadSampler.count("list.remoteChanged")
+        if remoteChangeReload != nil {
+            remoteChangePending = true
+            return
+        }
+        remoteChangeReload = Task { [weak self] in
+            repeat {
+                self?.remoteChangePending = false
+                try? await Task.sleep(nanoseconds: 600_000_000)
+                MainThreadSampler.count("list.remoteReload")
+                await self?.loadRemoteSessions(force: true)
+                try? await Task.sleep(nanoseconds: 4_000_000_000)
+            } while self?.remoteChangePending == true
+            self?.remoteChangeReload = nil
+        }
     }
 
     /// A chat was archived somewhere else — another device, the Mac, or an
@@ -522,9 +562,9 @@ public final class RipulSessionListModel {
         }
     }
 
-    /// Called on foreground / manual refresh. Invites are not fetched here —
-    /// ContentView's scenePhase handler already covers foreground, and the
-    /// invite UI fetches on open.
+    /// Called on foreground / manual refresh. Invites are not fetched here:
+    /// `RipulInviteManager` reads them on foreground by itself, and the list's
+    /// pull-to-refresh asks it alongside this (`RipulSessionsView`).
     public func refresh() async {
         if dataSource != nil { await loadDirectSessions(); return }
         await loadMachinesFromAPI()
@@ -887,9 +927,27 @@ public final class RipulSessionListModel {
         // still usable when that host cannot currently be resolved.
         guard let ownerMachineId = resolvedMachineId(for: session) else {
             if let tab = session.ripulSession { return tab }
-            reportOpenSessionFailure(
-                "machine-unavailable: " + (session.machineName.map { "\"\($0)\" isn't connected — this chat lives there." }
-                    ?? "This chat's machine isn't connected."), session: session)
+            // The row can be older than its tab: read from the cache at launch,
+            // or not rebuilt since the tab arrived. An invited chat always ends
+            // up here, because the "machine" its row names is the share itself
+            // (the pairing is named after the chat), never one this device can
+            // resolve. Opened in that gap it was refused as "isn't connected"
+            // while its tab was already there, or a moment from being restored.
+            let (tab, pageFailure) = try await tabOpenOnThisDevice(for: session)
+            if let tab { return tab }
+            if let pageFailure {
+                reportOpenSessionFailure(pageFailure, session: session)
+            } else if session.id.hasPrefix("shared_") {
+                // A share-link guest's tab. There is no machine to wait for:
+                // the way back in is the invitation.
+                reportOpenSessionFailure(
+                    "invited-chat-closed: \"\(session.title)\" is no longer open on this device. Open it again from Invites.",
+                    session: session)
+            } else {
+                reportOpenSessionFailure(
+                    "machine-unavailable: " + (session.machineName.map { "\"\($0)\" isn't connected — this chat lives there." }
+                        ?? "This chat's machine isn't connected."), session: session)
+            }
             return nil
         }
         let (tabId, provider, providerLabel, error) = await bridge.openRemoteSession(
@@ -1090,43 +1148,78 @@ public final class RipulSessionListModel {
 
     func moveSession(_ session: UnifiedSession, to target: RemoteMachine) {
         guard dataSource == nil else { return }
+        // One move at a time: a second request brings the running one back
+        // into view rather than starting a copy of the same work.
+        if let running = moveState, running.isRunning {
+            moveSheetHidden = false
+            bridge.handleConsoleLog("LOG: [MOVE] \(session.id) → \(target.displayName): refused, \(running.chatTitle) is still moving")
+            return
+        }
         // Use the ripul tab's id as the paired chatId if we have one; otherwise
         // fall back to the unified session id (which may be the sourceChatId).
         let sourceChatId = session.ripulSession?.id ?? session.id
+        let moveId = "move-" + UUID().uuidString.prefix(8).lowercased()
+        let sourceName = session.machineName ?? "this chat's Mac"
+        moveState = MoveChatState(
+            id: moveId,
+            sessionId: session.id,
+            chatTitle: session.title,
+            sourceName: sourceName,
+            targetName: target.displayName,
+            targetMachineId: target.machineId,
+            progress: MoveChatProgress(step: .export, fraction: 0.01, detail: "Starting the move")
+        )
+        moveSheetHidden = false
         openingUnifiedSessionId = session.id
 
+        // The web reports where the move is; read it while the move runs.
+        let poller = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(400))
+                guard let self, !Task.isCancelled else { return }
+                guard let progress = await self.bridge.moveProgress(id: moveId),
+                      self.moveState?.id == moveId, self.moveState?.isRunning == true else { continue }
+                if progress != self.moveState?.progress { self.moveState?.progress = progress }
+            }
+        }
+
         Task {
-            defer { openingUnifiedSessionId = nil }
+            defer {
+                openingUnifiedSessionId = nil
+                poller.cancel()
+            }
             // A chat this device never opened has no tab and no pairing: the
             // web moves it from its owner by the scan row's id instead.
-            let (success, _, _, cwdFallback, targetName, error, sourceRemoved, sourceRemoveError) = await bridge.moveSession(
+            let outcome = await bridge.moveSession(
                 sourceChatId: sourceChatId,
                 targetMachineId: target.machineId,
                 displayName: session.title,
-                sourceMachineId: session.ripulSession == nil ? resolvedMachineId(for: session) : nil
+                sourceMachineId: session.ripulSession == nil ? resolvedMachineId(for: session) : nil,
+                progressId: moveId
             )
             bridge.handleConsoleLog("LOG: [MOVE] \(sourceChatId) → \(target.displayName): "
-                + (success ? "ok cwdFallback=\(cwdFallback) sourceRemoved=\(sourceRemoved)"
-                           + (sourceRemoveError.map { " (\($0))" } ?? "")
-                           : "failed: \(error ?? "unknown")"))
-            if success {
-                let label = targetName ?? target.displayName
+                + (outcome.success ? "ok cwdFallback=\(outcome.cwdFallback) sourceRemoved=\(outcome.sourceRemoved)"
+                           + (outcome.sourceRemoveError.map { " (\($0))" } ?? "")
+                           : "failed at \(outcome.failedStep?.rawValue ?? "?"): \(outcome.error ?? "unknown")"))
+            if outcome.success {
+                let label = outcome.targetMachineName ?? target.displayName
                 // The original was retired on its Mac: drop its row now rather
                 // than waiting for that Mac's next scan to leave it out.
-                if sourceRemoved {
+                if outcome.sourceRemoved {
                     recentlyArchivedIds.insert(session.id)
                     for key in session.matchKeys { recentlyArchivedIds.insert(key) }
                     if let tab = session.ripulSession { recentlyClosedLocalIds.insert(tab.id) }
                 }
                 var notes: [String] = []
-                if cwdFallback {
+                if outcome.cwdFallback {
                     notes.append("Its folder doesn't exist there, so the chat uses \(label)'s default working directory.")
                 }
-                if !sourceRemoved {
-                    let from = session.machineName ?? "the original Mac"
-                    notes.append("The original is still on \(from): \(sourceRemoveError ?? "it couldn't be removed").")
+                if !outcome.sourceRemoved {
+                    let from = outcome.sourceMachineName ?? sourceName
+                    notes.append("The original is still on \(from): \(outcome.sourceRemoveError ?? "it couldn't be removed").")
                 }
-                if !notes.isEmpty { infoNotice = "Moved to \(label). " + notes.joined(separator: " ") }
+                finishMove(moveId, .moved(notes: notes),
+                           progress: MoveChatProgress(step: .done, fraction: 1, detail: "Moved to \(label)"))
                 // The move opened a new web tab paired to the target. Pull the
                 // tab list before rescanning, or the target's row is built with
                 // no local tab: tapping it then opened the chat a second time
@@ -1134,9 +1227,37 @@ public final class RipulSessionListModel {
                 await bridge.fetchSessions()
                 await loadRemoteSessions(force: true)
             } else {
-                reportSessionFailure(error ?? "Failed to move session.", action: .move, session: session)
+                finishMove(moveId, .failed(message: outcome.error ?? "The move failed for a reason the app wasn't told.",
+                                           step: outcome.failedStep ?? moveState?.progress.step ?? .export))
             }
         }
+    }
+
+    private func finishMove(_ moveId: String, _ outcome: MoveChatState.Outcome, progress: MoveChatProgress? = nil) {
+        guard moveState?.id == moveId else { return }
+        if let progress { moveState?.progress = progress }
+        moveState?.outcome = outcome
+        // The result always shows, even if the sheet was put away mid-move.
+        moveSheetHidden = false
+    }
+
+    /// Close the move sheet. A running move carries on and reopens it when done.
+    public func dismissMoveSheet() {
+        if moveState?.isRunning == true {
+            moveSheetHidden = true
+        } else {
+            moveState = nil
+            moveSheetHidden = false
+        }
+    }
+
+    /// Run the failed move again, from the list's current rows.
+    public func retryMove() {
+        guard let state = moveState, !state.isRunning,
+              let session = unifiedSessions.first(where: { $0.id == state.sessionId }),
+              let target = machines.first(where: { $0.machineId == state.targetMachineId }) else { return }
+        moveState = nil
+        moveSession(session, to: target)
     }
 
     // MARK: - Delete session
@@ -1977,6 +2098,50 @@ public final class RipulSessionListModel {
 
     /// Find a bridge session matching any of the given keys, using the same
     /// cli_ prefix stripping that rematchLocalSessions uses.
+    /// The tab of a row that has none attached, looked up in the bridge's own
+    /// list. A row that was open on this device when it was cached has a tab
+    /// that is either still to be listed or gone, and only the page can say
+    /// which, so the page is asked:
+    /// - up and answering: its list is the answer, read fresh;
+    /// - still starting: wait for it, as long as a local chat's restore gets;
+    /// - not answering: nothing else notices that while the app stays in
+    ///   front, so it is reloaded once, and the wait goes on.
+    /// `pageFailure` is what to tell the user when the page never came back.
+    private func tabOpenOnThisDevice(for session: UnifiedSession) async throws -> (tab: ChatSession?, pageFailure: String?) {
+        var keys = Set(session.matchKeys + [session.id])
+        for key in session.matchKeys where key.hasPrefix("cli_") {
+            keys.insert(String(key.dropFirst(4)))
+        }
+        if let tab = findBridgeSession(matchingKeys: keys) { return (tab, nil) }
+        guard session.cachedIsOpen else { return (nil, nil) }
+
+        var pageFailure: String?
+        let deadline = Date().addingTimeInterval(30)
+        while Date() < deadline {
+            switch await bridge.probeWebContextHealth() {
+            case .healthy:
+                // Read twice, a second apart: as the page starts, an invited
+                // chat's tab is restored from its pairing after the first listing.
+                for attempt in 0..<2 {
+                    if attempt > 0 { try await Task.sleep(nanoseconds: 1_000_000_000) }
+                    await bridge.fetchSessions()
+                    try Task.checkCancellation()
+                    if let tab = findBridgeSession(matchingKeys: keys) { return (tab, nil) }
+                }
+                return (nil, nil)
+            case .contextDead, .webCrashed, .callablesAbsent:
+                if pageFailure == nil {
+                    pageFailure = await bridge.classifyJsCallFailure("the page is not answering", callable: "openSession")
+                }
+            case .callablesMissing, .noWebView:
+                break
+            }
+            try await Task.sleep(nanoseconds: 500_000_000)
+            if let tab = findBridgeSession(matchingKeys: keys) { return (tab, nil) }
+        }
+        return (nil, pageFailure)
+    }
+
     private func findBridgeSession(matchingKeys allKeys: Set<String>) -> ChatSession? {
         for s in bridge.sessions {
             if allKeys.contains(s.id) || allKeys.contains(s.sourceChatId) { return s }

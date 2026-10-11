@@ -78,7 +78,10 @@ final class NativeSlotAttachment {
     /// Declining a placement (the owner retries ~32ms later) keeps content from
     /// landing on the scroller and being reparented a frame later — the other
     /// half of the arrival flicker. After this many, the scroller will do.
-    private static let maxMountWaits = 6
+    /// About half a second: a Catalyst chat entry shows the old chat's layer
+    /// for ~150ms before the new panel's views exist, and six waits (~200ms)
+    /// left whole chats parented to the scroller (2026-10-09).
+    private static let maxMountWaits = 15
     /// Last time a scroller-parented layered slot looked for its mount's view.
     private var lastUpgradeCheck: CFTimeInterval = 0
     /// The slot's origin (scroller coordinates, from the latest report). When
@@ -175,6 +178,63 @@ final class NativeSlotAttachment {
                                    unit: unit, pageScale: pageScale)
     }
 
+    #if DEBUG
+    private static func describe(_ r: CGRect) -> String {
+        String(format: "(%.1f,%.1f %.1fx%.1f)", r.minX, r.minY, r.width, r.height)
+    }
+
+    /// Views of the slot's size near its reported position, for the log line
+    /// written when a layered slot's view was never recognised. Searched in
+    /// every scroll view under the web view, so a match in another chat's
+    /// scroller (or none anywhere) shows up.
+    private func nearbyViews(in target: UIScrollView, around rect: CGRect) -> String {
+        guard let webView else { return "no web view" }
+        var lines: [String] = []
+        func scan(_ scroll: UIScrollView, tag: String) {
+            var total = 0, found: [String] = []
+            func visit(_ view: UIView, depth: Int) {
+                if view is SlotMountView { return }
+                if view !== scroll {
+                    if view is UIScrollView { return }
+                    total += 1
+                    let frame = view.convert(view.bounds, to: scroll)
+                    if abs(frame.minY - rect.minY) < 80, abs(frame.height - rect.height) < 30 {
+                        found.append(String(describing: type(of: view)) + Self.describe(frame)
+                                     + " d\(depth) sub\(view.subviews.count)" + (view.isHidden ? " hidden" : ""))
+                    }
+                }
+                view.subviews.forEach { visit($0, depth: depth + 1) }
+            }
+            visit(scroll, depth: 0)
+            let box = scroll.convert(scroll.bounds, to: webView)
+            lines.append("\(tag) frame=\(Self.describe(box)) content=\(Int(scroll.contentSize.height)) offset=\(Int(scroll.contentOffset.y)) views=\(total) alpha=\(scroll.alpha) hidden=\(scroll.isHidden): "
+                         + (found.isEmpty ? "none" : found.prefix(4).joined(separator: " | ")))
+        }
+        scan(target, tag: "target")
+        func visitScrolls(_ view: UIView) {
+            if let scroll = view as? UIScrollView, scroll !== target, scroll !== webView.scrollView { scan(scroll, tag: "other") }
+            view.subviews.forEach(visitScrolls)
+        }
+        visitScrolls(webView.scrollView)
+        return lines.joined(separator: " || ")
+    }
+    #endif
+
+    /// Whether any view of about the slot's height sits within 80pt of it in
+    /// `target`: the row layers exist, so a mismatch is timing, not absence.
+    private static func hasRowViews(in target: UIScrollView, near rect: CGRect) -> Bool {
+        func visit(_ view: UIView) -> Bool {
+            if view is SlotMountView { return false }
+            if view !== target {
+                if view is UIScrollView { return false }
+                let frame = view.convert(view.bounds, to: target)
+                if abs(frame.minY - rect.minY) < 80, abs(frame.height - rect.height) < 30 { return true }
+            }
+            return view.subviews.contains(where: visit)
+        }
+        return visit(target)
+    }
+
     /// Per-edge tolerance for recognising a slot view: reports are rounded to
     /// half a CSS pixel and scaled by page zoom; WebKit snaps to device pixels.
     private static let slotTolerance: CGFloat = 1.5
@@ -230,10 +290,22 @@ final class NativeSlotAttachment {
         guard let webView, let placed = resolve(g, existing: scroller) else { return nil }
         let kept = ridingSlotView.flatMap { $0.isDescendant(of: placed.scroller) ? $0 : nil }
         let slot = kept ?? slotView(in: placed.scroller, matching: placed.rect, layered: g.layered)
-        if slot == nil, g.layered, !isMounted, mountWaits < Self.maxMountWaits {
+        // Wait for the mount's view only while the scroller has row-sized
+        // views near the slot at all: then a report has merely beaten the
+        // commit. A chat shown again after being hidden has none of its rows
+        // as views for seconds (Catalyst, 2026-10-09), and waiting there just
+        // left the web copies showing before every strip was rebuilt.
+        if slot == nil, g.layered, !isMounted, mountWaits < Self.maxMountWaits,
+           Self.hasRowViews(in: placed.scroller, near: placed.rect) {
             mountWaits += 1
             return nil
         }
+        #if DEBUG
+        if slot == nil, g.layered, mountWaits >= Self.maxMountWaits {
+            NSLog("[SLOT] %@ no slot view for %@; near: %@", label, Self.describe(placed.rect),
+                  nearbyViews(in: placed.scroller, around: placed.rect))
+        }
+        #endif
         mountWaits = 0
         let parent: UIView = slot ?? placed.scroller
         #if DEBUG
@@ -298,6 +370,30 @@ final class NativeSlotAttachment {
                 slotOrigin = placed.rect.origin
             }
         }
+        setFrame(frame(placed))
+        return true
+    }
+
+    /// For content that fell back to the scroller of a layered slot: look for
+    /// the mount's view now, ignoring the report-driven throttle, and ride it
+    /// when found. Returns true once riding (already or newly). The owner
+    /// calls this on its own clock for a while after a scroller placement:
+    /// a strip left on the scroller moves only on a report, and a chat that
+    /// goes quiet after entry never sends one.
+    @discardableResult
+    func upgradeToSlotView(geometry g: NativeSlotGeometry, frame: (NativeSlotPlacement) -> CGRect) -> Bool {
+        guard g.layered else { return false }
+        if ridingSlotView != nil { return true }
+        guard let webView, let target = scroller, container.superview === target, target.isDescendant(of: webView),
+              let placed = placement(in: target, for: g) else { return false }
+        guard let slot = slotView(in: target, matching: placed.rect, layered: true) else { return false }
+        #if DEBUG
+        NSLog("[SLOT] %@ parent=layer (upgraded from scroller)", label)
+        #endif
+        lastUpgradeCheck = CACurrentMediaTime()
+        slot.addSubview(container)
+        slotView = slot
+        slotOrigin = placed.rect.origin
         setFrame(frame(placed))
         return true
     }

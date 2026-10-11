@@ -128,6 +128,14 @@ public final class SessionListStore {
         return false
     }
 
+    /// Whether a chat is mid-turn, or has stopped to ask its person something:
+    /// the two states a list must not fold out of sight. Unlike `turnPhase`,
+    /// a turn that has finished is neither.
+    public func isWorkingOrAsking(_ chatId: String) -> Bool {
+        guard !updatesSuppressed, let raw = cell(chatId).rawPhase else { return false }
+        return raw == .running || raw == .awaitingInput
+    }
+
     /// Collapsed phase for display: running / awaitingInput; completed and
     /// failed read as awaitingInput ("your move"); idle is nil. Nil while
     /// updates are suppressed.

@@ -72,11 +72,16 @@ public struct ActionParameter: Codable, Hashable, Sendable {
     /// A required input that cannot be filled sends the resolution to the
     /// map's fallback rather than running the action half-specified.
     public let isRequired: Bool
+    /// What this input is for, as the orchestrator is told it. Without one it
+    /// is described by its kind alone, which is enough for "the chat to open"
+    /// and not enough for "leave this out to continue the current chat".
+    public let description: String?
 
-    public init(name: String, kind: Kind, isRequired: Bool = true) {
+    public init(name: String, kind: Kind, isRequired: Bool = true, description: String? = nil) {
         self.name = name
         self.kind = kind
         self.isRequired = isRequired
+        self.description = description
     }
 }
 
@@ -96,13 +101,19 @@ public struct ActionValues: Equatable, Sendable {
 public struct CommandAction: Sendable, Identifiable {
     public let id: String
     public let title: String
+    /// What this action does and when to use it, as the orchestrator is told
+    /// it. The orchestrator is handed actions directly, as tools, so this is
+    /// the only place its understanding of an action comes from; a command
+    /// map's descriptions are not shown to it. Falls back to the title.
+    public let description: String?
     public let parameters: [ActionParameter]
     public let perform: @Sendable (ActionValues) async throws -> Void
 
-    public init(id: String, title: String, parameters: [ActionParameter] = [],
+    public init(id: String, title: String, description: String? = nil, parameters: [ActionParameter] = [],
                 perform: @escaping @Sendable (ActionValues) async throws -> Void) {
         self.id = id
         self.title = title
+        self.description = description
         self.parameters = parameters
         self.perform = perform
     }
@@ -113,10 +124,17 @@ public struct CommandAction: Sendable, Identifiable {
 public struct CommandRegistry: Sendable {
     public let actions: [CommandAction]
     public let sources: [EntitySource]
+    /// Where the person is in the app right now, in a sentence: "The person
+    /// is in the chat "Deploy lock contention"." Only the orchestrator is
+    /// told. It is what lets it read "this chat" and "here", and know that an
+    /// ordinary sentence said inside a chat is for that chat's agent.
+    public let situation: (@Sendable () async -> String?)?
 
-    public init(actions: [CommandAction], sources: [EntitySource]) {
+    public init(actions: [CommandAction], sources: [EntitySource],
+                situation: (@Sendable () async -> String?)? = nil) {
         self.actions = actions
         self.sources = sources
+        self.situation = situation
     }
 
     public func action(_ id: String) -> CommandAction? { actions.first { $0.id == id } }

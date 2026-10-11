@@ -14,6 +14,7 @@ struct ToolCallDetail: Decodable, Identifiable, Equatable {
     let rendererName: String?
     let renderArguments: CmsJSON?
     let commandPresentation: ShellToolPresentation?
+    var agentComms: AgentCommsPresentation? = nil
     var simulatorTargets: [SimulatorTarget]? = nil
     var task: ToolTaskActivity? = nil
 
@@ -48,6 +49,37 @@ struct ShellToolPresentation: Decodable, Equatable {
     let summary: String
     let source: String?
     let language: String?
+}
+
+/// A message to, start of, wait on or archive of another agent, worked out by
+/// the shared web presentation: who, what was sent, where it stands, the reply.
+/// Ids, handles and settings arrive as `details`, to be kept off the face.
+struct AgentCommsPresentation: Decodable, Equatable {
+    struct Target: Decodable, Equatable {
+        let name: String
+        /// A model id; `ModelIdentity` gives its glyph, colour and label.
+        var model: String? = nil
+        var harness: String? = nil
+        var machine: String? = nil
+    }
+    struct Status: Decodable, Equatable {
+        let text: String
+        /// `pending`, `ok` or `error`.
+        let tone: String
+    }
+    struct Detail: Decodable, Equatable {
+        let label: String
+        let value: String
+    }
+    let verb: String
+    let target: Target
+    var sent: String? = nil
+    let status: Status
+    var reply: String? = nil
+    var caption: String? = nil
+    var details: [Detail]? = nil
+    /// The output could not be read as this tool's result; show it as it is.
+    var unreadResult: Bool? = nil
 }
 
 struct ToolCallDetailsRequest: Decodable, Equatable {
@@ -113,7 +145,7 @@ struct ToolCallDetailsPresenter: ViewModifier {
     }
 
     func body(content: Content) -> some View {
-        content.sheet(isPresented: Binding(get: { store.request != nil }, set: { if !$0 { close() } })) {
+        content.ripulSheet(isPresented: Binding(get: { store.request != nil }, set: { if !$0 { close() } })) {
             ToolCallDetailsSheet(store: store, onClose: close, onViewSimulator: onViewSimulator)
         }
     }
@@ -165,7 +197,7 @@ struct ToolCallDetailsSheet: View {
               }
             }
             #if os(iOS)
-            .background(Color(.systemGroupedBackground))
+            .background(Color.ripul(.surfaceSunken))
             #else
             .background(Color(nsColor: .windowBackgroundColor))
             #endif
@@ -209,7 +241,7 @@ private struct ToolCallDisclosure: View {
                             } label: {
                                 Label(targets.count == 1 ? "View Simulator" : "View Simulator \(index + 1)", systemImage: "pip")
                             }
-                            .buttonStyle(.borderedProminent)
+                            .ripulProminentButtonStyle()
                             .accessibilityIdentifier("ToolCallDetails.viewSimulator.\(call.id).\(index)")
                         }
                     }
@@ -228,9 +260,9 @@ private struct ToolCallDisclosure: View {
                     }
                     DisclosureGroup("Call information") {
                         VStack(alignment: .leading, spacing: 12) {
-                            Text(call.toolName).font(.subheadline)
-                            Text(call.id).font(.caption).foregroundStyle(.secondary)
-                            if let task = call.task { Text("Task \(task.id)").font(.caption).foregroundStyle(.secondary) }
+                            Text(call.toolName).font(.ripul(.subheadline))
+                            Text(call.id).font(.ripul(.caption)).foregroundStyle(.ripul(.textSecondary))
+                            if let task = call.task { Text("Task \(task.id)").font(.ripul(.caption)).foregroundStyle(.ripul(.textSecondary)) }
                             if call.commandPresentation != nil, let command = call.recordedCommand {
                                 NativeToolCodeBlock(text: command, syntax: .shell, identifier: "ToolCallDetails.invocation")
                             }
@@ -254,32 +286,32 @@ private struct ToolCallDisclosure: View {
                     Spacer(minLength: 4)
                     if let task = call.task { ToolTaskStatus(status: task.status) } else { statusBadge }
                 }
-                .font(.caption2)
-                .foregroundStyle(.secondary)
+                .font(.ripul(.caption2))
+                .foregroundStyle(.ripul(.textSecondary))
                 HStack(alignment: .top, spacing: 10) {
                     Image(systemName: summary.symbol)
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(call.commandPresentation?.color.map { Color(hex: $0) } ?? .secondary)
+                        .font(.ripulIcon(size: 14, weight: .medium))
+                        .foregroundStyle(call.commandPresentation?.color.map { Color(hex: $0) } ?? Color.ripul(.textSecondary))  // theme-exempt: a command's colour is data
                         .frame(width: 30, height: 30)
-                        .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
+                        .background(.ripul(.textQuaternary), in: RoundedRectangle(cornerRadius: 8))
                         .accessibilityHidden(true)
                     VStack(alignment: .leading, spacing: 4) {
                         Text(call.task?.title ?? summary.title)
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(.primary)
+                            .font(.ripul(.subheadline, weight: .semibold))
+                            .foregroundStyle(.ripul(.text))
                             .lineLimit(2)
                             .accessibilityIdentifier("ToolCallDetails.summary.\(call.id)")
                         if call.task == nil, let context = call.commandPresentation?.executionContext {
                             Text(context)
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
+                                .font(.ripul(.caption2))
+                                .foregroundStyle(.ripul(.textSecondary))
                                 .lineLimit(2)
                                 .accessibilityIdentifier("ToolCallDetails.executionContext.\(call.id)")
                         }
                         if let subtitle = call.task == nil ? summary.subtitle : call.task?.variant {
                             Text(subtitle)
-                                .font(.system(.caption, design: summary.isCode ? .monospaced : .default))
-                                .foregroundStyle(.secondary)
+                                .font(.ripul(.caption, family: summary.isCode ? .code : nil))
+                                .foregroundStyle(.ripul(.textSecondary))
                                 .lineLimit(2)
                                 .accessibilityIdentifier("ToolCallDetails.subtitle.\(call.id)")
                         }
@@ -297,9 +329,9 @@ private struct ToolCallDisclosure: View {
     private var statusBadge: some View {
         let failed = call.statusTitle == "Failed"
         let running = call.statusTitle == "Running"
-        let color: Color = failed ? .red : running ? .orange : call.statusTitle == "Completed" ? .green : .secondary
+        let color: Color = failed ? .ripul(.danger) : running ? .ripul(.warning) : call.statusTitle == "Completed" ? .ripul(.success) : .ripul(.textSecondary)
         return Label(call.statusTitle, systemImage: failed ? "exclamationmark.circle.fill" : running ? "clock" : "checkmark.circle")
-            .font(.caption2.weight(.medium))
+            .font(.ripul(.caption2, weight: .medium))
             .foregroundStyle(color)
             .padding(.horizontal, 7).padding(.vertical, 3)
             .background(color.opacity(0.08), in: Capsule())
@@ -309,9 +341,9 @@ private struct ToolCallDisclosure: View {
 
     private func detailSection(_ title: String, text: String) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(title).font(.headline)
+            Text(title).font(.ripul(.headline))
             Text(text)
-                .font(.system(.callout, design: .monospaced))
+                .font(.ripul(.callout, family: .code))
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -332,8 +364,8 @@ private struct ToolCallPanelStyle: DisclosureGroupStyle {
             } label: {
                 HStack(alignment: .center, spacing: 10) {
                     Image(systemName: "chevron.right")
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(.secondary)
+                        .font(.ripulIcon(.caption2, weight: .semibold))
+                        .foregroundStyle(.ripul(.textSecondary))
                         .rotationEffect(.degrees(configuration.isExpanded ? 90 : 0))
                         .accessibilityHidden(true)
                     configuration.label

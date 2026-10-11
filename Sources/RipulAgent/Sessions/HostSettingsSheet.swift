@@ -135,13 +135,13 @@ public struct HostSettingsForm: View {
     public var body: some View {
         Form {
             if let error = model.error {
-                Section { Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(.orange) }
+                Section { Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(.ripul(.warning)) }
             }
             if !model.loaded {
                 Section { ProgressView("Reading \(machineName)'s settings…") }
             }
             ForEach(model.groups, id: \.name) { group in
-                Section(group.name) {
+                Section(themed: group.name) {
                     ForEach(group.settings) { setting in HostSettingRow(setting: setting, model: model) }
                 }
             }
@@ -196,7 +196,7 @@ public struct HostSettingsListScreen: View {
                     HostSettingsForm(machineId: machine.machineId, machineName: machine.displayName, bridge: bridge)
                 } label: {
                     LabeledContent {
-                        Text(machine.isOnline ? "Online" : "Offline").foregroundStyle(.secondary)
+                        Text(machine.isOnline ? "Online" : "Offline").foregroundStyle(.ripul(.textSecondary))
                     } label: {
                         Label(machine.displayName, systemImage: "desktopcomputer")
                     }
@@ -241,7 +241,7 @@ private struct HostSettingRow: View {
                 HStack {
                     labelled
                     Spacer()
-                    Text(format(n)).foregroundStyle(.secondary).monospacedDigit()
+                    Text(format(n)).foregroundStyle(.ripul(.textSecondary)).monospacedDigit()
                 }
             }
         case ("choice", .text(let current)):
@@ -250,7 +250,7 @@ private struct HostSettingRow: View {
                     ForEach(setting.options ?? [], id: \.value) { Text($0.label).tag($0.value) }
                 }
                 if let detail = setting.options?.first(where: { $0.value == current })?.detail ?? setting.detail {
-                    Text(detail).font(.caption).foregroundStyle(.secondary)
+                    Text(detail).font(.ripul(.caption)).foregroundStyle(.ripul(.textSecondary))
                 }
             }
         case ("multiChoice", .list(let chosen)):
@@ -265,7 +265,7 @@ private struct HostSettingRow: View {
             } label: {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(setting.label)
-                    Text(path).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.head)
+                    Text(path).font(.ripul(.caption)).foregroundStyle(.ripul(.textSecondary)).lineLimit(1).truncationMode(.head)
                 }
             }
         case ("directoryList", .list(let paths)):
@@ -276,7 +276,7 @@ private struct HostSettingRow: View {
             }
         default:
             // A kind this phone doesn't know yet: show it rather than hide it.
-            LabeledContent(setting.label) { Text("Update Ripul to change this").foregroundStyle(.secondary) }
+            LabeledContent(setting.label) { Text("Update Ripul to change this").foregroundStyle(.ripul(.textSecondary)) }
         }
     }
 
@@ -284,7 +284,7 @@ private struct HostSettingRow: View {
         VStack(alignment: .leading, spacing: 2) {
             Text(setting.label)
             if let detail = setting.detail, setting.kind != "choice" {
-                Text(detail).font(.caption).foregroundStyle(.secondary)
+                Text(detail).font(.ripul(.caption)).foregroundStyle(.ripul(.textSecondary))
             }
         }
     }
@@ -316,14 +316,14 @@ private struct HostMultiChoiceScreen: View {
                         model.set(key, .list(next))
                     } label: {
                         HStack {
-                            Text(option.label).foregroundStyle(.primary)
+                            Text(option.label).foregroundStyle(.ripul(.text))
                             Spacer()
                             if chosen.contains(option.value) { Image(systemName: "checkmark").foregroundStyle(Color.accentColor) }
                         }
                     }
                     .uiKitIdentifier("HostSettings.multiChoice.option")
                 }
-            } footer: { if let detail = setting?.detail { Text(detail) } }
+            } footer: { RipulSectionFooter { if let detail = setting?.detail { Text(detail) } } }
         }
         .disabled(model.saving.contains(key))
         .navigationTitle(setting?.label ?? "")
@@ -342,17 +342,17 @@ private struct HostDirectoryScreen: View {
         let current: String = { if case .text(let t)? = setting?.value { return t }; return "" }()
         List {
             if let error = model.error {
-                Section { Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(.orange) }
+                Section { Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(.ripul(.warning)) }
             }
             Section {
-                Text(current).font(.callout.monospaced()).textSelection(.enabled)
-            } header: { Text("Current") } footer: { if let detail = setting?.detail { Text(detail) } }
+                Text(current).font(.ripul(.callout, family: .code)).textSelection(.enabled)
+            } header: { RipulSectionHeader { Text("Current") } } footer: { RipulSectionFooter { if let detail = setting?.detail { Text(detail) } } }
             if let options = setting?.options, !options.isEmpty {
-                Section("Favorites") {
+                Section(themed: "Favorites") {
                     ForEach(options, id: \.value) { option in
                         Button { model.set(key, .text(option.value)) } label: {
                             HStack {
-                                DirectoryPathLabel(path: option.value).foregroundStyle(.primary)
+                                DirectoryPathLabel(path: option.value).foregroundStyle(.ripul(.text))
                                 Spacer()
                                 if option.value == current { Image(systemName: "checkmark").foregroundStyle(Color.accentColor) }
                             }
@@ -365,7 +365,7 @@ private struct HostDirectoryScreen: View {
                 Button { browsing = true } label: { Label("Browse…", systemImage: "folder") }
                     .uiKitIdentifier("HostSettings.directory.browse")
                 TextField("/Users/you/repos/project", text: $typed)
-                    .font(.callout.monospaced())
+                    .font(.ripul(.callout, family: .code))
                     .autocorrectionDisabled()
                     #if os(iOS)
                     .textInputAutocapitalization(.never)
@@ -374,11 +374,11 @@ private struct HostDirectoryScreen: View {
                 Button("Use This Folder") { model.set(key, .text(typed)); typed = "" }
                     .disabled(typed.trimmingCharacters(in: .whitespaces).isEmpty)
                     .uiKitIdentifier("HostSettings.directory.use")
-            } header: { Text("Other Folder") } footer: { Text("Browse the Mac's folders, or type a path. ~ means its home folder. The folder must already exist.") }
+            } header: { RipulSectionHeader { Text("Other Folder") } } footer: { RipulSectionFooter { Text("Browse the Mac's folders, or type a path. ~ means its home folder. The folder must already exist.") } }
         }
         .disabled(model.saving.contains(key))
         .navigationTitle(setting?.label ?? "")
-        .sheet(isPresented: $browsing) {
+        .ripulSheet(isPresented: $browsing) {
             RemoteFolderBrowseSheet(bridge: model.bridge, machineId: model.machineId, actionTitle: "Use This Folder", identifierPrefix: "HostSettings.browse") { model.set(key, .text($0)) }
         }
     }
@@ -395,7 +395,7 @@ private struct HostDirectoryListScreen: View {
         let paths: [String] = { if case .list(let l)? = setting?.value { return l }; return [] }()
         List {
             if let error = model.error {
-                Section { Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(.orange) }
+                Section { Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(.ripul(.warning)) }
             }
             Section {
                 ForEach(paths, id: \.self) { path in
@@ -406,13 +406,13 @@ private struct HostDirectoryListScreen: View {
                     next.remove(atOffsets: offsets)
                     model.set(key, .list(next))
                 }
-                if paths.isEmpty { Text("No favorites yet").foregroundStyle(.secondary) }
-            } footer: { if let detail = setting?.detail { Text(detail) } }
+                if paths.isEmpty { Text("No favorites yet").foregroundStyle(.ripul(.textSecondary)) }
+            } footer: { RipulSectionFooter { if let detail = setting?.detail { Text(detail) } } }
             Section {
                 Button { browsing = true } label: { Label("Browse…", systemImage: "folder.badge.plus") }
                     .uiKitIdentifier("HostSettings.directoryList.browse")
                 TextField("/Users/you/repos/project", text: $typed)
-                    .font(.callout.monospaced())
+                    .font(.ripul(.callout, family: .code))
                     .autocorrectionDisabled()
                     #if os(iOS)
                     .textInputAutocapitalization(.never)
@@ -421,11 +421,11 @@ private struct HostDirectoryListScreen: View {
                 Button("Add Favorite") { model.set(key, .list(paths + [typed.trimmingCharacters(in: .whitespaces)])); typed = "" }
                     .disabled(typed.trimmingCharacters(in: .whitespaces).isEmpty)
                     .uiKitIdentifier("HostSettings.directoryList.add")
-            } header: { Text("Add") } footer: { Text("Browse the Mac's folders, or type a path. ~ means its home folder.") }
+            } header: { RipulSectionHeader { Text("Add") } } footer: { RipulSectionFooter { Text("Browse the Mac's folders, or type a path. ~ means its home folder.") } }
         }
         .disabled(model.saving.contains(key))
         .navigationTitle(setting?.label ?? "")
-        .sheet(isPresented: $browsing) {
+        .ripulSheet(isPresented: $browsing) {
             RemoteFolderBrowseSheet(bridge: model.bridge, machineId: model.machineId, actionTitle: "Add Favorite", identifierPrefix: "HostSettings.browse") { picked in
                 if !paths.contains(picked) { model.set(key, .list(paths + [picked])) }
             }

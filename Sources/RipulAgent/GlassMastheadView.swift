@@ -59,7 +59,7 @@ public struct GlassMastheadView: View {
                         let _ = NSLog("[GlassMastheadView] Image load failed for %@: %@",
                                       imageUrl, error.localizedDescription)
                         Image(systemName: "photo")
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(.ripul(.textSecondary))
                             .frame(width: explicitWidth ?? fallbackHeight, height: fallbackHeight)
                     case .empty:
                         ProgressView()
@@ -75,13 +75,13 @@ public struct GlassMastheadView: View {
                     // Let the system's adaptive vibrancy handle foreground contrast
                     // so text remains readable over both light and dark backgrounds.
                     Text(text)
-                        .font(.system(size: resolvedFontSize, weight: .semibold))
-                        .foregroundStyle(.primary)
+                        .font(.ripul(size: resolvedFontSize, weight: .semibold))
+                        .foregroundStyle(.ripul(.text))
                         .lineLimit(1)
                 } else {
                     Text(text)
-                        .font(.system(size: resolvedFontSize, weight: .semibold))
-                        .foregroundStyle(Color(cssHex: config.textColor) ?? .primary)
+                        .font(.ripul(size: resolvedFontSize, weight: .semibold))
+                        .foregroundStyle(Color(cssHex: config.textColor) ?? Color.ripul(.text))  // theme-mapping: the left side is a Color, so `.primary` here was Color.primary
                         .lineLimit(1)
                 }
             }

@@ -71,9 +71,13 @@ public struct RemoteMachine: Identifiable, Codable, Equatable {
         }
     }
 
+    /// Default SF Symbol for a native host, for callers that know a chat's
+    /// machine only by name. Chats are hosted by native hosts, never browsers.
+    public static let defaultHostIconName = "desktopcomputer"
+
     /// Default SF Symbol when the user hasn't assigned an icon.
     public var defaultIconName: String {
-        isBrowserHost ? "globe" : "desktopcomputer"
+        isBrowserHost ? "globe" : Self.defaultHostIconName
     }
 
     /// Declared capabilities from registry meta (`caps`, comma-separated).

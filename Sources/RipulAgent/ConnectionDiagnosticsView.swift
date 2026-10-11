@@ -42,35 +42,35 @@ struct ConnectionDiagnosticsView: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
                 Image(systemName: phase.isStalled ? "exclamationmark.triangle.fill" : "flag.checkered")
-                    .foregroundStyle(phase.isStalled ? .orange : .secondary)
+                    .foregroundStyle(phase.isStalled ? Color.ripul(.warning) : Color.ripul(.textSecondary))
                 Text(phase.isStalled ? "Stalled here" : "Reached")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
+                    .font(.ripul(.caption, weight: .semibold))
+                    .foregroundStyle(.ripul(.textSecondary))
                 Spacer()
                 if let elapsed = phase.elapsedText {
                     Text(elapsed)
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.secondary)
+                        .font(.ripul(.caption).monospacedDigit())
+                        .foregroundStyle(.ripul(.textSecondary))
                 }
             }
             Text(phase.title)
-                .font(.subheadline.weight(.semibold))
+                .font(.ripul(.subheadline, weight: .semibold))
                 .fixedSize(horizontal: false, vertical: true)
             if let explanation = phase.scopeExplanation {
                 Text(explanation)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(.ripul(.caption))
+                    .foregroundStyle(.ripul(.textSecondary))
                     .fixedSize(horizontal: false, vertical: true)
             }
             if let machine = report.targetMachine {
                 HStack(spacing: 6) {
-                    statusDot(machine.presumedOnline ? .green : .orange)
+                    statusDot(machine.presumedOnline ? .ripul(.success) : .ripul(.warning))
                     Text("Talking to \(machine.displayName)")
-                        .font(.caption)
+                        .font(.ripul(.caption))
                     if let seen = machine.lastSeenText {
                         Text("· last seen \(seen)")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .font(.ripul(.caption))
+                            .foregroundStyle(.ripul(.textSecondary))
                     }
                 }
             }
@@ -78,14 +78,14 @@ struct ConnectionDiagnosticsView: View {
                 chipRow(phase.detailFields.map { "\($0.key) \($0.value)" })
             }
             Text(phase.raw)
-                .font(.caption2.monospaced())
-                .foregroundStyle(.tertiary)
+                .font(.ripul(.caption2, family: .code))
+                .foregroundStyle(.ripul(.textTertiary))
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(12)
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color.orange.opacity(phase.isStalled ? 0.12 : 0.06))
+                .fill(Color.ripul(.warning).opacity(phase.isStalled ? 0.12 : 0.06))
         )
         .accessibilityElement(children: .combine)
     }
@@ -99,16 +99,16 @@ struct ConnectionDiagnosticsView: View {
         return section("This chat", subtitle: String(focus.chatId.suffix(8))) {
             ForEach(focus.facts, id: \.self) { fact in
                 Text(fact)
-                    .font(.caption)
+                    .font(.ripul(.caption))
                     .fixedSize(horizontal: false, vertical: true)
             }
             ForEach(problems.isEmpty ? Array(focus.findings.prefix(1)) : problems) { finding in
                 HStack(alignment: .top, spacing: 8) {
-                    statusDot(finding.severity == "fail" ? .red : finding.isProblem ? .orange : .green)
+                    statusDot(finding.severity == "fail" ? .ripul(.danger) : finding.isProblem ? .ripul(.warning) : .ripul(.success))
                         .padding(.top, 3)
                     Text(finding.message)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
+                        .font(.ripul(.caption2))
+                        .foregroundStyle(.ripul(.textSecondary))
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 .accessibilityElement(children: .combine)
@@ -122,19 +122,19 @@ struct ConnectionDiagnosticsView: View {
         section("Machines", subtitle: report.remoteBridgeAvailable == false ? "relay bridge unavailable" : nil) {
             ForEach(report.machines) { machine in
                 HStack(spacing: 8) {
-                    statusDot(machine.presumedOnline ? .green : .orange)
+                    statusDot(machine.presumedOnline ? .ripul(.success) : .ripul(.warning))
                     VStack(alignment: .leading, spacing: 1) {
                         Text(machine.displayName)
-                            .font(.caption.weight(machine.machineId == report.targetMachineId ? .semibold : .regular))
+                            .font(.ripul(.caption).weight(machine.machineId == report.targetMachineId ? .semibold : .regular))
                         Text(machine.presumedOnline ? "presumed online" : "looks offline")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
+                            .font(.ripul(.caption2))
+                            .foregroundStyle(.ripul(.textSecondary))
                     }
                     Spacer(minLength: 8)
                     if let seen = machine.lastSeenText {
                         Text(seen)
-                            .font(.caption2.monospacedDigit())
-                            .foregroundStyle(.secondary)
+                            .font(.ripul(.caption2).monospacedDigit())
+                            .foregroundStyle(.ripul(.textSecondary))
                     }
                 }
                 .accessibilityElement(children: .combine)
@@ -153,10 +153,10 @@ struct ConnectionDiagnosticsView: View {
                         .padding(.top, 3)
                     VStack(alignment: .leading, spacing: 1) {
                         Text(transport.label)
-                            .font(.caption.monospaced())
+                            .font(.ripul(.caption, family: .code))
                         Text(transport.detailText)
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
+                            .font(.ripul(.caption2))
+                            .foregroundStyle(.ripul(.textSecondary))
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     Spacer(minLength: 0)
@@ -168,11 +168,11 @@ struct ConnectionDiagnosticsView: View {
 
     private func color(for health: ConnectionDiagnosticsReport.TransportHealth) -> Color {
         switch health {
-        case .healthy: return .green
-        case .connecting: return .yellow
-        case .reconnecting: return .orange
-        case .down: return .red
-        case .untracked: return .secondary
+        case .healthy: return .ripul(.success)
+        case .connecting: return .ripul(system: .systemYellow)
+        case .reconnecting: return .ripul(.warning)
+        case .down: return .ripul(.danger)
+        case .untracked: return .ripul(.textSecondary)
         }
     }
 
@@ -182,11 +182,11 @@ struct ConnectionDiagnosticsView: View {
         section("Paired sessions", subtitle: "\(report.totalPairings) total") {
             ForEach(report.pairingGroups) { group in
                 HStack(spacing: 8) {
-                    Text(group.machineName).font(.caption)
+                    Text(group.machineName).font(.ripul(.caption))
                     Spacer(minLength: 8)
                     Text("\(group.tabCount)")
-                        .font(.caption2.monospacedDigit())
-                        .foregroundStyle(.secondary)
+                        .font(.ripul(.caption2).monospacedDigit())
+                        .foregroundStyle(.ripul(.textSecondary))
                 }
                 .accessibilityElement(children: .combine)
             }
@@ -206,8 +206,8 @@ struct ConnectionDiagnosticsView: View {
             }
             if let capturedAt = report.capturedAt { keyValue("Captured", capturedAt) }
             if report.hasCrash {
-                if let live = report.crashLive { keyValue("Crash (live)", live, tint: .red) }
-                if let persisted = report.crashPersisted { keyValue("Last crash", persisted, tint: .orange) }
+                if let live = report.crashLive { keyValue("Crash (live)", live, tint: .ripul(.danger)) }
+                if let persisted = report.crashPersisted { keyValue("Last crash", persisted, tint: .ripul(.warning)) }
             } else {
                 keyValue("Crashes", "none recorded")
             }
@@ -217,7 +217,7 @@ struct ConnectionDiagnosticsView: View {
     private var sectionErrorsSection: some View {
         section("Unavailable data", subtitle: nil) {
             ForEach(report.sectionErrors.sorted(by: { $0.key < $1.key }), id: \.key) { key, message in
-                keyValue(key, message, tint: .orange)
+                keyValue(key, message, tint: .ripul(.warning))
             }
         }
     }
@@ -233,12 +233,12 @@ struct ConnectionDiagnosticsView: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
                 Text(title.uppercased())
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.secondary)
+                    .font(.ripul(.caption2, weight: .semibold))
+                    .foregroundStyle(.ripul(.textSecondary))
                 if let subtitle {
                     Text("· \(subtitle)")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
+                        .font(.ripul(.caption2))
+                        .foregroundStyle(.ripul(.textTertiary))
                 }
             }
             VStack(alignment: .leading, spacing: 6) { content() }
@@ -246,7 +246,7 @@ struct ConnectionDiagnosticsView: View {
                 .padding(10)
                 .background(
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(Color.primary.opacity(0.05))
+                        .fill(Color.ripul(.text).opacity(0.05))
                 )
         }
     }
@@ -254,12 +254,12 @@ struct ConnectionDiagnosticsView: View {
     private func keyValue(_ key: String, _ value: String, tint: Color? = nil) -> some View {
         HStack(alignment: .top, spacing: 8) {
             Text(key)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
+                .font(.ripul(.caption2))
+                .foregroundStyle(.ripul(.textSecondary))
             Spacer(minLength: 8)
             Text(value)
-                .font(.caption2.monospaced())
-                .foregroundStyle(tint ?? .primary)
+                .font(.ripul(.caption2, family: .code))
+                .foregroundStyle(tint ?? Color.ripul(.text))
                 .multilineTextAlignment(.trailing)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -271,13 +271,13 @@ struct ConnectionDiagnosticsView: View {
         HStack(spacing: 6) {
             ForEach(items, id: \.self) { item in
                 Text(item)
-                    .font(.caption2.monospaced())
+                    .font(.ripul(.caption2, family: .code))
                     .lineLimit(1)
                     .truncationMode(.middle)
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2)
                     .background(
-                        Capsule().fill(Color.primary.opacity(0.07))
+                        Capsule().fill(Color.ripul(.text).opacity(0.07))
                     )
             }
         }

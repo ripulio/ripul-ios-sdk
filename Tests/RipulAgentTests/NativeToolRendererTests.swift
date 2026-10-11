@@ -62,6 +62,7 @@ final class NativeToolRendererTests: XCTestCase {
                 "arguments": try text(fixture["args"]!), "result": try text(fixture["result"]!), "diagnostics": "{}",
                 "rendererName": fixture["rendererName"]!, "renderArguments": fixture["renderArguments"]!]
             wire["commandPresentation"] = fixture["commandPresentation"]
+            wire["agentComms"] = fixture["agentComms"]
             let call = try JSONDecoder().decode(ToolCallDetail.self, from: JSONSerialization.data(withJSONObject: wire))
             let content = NativeToolContent(call)
             XCTAssertEqual(content.kind.rawValue, fixture["expectedKind"] as? String, name)
@@ -95,12 +96,75 @@ final class NativeToolRendererTests: XCTestCase {
                 XCTAssertEqual(call.commandPresentation?.commandBreakLines, [1])
                 XCTAssertEqual(call.commandPresentation?.command, "python3 check.py &&\ngit status --short")
             }
+            if name == "agent-spawn" {
+                let summary = NativeToolSummary(call)
+                XCTAssertEqual(summary.title, "Started Check the upload retry")
+                XCTAssertEqual(summary.subtitle, "Review how the upload queue retries a failed part. Read UploadQueue.swift and say whether a part that fails three times is dropped or kept. Do not change any code.", "The task as plain text, not the ids")
+                XCTAssertEqual(call.agentComms?.target.harness, "Claude Code")
+                XCTAssertEqual(call.agentComms?.details?.first, .init(label: "Agent ID", value: "cli_3f9a2c1b-77aa-4e0c-9d54-1f2b6c0a9e11"))
+            }
+            if name == "agent-await" {
+                let summary = NativeToolSummary(call)
+                XCTAssertEqual(summary.title, "Reply from Check the upload retry", "Named from the chat's earlier start, not its handle")
+                XCTAssertEqual(summary.subtitle, "A part that fails three times is kept, not dropped. UploadQueue.retry moves it to parked. Parked parts are retried when the network path changes.", "Markdown marks are left out of a one-line preview")
+                XCTAssertFalse((summary.title + summary.subtitle!).contains("agentmsg_"))
+            }
+            if name == "agent-list" {
+                XCTAssertNil(call.agentComms)
+                let summary = NativeToolSummary(call)
+                XCTAssertEqual(summary.title, "Recent agents")
+                XCTAssertNil(summary.subtitle)
+                let list = try XCTUnwrap(NativeAgentList(content.output))
+                XCTAssertEqual(list.summary, "3 agents · 1 working · 1 needs input")
+                XCTAssertEqual(list.agents.map(\.harness), ["Claude Code", "Codex", "Claude Code"])
+                XCTAssertEqual(list.agents.map(\.activity), ["Review how the upload queue retries a failed part.", "Two pass. May I delete the stale snapshot?", nil])
+                XCTAssertEqual(list.agents.map(\.folder), ["ripul", "chrome-extension", "website"])
+                XCTAssertEqual(list.agents[1].device, "iPhone 16 Pro")
+                XCTAssertEqual(list.agents.map(\.startedByCaller), [true, false, false])
+                XCTAssertEqual(list.inFlight, [.init(summary: "Task to Check the upload retry", state: "Running")])
+                XCTAssertEqual(list.otherMachines, ["MacBook Pro"])
+                XCTAssertEqual(list.ids.first, .init(label: "Check the upload retry", value: "cli_3f9a2c1b-77aa-4e0c-9d54-1f2b6c0a9e11"))
+                XCTAssertNil(list.rest["agents"])
+                let taken = try Date.ISO8601FormatStyle().parse("2026-09-11T05:53:20Z")
+                // The wording is the system's and follows the locale ("5 min ago", "5 min. ago").
+                XCTAssertTrue(NativeAgentList.ago(list.agents[0].lastActive!, asOf: taken).contains("5"), "Told as of the call, not as of now")
+                XCTAssertEqual(NativeAgentList.ago(taken, asOf: taken), "just now")
+            }
             if name == "pipeline-command" {
                 XCTAssertEqual(call.commandPresentation?.commandBreakLines, [1, 2])
                 XCTAssertEqual(call.commandPresentation?.commandPipeLines, [1])
                 XCTAssertEqual(NativeToolSummary(call).title, "Grep + Head + Sed")
             }
         }
+    }
+
+    func testAgentCallsRouteToTheirOwnPanelsAndIcons() {
+        for name in ["send_to_agent", "spawn_agent", "await_agent", "archive_agent"] {
+            XCTAssertEqual(NativeToolRendererKind.resolve("mcp__ripul_tools__\(name)"), .agentComms, name)
+            XCTAssertEqual(ToolIconMap.symbol(for: "mcp__ripul_tools__\(name)"), "bubble.left.and.bubble.right", name)
+        }
+        XCTAssertEqual(NativeToolRendererKind.resolve("functions.mcp__ripul_tools__list_agents"), .agentList)
+        XCTAssertEqual(ToolIconMap.symbol(for: "list_agents"), "bubble.left.and.bubble.right")
+        XCTAssertEqual(NativeToolRendererKind.resolve("Agent"), .agent, "Claude's own sub-agent tool keeps its panel")
+        XCTAssertEqual(NativeAgentRuntime.text(harness: "Claude Code", model: "claude-cli-raw-opus", "on MacBook Pro"), "Claude Code · Opus · on MacBook Pro")
+        XCTAssertEqual(NativeAgentRuntime.text(harness: "Codex", model: "codex-shared-cli-raw-default", nil), "Codex", "A default model named after its CLI is not said twice")
+        XCTAssertEqual(NativeAgentRuntime.text(harness: nil, model: "claude-cli-raw-haiku"), "Haiku")
+        XCTAssertEqual(NativeAgentRuntime.text(harness: nil, model: nil), "")
+    }
+
+    func testAgentCallWithoutThePresentationLeadsWithWhatWasAsked() throws {
+        // A web build from before the card: no ids in the heading or the subtitle.
+        let wire: [String: Any] = ["id": "old", "toolName": "mcp__ripul_tools__await_agent", "status": "success", "timestamp": 1,
+            "arguments": #"{"handle":"agentmsg_1791624528515_7ix9q2u14","timeoutSec":120}"#, "result": "{}", "diagnostics": "{}"]
+        let call = try JSONDecoder().decode(ToolCallDetail.self, from: JSONSerialization.data(withJSONObject: wire))
+        let summary = NativeToolSummary(call)
+        XCTAssertEqual(summary.title, "Await agent")
+        XCTAssertNil(summary.subtitle)
+        XCTAssertNil(NativeAgentList(ToolValue.parse(#"{"error":"Connection failed"}"#)))
+        // A reply on its way back to the caller, as a live list showed it on 10 October 2026.
+        let live = NativeAgentList(ToolValue.parse(#"{"self":{"agentId":"me"},"agents":[{"agentId":"a","title":"Panel test: ready","status":"idle"}],"pending":[{"from":"a","to":"me","kind":"reply","status":"running"}]}"#))
+        XCTAssertEqual(live?.inFlight, [.init(summary: "Reply from Panel test: ready", state: "Running")])
+        XCTAssertNil(NativeAgentList(.string("unavailable")))
     }
 
     func testDiffReconstructsBothSourcesWithoutInventingChanges() {

@@ -93,16 +93,16 @@ struct PlanRunSheet: View {
                     }
                     .pickerStyle(.menu)
                     .uiKitIdentifier("PlanRunSheet.intentPicker")
-                } header: {
+                } header: { RipulSectionHeader {
                     Text("Run")
-                } footer: {
+                } } footer: { RipulSectionFooter {
                     Text(hint)
-                }
+                } }
 
-                Section("Model") {
+                Section(themed: "Model") {
                     if models.isEmpty {
                         Text("No models available yet.")
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(.ripul(.textSecondary))
                     } else {
                         // Drills into the shared picker rather than a flat menu:
                         // a run costs tokens against one account or another, and
@@ -120,7 +120,7 @@ struct PlanRunSheet: View {
                                 Text("Model")
                                 Spacer()
                                 Text(selectedModelName)
-                                    .foregroundStyle(.secondary)
+                                    .foregroundStyle(.ripul(.textSecondary))
                             }
                         }
                         .uiKitIdentifier("PlanRunSheet.modelPicker")
@@ -133,18 +133,18 @@ struct PlanRunSheet: View {
                     } else {
                         TextField("Prompt", text: $prompt, axis: .vertical)
                             .lineLimit(6...20)
-                            .font(.callout)
+                            .font(.ripul(.callout))
                             .uiKitIdentifier("PlanRunSheet.promptField")
                     }
-                } header: {
+                } header: { RipulSectionHeader {
                     Text("Prompt")
-                } footer: {
+                } } footer: { RipulSectionFooter {
                     Text("Sent as the first message of a new session, in this plan's working directory.")
-                }
+                } }
 
                 if let failure {
                     Section {
-                        Text(failure).foregroundStyle(.red).font(.callout)
+                        Text(failure).foregroundStyle(.ripul(.danger)).font(.ripul(.callout))
                     }
                 }
             }

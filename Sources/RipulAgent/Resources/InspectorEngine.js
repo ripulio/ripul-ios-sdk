@@ -1,7 +1,9 @@
 // The native Inspector's DOM provider. Selection is a retained element, never a
 // selector re-query: rerendered nodes cannot silently become an action's target.
 (() => {
-  if (window.__ripulInspector) return;
+  // A page keeps the engine it was first given. The version lets a newer build
+  // replace an older one without a reload.
+  if (window.__ripulInspector?.version >= 2) return;
   const elements = new Map();
   const ids = new WeakMap();
   let serial = 0;
@@ -38,6 +40,28 @@
   };
   const label = el => el.getAttribute('data-ui') || el.id || el.tagName.toLowerCase();
   const summary = el => ({ id: key(el), label: label(el) });
+  // A selector something outside the page can find the element with again: an
+  // agent given this element and a browser tool. Selection itself stays a
+  // retained element. Empty when nothing unique can be written, as inside a
+  // shadow tree, which document.querySelector does not reach.
+  const selector = el => {
+    if (el.getRootNode() !== document) return '';
+    const unique = s => { try { return document.querySelectorAll(s).length === 1; } catch { return false; } };
+    const quote = s => '"' + s.replace(/["\\]/g, '\\$&') + '"';
+    const parts = [];
+    for (let node = el; node && node.nodeType === 1; node = node.parentElement) {
+      const ui = node.getAttribute('data-ui');
+      const anchor = node.id && unique('#' + CSS.escape(node.id)) ? '#' + CSS.escape(node.id)
+        : ui && unique('[data-ui=' + quote(ui) + ']') ? '[data-ui=' + quote(ui) + ']'
+        : node === document.body ? 'body' : node === document.documentElement ? 'html' : '';
+      if (anchor) { parts.unshift(anchor); break; }
+      const tag = node.tagName.toLowerCase();
+      const same = [...(node.parentElement?.children || [])].filter(c => c.tagName === node.tagName);
+      parts.unshift(same.length > 1 ? `${tag}:nth-of-type(${same.indexOf(node) + 1})` : tag);
+    }
+    const result = parts.join(' > ');
+    return unique(result) ? result : '';
+  };
   const viewport = () => ({ width: visualViewport?.width || innerWidth, height: visualViewport?.height || innerHeight,
     offsetLeft: visualViewport?.offsetLeft || 0, offsetTop: visualViewport?.offsetTop || 0 });
   const boxModel = (el, style) => {
@@ -85,6 +109,7 @@
     return { id: key(el), label: label(el), tag: el.tagName.toLowerCase(), text,
       identifier: el.getAttribute('data-ui') || el.id || '', role: el.getAttribute('role') || '',
       correlationId: el.closest('[data-correlation-id]')?.getAttribute('data-correlation-id') || '',
+      selector: selector(el), page: { url: location.href, title: document.title },
       rect: r, viewport: visible, box: boxModel(el, style),
       styles: Object.fromEntries(properties.map(p => [p, style.getPropertyValue(p)])),
       attributes: Object.fromEntries([...el.attributes].filter(a => !/^(value|style|on)/i.test(a.name)).map(a => [a.name, a.value.slice(0, 500)])),
@@ -102,6 +127,7 @@
     return result;
   };
   window.__ripulInspector = {
+    version: 2,
     pickInView(x, y, width) {
       const v = viewport(), scale = v.width / width;
       // Keyboard occlusion changes viewport height without scaling page content.

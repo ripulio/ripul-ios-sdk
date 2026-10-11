@@ -34,7 +34,7 @@ private struct NativeConsoleBrowser: View {
         let matchingCount = matches.reduce(0) { $0 + $1.count }
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Label("Console", systemImage: "terminal").font(.headline)
+                Label("Console", systemImage: "terminal").font(.ripul(.headline))
                 Spacer()
                 Button {
                     copyConsoleText(logs.copyText(query: query, level: level, newestFirst: newestFirst))
@@ -46,31 +46,31 @@ private struct NativeConsoleBrowser: View {
                 .accessibilityLabel("Copy matching logs")
                 .accessibilityIdentifier("NativeTool.logs.copy")
             }
-            Text(summary()).font(.caption).foregroundStyle(.secondary)
+            Text(summary()).font(.ripul(.caption)).foregroundStyle(.ripul(.textSecondary))
                 .accessibilityIdentifier("NativeTool.logs.summary")
             search
             levelFilters
             HStack {
                 Text("\(matchingCount) matching \(matchingCount == 1 ? "entry" : "entries")")
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.ripul(.textSecondary))
                     .accessibilityIdentifier("NativeTool.logs.matchCount")
                 Spacer()
-                Menu {
+                Menu { MenuIcons {
                     Picker("Order", selection: $newestFirst) {
                         Text("Newest first").tag(true)
                         Text("Oldest first").tag(false)
                     }
-                } label: {
+                }} label: {
                     Label(newestFirst ? "Newest first" : "Oldest first", systemImage: "arrow.up.arrow.down")
                 }
                 .accessibilityIdentifier("NativeTool.logs.order")
-            }.font(.caption)
+            }.font(.ripul(.caption))
             if matches.isEmpty {
                 VStack(alignment: .leading, spacing: 8) {
                     Label(logs.entries.isEmpty ? "No logs were captured" : "No matching logs", systemImage: "text.magnifyingglass")
-                        .font(.subheadline).accessibilityIdentifier("NativeTool.logs.empty")
+                        .font(.ripul(.subheadline)).accessibilityIdentifier("NativeTool.logs.empty")
                     if !logs.entries.isEmpty {
-                        Text("Try another search or log level.").font(.caption).foregroundStyle(.secondary)
+                        Text("Try another search or log level.").font(.ripul(.caption)).foregroundStyle(.ripul(.textSecondary))
                         Button("Clear filters") { query = ""; level = nil; searchFocused = false }
                             .accessibilityIdentifier("NativeTool.logs.reset")
                     }
@@ -104,18 +104,18 @@ private struct NativeConsoleBrowser: View {
 
     private var search: some View {
         HStack(spacing: 8) {
-            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+            Image(systemName: "magnifyingglass").foregroundStyle(.ripul(.textSecondary))
             TextField("Search captured logs", text: $query).textFieldStyle(.plain)
                 .autocorrectionDisabled()
                 .focused($searchFocused).onSubmit { searchFocused = false }
                 .accessibilityIdentifier("NativeTool.logs.search")
             if !query.isEmpty {
                 Button { query = "" } label: { Image(systemName: "xmark.circle.fill") }
-                    .buttonStyle(.plain).foregroundStyle(.secondary)
+                    .buttonStyle(.plain).foregroundStyle(.ripul(.textSecondary))
                     .accessibilityLabel("Clear search")
             }
         }
-        .padding(10).background(.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 10))
+        .padding(10).background(.ripul(.text).opacity(0.05), in: RoundedRectangle(cornerRadius: 10))
     }
 
     private var levelFilters: some View {
@@ -137,9 +137,9 @@ private struct NativeConsoleBrowser: View {
                 Text(title)
                 Text("\(count)").monospacedDigit().opacity(0.75)
             }
-            .font(.caption.weight(.semibold)).padding(.horizontal, 12).padding(.vertical, 9)
-            .foregroundStyle(selected ? color : .secondary)
-            .background(selected ? color.opacity(0.13) : .primary.opacity(0.04), in: Capsule())
+            .font(.ripul(.caption, weight: .semibold)).padding(.horizontal, 12).padding(.vertical, 9)
+            .foregroundStyle(selected ? color : Color.ripul(.textSecondary))
+            .background(selected ? color.opacity(0.13) : Color.ripul(.text).opacity(0.04), in: Capsule())
             .overlay(Capsule().strokeBorder(selected ? color.opacity(0.5) : .clear))
         }
         .buttonStyle(.plain)
@@ -170,38 +170,38 @@ private struct NativeConsoleLogRow: View {
                 }
                 Spacer(minLength: 4)
                 if let date = entry.date {
-                    Text(date.formatted(date: .omitted, time: .standard)).monospacedDigit().foregroundStyle(.secondary)
+                    Text(date.formatted(date: .omitted, time: .standard)).monospacedDigit().foregroundStyle(.ripul(.textSecondary))
                         .help(date.formatted(date: .complete, time: .complete))
                 }
-            }.font(.caption)
+            }.font(.ripul(.caption))
             if expanded {
                 NativeToolCodeBlock(text: entry.message, identifier: "NativeTool.logs.message.\(group.id)")
             } else {
-                Text(long ? preview + "…" : clean).font(.system(.caption, design: .monospaced))
+                Text(long ? preview + "…" : clean).font(.ripul(.caption, family: .code))
                     .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("NativeTool.logs.message.\(group.id)")
             }
             if long {
                 Button(expanded ? "Show less" : "Show full message") { expanded.toggle() }
-                    .font(.caption).accessibilityIdentifier("NativeTool.logs.expand.\(group.id)")
+                    .font(.ripul(.caption)).accessibilityIdentifier("NativeTool.logs.expand.\(group.id)")
             }
             if group.count > 1, let last = group.lastEntry.date, last != entry.date {
                 Text("Last repeated \(last.formatted(date: .omitted, time: .standard))")
-                    .font(.caption2).foregroundStyle(.secondary)
+                    .font(.ripul(.caption2)).foregroundStyle(.ripul(.textSecondary))
             }
             if let stack = entry.stack, !stack.isEmpty {
                 DisclosureGroup("Stack trace") {
                     NativeToolCodeBlock(text: stack, identifier: "NativeTool.logs.stack.\(group.id)")
-                }.font(.caption).accessibilityIdentifier("NativeTool.logs.stackToggle.\(group.id)")
+                }.font(.ripul(.caption)).accessibilityIdentifier("NativeTool.logs.stackToggle.\(group.id)")
             }
         }
         .padding(12).frame(maxWidth: .infinity, alignment: .leading)
         .background(color.opacity(0.06), in: RoundedRectangle(cornerRadius: 10))
         .overlay(alignment: .leading) { RoundedRectangle(cornerRadius: 2).fill(color.opacity(0.7)).frame(width: 3).padding(.vertical, 10) }
-        .contextMenu {
+        .contextMenu { MenuIcons {
             Button("Copy message", systemImage: "doc.on.doc") { copyConsoleText(entry.message) }
             if let stack = entry.stack { Button("Copy stack trace", systemImage: "text.alignleft") { copyConsoleText(stack) } }
-        }
+        }}
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("NativeTool.logs.row.\(group.id)")
     }
@@ -213,10 +213,10 @@ private func logLevelTitle(_ level: String) -> String {
 
 private func logLevelColor(_ level: String) -> Color {
     switch level {
-    case "ERROR": return .red
-    case "WARN": return .orange
-    case "INFO": return .blue
-    default: return .secondary
+    case "ERROR": return .ripul(.danger)
+    case "WARN": return .ripul(.warning)
+    case "INFO": return .ripul(.info)
+    default: return .ripul(.textSecondary)
     }
 }
 

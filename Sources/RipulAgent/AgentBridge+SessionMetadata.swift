@@ -95,6 +95,41 @@ extension AgentBridge {
         return SessionStorageBreakdown(totalBytes: totalBytes, count: count, buckets: buckets)
     }
 
+    /// A message a person typed into the chat — an anchor the metadata panel
+    /// jumps back to. Keyed by `correlationId`, which stays put as older
+    /// history pages in above it.
+    public struct HumanChatAnchor: Identifiable, Hashable {
+        public let correlationId: String
+        public let text: String
+        public let timestamp: Date?
+        public let senderDisplayName: String?
+        public var id: String { correlationId }
+    }
+
+    /// The messages people typed into a loaded chat, oldest first. Calls
+    /// `window.__ripulGetHumanChatAnchors`; nil when the page couldn't answer.
+    public func getHumanChatAnchors(sessionId: String) async -> [HumanChatAnchor]? {
+        let reply = await callPage("__ripulGetHumanChatAnchors", [sessionId], .ifMissing("{ error: 'not ready' }"))
+        guard let raw = reply.dictionary?["messages"] as? [[String: Any]] else { return nil }
+        return raw.compactMap { m in
+            guard let correlationId = m["correlationId"] as? String,
+                  let text = m["text"] as? String else { return nil }
+            let ms = (m["timestamp"] as? NSNumber)?.doubleValue
+            return HumanChatAnchor(
+                correlationId: correlationId,
+                text: text,
+                timestamp: ms.map { Date(timeIntervalSince1970: $0 / 1000) },
+                senderDisplayName: m["senderDisplayName"] as? String
+            )
+        }
+    }
+
+    /// Scroll the chat to one message by its correlationId. A message the
+    /// scroller hasn't loaded is a no-op.
+    public func scrollToChatMessage(correlationId: String) {
+        Task { _ = await callPage("__ripulScrollToChatMessage", [correlationId]) }
+    }
+
     /// A single tool entry returned by `__ripulGetResolvedToolsForSession`.
     public struct CliToolEntry {
         public let name: String

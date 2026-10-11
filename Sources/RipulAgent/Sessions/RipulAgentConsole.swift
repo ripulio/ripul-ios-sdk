@@ -198,13 +198,13 @@ public struct RipulAgentConsole: View {
             guard notification.object as? AgentBridge === bridge, authStore.isSignedIn else { return }
             showProfile = true
         }
-        .sheet(isPresented: Binding(
+        .ripulSheet(isPresented: Binding(
             get: { navigation.themeReviewRequested && authStore.isSignedIn },
             set: { navigation.themeReviewRequested = $0 }
         ), onDismiss: { navigation.onThemeReviewDismiss?() }) {
             ThemePublishEntryScreen(baseURL: configuration.baseURL, tokenProvider: { authStore.token })
         }
-        .sheet(isPresented: $showProfile) {
+        .ripulSheet(isPresented: $showProfile) {
             NavigationStack {
                 RipulProfileScreen(
                     bridge: bridge,
@@ -225,7 +225,7 @@ public struct RipulAgentConsole: View {
                 }
             }
         }
-        .sheet(isPresented: $showDevTools) {
+        .ripulSheet(isPresented: $showDevTools) {
             NavigationStack {
                 ConsoleLogViewer(bridge: bridge)
                     .toolbar {
@@ -238,7 +238,7 @@ public struct RipulAgentConsole: View {
         .onReceive(NotificationCenter.default.publisher(for: .ripulShowMacroLibrary)) { _ in
             showMacroLibrary = true
         }
-        .sheet(isPresented: $showMacroLibrary) {
+        .ripulSheet(isPresented: $showMacroLibrary) {
             MacroLibraryScreen(client: macroClient, onChange: { Task { await refreshMacroTools() } })
         }
         .animation(.easeInOut(duration: 0.25), value: authStore.isSignedIn)

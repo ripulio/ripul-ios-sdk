@@ -77,6 +77,108 @@ extension AgentBridge {
         await editModel("__ripulDeleteModel", [id], otherwise: "Delete failed")
     }
 
+    // MARK: A person's own entries
+
+    /// One tool profile an entry may be given, as the web app describes it.
+    public struct PersonalModelProfile: Identifiable, Hashable, Sendable {
+        public let id: String
+        public let label: String
+        public let blurb: String
+    }
+
+    /// The tool profiles on offer, in the order to show them.
+    public func personalModelProfiles() async -> [PersonalModelProfile] {
+        let reply = await callPage("__ripulGetPersonalModels", [], .orElse("{entries:[], profiles:[]}"))
+        let profiles = reply.dictionary?["profiles"] as? [[String: Any]] ?? []
+        return profiles.compactMap { item in
+            guard let id = item["id"] as? String, let label = item["label"] as? String else { return nil }
+            return PersonalModelProfile(id: id, label: label, blurb: (item["blurb"] as? String) ?? "")
+        }
+    }
+
+    /// One Ripul tool category that can be hidden from a model's chats.
+    public struct ModelToolCategory: Identifiable, Hashable, Sendable {
+        public var id: String { name }
+        public let name: String
+        public let label: String
+        public let description: String
+    }
+
+    /// What one model row is given, and what there is to choose from.
+    public struct ModelToolsState: Sendable {
+        public let modelId: String
+        public let name: String
+        /// Set when the row is one of the person's own copies.
+        public let baseName: String?
+        public let profile: String
+        public let defaultProfile: String
+        /// Names of the Ripul tool categories hidden from chats on this row.
+        public let disabled: [String]
+        public let profiles: [PersonalModelProfile]
+        public let categories: [ModelToolCategory]
+    }
+
+    /// The tools of one model row. Nil with a reason when it cannot be read.
+    public func modelTools(modelId: String) async -> (ModelToolsState?, String?) {
+        let reply = await callPage("__ripulGetModelTools", [modelId], .orElse("{error:'__ripulGetModelTools unavailable'}"))
+        if let reason = reply.failure(detached: "No web view") { return (nil, reason) }
+        guard let dict = reply.dictionary else { return (nil, "Unexpected response") }
+        if let error = dict["error"] as? String, !error.isEmpty { return (nil, error) }
+        let profiles = (dict["profiles"] as? [[String: Any]] ?? []).compactMap { item -> PersonalModelProfile? in
+            guard let id = item["id"] as? String, let label = item["label"] as? String else { return nil }
+            return PersonalModelProfile(id: id, label: label, blurb: (item["blurb"] as? String) ?? "")
+        }
+        let categories = (dict["categories"] as? [[String: Any]] ?? []).compactMap { item -> ModelToolCategory? in
+            guard let name = item["name"] as? String else { return nil }
+            return ModelToolCategory(name: name, label: (item["label"] as? String) ?? name,
+                                     description: (item["description"] as? String) ?? "")
+        }
+        return (ModelToolsState(
+            modelId: (dict["modelId"] as? String) ?? modelId,
+            name: (dict["name"] as? String) ?? "",
+            baseName: dict["baseName"] as? String,
+            profile: (dict["profile"] as? String) ?? "full",
+            defaultProfile: (dict["defaultProfile"] as? String) ?? "full",
+            disabled: dict["disabled"] as? [String] ?? [],
+            profiles: profiles,
+            categories: categories), nil)
+    }
+
+    /// Set a row's profile and hidden categories, and a copy's name. Works on
+    /// an existing model (scoped in place) and on a copy. A copy's id changes
+    /// with its profile, so the id to use from now on is returned. Refreshes
+    /// `availableModels` on success. Returns (id?, errorMessage?).
+    public func setModelTools(modelId: String, profile: String, disabled: [String], name: String? = nil) async -> (String?, String?) {
+        var body: [String: Any] = ["profile": profile, "disabled": disabled]
+        if let name { body["name"] = name }
+        return await savePersonal("__ripulSetModelTools", [modelId], body: body)
+    }
+
+    /// Add a copy of the person's own based on `baseId`. It is kept in their
+    /// settings, not the shared catalog. Refreshes `availableModels` on
+    /// success. Returns (the copy's id?, errorMessage?).
+    public func savePersonalModel(baseId: String, name: String, profile: String) async -> (String?, String?) {
+        await savePersonal("__ripulSavePersonalModel", [], body: ["baseId": baseId, "name": name, "profile": profile])
+    }
+
+    private func savePersonal(_ function: String, _ leading: [Any?], body: [String: Any]) async -> (String?, String?) {
+        guard let data = try? JSONSerialization.data(withJSONObject: body),
+              let json = String(data: data, encoding: .utf8) else { return (nil, "Could not encode the change") }
+        let reply = await callPage(function, leading + [json], .orElse("{success:false, error:'\(function) unavailable'}"))
+        if let reason = reply.failure(detached: "No web view") { return (nil, reason) }
+        guard let dict = reply.dictionary else { return (nil, "Unexpected response") }
+        guard (dict["success"] as? Bool) == true, let id = dict["id"] as? String else {
+            return (nil, (dict["error"] as? String) ?? "Save failed")
+        }
+        await fetchModels()
+        return (id, nil)
+    }
+
+    /// Remove one of the person's own entries. Refreshes `availableModels` on success.
+    public func deletePersonalModel(id: String) async -> (Bool, String?) {
+        await editModel("__ripulDeletePersonalModel", [id], otherwise: "Remove failed")
+    }
+
     /// Set the model override for a specific chat tab (used for CLI raw sessions).
     /// Unlike setModel() which sets a global override, this targets a single chat.
     @discardableResult

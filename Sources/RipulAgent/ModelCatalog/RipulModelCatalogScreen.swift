@@ -119,15 +119,15 @@ public struct RipulModelCatalogScreen: View {
                 defaultsSection(defaults)
             }
             ForEach(groups) { group in
-                Section(group.name) {
+                Section(themed: group.name) {
                     ForEach(group.models) { row($0) }
                 }
             }
             if let stats = model.stats {
                 Section {
                     Text("\(stats.totalModels) models · \(stats.enabledModels) enabled")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
+                        .font(.ripul(.footnote))
+                        .foregroundStyle(.ripul(.textSecondary))
                         .frame(maxWidth: .infinity, alignment: .center)
                         .listRowBackground(Color.clear)
                 }
@@ -140,11 +140,11 @@ public struct RipulModelCatalogScreen: View {
             } else if !model.loading && model.models.isEmpty {
                 VStack(spacing: 8) {
                     Image(systemName: "cube")
-                        .font(.largeTitle)
-                        .foregroundStyle(.secondary)
+                        .font(.ripulIcon(.largeTitle))
+                        .foregroundStyle(.ripul(.textSecondary))
                     Text(model.errorMessage ?? "No models in the catalog")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
+                        .font(.ripul(.callout))
+                        .foregroundStyle(.ripul(.textSecondary))
                         .multilineTextAlignment(.center)
                     Button("Retry") { Task { await model.load() } }
                         .buttonStyle(.bordered)
@@ -156,7 +156,7 @@ public struct RipulModelCatalogScreen: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
-                Menu {
+                Menu { MenuIcons {
                     Button {
                         Task { await model.load() }
                     } label: {
@@ -172,7 +172,7 @@ public struct RipulModelCatalogScreen: View {
                     } label: {
                         Label("Verify costs", systemImage: "dollarsign.arrow.circlepath")
                     }
-                } label: {
+                }} label: {
                     Image(systemName: "ellipsis.circle")
                 }
                 .uiKitIdentifier("ModelCatalog.menu")
@@ -188,7 +188,7 @@ public struct RipulModelCatalogScreen: View {
         }
         .refreshable { await model.load() }
         .task { await model.load() }
-        .sheet(item: $editorTarget) { target in
+        .ripulSheet(item: $editorTarget) { target in
             RipulModelCatalogEditorSheet(
                 client: model.client,
                 seed: target.seed,
@@ -197,12 +197,12 @@ public struct RipulModelCatalogScreen: View {
                 Task { await model.load() }
             }
         }
-        .sheet(isPresented: $showingDiscovery) {
+        .ripulSheet(isPresented: $showingDiscovery) {
             RipulModelDiscoverySheet(client: model.client) {
                 Task { await model.load() }
             }
         }
-        .sheet(isPresented: $showingCostCheck) {
+        .ripulSheet(isPresented: $showingCostCheck) {
             RipulModelCostVerifySheet(client: model.client) {
                 Task { await model.load() }
             }
@@ -246,11 +246,11 @@ public struct RipulModelCatalogScreen: View {
             defaultRow("Pro tier", slot: "pro", current: defaults.pro)
             defaultRow("Enterprise", slot: "enterprise", current: defaults.enterprise)
             defaultRow("Site keys", slot: "siteKey", current: defaults.siteKey)
-        } header: {
+        } header: { RipulSectionHeader {
             Text("Default models")
-        } footer: {
+        } } footer: { RipulSectionFooter {
             Text("What each context gets when no model is chosen.")
-        }
+        } }
     }
 
     private func defaultRow(_ label: String, slot: String, current: String) -> some View {
@@ -281,26 +281,26 @@ public struct RipulModelCatalogScreen: View {
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
                     Text(m.name)
-                        .font(.subheadline.weight(.medium))
-                        .foregroundStyle(.primary)
+                        .font(.ripul(.subheadline, weight: .medium))
+                        .foregroundStyle(.ripul(.text))
                         .lineLimit(1)
                     if m.tier == "premium" {
-                        badge("Premium", tint: .orange)
+                        badge("Premium", tint: .ripul(.warning))
                     }
                     if !m.enabled {
-                        badge("Off", tint: .secondary)
+                        badge("Off", tint: .ripul(.textSecondary))
                     }
                     Spacer()
                     badge(m.typeLabel, tint: typeTint(m))
                 }
                 Text(m.modelId.isEmpty ? m.id : m.modelId)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(.ripul(.caption))
+                    .foregroundStyle(.ripul(.textSecondary))
                     .lineLimit(1)
                 if m.perMInput > 0 || m.perMOutput > 0 {
                     Text("\(price(m.perMInput)) in · \(price(m.perMOutput)) out · per M tokens")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
+                        .font(.ripul(.caption2))
+                        .foregroundStyle(.ripul(.textTertiary))
                 }
             }
             .contentShape(Rectangle())
@@ -316,7 +316,7 @@ public struct RipulModelCatalogScreen: View {
                     systemImage: m.enabled ? "pause.circle" : "checkmark.circle"
                 )
             }
-            .tint(m.enabled ? .gray : .green)
+            .tint(m.enabled ? Color.ripul(.neutral) : Color.ripul(.success))
         }
         .swipeActions(edge: .trailing) {
             Button(role: .destructive) {
@@ -329,7 +329,7 @@ public struct RipulModelCatalogScreen: View {
             } label: {
                 Label("Duplicate", systemImage: "plus.square.on.square")
             }
-            .tint(.blue)
+            .tint(Color.ripul(.info))
         }
         .uiKitIdentifier("ModelCatalog.row")
     }
@@ -343,7 +343,7 @@ public struct RipulModelCatalogScreen: View {
 
     private func badge(_ text: String, tint: Color) -> some View {
         Text(text)
-            .font(.caption2.weight(.medium))
+            .font(.ripul(.caption2, weight: .medium))
             .foregroundStyle(tint)
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
@@ -351,12 +351,12 @@ public struct RipulModelCatalogScreen: View {
     }
 
     private func typeTint(_ m: RipulCatalogModel) -> Color {
-        if m.isCli { return .teal }
+        if m.isCli { return .teal } // theme-exempt: a model type's colour is data
         switch m.provider {
-        case "anthropic": return .orange
-        case "openai": return .green
-        case "openrouter": return .purple
-        default: return .blue
+        case "anthropic": return .orange // theme-exempt: a provider's colour is data
+        case "openai": return .green // theme-exempt: a provider's colour is data
+        case "openrouter": return .purple // theme-exempt: a provider's colour is data
+        default: return .blue // theme-exempt: a provider's colour is data
         }
     }
 

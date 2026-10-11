@@ -22,9 +22,13 @@ public struct CommandDecision: Codable, Hashable, Sendable {
 /// prompt, the schema and the check all see the same list.
 public struct CommandSnapshot: Sendable, Equatable {
     public var entities: [String: [CommandEntity]]
+    /// Where the person was when the lists were read. See
+    /// `CommandRegistry.situation`.
+    public var situation: String?
 
-    public init(entities: [String: [CommandEntity]] = [:]) {
+    public init(entities: [String: [CommandEntity]] = [:], situation: String? = nil) {
         self.entities = entities
+        self.situation = situation
     }
 
     public func candidates(_ sourceId: String) -> [CommandEntity] { entities[sourceId] ?? [] }
@@ -33,7 +37,7 @@ public struct CommandSnapshot: Sendable, Equatable {
 /// Everything a resolution did, in the order it did it. The Lab shows this
 /// whole record; a resolver that cannot explain itself cannot be tuned.
 public struct CommandResolution: Sendable, Equatable {
-    public enum Engine: String, Codable, Sendable { case model, rules }
+    public enum Engine: String, Codable, Sendable { case model, rules, orchestrator }
 
     public var engine: Engine
     public var sentence: String
@@ -51,6 +55,12 @@ public struct CommandResolution: Sendable, Equatable {
     /// Whether the chosen command was abandoned for the map's fallback.
     public var fellBack: Bool
     public var duration: Duration?
+    /// Actions to run after the first, in order. Only the orchestrator fills
+    /// this: the rules and the on-device model choose exactly one command.
+    public var laterSteps: [CommandStep]
+    /// The orchestrator's raw answer, before checking. Nil for the others,
+    /// whose raw answer is `decision`.
+    public var reply: OrchestratorReply?
 
     public init(engine: Engine, sentence: String) {
         self.engine = engine
@@ -58,6 +68,18 @@ public struct CommandResolution: Sendable, Equatable {
         self.values = ActionValues()
         self.notes = []
         self.fellBack = false
+        self.laterSteps = []
+    }
+}
+
+/// One action and the inputs it will run with.
+public struct CommandStep: Sendable, Equatable {
+    public var actionId: String
+    public var values: ActionValues
+
+    public init(actionId: String, values: ActionValues = ActionValues()) {
+        self.actionId = actionId
+        self.values = values
     }
 }
 
@@ -153,17 +175,25 @@ public enum CommandBinder {
             resolution.notes.append("\"\(decision.commandId)\" is not an enabled command")
         }
 
+        fallBack(into: &resolution, abandoning: decision.commandId, text: decision.text,
+                 map: map, registry: registry, snapshot: snapshot)
+    }
+
+    /// Abandon whatever was chosen for the map's fallback. `abandoning` is the
+    /// command that just failed, when there was one.
+    static func fallBack(into resolution: inout CommandResolution, abandoning failed: String?, text: String?,
+                         map: CommandMap, registry: CommandRegistry, snapshot: CommandSnapshot) {
         resolution.fellBack = true
         // Retrying the fallback when it is the thing that just failed would
         // only fail the same way.
-        guard let fallbackId = map.fallbackCommandId, fallbackId != decision.commandId,
+        guard let fallbackId = map.fallbackCommandId, fallbackId != failed,
               let fallback = map.command(fallbackId), fallback.isEnabled else {
             resolution.notes.append("no fallback command, so nothing runs")
             return
         }
         // The fallback is bound with no model picks: whatever the model chose
         // was the thing that just failed.
-        let clean = CommandDecision(commandId: fallback.id, picks: [:], text: decision.text)
+        let clean = CommandDecision(commandId: fallback.id, picks: [:], text: text)
         switch values(for: fallback, decision: clean, sentence: resolution.sentence,
                       map: map, registry: registry, snapshot: snapshot, notes: &resolution.notes) {
         case .success(let values):

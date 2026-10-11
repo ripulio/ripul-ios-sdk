@@ -69,7 +69,7 @@ struct PlanReviewDetailView: View {
     /// plan body ignores iOS text size entirely and can never reflow.
     @ScaledMetric(relativeTo: .body) private var proseFontSize: CGFloat = 15
 
-    /// Wrapper so `.sheet(item:)` can distinguish "no source comment" from
+    /// Wrapper so `.ripulSheet(item:)` can distinguish "no source comment" from
     /// "not composing" — an optional PlanComment cannot express both.
     private struct TaskComposition: Identifiable {
         let id: String
@@ -106,14 +106,14 @@ struct PlanReviewDetailView: View {
                         isExpanded: $orphanedExpanded,
                         trailing: {
                             Image(systemName: "exclamationmark.triangle.fill")
-                                .font(.caption)
-                                .foregroundStyle(.orange)
+                                .font(.ripulIcon(.caption))
+                                .foregroundStyle(.ripul(.warning))
                         }
                     ) {
                         panelRows(plan.orphaned) { commentRow($0, orphaned: true) }
                         Text("These point at sections that no longer exist. Each was either addressed by the rewrite, or lost in it.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .font(.ripul(.caption))
+                            .foregroundStyle(.ripul(.textSecondary))
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.horizontal, 16)
                             .padding(.top, 4)
@@ -159,7 +159,7 @@ struct PlanReviewDetailView: View {
                                 }
                             }
                             .contentShape(Rectangle())
-                            .contextMenu {
+                            .contextMenu { MenuIcons {
                                 // Copy works whether or not the section is
                                 // expanded — the heading alone is still a
                                 // long-press target, and it should still
@@ -168,7 +168,7 @@ struct PlanReviewDetailView: View {
                                     copyToPasteboard(sectionText(display.section))
                                 } label: { Label("Copy", systemImage: "doc.on.doc") }
                                     .uiKitIdentifier("PlanReviewDetailView.sectionCopy")
-                            }
+                            }}
                         }
                     }
                     .padding(.vertical, 6)
@@ -187,9 +187,10 @@ struct PlanReviewDetailView: View {
 
                 if plan.outstandingCount == 0 && plan.tasks.isEmpty && plan.sections.isEmpty {
                     ContentUnavailableView {
-                        Label("Not reviewed yet", systemImage: "text.magnifyingglass")
+                        RipulEmptyStateLabel("Not reviewed yet", systemImage: "text.magnifyingglass")
                     } description: {
                         Text("No comments on this plan. Ask an agent to review it, or add the first one yourself.")
+                            .ripulEmptyStateDescription()
                     } actions: {
                         // The description says "ask an agent" — so offer it,
                         // as the primary action, with the right verb: a
@@ -198,7 +199,7 @@ struct PlanReviewDetailView: View {
                         Button(plan.bodyIsTemplate ? "Draft with agent" : "Run an agent review") {
                             runningAgent = true
                         }
-                        .buttonStyle(.borderedProminent)
+                        .ripulProminentButtonStyle()
                         .uiKitIdentifier("PlanReviewDetailView.emptyRunAgent")
                         Button("Add comment") {
                             composeAnchor = PlanAnchorConstants.planWide
@@ -228,8 +229,8 @@ struct PlanReviewDetailView: View {
                     ) {
                         panelRows(plan.violations) { violation in
                             VStack(alignment: .leading, spacing: 2) {
-                                Text(violation.reason).font(.subheadline.weight(.medium))
-                                Text(violation.detail).font(.caption).foregroundStyle(.secondary)
+                                Text(violation.reason).font(.ripul(.subheadline, weight: .medium))
+                                Text(violation.detail).font(.ripul(.caption)).foregroundStyle(.ripul(.textSecondary))
                             }
                         }
                     }
@@ -261,7 +262,7 @@ struct PlanReviewDetailView: View {
                 .uiKitIdentifier("PlanReviewDetailView.runButton")
             }
             ToolbarItem(placement: .primaryAction) {
-                Menu {
+                Menu { MenuIcons {
                     Button {
                         composeAnchor = PlanAnchorConstants.planWide
                         composingComment = true
@@ -269,13 +270,13 @@ struct PlanReviewDetailView: View {
                     Button {
                         composingTask = TaskComposition(id: "new", source: nil)
                     } label: { Label("Add task", systemImage: "checklist") }
-                } label: {
+                }} label: {
                     Label("Add", systemImage: "plus")
                 }
                 .uiKitIdentifier("PlanReviewDetailView.addButton")
             }
         }
-        .sheet(isPresented: $composingComment) {
+        .ripulSheet(isPresented: $composingComment) {
             PlanCommentSheet(
                 anchors: store.detail?.anchors ?? [],
                 initialAnchor: composeAnchor
@@ -283,7 +284,7 @@ struct PlanReviewDetailView: View {
                 await store.addComment(anchor: anchor, severity: severity, body: body, in: slug)
             }
         }
-        .sheet(item: $composingTask) { composition in
+        .ripulSheet(item: $composingTask, size: .form) { composition in
             PlanTaskSheet(sourceComment: composition.source) { title, owner in
                 await store.addTask(
                     title: title,
@@ -293,7 +294,7 @@ struct PlanReviewDetailView: View {
                 )
             }
         }
-        .sheet(isPresented: $runningAgent) {
+        .ripulSheet(isPresented: $runningAgent) {
             PlanRunSheet(
                 planTitle: store.detail?.title ?? slug,
                 models: store.models,
@@ -335,15 +336,15 @@ struct PlanReviewDetailView: View {
         } message: {
             Text(store.errorMessage ?? "")
         }
-        .sheet(item: $replyTarget) { comment in
+        .ripulSheet(item: $replyTarget, size: .form) { comment in
             replySheet(comment)
         }
-        .sheet(isPresented: $showingLinkPicker) {
+        .ripulSheet(isPresented: $showingLinkPicker) {
             if let planLinkPicker, let planKey = store.detail?.planKey {
                 planLinkPicker(planKey)
             }
         }
-        .sheet(isPresented: $showingFile) {
+        .ripulSheet(isPresented: $showingFile) {
             PlanFileSheet(
                 path: store.detail?.bodyPath ?? slug,
                 contents: store.detail?.body ?? ""
@@ -363,16 +364,16 @@ struct PlanReviewDetailView: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 12) {
                 Image(systemName: plan.locked ? "lock.fill" : "lock.open.fill")
-                    .font(.title2)
-                    .foregroundStyle(plan.locked ? Color.green : Color.orange)
+                    .font(.ripulIcon(.title2))
+                    .foregroundStyle(plan.locked ? Color.ripul(.success) : Color.ripul(.warning))
                 VStack(alignment: .leading, spacing: 2) {
                     Text(plan.locked ? "Locked" : "Open")
-                        .font(.headline)
+                        .font(.ripul(.headline))
                     Text(plan.locked
                          ? "No blocking comments outstanding."
                          : "^[\(plan.blockingOutstanding) blocking comment](inflect: true) outstanding.")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                        .font(.ripul(.subheadline))
+                        .foregroundStyle(.ripul(.textSecondary))
                 }
             }
             .padding(.vertical, 4)
@@ -380,8 +381,8 @@ struct PlanReviewDetailView: View {
             if plan.outstandingCount > 0 {
                 LabeledContent("Open") {
                     Text("\(plan.openBlocking) blocking · \(plan.openShouldFix) should-fix · \(plan.openNit) nit")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .font(.ripul(.caption))
+                        .foregroundStyle(.ripul(.textSecondary))
                 }
             }
 
@@ -397,19 +398,19 @@ struct PlanReviewDetailView: View {
             } label: {
                 HStack(spacing: 4) {
                     Text("\(plan.bodyPath) · \(plan.machineName)")
-                        .font(.caption2)
+                        .font(.ripul(.caption2))
                         .monospaced()
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(.ripul(.textSecondary))
                         .lineLimit(1)
                         .truncationMode(.head)
                     Image(systemName: "chevron.right")
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(.tertiary)
+                        .font(.ripulIcon(.caption2, weight: .semibold))
+                        .foregroundStyle(.ripul(.textTertiary))
                 }
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .contextMenu {
+            .contextMenu { MenuIcons {
                 Button {
                     PlanFileSheet.copyToPasteboard(plan.bodyPath)
                 } label: {
@@ -420,7 +421,7 @@ struct PlanReviewDetailView: View {
                 } label: {
                     Label("View file", systemImage: "doc.text")
                 }
-            }
+            }}
             .uiKitIdentifier("PlanReviewDetailView.filePathRow")
         }
         .padding(.horizontal, 16)
@@ -468,12 +469,12 @@ struct PlanReviewDetailView: View {
             } label: {
                 HStack(spacing: 6) {
                     Image(systemName: "chevron.right")
-                        .font(.caption2.weight(.bold))
+                        .font(.ripulIcon(.caption2, weight: .bold))
                         .rotationEffect(.degrees(expanded ? 90 : 0))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(.ripul(.textSecondary))
                     Text(section.heading)
-                        .font(section.level <= 2 ? .subheadline.weight(.semibold) : .caption)
-                        .foregroundStyle(.primary)
+                        .font(section.level <= 2 ? .ripul(.subheadline, weight: .semibold) : .ripul(.caption))
+                        .foregroundStyle(.ripul(.text))
                         .multilineTextAlignment(.leading)
                 }
                 .contentShape(Rectangle())
@@ -506,8 +507,8 @@ struct PlanReviewDetailView: View {
                 composingComment = true
             } label: {
                 Image(systemName: "plus.bubble")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(.ripulIcon(.caption))
+                    .foregroundStyle(.ripul(.textSecondary))
             }
             .buttonStyle(.plain)
             .uiKitIdentifier("PlanReviewDetailView.sectionAddComment")
@@ -516,11 +517,11 @@ struct PlanReviewDetailView: View {
 
     private func countPill(_ count: Int, highlight: Bool) -> some View {
         Text("\(count)")
-            .font(.caption2.weight(.semibold))
+            .font(.ripul(.caption2, weight: .semibold))
             .padding(.horizontal, 6)
             .padding(.vertical, 1)
             .background(
-                Capsule().fill(highlight ? Color.orange.opacity(0.25) : Color.secondary.opacity(0.15))
+                Capsule().fill(highlight ? Color.ripul(.warning).opacity(0.25) : Color.ripul(.textSecondary).opacity(0.15))
             )
     }
 
@@ -592,15 +593,15 @@ struct PlanReviewDetailView: View {
             HStack(spacing: 6) {
                 Image(systemName: comment.severity.symbol)
                     .foregroundStyle(comment.severity.tint)
-                    .font(.caption)
+                    .font(.ripulIcon(.caption))
                 Text(comment.severity.label)
-                    .font(.caption.weight(.semibold))
+                    .font(.ripul(.caption, weight: .semibold))
                     .foregroundStyle(comment.severity.tint)
                 if comment.status != .open {
                     Text(comment.status.label)
-                        .font(.caption2.weight(.medium))
+                        .font(.ripul(.caption2, weight: .medium))
                         .padding(.horizontal, 6).padding(.vertical, 2)
-                        .background(.quaternary, in: Capsule())
+                        .background(.ripul(.textQuaternary), in: Capsule())
                 }
                 Spacer()
                 if store.isPending(comment.id) {
@@ -609,12 +610,12 @@ struct PlanReviewDetailView: View {
             }
 
             Text(comment.body)
-                .font(.callout)
+                .font(.ripul(.callout))
                 .fixedSize(horizontal: false, vertical: true)
 
             if orphaned, let suggestion = comment.suggestion {
                 Text("Ambiguous — could be \(suggestion)")
-                    .font(.caption).foregroundStyle(.orange)
+                    .font(.ripul(.caption)).foregroundStyle(.ripul(.warning))
             }
 
             if !comment.replies.isEmpty {
@@ -622,10 +623,10 @@ struct PlanReviewDetailView: View {
                     ForEach(comment.replies) { reply in
                         HStack(alignment: .top, spacing: 4) {
                             Image(systemName: "arrow.turn.down.right")
-                                .font(.caption2).foregroundStyle(.tertiary)
+                                .font(.ripulIcon(.caption2)).foregroundStyle(.ripul(.textTertiary))
                             Text(reply.body)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                                .font(.ripul(.caption))
+                                .foregroundStyle(.ripul(.textSecondary))
                                 .fixedSize(horizontal: false, vertical: true)
                         }
                     }
@@ -633,7 +634,7 @@ struct PlanReviewDetailView: View {
                 .padding(.leading, 4)
             }
 
-            Text(comment.author).font(.caption2).foregroundStyle(.tertiary)
+            Text(comment.author).font(.ripul(.caption2)).foregroundStyle(.ripul(.textTertiary))
         }
         .padding(.vertical, 2)
         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
@@ -643,13 +644,13 @@ struct PlanReviewDetailView: View {
                 Button {
                     Task { await store.setStatus(.resolved, on: comment, in: slug) }
                 } label: { Label("Resolve", systemImage: "checkmark.circle.fill") }
-                    .tint(.green)
+                    .tint(Color.ripul(.success))
             }
             if comment.allowedActions.contains(.wontfix) {
                 Button {
                     Task { await store.setStatus(.wontfix, on: comment, in: slug) }
                 } label: { Label("Won't fix", systemImage: "slash.circle") }
-                    .tint(.gray)
+                    .tint(Color.ripul(.neutral))
             }
         }
         .swipeActions(edge: .leading, allowsFullSwipe: false) {
@@ -657,10 +658,10 @@ struct PlanReviewDetailView: View {
                 Button {
                     Task { await store.setStatus(.accepted, on: comment, in: slug) }
                 } label: { Label("Accept", systemImage: "checkmark") }
-                    .tint(.blue)
+                    .tint(Color.ripul(.info))
             }
         }
-        .contextMenu {
+        .contextMenu { MenuIcons {
             Button {
                 replyText = ""
                 replyTarget = comment
@@ -676,21 +677,21 @@ struct PlanReviewDetailView: View {
                     Task { await store.setStatus(action, on: comment, in: slug) }
                 } label: { Label(action.label, systemImage: action.symbol) }
             }
-        }
+        }}
     }
 
     @ViewBuilder
     private func closedRow(_ comment: PlanComment) -> some View {
         HStack(spacing: 8) {
             Image(systemName: comment.status.symbol)
-                .foregroundStyle(comment.status == .resolved ? Color.green : Color.secondary)
+                .foregroundStyle(comment.status == .resolved ? Color.ripul(.success) : Color.ripul(.textSecondary))
             VStack(alignment: .leading, spacing: 2) {
                 Text(comment.body)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(.ripul(.caption))
+                    .foregroundStyle(.ripul(.textSecondary))
                     .strikethrough(comment.status == .wontfix)
                     .lineLimit(2)
-                Text(comment.status.label).font(.caption2).foregroundStyle(.tertiary)
+                Text(comment.status.label).font(.ripul(.caption2)).foregroundStyle(.ripul(.textTertiary))
             }
         }
     }
@@ -702,14 +703,14 @@ struct PlanReviewDetailView: View {
         } label: {
             HStack(spacing: 10) {
                 Image(systemName: task.status.isDone ? "checkmark.circle.fill" : "circle")
-                    .foregroundStyle(task.status.isDone ? Color.green : Color.secondary)
+                    .foregroundStyle(task.status.isDone ? Color.ripul(.success) : Color.ripul(.textSecondary))
                 VStack(alignment: .leading, spacing: 2) {
                     Text(task.title)
-                        .font(.callout)
+                        .font(.ripul(.callout))
                         .strikethrough(task.status.isDone)
-                        .foregroundStyle(task.status.isDone ? .secondary : .primary)
+                        .foregroundStyle(task.status.isDone ? .ripul(.textSecondary) : .ripul(.text))
                     if let owner = task.owner {
-                        Text(owner).font(.caption2).foregroundStyle(.tertiary)
+                        Text(owner).font(.ripul(.caption2)).foregroundStyle(.ripul(.textTertiary))
                     }
                 }
                 Spacer()
@@ -725,8 +726,8 @@ struct PlanReviewDetailView: View {
     private func replySheet(_ comment: PlanComment) -> some View {
         NavigationStack {
             Form {
-                Section("Replying to") {
-                    Text(comment.body).font(.callout).foregroundStyle(.secondary)
+                Section(themed: "Replying to") {
+                    Text(comment.body).font(.ripul(.callout)).foregroundStyle(.ripul(.textSecondary))
                 }
                 Section {
                     TextField("Your reply", text: $replyText, axis: .vertical)

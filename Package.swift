@@ -18,7 +18,8 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/gonzalezreal/swift-markdown-ui.git", from: "2.4.1"),
-        .package(url: "https://github.com/ripulio/thinking-orbs-swift.git", from: "0.1.0"),
+        // 0.2.0 added the frame limit the voice orb needs (VoiceModeOverlay.swift).
+        .package(url: "https://github.com/ripulio/thinking-orbs-swift.git", from: "0.2.0"),
         .package(url: "https://github.com/appstefan/HighlightSwift.git", from: "1.1.0"),
     ],
     targets: [

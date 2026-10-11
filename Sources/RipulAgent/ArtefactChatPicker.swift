@@ -30,12 +30,12 @@ struct ArtefactChatPicker: View {
         NavigationStack {
             VStack(spacing: 0) {
                 if busy { ProgressView().padding() }
-                if let error { Text(error).foregroundStyle(.red).font(.callout).padding().accessibilityIdentifier("ArtefactChat.error") }
+                if let error { Text(error).foregroundStyle(.ripul(.danger)).font(.ripul(.callout)).padding().accessibilityIdentifier("ArtefactChat.error") }
                 if let choice {
                     Form {
                         Section {
-                            Text(choice.title).font(.headline)
-                            Text("Revision \(choice.revision) · saved with this card").foregroundStyle(.secondary)
+                            Text(choice.title).font(.ripul(.headline))
+                            Text("Revision \(choice.revision) · saved with this card").foregroundStyle(.ripul(.textSecondary))
                             Picker("Display", selection: $surface) {
                                 ForEach(choice.surfaces, id: \.self) { value in
                                     Text(value == "widget" ? "Interactive chat card" : "Full page").tag(value)
@@ -45,9 +45,9 @@ struct ArtefactChatPicker: View {
                                 Text("Keep existing access").tag("")
                                 ForEach(teams) { team in Text("Allow \(team.teamName) to view and run").tag(team.teamId) }
                             }.disabled(busy || attempted || !choice.canShare)
-                        } footer: {
+                        } footer: { RipulSectionFooter {
                             Text("People need artefact access to open the card. Sharing with a team gives its members access across chats. Private scenarios and run history stay private.")
-                        }
+                        } }
                         Section {
                             Button(attempted ? "Retry add to chat" : "Add to chat") { Task { await post(choice) } }
                                 .disabled(busy).accessibilityIdentifier("ArtefactChat.add")
@@ -61,12 +61,12 @@ struct ArtefactChatPicker: View {
                             Button { Task { await select(item) } } label: {
                                 VStack(alignment: .leading, spacing: 4) {
                                     Text(item.title)
-                                    Text("Revision \(item.latestRevision)").font(.caption).foregroundStyle(.secondary)
+                                    Text("Revision \(item.latestRevision)").font(.ripul(.caption)).foregroundStyle(.ripul(.textSecondary))
                                 }
                             }.disabled(busy)
                         }
                         if !busy && items.filter({ search.isEmpty || $0.title.localizedCaseInsensitiveContains(search) }).isEmpty {
-                            Text("No artefacts found.").foregroundStyle(.secondary)
+                            Text("No artefacts found.").foregroundStyle(.ripul(.textSecondary))
                         }
                     }
                     if !busy && error != nil { Button("Reload library") { Task { await load() } }.padding() }

@@ -105,9 +105,9 @@ public struct NewChatSheet: View {
                     TextField("Title (optional)", text: $title)
                         .submitLabel(.done)
                         .accessibilityIdentifier("NewChat.title")
-                } footer: {
+                } footer: { RipulSectionFooter {
                     Text("Leave it blank to name the chat from its first message.")
-                }
+                } }
                 .disabled(loadingID != nil)
                 if lockedMachine == nil {
                     Section {
@@ -137,9 +137,9 @@ public struct NewChatSheet: View {
                         Button { browsing = true } label: { Label("Browse…", systemImage: "folder.badge.plus") }
                             .accessibilityIdentifier("NewChat.browseFolder")
                     }
-                } header: {
+                } header: { RipulSectionHeader {
                     Text("Folder")
-                } footer: {
+                } } footer: { RipulSectionFooter {
                     if let machine = candidates.first(where: { $0.id == draft.machineID }), let team = machine.teamName {
                         Text("Shared with \(team). Chats use this Mac's coding account and stay private to you until you share one with the team. Colleagues work in the same folders, so choose a separate working copy for independent edits. Mac-local history is available through Direct pairing.")
                     }
@@ -148,10 +148,10 @@ public struct NewChatSheet: View {
                          : (draft.connection == .direct
                             ? "Work uses the selected Mac's configured working directory. History stays on the Mac."
                             : "History stays in Ripul cloud. Coding chats use the selected Mac's configured working directory."))
-                }
+                } }
                 .disabled(loadingID != nil)
-                if let error { Section { Text(error).foregroundStyle(.red).textSelection(.enabled).accessibilityIdentifier("NewChat.error") } }
-                if let validationError { Section { Text(validationError).foregroundStyle(.secondary) } }
+                if let error { Section { Text(error).foregroundStyle(.ripul(.danger)).textSelection(.enabled).accessibilityIdentifier("NewChat.error") } }
+                if let validationError { Section { Text(validationError).foregroundStyle(.ripul(.textSecondary)) } }
                 if draft.connection == .direct {
                     Section { Button("Pair or manage Macs", action: onManageAccess).accessibilityIdentifier("NewChat.manageAccess") }
                         .disabled(loadingID != nil)
@@ -179,7 +179,7 @@ public struct NewChatSheet: View {
                 }
                 ToolbarItem(placement: .principal) { destinationTitle }
             }
-            .sheet(isPresented: $browsing) {
+            .ripulSheet(isPresented: $browsing) {
                 if let bridge, let machineID = draft.machineID {
                     RemoteFolderBrowseSheet(bridge: bridge, machineId: machineID, actionTitle: "Use This Folder",
                                             identifierPrefix: "NewChat.browse") { choose($0) }
@@ -211,12 +211,12 @@ public struct NewChatSheet: View {
     private var destinationTitle: some View {
         HStack(spacing: 8) {
             Image(systemName: destination?.icon ?? "desktopcomputer")
-                .font(.title3.weight(.semibold))
-                .foregroundStyle(destination == nil ? AnyShapeStyle(.secondary) : AnyShapeStyle(.tint))
+                .font(.ripulIcon(.title3, weight: .semibold))
+                .foregroundStyle(destination == nil ? AnyShapeStyle(.ripul(.textSecondary)) : AnyShapeStyle(.tint))
             VStack(alignment: .leading, spacing: 0) {
-                Text("New Chat").font(.headline)
+                Text("New Chat").font(.ripul(.headline))
                 Text(destination?.name ?? draft.machineName ?? "Choose a Mac")
-                    .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    .font(.ripul(.caption)).foregroundStyle(.ripul(.textSecondary)).lineLimit(1)
             }
         }
         .accessibilityElement(children: .combine)
@@ -232,18 +232,18 @@ public struct NewChatSheet: View {
         return Button { choose(folder) } label: {
             HStack(spacing: 12) {
                 Image(systemName: folder == nil ? "house" : "folder")
-                    .font(.system(size: 15)).foregroundStyle(.secondary).frame(width: 20)
+                    .font(.ripulIcon(size: 15)).foregroundStyle(.ripul(.textSecondary)).frame(width: 20)
                 if let folder {
                     DirectoryPathLabel(path: folder)
                 } else {
                     VStack(alignment: .leading, spacing: 1) {
-                        Text("The Mac's working directory").font(.caption).foregroundStyle(.secondary)
-                        Text("Default").font(.headline)
+                        Text("The Mac's working directory").font(.ripul(.caption)).foregroundStyle(.ripul(.textSecondary))
+                        Text("Default").font(.ripul(.headline))
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 if selected {
-                    Image(systemName: "checkmark").font(.system(size: 14, weight: .semibold)).foregroundStyle(.tint)
+                    Image(systemName: "checkmark").font(.ripulIcon(size: 14, weight: .semibold)).foregroundStyle(.tint)
                 }
             }
             .contentShape(Rectangle())

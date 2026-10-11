@@ -138,7 +138,8 @@ public enum RipulLiveViewIdentity {
             "iPhone16,2": "iPhone 15 Pro Max", "iPhone17,1": "iPhone 16 Pro", "iPhone17,2": "iPhone 16 Pro Max",
             "iPhone17,3": "iPhone 16", "iPhone17,4": "iPhone 16 Plus", "iPhone17,5": "iPhone 16e",
             "iPhone18,1": "iPhone 17 Pro", "iPhone18,2": "iPhone 17 Pro Max", "iPhone18,3": "iPhone 17",
-            "iPhone18,4": "iPhone Air", "iPhone18,5": "iPhone 17e",
+            "iPhone18,4": "iPhone Air", "iPhone18,5": "iPhone 17e", "iPhone19,2": "iPhone 18 Pro",
+            "iPhone19,4": "iPhone Duo",
         ]
         if let known = names[model] { return known }
         for family in ["iPhone", "iPad", "Mac"] where model.hasPrefix(family) { return family }

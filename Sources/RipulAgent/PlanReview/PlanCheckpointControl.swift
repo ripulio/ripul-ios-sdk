@@ -234,8 +234,8 @@ public struct PlanCheckpointControl: View {
                 HStack(spacing: 10) {
                     ProgressView().controlSize(.small)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("Running").font(.subheadline.weight(.semibold))
-                        Text(title).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        Text("Running").font(.ripul(.subheadline, weight: .semibold))
+                        Text(title).font(.ripul(.caption)).foregroundStyle(.ripul(.textSecondary)).lineLimit(1)
                     }
                     Spacer(minLength: 0)
                 }
@@ -275,12 +275,12 @@ public struct PlanCheckpointControl: View {
                 }
             case .settled(let openTasks):
                 HStack(spacing: 10) {
-                    Image(systemName: "checkmark.seal.fill").foregroundStyle(.green)
+                    Image(systemName: "checkmark.seal.fill").foregroundStyle(.ripul(.success))
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("Reviewed & locked").font(.subheadline.weight(.semibold))
+                        Text("Reviewed & locked").font(.ripul(.subheadline, weight: .semibold))
                         if openTasks > 0 {
                             Text("\(openTasks) open tasks — Run agent… → Do the tasks")
-                                .font(.caption).foregroundStyle(.secondary)
+                                .font(.ripul(.caption)).foregroundStyle(.ripul(.textSecondary))
                         }
                     }
                     Spacer(minLength: 0)
@@ -289,8 +289,8 @@ public struct PlanCheckpointControl: View {
 
             if let feedback {
                 Text(feedback)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(.ripul(.caption))
+                    .foregroundStyle(.ripul(.textSecondary))
             }
         }
         .padding(.horizontal, 16)
@@ -352,18 +352,18 @@ public struct PlanCheckpointControl: View {
                 if working {
                     ProgressView().controlSize(.small)
                 } else {
-                    Image(systemName: icon).font(.title3)
+                    Image(systemName: icon).font(.ripulIcon(.title3))
                 }
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(label).font(.subheadline.weight(.semibold))
+                    Text(label).font(.ripul(.subheadline, weight: .semibold))
                     if let subtitle {
-                        Text(subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        Text(subtitle).font(.ripul(.caption)).foregroundStyle(.ripul(.textSecondary)).lineLimit(1)
                     }
                 }
                 Spacer(minLength: 0)
                 Image(systemName: "chevron.right")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.tertiary)
+                    .font(.ripulIcon(.caption, weight: .semibold))
+                    .foregroundStyle(.ripul(.textTertiary))
             }
             .contentShape(Rectangle())
         }

@@ -23,7 +23,7 @@ struct InspectorWebPanel: View {
             case .edit, .layout:
                 if tab == .layout {
                     InspectorBoxModelView(session: session, element: element)
-                    Text("Tap an edge to edit. Values are CSS pixels.").foregroundStyle(.gray)
+                    Text("Tap an edge to edit. Values are CSS pixels.").foregroundStyle(.ripul(.neutral))
                 }
                 ForEach(styleKeys, id: \.self) { key in
                     InspectorWebStyleRow(session: session, property: key, value: element.styles[key] ?? "")
@@ -33,15 +33,15 @@ struct InspectorWebPanel: View {
                 ForEach(element.ancestors) { node in
                     Button("↑ " + node.label) { session.selectWeb(id: node.id) }
                 }
-                Text("● " + element.label).foregroundStyle(.pink)
+                Text("● " + element.label).foregroundStyle(.ripul(system: .systemPink))
                 ForEach(element.children) { node in
                     Button("↳ " + node.label) { session.selectWeb(id: node.id) }
                 }
-                if element.children.count == 150 { Text("First 150 children shown").foregroundStyle(.gray) }
+                if element.children.count == 150 { Text("First 150 children shown").foregroundStyle(.ripul(.neutral)) }
             case .eval:
-                Text("JavaScript expression · $0 is the selected element").foregroundStyle(.gray)
+                Text("JavaScript expression · $0 is the selected element").foregroundStyle(.ripul(.neutral))
                 TextField("Expression", text: $expression, axis: .vertical)
-                    .textFieldStyle(.roundedBorder).foregroundStyle(.primary)
+                    .textFieldStyle(.roundedBorder).foregroundStyle(.ripul(.text))
                     .autocorrectionDisabled().textInputAutocapitalization(.never)
                     .uiKitIdentifier("Inspector.eval.expression")
                 Button(evaluating ? "Running…" : "Run") {
@@ -54,8 +54,8 @@ struct InspectorWebPanel: View {
                 EmptyView()
             }
         }
-        .font(.system(size: 11, design: .monospaced))
-        .foregroundStyle(.white)
+        .font(.ripul(size: 11, family: .code))
+        .foregroundStyle(.ripul(system: .white))
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
@@ -78,16 +78,16 @@ private struct InspectorBoxModelView: View {
     @State private var editing = false
 
     var body: some View {
-        ring("margin", color: .orange) {
-            ring("border", color: .yellow) {
-                ring("padding", color: .green) {
+        ring("margin", color: .orange) { // theme-exempt: box-model layer colour, as in browser developer tools
+            ring("border", color: .yellow) { // theme-exempt: box-model layer colour
+                ring("padding", color: .green) { // theme-exempt: box-model layer colour
                     Text("\(format(element.box.content.width)) × \(format(element.box.content.height))")
                         .fontWeight(.semibold)
                         .lineLimit(1).minimumScaleFactor(0.7)
                         .frame(maxWidth: .infinity).frame(height: 44)
-                        .foregroundStyle(.cyan)
-                        .background(Color.cyan.opacity(0.18))
-                        .overlay(Rectangle().strokeBorder(Color.cyan, style: StrokeStyle(lineWidth: 1, dash: [3, 2])))
+                        .foregroundStyle(.cyan) // theme-exempt: box-model layer colour
+                        .background(Color.cyan.opacity(0.18)) // theme-exempt: box-model layer colour
+                        .overlay(Rectangle().strokeBorder(Color.cyan, style: StrokeStyle(lineWidth: 1, dash: [3, 2]))) // theme-exempt: box-model layer colour
                         .accessibilityLabel("Content size")
                         .accessibilityValue("\(format(element.box.content.width)) by \(format(element.box.content.height)) CSS pixels")
                         .uiKitIdentifier("Inspector.boxModel.content")
@@ -123,7 +123,7 @@ private struct InspectorBoxModelView: View {
         .background(color.opacity(0.13))
         .overlay(Rectangle().strokeBorder(color.opacity(0.8), style: StrokeStyle(lineWidth: 1, dash: [3, 2])).allowsHitTesting(false))
         .overlay(alignment: .topLeading) {
-            Text(layer).font(.system(size: 9, weight: .semibold, design: .monospaced))
+            Text(layer).font(.ripul(size: 9, weight: .semibold, family: .code))
                 .foregroundStyle(color).padding(4).allowsHitTesting(false)
         }
     }
@@ -162,7 +162,7 @@ private struct InspectorWebStyleRow: View {
         HStack {
             Text(property).frame(width: 115, alignment: .leading)
             TextField(property, text: $draft)
-                .textFieldStyle(.roundedBorder).foregroundStyle(.primary)
+                .textFieldStyle(.roundedBorder).foregroundStyle(.ripul(.text))
                 .autocorrectionDisabled().textInputAutocapitalization(.never)
                 .onSubmit { Task { await session.editStyle(property, value: draft) } }
             Button("Apply") { Task { await session.editStyle(property, value: draft) } }

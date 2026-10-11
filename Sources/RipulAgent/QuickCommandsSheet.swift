@@ -12,6 +12,7 @@ public struct QuickCommandsSheet: View {
     @State private var commands: [SlashCommandInfo] = []
     @State private var isLoading = true
     @State private var searchText = ""
+    @AppStorage(RipulExperimentalFeatures.plansKey) private var plansEnabled = false
     @State private var showEvictConfirm = false
     @State private var evictStatus: String?
     @State private var isEvicting = false
@@ -30,7 +31,7 @@ public struct QuickCommandsSheet: View {
             PlanReviewScreen(bridge: bridge.planReviewBridge(), chatId: chatId)
         } else {
             ContentUnavailableView(
-                "No active chat",
+                themed: "No active chat",
                 systemImage: "bubble.left.and.exclamationmark.bubble.right",
                 description: Text("Plans are read from the working directory of the chat you're in. Open a session first.")
             )
@@ -54,23 +55,23 @@ public struct QuickCommandsSheet: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     List {
-                        if #available(iOS 17.0, macOS 14.0, *) {
-                            Section("Plans") {
+                        if plansEnabled, #available(iOS 17.0, macOS 14.0, *) {
+                            Section(themed: "Plans") {
                                 NavigationLink {
                                     planReviewDestination
                                 } label: {
                                     HStack(spacing: 12) {
                                         Image(systemName: "checklist")
-                                            .font(.system(size: 16))
+                                            .font(.ripulIcon(size: 16))
                                             .foregroundStyle(.tint)
                                             .frame(width: 28)
                                         VStack(alignment: .leading, spacing: 3) {
                                             Text("Plan review")
-                                                .font(.body)
+                                                .font(.ripul(.body))
                                                 .fontWeight(.medium)
                                             Text("Comments, tasks and lock state for this repo's plans")
-                                                .font(.caption)
-                                                .foregroundStyle(.secondary)
+                                                .font(.ripul(.caption))
+                                                .foregroundStyle(.ripul(.textSecondary))
                                         }
                                     }
                                     .padding(.vertical, 4)
@@ -80,31 +81,31 @@ public struct QuickCommandsSheet: View {
                         }
 
                         if commands.isEmpty && !debugMode {
-                            Section("Commands") {
+                            Section(themed: "Commands") {
                                 Label("No slash commands available.", systemImage: "bolt.slash")
-                                    .foregroundStyle(.secondary)
-                                    .font(.callout)
+                                    .foregroundStyle(.ripul(.textSecondary))
+                                    .font(.ripul(.callout))
                             }
                         }
                         // Native debug tools (only in /rr. menu)
                         if debugMode {
-                            Section("Native") {
+                            Section(themed: "Native") {
                                 NavigationLink {
                                     ConsoleLogViewer(bridge: bridge)
                                 } label: {
                                     HStack(spacing: 12) {
                                         Image(systemName: "terminal")
-                                            .font(.system(size: 16))
+                                            .font(.ripulIcon(size: 16))
                                             .foregroundStyle(.tint)
                                             .frame(width: 28)
 
                                         VStack(alignment: .leading, spacing: 3) {
                                             Text("Console Logs")
-                                                .font(.body)
+                                                .font(.ripul(.body))
                                                 .fontWeight(.medium)
                                             Text("View JavaScript console output")
-                                                .font(.caption)
-                                                .foregroundStyle(.secondary)
+                                                .font(.ripul(.caption))
+                                                .foregroundStyle(.ripul(.textSecondary))
                                         }
 
                                         Spacer()
@@ -112,12 +113,12 @@ public struct QuickCommandsSheet: View {
                                         let errorCount = bridge.consoleLogs.filter { $0.level == "ERROR" }.count
                                         if errorCount > 0 {
                                             Text("\(errorCount)")
-                                                .font(.caption2)
+                                                .font(.ripul(.caption2))
                                                 .fontWeight(.bold)
-                                                .foregroundStyle(.white)
+                                                .foregroundStyle(.ripul(.onAccent))
                                                 .padding(.horizontal, 6)
                                                 .padding(.vertical, 2)
-                                                .background(.red, in: Capsule())
+                                                .background(.ripul(.danger), in: Capsule())
                                         }
                                     }
                                     .padding(.vertical, 4)
@@ -128,17 +129,17 @@ public struct QuickCommandsSheet: View {
                                 } label: {
                                     HStack(spacing: 12) {
                                         Image(systemName: "waveform.path.ecg")
-                                            .font(.system(size: 16))
+                                            .font(.ripulIcon(size: 16))
                                             .foregroundStyle(.tint)
                                             .frame(width: 28)
 
                                         VStack(alignment: .leading, spacing: 3) {
                                             Text("Relay Host Stats")
-                                                .font(.body)
+                                                .font(.ripul(.body))
                                                 .fontWeight(.medium)
                                             Text("Live ping/pong + frame vs command diagnostics")
-                                                .font(.caption)
-                                                .foregroundStyle(.secondary)
+                                                .font(.ripul(.caption))
+                                                .foregroundStyle(.ripul(.textSecondary))
                                         }
 
                                         Spacer()
@@ -151,18 +152,18 @@ public struct QuickCommandsSheet: View {
                                 } label: {
                                     HStack(spacing: 12) {
                                         Image(systemName: "bolt.trianglebadge.exclamationmark")
-                                            .font(.system(size: 16))
-                                            .foregroundStyle(.red)
+                                            .font(.ripulIcon(size: 16))
+                                            .foregroundStyle(.ripul(.danger))
                                             .frame(width: 28)
 
                                         VStack(alignment: .leading, spacing: 3) {
                                             Text("Evict Session DO")
-                                                .font(.body)
+                                                .font(.ripul(.body))
                                                 .fontWeight(.medium)
-                                                .foregroundStyle(.red)
+                                                .foregroundStyle(.ripul(.danger))
                                             Text(evictSubtitle)
-                                                .font(.caption)
-                                                .foregroundStyle(.secondary)
+                                                .font(.ripul(.caption))
+                                                .foregroundStyle(.ripul(.textSecondary))
                                                 .lineLimit(2)
                                         }
 
@@ -181,7 +182,7 @@ public struct QuickCommandsSheet: View {
 
                         // Web-defined commands
                         if !filteredCommands.isEmpty {
-                            Section(debugMode ? "Web" : "") {
+                            Section(themed: debugMode ? "Web" : "") {
                                 ForEach(filteredCommands) { cmd in
                                     if cmd.options.isEmpty {
                                         CommandRow(command: cmd)
@@ -324,11 +325,11 @@ private struct CommandOptionsView: View {
             HStack(spacing: 12) {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(option.label)
-                        .font(.body)
+                        .font(.ripul(.body))
                     if let desc = option.description {
                         Text(desc)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .font(.ripul(.caption))
+                            .foregroundStyle(.ripul(.textSecondary))
                     }
                 }
                 Spacer()
@@ -356,18 +357,18 @@ private struct CommandRow: View {
     var body: some View {
         HStack(spacing: 12) {
             Image(systemName: command.sfSymbol)
-                .font(.system(size: 16))
+                .font(.ripulIcon(size: 16))
                 .foregroundStyle(.tint)
                 .frame(width: 28)
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(command.command.prefix(1).uppercased() + command.command.dropFirst())
-                    .font(.body)
+                    .font(.ripul(.body))
                     .fontWeight(.medium)
 
                 Text(command.description)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(.ripul(.caption))
+                    .foregroundStyle(.ripul(.textSecondary))
                     .lineLimit(2)
             }
 
@@ -375,8 +376,8 @@ private struct CommandRow: View {
 
             if !command.options.isEmpty {
                 Image(systemName: "chevron.right")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(.ripulIcon(.caption))
+                    .foregroundStyle(.ripul(.textSecondary))
             }
         }
         .padding(.vertical, 4)

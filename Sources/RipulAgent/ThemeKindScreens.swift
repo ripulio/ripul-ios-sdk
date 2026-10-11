@@ -123,9 +123,9 @@ public struct RipulThemeComponentsScreen: View {
                             .padding(.leading, row.isPart ? 16 : 0)
                         }
                     }
-                } header: {
+                } header: { RipulSectionHeader {
                     if !group.name.isEmpty { Text(group.name) }
-                }
+                } }
             }
         }
         .navigationTitle("Components")
@@ -234,10 +234,10 @@ public struct RipulStyleKindScreen: View {
                     onChange: { knobs in
                         RipulThemeEngine.setOverrides(kind: kind, element: element.id, knobs: knobs)
                     })
-            } footer: {
+            } footer: { RipulSectionFooter {
                 Text("Applies everywhere this is used. Each value inherits the bundled theme "
                      + "until you set it.")
-            }
+            } }
             if RipulThemeEngine.current.styleOverrides[kind]?[element.id] != nil {
                 Section {
                     Button("Reset to bundled", role: .destructive) {
@@ -267,31 +267,31 @@ public struct RipulStyleKindScreen: View {
                             }
                         }
                     }
-                } header: {
+                } header: { RipulSectionHeader {
                     Text("Assembled from")
-                } footer: {
+                } } footer: { RipulSectionFooter {
                     Text("A style below picks one of each. Editing a part's style restyles "
                          + "every component pointing at it.")
-                }
+                } }
             }
             if !composedBy.isEmpty {
                 Section {
                     ForEach(composedBy, id: \.name) { parent in
                         NavigationLink(parent.label) { RipulStyleKindScreen(kind: parent.name) }
                     }
-                } header: {
+                } header: { RipulSectionHeader {
                     Text("Used as a part of")
-                }
+                } }
             }
             if styleKind?.supportsNamedStyles == true {
                 Section {
                     RipulStyleLibraryRows(kind: kind)
-                } header: {
+                } header: { RipulSectionHeader {
                     Text("Styles")
-                } footer: {
+                } } footer: { RipulSectionFooter {
                     Text("Shared styles. Assign one to elements below; editing it restyles "
                          + "every element that uses it.")
-                }
+                } }
             }
             if !elements.isEmpty {
                 Section {
@@ -304,12 +304,12 @@ public struct RipulStyleKindScreen: View {
                             RipulThemeScopesScreen(kind: kind)
                         }
                     }
-                } header: {
+                } header: { RipulSectionHeader {
                     Text("Elements")
-                } footer: {
+                } } footer: { RipulSectionFooter {
                     Text("Knobs set on an element apply to THAT element only and beat its "
                          + "assigned style.")
-                }
+                } }
             }
         }
         .navigationTitle(styleKind?.label ?? kind)
@@ -357,11 +357,11 @@ public struct RipulStyleLibraryScreen: View {
         Form {
             Section {
                 RipulStyleLibraryRows(kind: kind, showsPreviews: showsPreviews)
-            } footer: {
+            } footer: { RipulSectionFooter {
                 Text("Shared styles for \(styleKind?.label.lowercased() ?? kind). Assign one to "
                      + "elements; editing it restyles every element that uses it. Editing a "
                      + "built-in makes your own copy (Reset restores stock).")
-            }
+            } }
         }
         .navigationTitle(styleKind?.label ?? kind)
         .navigationBarTitleDisplayMode(.inline)
@@ -528,10 +528,10 @@ public struct RipulThemeScopesScreen: View {
             if node == nil {
                 Section {
                     EmptyView()
-                } footer: {
+                } footer: { RipulSectionFooter {
                     Text("Each element uses its assigned style unless you set knobs here — "
                          + "those apply to THIS element only and beat its named style.")
-                }
+                } }
             }
         }
         .navigationTitle(node?.name ?? (styleKind.map { "\($0.label) · elements" } ?? kind))
@@ -598,10 +598,10 @@ public struct RipulScopeOverridesScreen: View {
                     onChange: { knobs in
                         RipulThemeEngine.setOverrides(kind: kind, element: element, knobs: knobs)
                     })
-            } footer: {
+            } footer: { RipulSectionFooter {
                 Text("Each value inherits until you set it, at which point it applies to this "
                      + "element only.")
-            }
+            } }
             if hasOverrides {
                 Section {
                     Button("Reset to inherited", role: .destructive) {

@@ -145,7 +145,7 @@ private struct SimulatorPreviewImage: View {
     @ObservedObject var frame: HostScreenPreviewFrame
     var body: some View {
         if let image = frame.image { Image(uiImage: image).resizable().scaledToFit() }
-        else { Color.black }
+        else { Color.ripul(system: .black) }
     }
 }
 
@@ -171,21 +171,21 @@ struct SimulatorPreviewPanel: View {
                         .opacity(state.collapsed ? 0 : 1)
                         if state.collapsed {
                             control("pip", label: "Expand simulator preview", id: "expand", size: 56) { state.collapsed = false }
-                                .contextMenu { Button("Close preview", role: .destructive) { state.close() } }
+                                .contextMenu { MenuIcons { Button("Close preview", role: .destructive) { state.close() } }}
                         } else {
                             if let error = state.error {
                                 VStack(spacing: 8) {
-                                    Text(error).font(.caption).multilineTextAlignment(.center)
+                                    Text(error).font(.ripul(.caption)).multilineTextAlignment(.center)
                                     Button("Retry") { state.retry() }.buttonStyle(.bordered)
                                 }.padding(8).padding(.top, 44).frame(maxWidth: .infinity, maxHeight: .infinity)
                             } else if !state.windows.isEmpty {
                                 VStack(spacing: 8) {
-                                    Text("Several simulators may match.").font(.caption).multilineTextAlignment(.center)
-                                    Menu("Choose window") {
+                                    Text("Several simulators may match.").font(.ripul(.caption)).multilineTextAlignment(.center)
+                                    Menu("Choose window") { MenuIcons {
                                         ForEach(Array(state.windows.enumerated()), id: \.element.id) { index, window in
                                             Button("\(window.title) · Window \(index + 1)") { state.choose(window) }
                                         }
-                                    }
+                                    }}
                                 }.padding(8).padding(.top, 44).frame(maxWidth: .infinity, maxHeight: .infinity)
                             } else if state.imageSize == .zero {
                                 ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity).accessibilityLabel("Connecting to Simulator")
@@ -200,7 +200,7 @@ struct SimulatorPreviewPanel: View {
                     .frame(width: state.collapsed ? 56 : width, height: state.collapsed ? 56 : width / ratio)
                     .clipShape(outline)
                     .glassEffect(.regular, in: outline)
-                    .shadow(color: .black.opacity(0.2), radius: 10, y: 3)
+                    .shadow(color: Color.ripul(system: .black).opacity(0.2), radius: 10, y: 3)
                     .accessibilityElement(children: .contain)
                     .accessibilityIdentifier("SimulatorPreview.surface")
                     .animation(reduceMotion ? nil : .spring(response: 0.38, dampingFraction: 0.88), value: state.collapsed)
@@ -211,7 +211,7 @@ struct SimulatorPreviewPanel: View {
 
     private func control(_ symbol: String, label: String, id: String, size: CGFloat = 44, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Image(systemName: symbol).font(.system(size: size == 56 ? 22 : 14, weight: .semibold))
+            Image(systemName: symbol).font(.ripulIcon(size: size == 56 ? 22 : 14, weight: .semibold))
                 .frame(width: size, height: size).contentShape(Rectangle())
                 .glassEffect(.regular.interactive(), in: Circle())
         }.buttonStyle(.plain).accessibilityLabel(label).uiKitIdentifier("SimulatorPreview.\(id)")
@@ -234,7 +234,7 @@ final class SimulatorPreviewController: UIViewController {
     override func loadView() { view = HostScreenPreviewPassthroughView() }
     override func viewDidLoad() {
         super.viewDidLoad()
-        let host = UIHostingController(rootView: SimulatorPreviewPanel(state: state))
+        let host = UIHostingController(rootView: SimulatorPreviewPanel(state: state).ripulThemeRoot())
         host.view.backgroundColor = .clear
         addChild(host); view.addSubview(host.view)
         host.view.frame = view.bounds; host.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]

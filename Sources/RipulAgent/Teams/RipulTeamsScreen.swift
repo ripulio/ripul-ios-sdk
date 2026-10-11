@@ -191,8 +191,8 @@ public struct RipulTeamsScreen: View {
                     Text(me.canManageTeams
                          ? "Your plan includes team management."
                          : "Creating teams needs the Lifetime plan or an admin role. You can still join teams you're invited to.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
+                        .font(.ripul(.footnote))
+                        .foregroundStyle(.ripul(.textSecondary))
                         .frame(maxWidth: .infinity, alignment: .center)
                         .listRowBackground(Color.clear)
                 }
@@ -217,7 +217,7 @@ public struct RipulTeamsScreen: View {
         }
         .refreshable { await model.load() }
         .task { await model.load() }
-        .sheet(isPresented: $showingCreate) {
+        .ripulSheet(isPresented: $showingCreate) {
             RipulTeamEditorSheet(title: "New Team", name: "", description: "") { name, description in
                 await model.create(name: name, description: description)
             }
@@ -226,7 +226,7 @@ public struct RipulTeamsScreen: View {
     }
 
     private var invitationsSection: some View {
-        Section("Invitations") {
+        Section(themed: "Invitations") {
             ForEach(model.invites) { invite in
                 RipulTeamInviteInboxRow(
                     invite: invite,
@@ -243,7 +243,7 @@ public struct RipulTeamsScreen: View {
         Section {
             if model.memberships.isEmpty, model.hasLoaded {
                 Text("You're not in any teams yet.")
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.ripul(.textSecondary))
             }
             ForEach(model.memberships) { membership in
                 NavigationLink {
@@ -260,13 +260,13 @@ public struct RipulTeamsScreen: View {
                 }
                 .uiKitIdentifier("Teams.row")
             }
-        } header: {
+        } header: { RipulSectionHeader {
             Text("My teams")
-        } footer: {
+        } } footer: { RipulSectionFooter {
             if !model.memberships.isEmpty {
                 Text("Teams share deployed tools, prompts and artefacts, and can scope which solution context your chats use.")
             }
-        }
+        } }
     }
 
     private var otherTeamsSection: some View {
@@ -285,11 +285,11 @@ public struct RipulTeamsScreen: View {
                     teamRow(name: team.name, role: "Not a member")
                 }
             }
-        } header: {
+        } header: { RipulSectionHeader {
             Text("All teams")
-        } footer: {
+        } } footer: { RipulSectionFooter {
             Text("Visible because you're a platform admin.")
-        }
+        } }
     }
 
     @ViewBuilder
@@ -300,11 +300,11 @@ public struct RipulTeamsScreen: View {
                 .frame(width: 28)
             VStack(alignment: .leading, spacing: 1) {
                 Text(name)
-                    .font(.subheadline.weight(.medium))
+                    .font(.ripul(.subheadline, weight: .medium))
                     .lineLimit(1)
                 Text(role)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(.ripul(.caption))
+                    .foregroundStyle(.ripul(.textSecondary))
             }
         }
         .padding(.vertical, 2)
@@ -317,11 +317,11 @@ public struct RipulTeamsScreen: View {
         } else if !model.loading, !model.hasLoaded {
             VStack(spacing: 8) {
                 Image(systemName: "person.2")
-                    .font(.largeTitle)
-                    .foregroundStyle(.secondary)
+                    .font(.ripulIcon(.largeTitle))
+                    .foregroundStyle(.ripul(.textSecondary))
                 Text(model.errorMessage ?? "Couldn't load your teams")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
+                    .font(.ripul(.callout))
+                    .foregroundStyle(.ripul(.textSecondary))
                     .multilineTextAlignment(.center)
                 Button("Retry") { Task { await model.load() } }
                     .buttonStyle(.bordered)
@@ -341,21 +341,21 @@ struct RipulTeamInviteInboxRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(invite.teamName ?? invite.teamId)
-                .font(.subheadline.weight(.semibold))
+                .font(.ripul(.subheadline, weight: .semibold))
             Text("\(invite.inviterName ?? "Someone") invited you to join as \(invite.role.label.lowercased()).")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .font(.ripul(.caption))
+                .foregroundStyle(.ripul(.textSecondary))
             if let description = invite.teamDescription {
                 Text(description)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(.ripul(.caption))
+                    .foregroundStyle(.ripul(.textSecondary))
                     .lineLimit(2)
             }
             HStack(spacing: 8) {
                 Button(action: onAccept) {
                     Label("Accept", systemImage: "checkmark")
                 }
-                .buttonStyle(.borderedProminent)
+                .ripulProminentButtonStyle()
                 .uiKitIdentifier("Teams.invite.accept")
                 Button(role: .destructive, action: onDecline) {
                     Text("Decline")
@@ -593,7 +593,7 @@ struct RipulTeamDetailScreen: View {
                 ToolbarItem(placement: .topBarTrailing) {
                     // Invite lives in the Members section as a row; the menu keeps
                     // the rarer team-level actions.
-                    Menu {
+                    Menu { MenuIcons {
                         Button {
                             showingEdit = true
                         } label: {
@@ -607,7 +607,7 @@ struct RipulTeamDetailScreen: View {
                                 Label("Delete team", systemImage: "trash")
                             }
                         }
-                    } label: {
+                    }} label: {
                         Image(systemName: "ellipsis.circle")
                     }
                     .uiKitIdentifier("TeamDetail.menu")
@@ -616,14 +616,14 @@ struct RipulTeamDetailScreen: View {
         }
         .refreshable { await model.load() }
         .task { await model.load() }
-        .sheet(isPresented: $showingInvite) {
+        .ripulSheet(isPresented: $showingInvite) {
             RipulTeamInviteSheet(allowUserId: model.me?.isAdmin ?? false) { email, userId, role in
                 let ok = await model.invite(email: email, userId: userId, role: role)
                 if ok { onChange() }
                 return ok
             }
         }
-        .sheet(isPresented: $showingEdit) {
+        .ripulSheet(isPresented: $showingEdit) {
             RipulTeamEditorSheet(
                 title: "Edit Team",
                 name: team?.name ?? initialName,
@@ -684,34 +684,34 @@ struct RipulTeamDetailScreen: View {
                 .uiKitIdentifier("TeamDetail.sharedHost")
             }
             if model.hosts.isEmpty {
-                Text("No Macs shared with this team.").foregroundStyle(.secondary)
+                Text("No Macs shared with this team.").foregroundStyle(.ripul(.textSecondary))
             }
             if model.myRole?.canManage == true {
-                Menu {
+                Menu { MenuIcons {
                     ForEach(model.availableHosts) { machine in
                         Button(machine.displayName) { Task { await model.shareHost(machine) } }
                     }
-                } label: {
+                }} label: {
                     Label("Share one of my Macs", systemImage: "plus.circle")
                 }
                 .disabled(model.changingHost || model.availableHosts.isEmpty)
                 .uiKitIdentifier("TeamDetail.addHost")
                 if model.availableHosts.isEmpty {
-                    Text("Bring an unshared Mac online under your account to add it here.").font(.caption).foregroundStyle(.secondary)
+                    Text("Bring an unshared Mac online under your account to add it here.").font(.ripul(.caption)).foregroundStyle(.ripul(.textSecondary))
                 }
             }
-        } header: {
+        } header: { RipulSectionHeader {
             Text("Shared Hosts")
-        } footer: {
+        } } footer: { RipulSectionFooter {
             Text("Accepted team members can start chats using each Mac's files, tools and coding account. Each person's chats are private until they share one with the team. Find shared Macs in Agents. Stopping sharing ends command and chat access within 30 seconds; accepted jobs can finish.")
-        }
+        } }
     }
 
     private var aboutSection: some View {
         Section {
             if let description = team?.description {
                 Text(description)
-                    .font(.subheadline)
+                    .font(.ripul(.subheadline))
             }
             if let role = model.myRole {
                 LabeledContent("Your role", value: role.label)
@@ -728,11 +728,11 @@ struct RipulTeamDetailScreen: View {
                 )
                 .uiKitIdentifier("TeamDetail.activeForChats")
             }
-        } footer: {
+        } footer: { RipulSectionFooter {
             if model.activeTeam != nil, model.myRole != nil {
                 Text("When on, chats and prompt lookups are scoped to this team's solution context. If you're in several teams with different contexts, one must be chosen or requests are refused.")
             }
-        }
+        } }
     }
 
     private var membersSection: some View {
@@ -750,7 +750,7 @@ struct RipulTeamDetailScreen: View {
             }
             if model.members.isEmpty, model.detail != nil {
                 Text("No members yet.")
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.ripul(.textSecondary))
             }
             ForEach(model.members) { member in
                 memberRow(member)
@@ -765,16 +765,16 @@ struct RipulTeamDetailScreen: View {
                     }
                     .uiKitIdentifier("TeamDetail.member")
             }
-        } header: {
+        } header: { RipulSectionHeader {
             HStack {
                 Text("Members")
                 if !model.members.isEmpty { Text("(\(model.members.count))") }
             }
-        } footer: {
+        } } footer: { RipulSectionFooter {
             if model.canManage {
                 Text("Owners and admins can invite people and change roles. A team always keeps at least one owner.")
             }
-        }
+        } }
     }
 
     @ViewBuilder
@@ -784,18 +784,18 @@ struct RipulTeamDetailScreen: View {
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 4) {
                     Text(member.title)
-                        .font(.subheadline.weight(.medium))
+                        .font(.ripul(.subheadline, weight: .medium))
                         .lineLimit(1)
                     if member.userId == model.me?.userId {
                         Text("you")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
+                            .font(.ripul(.caption2))
+                            .foregroundStyle(.ripul(.textSecondary))
                     }
                 }
                 if let subtitle = member.subtitle {
                     Text(subtitle)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .font(.ripul(.caption))
+                        .foregroundStyle(.ripul(.textSecondary))
                         .lineLimit(1)
                 }
             }
@@ -803,7 +803,7 @@ struct RipulTeamDetailScreen: View {
             if model.busyMemberId == member.userId {
                 ProgressView().controlSize(.small)
             } else if model.canManage {
-                Menu {
+                Menu { MenuIcons {
                     ForEach(RipulTeamRole.allCases, id: \.self) { role in
                         Button {
                             Task {
@@ -818,20 +818,20 @@ struct RipulTeamDetailScreen: View {
                             }
                         }
                     }
-                } label: {
+                }} label: {
                     HStack(spacing: 3) {
                         Text(member.role.label)
                         Image(systemName: "chevron.up.chevron.down")
-                            .font(.caption2)
+                            .font(.ripulIcon(.caption2))
                     }
-                    .font(.caption)
+                    .font(.ripul(.caption))
                     .foregroundStyle(.tint)
                 }
                 .uiKitIdentifier("TeamDetail.member.role")
             } else {
                 Text(member.role.label)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(.ripul(.caption))
+                    .foregroundStyle(.ripul(.textSecondary))
             }
         }
         .padding(.vertical, 2)
@@ -841,16 +841,16 @@ struct RipulTeamDetailScreen: View {
         Section {
             if model.invites.isEmpty {
                 Text("No outstanding invitations.")
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.ripul(.textSecondary))
             }
             ForEach(model.invites) { invite in
                 VStack(alignment: .leading, spacing: 1) {
                     Text(invite.email)
-                        .font(.subheadline)
+                        .font(.ripul(.subheadline))
                         .lineLimit(1)
                     Text(inviteFootnote(invite))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .font(.ripul(.caption))
+                        .foregroundStyle(.ripul(.textSecondary))
                 }
                 .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                     Button(role: .destructive) {
@@ -861,11 +861,11 @@ struct RipulTeamDetailScreen: View {
                 }
                 .uiKitIdentifier("TeamDetail.invite")
             }
-        } header: {
+        } header: { RipulSectionHeader {
             Text("Invitations")
-        } footer: {
+        } } footer: { RipulSectionFooter {
             Text("Invitations expire after two weeks. Swipe to withdraw one.")
-        }
+        } }
     }
 
     private func inviteFootnote(_ invite: RipulTeamInvite) -> String {
@@ -901,7 +901,7 @@ struct RipulTeamMemberAvatar: View {
 
     private var initials: some View {
         Text(member.initials)
-            .font(.caption.weight(.semibold))
+            .font(.ripul(.caption, weight: .semibold))
             .foregroundStyle(.tint)
     }
 }
@@ -925,7 +925,7 @@ struct RipulTeamEditorSheet: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("Name") {
+                Section(themed: "Name") {
                     TextField("Team name", text: $name)
                         .textInputAutocapitalization(.words)
                         .uiKitIdentifier("TeamEditor.name")
@@ -934,11 +934,11 @@ struct RipulTeamEditorSheet: View {
                     TextField("What this team is for", text: $description, axis: .vertical)
                         .lineLimit(2...5)
                         .uiKitIdentifier("TeamEditor.description")
-                } header: {
+                } header: { RipulSectionHeader {
                     Text("Description")
-                } footer: {
+                } } footer: { RipulSectionFooter {
                     Text("Optional. Shown to people you invite.")
-                }
+                } }
             }
             .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
@@ -1019,14 +1019,14 @@ struct RipulTeamInviteSheet: View {
                             .autocorrectionDisabled()
                             .uiKitIdentifier("TeamInvite.userId")
                     }
-                } header: {
+                } header: { RipulSectionHeader {
                     Text(mode == .email ? "Email address" : "Clerk user ID")
-                } footer: {
+                } } footer: { RipulSectionFooter {
                     Text(mode == .email
                          ? "They'll see the invitation in Ripul and can accept or decline. Nothing is shared until they accept."
                          : "Adds the account to the team immediately.")
-                }
-                Section("Role") {
+                } }
+                Section(themed: "Role") {
                     Picker("Role", selection: $role) {
                         ForEach(RipulTeamRole.allCases, id: \.self) { role in
                             Text(role.label).tag(role)
@@ -1108,17 +1108,17 @@ private struct RipulDepartmentActivityScreen: View {
             Section {
                 Text("Shared with \(host.teamName)")
                 Text("Runs on the Mac's configured coding account. Team members' requests are recorded below.")
-                    .font(.subheadline).foregroundStyle(.secondary)
+                    .font(.ripul(.subheadline)).foregroundStyle(.ripul(.textSecondary))
             }
-            Section("Recent Activity") {
+            Section(themed: "Recent Activity") {
                 if loading { ProgressView() }
-                else if activity.isEmpty { Text("No team activity yet.").foregroundStyle(.secondary) }
+                else if activity.isEmpty { Text("No team activity yet.").foregroundStyle(.ripul(.textSecondary)) }
                 ForEach(Array(activity.enumerated()), id: \.offset) { _, item in
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(item.actorName).font(.headline)
-                        Text(item.title).font(.subheadline)
+                        Text(item.actorName).font(.ripul(.headline))
+                        Text(item.title).font(.ripul(.subheadline))
                         if let date = item.date {
-                            Text(date, style: .relative).font(.caption).foregroundStyle(.secondary)
+                            Text(date, style: .relative).font(.ripul(.caption)).foregroundStyle(.ripul(.textSecondary))
                         }
                     }
                 }

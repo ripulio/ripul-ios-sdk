@@ -75,12 +75,12 @@ struct RipulModelCatalogEditorSheet: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("Model") {
+                Section(themed: "Model") {
                     TextField("Display name", text: $name)
                     TextField("Group", text: $group)
                     TextField("Description", text: $descriptionText, axis: .vertical)
                 }
-                Section("Type") {
+                Section(themed: "Type") {
                     Picker("Provider", selection: $provider) {
                         ForEach(Self.providers, id: \.self) { Text($0.capitalized).tag($0) }
                         if !Self.providers.contains(provider) {
@@ -100,7 +100,7 @@ struct RipulModelCatalogEditorSheet: View {
                         .textInputAutocapitalization(.never)
                 }
                 if isCli {
-                    Section("CLI") {
+                    Section(themed: "CLI") {
                         TextField("Model alias (passed via --model)", text: $cliModelId)
                             .autocorrectionDisabled()
                             .textInputAutocapitalization(.never)
@@ -117,7 +117,7 @@ struct RipulModelCatalogEditorSheet: View {
                         Toggle("Supports tools", isOn: $supportsTools)
                     }
                 } else {
-                    Section("API") {
+                    Section(themed: "API") {
                         TextField("Model ID sent to the API", text: $apiModelId)
                             .autocorrectionDisabled()
                             .textInputAutocapitalization(.never)
@@ -136,7 +136,7 @@ struct RipulModelCatalogEditorSheet: View {
                         Toggle("Use native endpoint (site keys)", isOn: $useNativeEndpoint)
                     }
                 }
-                Section("Pricing") {
+                Section(themed: "Pricing") {
                     TextField("$ per M input tokens", text: $perMInputText)
                         .keyboardType(.decimalPad)
                     TextField("$ per M output tokens", text: $perMOutputText)
@@ -146,7 +146,7 @@ struct RipulModelCatalogEditorSheet: View {
                         Text("Premium").tag("premium")
                     }
                 }
-                Section("Availability") {
+                Section(themed: "Availability") {
                     Toggle("Enabled", isOn: $enabled)
                     TextField("Sort order", text: $sortOrderText)
                         .keyboardType(.numberPad)
@@ -156,7 +156,7 @@ struct RipulModelCatalogEditorSheet: View {
                         .autocorrectionDisabled()
                         .textInputAutocapitalization(.never)
                         .disabled(!isNew)
-                        .foregroundStyle(isNew ? Color.primary : Color.secondary)
+                        .foregroundStyle(isNew ? Color.ripul(.text) : Color.ripul(.textSecondary))
                         .onChange(of: catalogId) { _ in
                             if suppressIdLatch {
                                 suppressIdLatch = false
@@ -164,16 +164,16 @@ struct RipulModelCatalogEditorSheet: View {
                                 idEdited = true
                             }
                         }
-                } header: {
+                } header: { RipulSectionHeader {
                     Text("Catalog ID")
-                } footer: {
+                } } footer: { RipulSectionFooter {
                     Text(isNew
                         ? "Auto-suggested from the name; edit if you like."
                         : "The catalog id can't be changed.")
-                }
+                } }
                 if let errorMessage {
                     Section {
-                        Text(errorMessage).foregroundStyle(.red).font(.callout)
+                        Text(errorMessage).foregroundStyle(.ripul(.danger)).font(.ripul(.callout))
                     }
                 }
             }

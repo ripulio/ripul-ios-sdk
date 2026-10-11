@@ -347,7 +347,7 @@ struct CmsAgGridBlockView: View {
                     .background(Capsule().fill(runtime.theme.divider.opacity(0.15)))
                 }
                 if sortEnabled {
-                    Menu {
+                    Menu { MenuIcons {
                         ForEach(columns) { column in
                             Button {
                                 if sortKey == column.key { sortAscending.toggle() } else { sortKey = column.key; sortAscending = true }
@@ -363,7 +363,7 @@ struct CmsAgGridBlockView: View {
                             Divider()
                             Button("Clear sort") { sortKey = nil }
                         }
-                    } label: {
+                    }} label: {
                         Image(systemName: "arrow.up.arrow.down")
                             .font(.subheadline)
                             .foregroundColor(sortKey == nil ? runtime.theme.textSecondary : runtime.theme.primary)

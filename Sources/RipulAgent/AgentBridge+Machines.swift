@@ -15,42 +15,48 @@ extension AgentBridge {
         return (true, newChatId, nil)
     }
 
-    /// Move a CLI session from its currently-paired machine to a different
-    /// target machine. The source copy is left intact (fork-and-move). Returns
-    /// the new local chatId on success, the effective cwd chosen by the target
-    /// (and whether that was a fallback), and the target machine's display name.
+    /// Move a CLI session from its machine to a different one. Once the target
+    /// holds it, the original is removed from its Mac. `progressId` names the
+    /// move so `moveProgress(id:)` can read where it is while this awaits.
     public func moveSession(
         sourceChatId: String,
         targetMachineId: String,
         displayName: String?,
-        sourceMachineId: String? = nil
-    ) async -> (
-        success: Bool,
-        newChatId: String?,
-        effectiveCwd: String?,
-        cwdFallback: Bool,
-        targetMachineName: String?,
-        error: String?,
-        /// The move retires the original on the source Mac once the target has
-        /// the chat. False (with the reason) when that step failed — the move
-        /// itself still succeeded, and the original is still there.
-        sourceRemoved: Bool,
-        sourceRemoveError: String?
-    ) {
-        let reply = await callPage("__ripulMoveSession", [sourceChatId, targetMachineId, displayName, sourceMachineId],
+        sourceMachineId: String? = nil,
+        progressId: String? = nil
+    ) async -> MoveSessionOutcome {
+        let reply = await callPage("__ripulMoveSession", [sourceChatId, targetMachineId, displayName, sourceMachineId, progressId],
                                    .orElse("{success:false, error:'not ready'}"))
-        if let reason = reply.failure() { return (false, nil, nil, false, nil, reason, false, nil) }
-        guard reply.succeeded, let dict = reply.dictionary else {
-            return (false, nil, nil, false, nil, reply.dictionary?["error"] as? String, false, nil)
+        if let reason = reply.failure() { return MoveSessionOutcome(error: reason) }
+        let dict = reply.dictionary ?? [:]
+        let outcome = MoveSessionOutcome(
+            success: reply.succeeded,
+            newChatId: dict["newChatId"] as? String,
+            effectiveCwd: dict["effectiveCwd"] as? String,
+            cwdFallback: (dict["cwdFallback"] as? Bool) ?? false,
+            targetMachineName: dict["targetMachineName"] as? String,
+            sourceMachineName: dict["sourceMachineName"] as? String,
+            error: reply.succeeded ? nil : (dict["error"] as? String),
+            failedStep: (dict["failedStep"] as? String).flatMap(MoveChatProgress.Step.init(rawValue:)),
+            sourceRemoved: (dict["sourceRemoved"] as? Bool) ?? false,
+            sourceRemoveError: dict["sourceRemoveError"] as? String
+        )
+        if outcome.success {
+            NSLog("[AgentBridge] moveSession: moved %@ → %@ (new=%@)", sourceChatId, targetMachineId, outcome.newChatId ?? "?")
         }
-        let newChatId = dict["newChatId"] as? String
-        let effectiveCwd = dict["effectiveCwd"] as? String
-        let cwdFallback = (dict["cwdFallback"] as? Bool) ?? false
-        let targetName = dict["targetMachineName"] as? String
-        let sourceRemoved = (dict["sourceRemoved"] as? Bool) ?? false
-        let sourceRemoveError = dict["sourceRemoveError"] as? String
-        NSLog("[AgentBridge] moveSession: moved %@ → %@ (new=%@)", sourceChatId, targetMachineId, newChatId ?? "?")
-        return (true, newChatId, effectiveCwd, cwdFallback, targetName, nil, sourceRemoved, sourceRemoveError)
+        return outcome
+    }
+
+    /// Where the move started with `progressId` is. Nil before its first report.
+    public func moveProgress(id: String) async -> MoveChatProgress? {
+        let reply = await callPage("__ripulGetMoveProgress", [id], log: .none)
+        guard let dict = reply.dictionary,
+              let step = (dict["step"] as? String).flatMap(MoveChatProgress.Step.init(rawValue:)) else { return nil }
+        return MoveChatProgress(
+            step: step,
+            fraction: (dict["fraction"] as? Double) ?? 0,
+            detail: (dict["detail"] as? String) ?? ""
+        )
     }
 
     /// Set the working directory for a CLI session via the web app's relay.
@@ -256,6 +262,14 @@ extension AgentBridge {
     /// userInfo carries `sessionId` (`claude-cli:<uuid>`) and `chatId` (`cli_<uuid>`).
     public static let remoteSessionArchivedNotification = Notification.Name("ripulRemoteSessionArchived")
 
+    /// Posted (object: the bridge) when a Mac says one of its chats changed
+    /// state and this device's copy of that Mac's list does not show it: a
+    /// chat started there that this device has no row for, or a chat it has
+    /// never opened starting or stopping. The session list reads the Macs'
+    /// lists again. Before this a new chat on another machine appeared only
+    /// when something else made the list refresh.
+    public static let remoteSessionsChangedNotification = Notification.Name("ripulRemoteSessionsChanged")
+
     public func listRemoteSessions(machineId: String) async -> [RemoteSessionInfo] {
         await listRemoteSessionsAnswer(machineId: machineId).sessions
     }
@@ -319,7 +333,8 @@ extension AgentBridge {
                 hostChatId: item["hostChatId"] as? String,
                 machineId: machineId,
                 teamVisibility: item["teamVisibility"] as? String,
-                creatorUserId: item["creatorUserId"] as? String
+                creatorUserId: item["creatorUserId"] as? String,
+                startedBy: SessionStartedBy(wire: item["startedBy"])
             )
         }
         NSLog("[AgentBridge] listRemoteSessions: %d sessions on %@", parsed.count, machineId)

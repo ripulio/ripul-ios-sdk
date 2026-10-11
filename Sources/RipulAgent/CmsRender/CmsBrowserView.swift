@@ -125,7 +125,7 @@ public struct CmsBrowserView: View {
         return HStack {
             Text(definition.name ?? definition.id)
             Spacer()
-            Menu {
+            Menu { MenuIcons {
                 Button {
                     visitorKeyByCms[definition.id] = nil
                 } label: {
@@ -148,7 +148,7 @@ public struct CmsBrowserView: View {
                         }
                     }
                 }
-            } label: {
+            }} label: {
                 HStack(spacing: 4) {
                     Image(systemName: activeKey == nil ? "person.badge.key" : "person")
                         .font(.caption2)
@@ -172,7 +172,7 @@ private extension View {
         #if os(iOS)
         fullScreenCover(item: item, content: content)
         #else
-        sheet(item: item, content: content)
+        ripulSheet(item: item, content: content)
         #endif
     }
 }

@@ -44,12 +44,12 @@ struct DeviceSpeechKeySection: View {
                 }
                 .uiKitIdentifier("VoiceSettings.deviceKey.usage")
             }
-            if let error { Text(error).foregroundStyle(.red).uiKitIdentifier("VoiceSettings.deviceKey.error") }
-        } header: {
+            if let error { Text(error).foregroundStyle(.ripul(.danger)).uiKitIdentifier("VoiceSettings.deviceKey.error") }
+        } header: { RipulSectionHeader {
             Text("Your ElevenLabs key")
-        } footer: {
+        } } footer: { RipulSectionFooter {
             Text("Optional. Stored in this app’s Keychain on this device. Speech and transcription connect directly to ElevenLabs using your account and quota. Nothing passes through Ripul’s servers or your paired Mac. Without a key, Standalone uses Apple speech. Internet access is needed for ElevenLabs.")
-        }
+        } }
         .alert("Remove ElevenLabs key?", isPresented: $removing) {
             Button("Remove", role: .destructive) {
                 do {

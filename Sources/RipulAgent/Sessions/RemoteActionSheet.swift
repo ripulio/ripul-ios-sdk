@@ -47,8 +47,8 @@ public struct RemoteActionSheet: View {
                     // Description
                     if !action.description.isEmpty {
                         Text(action.description)
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
+                            .font(.ripul(.subheadline))
+                            .foregroundStyle(.ripul(.textSecondary))
                     }
 
                     // Parameter form
@@ -74,15 +74,15 @@ public struct RemoteActionSheet: View {
                                 if isExecuting {
                                     ProgressView()
                                         .controlSize(.small)
-                                        .tint(.white)
+                                        .tint(Color.ripul(.onAccent))
                                 }
                                 Text(isExecuting ? "Executing..." : "Execute")
                             }
                             .frame(maxWidth: .infinity)
                         }
                         .uiKitIdentifier("RemoteActionSheet.executeButton")
-                        .buttonStyle(.borderedProminent)
-                        .tint(action.destructive ? .red : .blue)
+                        .ripulProminentButtonStyle()
+                        .tint(action.destructive ? Color.ripul(.danger) : Color.ripul(.info))
                         .disabled(isExecuting)
                         .padding(.top, 8)
                     }
@@ -123,12 +123,12 @@ public struct RemoteActionSheet: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 4) {
                 Text(label)
-                    .font(.caption)
+                    .font(.ripul(.caption))
                     .fontWeight(.medium)
                 if isRequired {
                     Text("*")
-                        .font(.caption)
-                        .foregroundStyle(.red)
+                        .font(.ripul(.caption))
+                        .foregroundStyle(.ripul(.danger))
                 }
             }
 
@@ -138,7 +138,7 @@ public struct RemoteActionSheet: View {
                     get: { paramValues[key] == "true" },
                     set: { paramValues[key] = $0 ? "true" : "false" }
                 ))
-                .font(.caption)
+                .font(.ripul(.caption))
             case "number":
                 TextField(description.isEmpty ? label : description, text: Binding(
                     get: { paramValues[key] ?? "" },
@@ -174,9 +174,9 @@ public struct RemoteActionSheet: View {
         // Status header
         HStack(spacing: 6) {
             Image(systemName: isError ? "xmark.circle.fill" : "checkmark.circle.fill")
-                .foregroundStyle(isError ? .red : .green)
+                .foregroundStyle(isError ? .ripul(.danger) : .ripul(.success))
             Text(isError ? "Failed" : "Success")
-                .font(.subheadline)
+                .font(.ripul(.subheadline))
                 .fontWeight(.semibold)
             Spacer()
             copyJSONButton(result)
@@ -208,8 +208,8 @@ public struct RemoteActionSheet: View {
     private func errorResultView(_ result: [String: Any]) -> some View {
         let errorMsg = result["error"] as? String ?? result["message"] as? String ?? "Unknown error"
         Text(errorMsg)
-            .font(.system(.caption, design: .monospaced))
-            .foregroundStyle(.secondary)
+            .font(.ripul(.caption, family: .code))
+            .foregroundStyle(.ripul(.textSecondary))
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(10)
             .background(.ultraThinMaterial)
@@ -304,17 +304,17 @@ public struct RemoteActionSheet: View {
         HStack(spacing: 8) {
             if let icon = field.icon {
                 Image(systemName: icon)
-                    .foregroundStyle(.secondary)
-                    .font(.title3)
+                    .foregroundStyle(.ripul(.textSecondary))
+                    .font(.ripulIcon(.title3))
             }
             VStack(alignment: .leading, spacing: 2) {
                 if let label = field.label {
                     Text(label)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
+                        .font(.ripul(.caption2))
+                        .foregroundStyle(.ripul(.textSecondary))
                 }
                 Text("\(value)")
-                    .font(.title3)
+                    .font(.ripul(.title3))
                     .fontWeight(.bold)
             }
         }
@@ -351,18 +351,18 @@ public struct RemoteActionSheet: View {
         HStack(alignment: .top, spacing: 8) {
             if let icon = field.icon {
                 Image(systemName: icon)
-                    .foregroundStyle(.secondary)
-                    .font(.caption)
+                    .foregroundStyle(.ripul(.textSecondary))
+                    .font(.ripulIcon(.caption))
                     .frame(width: 16)
             }
             Text(field.label ?? humanize(field.key))
-                .font(.caption2)
+                .font(.ripul(.caption2))
                 .fontWeight(.medium)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.ripul(.textSecondary))
                 .frame(width: 80, alignment: .trailing)
             Text("\(value)")
-                .font(.system(.caption, design: .monospaced))
-                .foregroundStyle(.primary)
+                .font(.ripul(.caption, family: .code))
+                .foregroundStyle(.ripul(.text))
                 .textSelection(.enabled)
             Spacer()
         }
@@ -373,22 +373,22 @@ public struct RemoteActionSheet: View {
         HStack(spacing: 8) {
             if let icon = field.icon {
                 Image(systemName: icon)
-                    .foregroundStyle(.secondary)
-                    .font(.caption)
+                    .foregroundStyle(.ripul(.textSecondary))
+                    .font(.ripulIcon(.caption))
                     .frame(width: 16)
             }
             Text(field.label ?? humanize(field.key))
-                .font(.caption2)
+                .font(.ripul(.caption2))
                 .fontWeight(.medium)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.ripul(.textSecondary))
                 .frame(width: 80, alignment: .trailing)
             Text("\(value)")
-                .font(.system(.caption, design: .monospaced))
+                .font(.ripul(.caption, family: .code))
                 .fontWeight(.medium)
                 .padding(.horizontal, 8)
                 .padding(.vertical, 3)
-                .background(.blue.opacity(0.15))
-                .foregroundStyle(.blue)
+                .background(Color.ripul(.info).opacity(0.15))
+                .foregroundStyle(.ripul(.info))
                 .clipShape(Capsule())
             Spacer()
         }
@@ -400,18 +400,18 @@ public struct RemoteActionSheet: View {
         HStack(spacing: 8) {
             if let icon = field.icon {
                 Image(systemName: icon)
-                    .foregroundStyle(.secondary)
-                    .font(.caption)
+                    .foregroundStyle(.ripul(.textSecondary))
+                    .font(.ripulIcon(.caption))
                     .frame(width: 16)
             }
             Text(field.label ?? humanize(field.key))
-                .font(.caption2)
+                .font(.ripul(.caption2))
                 .fontWeight(.medium)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.ripul(.textSecondary))
                 .frame(width: 80, alignment: .trailing)
             Text(relativeText)
-                .font(.system(.caption, design: .monospaced))
-                .foregroundStyle(.primary)
+                .font(.ripul(.caption, family: .code))
+                .foregroundStyle(.ripul(.text))
                 .textSelection(.enabled)
             Spacer()
         }
@@ -423,18 +423,18 @@ public struct RemoteActionSheet: View {
         HStack(spacing: 8) {
             if let icon = field.icon {
                 Image(systemName: icon)
-                    .foregroundStyle(.secondary)
-                    .font(.caption)
+                    .foregroundStyle(.ripul(.textSecondary))
+                    .font(.ripulIcon(.caption))
                     .frame(width: 16)
             }
             Text(field.label ?? humanize(field.key))
-                .font(.caption2)
+                .font(.ripul(.caption2))
                 .fontWeight(.medium)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.ripul(.textSecondary))
                 .frame(width: 80, alignment: .trailing)
             Text(formatted)
-                .font(.system(.caption, design: .monospaced))
-                .foregroundStyle(.primary)
+                .font(.ripul(.caption, family: .code))
+                .foregroundStyle(.ripul(.text))
                 .textSelection(.enabled)
             Spacer()
         }
@@ -452,29 +452,29 @@ public struct RemoteActionSheet: View {
             HStack(spacing: 6) {
                 if let icon = field.icon {
                     Image(systemName: icon)
-                        .foregroundStyle(.secondary)
-                        .font(.caption)
+                        .foregroundStyle(.ripul(.textSecondary))
+                        .font(.ripulIcon(.caption))
                 }
                 Text(field.label ?? humanize(field.key))
-                    .font(.caption2)
+                    .font(.ripul(.caption2))
                     .fontWeight(.medium)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.ripul(.textSecondary))
                 Spacer()
                 if let label = parsed.label {
                     Text(label)
-                        .font(.system(.caption, design: .monospaced))
-                        .foregroundStyle(.primary)
+                        .font(.ripul(.caption, family: .code))
+                        .foregroundStyle(.ripul(.text))
                 }
             }
 
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
                     RoundedRectangle(cornerRadius: 4)
-                        .fill(Color.secondary.opacity(0.2))
+                        .fill(Color.ripul(.textSecondary).opacity(0.2))
                     RoundedRectangle(cornerRadius: 4)
                         .fill(
                             LinearGradient(
-                                colors: [.blue, .purple],
+                                colors: [Color.ripul(.info), Color.ripul(system: .systemPurple)],
                                 startPoint: .leading,
                                 endPoint: .trailing
                             )
@@ -485,8 +485,8 @@ public struct RemoteActionSheet: View {
             .frame(height: 8)
 
             Text("\(Int(percent))% in use")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
+                .font(.ripul(.caption2))
+                .foregroundStyle(.ripul(.textSecondary))
         }
         .padding(.vertical, 4)
     }
@@ -517,8 +517,8 @@ public struct RemoteActionSheet: View {
             // Single value: show as text
             let msg = displayFields.values.first.map { "\($0)" } ?? "Done"
             Text(msg)
-                .font(.system(.caption, design: .monospaced))
-                .foregroundStyle(.secondary)
+                .font(.ripul(.caption, family: .code))
+                .foregroundStyle(.ripul(.textSecondary))
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(10)
                 .background(.ultraThinMaterial)
@@ -541,13 +541,13 @@ public struct RemoteActionSheet: View {
     private func defaultFieldRow(key: String, value: Any) -> some View {
         HStack(alignment: .top, spacing: 8) {
             Text(humanize(key))
-                .font(.caption2)
+                .font(.ripul(.caption2))
                 .fontWeight(.medium)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.ripul(.textSecondary))
                 .frame(width: 90, alignment: .trailing)
             Text("\(value)")
-                .font(.system(.caption, design: .monospaced))
-                .foregroundStyle(.primary)
+                .font(.ripul(.caption, family: .code))
+                .foregroundStyle(.ripul(.text))
                 .textSelection(.enabled)
             Spacer()
         }
@@ -568,10 +568,10 @@ public struct RemoteActionSheet: View {
             #endif
         } label: {
             Label("Copy JSON", systemImage: "doc.on.doc")
-                .font(.caption2)
+                .font(.ripul(.caption2))
         }
         .buttonStyle(.borderless)
-        .foregroundStyle(.secondary)
+        .foregroundStyle(.ripul(.textSecondary))
     }
 
     private static func serializeJSON(_ value: [String: Any]) -> String {
@@ -620,18 +620,18 @@ public struct RemoteActionSheet: View {
                     #endif
                 } label: {
                     Image(systemName: "doc.on.doc")
-                        .font(.caption2)
+                        .font(.ripulIcon(.caption2))
                 }
                 .buttonStyle(.borderless)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.ripul(.textSecondary))
             }
             .padding(.horizontal, 10)
             .padding(.top, 8)
 
             ScrollView(.horizontal, showsIndicators: false) {
                 Text(text)
-                    .font(.system(.caption, design: .monospaced))
-                    .foregroundStyle(.primary)
+                    .font(.ripul(.caption, family: .code))
+                    .foregroundStyle(.ripul(.text))
                     .textSelection(.enabled)
                     .padding(.horizontal, 10)
                     .padding(.bottom, 10)
@@ -647,13 +647,13 @@ public struct RemoteActionSheet: View {
         HStack(spacing: 4) {
             if let icon {
                 Image(systemName: icon)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+                    .font(.ripulIcon(.caption2))
+                    .foregroundStyle(.ripul(.textSecondary))
             }
             Text(label)
-                .font(.caption2)
+                .font(.ripul(.caption2))
                 .fontWeight(.medium)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.ripul(.textSecondary))
         }
     }
 

@@ -80,14 +80,14 @@ public struct RelayHostStatsView: View {
                         Button { copyCommsLog() } label: {
                             Label("Copy", systemImage: "doc.on.doc")
                         }
-                        .font(.caption)
+                        .font(.ripul(.caption))
                         .buttonStyle(.borderless)
                         Button { Task { await clearCommsLog() } } label: {
                             Label("Clear", systemImage: "trash")
                         }
-                        .font(.caption)
+                        .font(.ripul(.caption))
                         .buttonStyle(.borderless)
-                        .tint(.red)
+                        .tint(Color.ripul(.danger))
                     }
                 }
                 commsLogCard
@@ -110,8 +110,8 @@ public struct RelayHostStatsView: View {
     @ViewBuilder
     private func sectionLabel(_ text: String) -> some View {
         Text(text)
-            .font(.caption.weight(.semibold))
-            .foregroundStyle(.secondary)
+            .font(.ripul(.caption, weight: .semibold))
+            .foregroundStyle(.ripul(.textSecondary))
             .textCase(.uppercase)
     }
 
@@ -121,18 +121,18 @@ public struct RelayHostStatsView: View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             if let ts = lastFetchedAt {
                 Text("Updated \(Self.timestampFormatter.string(from: ts))")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(.ripul(.caption))
+                    .foregroundStyle(.ripul(.textSecondary))
             } else {
                 Text("Loading…")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(.ripul(.caption))
+                    .foregroundStyle(.ripul(.textSecondary))
             }
             Spacer()
             if let err = fetchError {
                 Text(err)
-                    .font(.caption)
-                    .foregroundStyle(.red)
+                    .font(.ripul(.caption))
+                    .foregroundStyle(.ripul(.danger))
                     .lineLimit(1)
                     .truncationMode(.middle)
             }
@@ -148,7 +148,7 @@ public struct RelayHostStatsView: View {
         let all = findings
         let problems = all.filter { $0.level >= .warn }
         let worst = all.map(\.level).max()
-        let verdictColor: Color = worst == .error ? .red : worst == .warn ? .orange : (bridgeDiagnostics.hostStatusAvailable == nil ? .secondary : .green)
+        let verdictColor: Color = worst == .error ? Color.ripul(.danger) : worst == .warn ? Color.ripul(.warning) : (bridgeDiagnostics.hostStatusAvailable == nil ? Color.ripul(.textSecondary) : Color.ripul(.success))
         return VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
                 Image(systemName: problems.isEmpty ? (bridgeDiagnostics.hostStatusAvailable == nil ? "hourglass" : "checkmark.seal.fill")
@@ -157,13 +157,13 @@ public struct RelayHostStatsView: View {
                 Text(problems.isEmpty
                      ? (bridgeDiagnostics.hostStatusAvailable == nil ? "Checking…" : "All clear")
                      : "\(problems.count) thing\(problems.count == 1 ? "" : "s") need\(problems.count == 1 ? "s" : "") attention")
-                    .font(.subheadline.weight(.semibold))
+                    .font(.ripul(.subheadline, weight: .semibold))
                     .foregroundStyle(verdictColor)
             }
             if problems.isEmpty, bridgeDiagnostics.hostStatusAvailable != nil {
                 Text(StatusSummary.allClearSentence(diagnostics: bridgeDiagnostics, rooms: rooms, comms: commsEntries, now: Date()))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(.ripul(.caption))
+                    .foregroundStyle(.ripul(.textSecondary))
                     .fixedSize(horizontal: false, vertical: true)
             }
             ForEach(all) { finding in
@@ -186,11 +186,11 @@ public struct RelayHostStatsView: View {
                 .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
             VStack(alignment: .leading, spacing: 3) {
                 Text(finding.title)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(finding.level == .info ? .secondary : .primary)
+                    .font(.ripul(.caption, weight: .semibold))
+                    .foregroundStyle(finding.level == .info ? .ripul(.textSecondary) : .ripul(.text))
                 Text(finding.detail)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(.ripul(.caption))
+                    .foregroundStyle(.ripul(.textSecondary))
                     .fixedSize(horizontal: false, vertical: true)
                 if let action = finding.action {
                     findingActionButton(action)
@@ -208,7 +208,7 @@ public struct RelayHostStatsView: View {
             } label: {
                 Label("Retry now", systemImage: "arrow.clockwise")
             }
-            .font(.caption)
+            .font(.ripul(.caption))
             .buttonStyle(.borderless)
         case .healWebContext:
             Button {
@@ -216,7 +216,7 @@ public struct RelayHostStatsView: View {
             } label: {
                 Label("Heal now", systemImage: "bandage")
             }
-            .font(.caption)
+            .font(.ripul(.caption))
             .buttonStyle(.borderless)
         }
     }
@@ -224,13 +224,13 @@ public struct RelayHostStatsView: View {
     private var emptyState: some View {
         VStack(spacing: 6) {
             Image(systemName: "antenna.radiowaves.left.and.right.slash")
-                .font(.largeTitle)
-                .foregroundStyle(.secondary)
+                .font(.ripulIcon(.largeTitle))
+                .foregroundStyle(.ripul(.textSecondary))
             Text("No host bridge or controller pings visible.")
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.ripul(.textSecondary))
             Text(bridgeDiagnostics.diagnosis)
-                .font(.caption)
-                .foregroundStyle(.tertiary)
+                .font(.ripul(.caption))
+                .foregroundStyle(.ripul(.textTertiary))
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 16)
         }
@@ -248,14 +248,14 @@ public struct RelayHostStatsView: View {
                 Image(systemName: bridgeDiagnostics.statusIcon)
                     .foregroundStyle(bridgeDiagnostics.statusColor)
                 Text(bridgeDiagnostics.statusLabel)
-                    .font(.caption.weight(.semibold))
+                    .font(.ripul(.caption, weight: .semibold))
                     .foregroundStyle(bridgeDiagnostics.statusColor)
             }
 
             if !bridgeDiagnostics.diagnosis.isEmpty {
                 Text(bridgeDiagnostics.diagnosis)
-                    .font(.caption)
-                    .foregroundStyle(.primary)
+                    .font(.ripul(.caption))
+                    .foregroundStyle(.ripul(.text))
                     .fixedSize(horizontal: false, vertical: true)
             }
 
@@ -271,7 +271,7 @@ public struct RelayHostStatsView: View {
                     } label: {
                         Label("Heal now", systemImage: "bandage")
                     }
-                    .font(.caption)
+                    .font(.ripul(.caption))
                     .buttonStyle(.borderless)
                     .help("Run the self-heal ladder (reload, escalating to a state purge). Respects the 10s floor between heals.")
 
@@ -280,9 +280,9 @@ public struct RelayHostStatsView: View {
                     } label: {
                         Label("Purge + reload", systemImage: "trash")
                     }
-                    .font(.caption)
+                    .font(.ripul(.caption))
                     .buttonStyle(.borderless)
-                    .tint(.red)
+                    .tint(Color.ripul(.danger))
                     .help("Clear localStorage/IndexedDB/caches (cookies kept, so you stay signed in) and fresh-load. This is the manual recovery, unconditional — no floor.")
                 }
             }
@@ -295,10 +295,10 @@ public struct RelayHostStatsView: View {
                         diagRow("connected for", value: RelayStability.duration(connectedFor))
                     } else if let downFor = stability.downForMs {
                         diagRow("down for", value: "\(RelayStability.duration(downFor)), \(stability.downAttempts) attempt(s)",
-                                color: bridgeDiagnostics.statusColor == .secondary ? nil : bridgeDiagnostics.statusColor)
+                                color: bridgeDiagnostics.statusColor == Color.ripul(.textSecondary) ? nil : bridgeDiagnostics.statusColor)
                     }
                     diagRow("drops (5 min / 1 h)", value: "\(stability.dropsLast5m) / \(stability.dropsLast1h)",
-                            color: stability.dropsLast5m >= RelayStability.unstableDrops ? .orange : nil)
+                            color: stability.dropsLast5m >= RelayStability.unstableDrops ? Color.ripul(.warning) : nil)
                     diagRow("last drop", value: stability.lastDropSummary)
                     if let build = bridgeDiagnostics.build {
                         diagRow("web build", value: build, mono: true)
@@ -309,23 +309,23 @@ public struct RelayHostStatsView: View {
             DisclosureGroup("Raw values") {
             VStack(alignment: .leading, spacing: 4) {
                 diagRow("getHostStatus.available", value: bridgeDiagnostics.hostStatusAvailable.map { $0 ? "true" : "false" } ?? "—",
-                        color: (bridgeDiagnostics.hostStatusAvailable == false) ? .red : nil)
+                        color: (bridgeDiagnostics.hostStatusAvailable == false) ? Color.ripul(.danger) : nil)
                 if let err = bridgeDiagnostics.hostStatusError {
-                    diagRow("getHostStatus.error", value: err, color: .red, mono: true)
+                    diagRow("getHostStatus.error", value: err, color: .ripul(.danger), mono: true)
                 }
                 if let health = bridgeDiagnostics.probeHealth {
-                    diagRow("jsContext.probe", value: health, color: health == "healthy" ? nil : .red, mono: true)
+                    diagRow("jsContext.probe", value: health, color: health == "healthy" ? nil : Color.ripul(.danger), mono: true)
                 }
                 if let digest = bridgeDiagnostics.probeDigest {
                     diagRow("jsContext.detail", value: digest, mono: true)
                 }
                 diagRow("hostEnabled", value: bridgeDiagnostics.hostEnabled.map { $0 ? "true" : "false" } ?? "—",
-                        color: (bridgeDiagnostics.hostEnabled == false) ? .orange : nil)
+                        color: (bridgeDiagnostics.hostEnabled == false) ? Color.ripul(.warning) : nil)
                 diagRow("registered", value: bridgeDiagnostics.registered.map { $0 ? "true" : "false" } ?? "—",
-                        color: (bridgeDiagnostics.registered == false) ? .orange : nil)
+                        color: (bridgeDiagnostics.registered == false) ? Color.ripul(.warning) : nil)
                 diagRow("relayState", value: bridgeDiagnostics.relayState ?? "—",
                         color: (bridgeDiagnostics.relayState != nil && bridgeDiagnostics.relayState != "connected"
-                                && bridgeDiagnostics.statusColor != .secondary) ? bridgeDiagnostics.statusColor : nil)
+                                && bridgeDiagnostics.statusColor != Color.ripul(.textSecondary)) ? bridgeDiagnostics.statusColor : nil)
                 diagRow("roomId", value: bridgeDiagnostics.roomId ?? "—", mono: true)
                 diagRow("machineName", value: bridgeDiagnostics.machineName ?? "—", mono: true)
                 diagRow("machineId", value: bridgeDiagnostics.machineId ?? "—", mono: true)
@@ -333,16 +333,16 @@ public struct RelayHostStatsView: View {
                 Divider().padding(.vertical, 2)
 
                 diagRow("getRelayDiagnostics.available", value: bridgeDiagnostics.diagAvailable.map { $0 ? "true" : "false" } ?? "—",
-                        color: (bridgeDiagnostics.diagAvailable == false) ? .red : nil)
+                        color: (bridgeDiagnostics.diagAvailable == false) ? Color.ripul(.danger) : nil)
                 if let err = bridgeDiagnostics.diagError {
-                    diagRow("getRelayDiagnostics.error", value: err, color: .red, mono: true)
+                    diagRow("getRelayDiagnostics.error", value: err, color: .ripul(.danger), mono: true)
                 }
                 diagRow("rooms returned", value: "\(bridgeDiagnostics.diagRoomsCount)")
             }
             .padding(.top, 4)
             }
-            .font(.caption2)
-            .foregroundStyle(.secondary)
+            .font(.ripul(.caption2))
+            .foregroundStyle(.ripul(.textSecondary))
         }
         .padding(12)
         .background(
@@ -359,12 +359,12 @@ public struct RelayHostStatsView: View {
     private func diagRow(_ label: String, value: String, color: Color? = nil, mono: Bool = false) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             Text(label)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
+                .font(.ripul(.caption2))
+                .foregroundStyle(.ripul(.textSecondary))
                 .frame(width: 200, alignment: .leading)
             Text(value)
-                .font(mono ? .system(.caption2, design: .monospaced) : .caption2)
-                .foregroundStyle(color ?? .primary)
+                .font(mono ? .ripul(.caption2, family: .code) : .ripul(.caption2))
+                .foregroundStyle(color ?? Color.ripul(.text))
                 .lineLimit(2)
                 .truncationMode(.middle)
             Spacer()
@@ -377,20 +377,20 @@ public struct RelayHostStatsView: View {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 healthBadge(room.health)
                 Text(room.title)
-                    .font(.system(.subheadline, design: .monospaced))
+                    .font(.ripul(.subheadline, family: .code))
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Spacer()
                 if let rtt = room.rttMs {
                     Text("\(rtt) ms")
-                        .font(.system(.caption, design: .monospaced))
-                        .foregroundStyle(.secondary)
+                        .font(.ripul(.caption, family: .code))
+                        .foregroundStyle(.ripul(.textSecondary))
                 }
             }
 
             if let reason = room.health.detail {
                 Text(reason)
-                    .font(.caption)
+                    .font(.ripul(.caption))
                     .foregroundStyle(room.health.color)
             }
 
@@ -436,7 +436,7 @@ public struct RelayHostStatsView: View {
                 .fill(health.color)
                 .frame(width: 8, height: 8)
             Text(health.label)
-                .font(.caption.weight(.semibold))
+                .font(.ripul(.caption, weight: .semibold))
                 .foregroundStyle(health.color)
             infoIcon("""
             HEALTHY — no dropped commands and no stalled turns. An idle host is healthy: pings and self-echo raise 'Frames in' without any commands, and that is expected.
@@ -473,7 +473,7 @@ public struct RelayHostStatsView: View {
                 "Command frames in",
                 value: room.commandFramesReceived.map { "\($0)" } ?? "—",
                 detail: room.commandFramesSinceLastSample.map { "+\($0) since last" },
-                valueColor: (room.droppedSinceLastSample ?? 0) > 0 ? .orange : nil,
+                valueColor: (room.droppedSinceLastSample ?? 0) > 0 ? Color.ripul(.warning) : nil,
                 tooltip: """
                 Agent commands from other devices that reached the host's inbound handler, counted BEFORE the checks that can drop them (bridge enabled, relay connected, background API present).
 
@@ -487,7 +487,7 @@ public struct RelayHostStatsView: View {
                     "Commands dropped",
                     value: "\(dropped)",
                     detail: room.recentlyDropped ? "latest within 2 min" : nil,
-                    valueColor: dropped > 0 ? .orange : nil,
+                    valueColor: dropped > 0 ? Color.ripul(.warning) : nil,
                     tooltip: """
                     Commands that reached this host and were dropped without being run or answered, since its page loaded: 'Command frames in' minus 'Commands drained'. Both are exact counters, so anything above 0 is real.
 
@@ -575,17 +575,17 @@ public struct RelayHostStatsView: View {
     ) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
             Text(label)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .font(.ripul(.caption))
+                .foregroundStyle(.ripul(.textSecondary))
                 .frame(width: 170, alignment: .leading)
             infoIcon(tooltip)
             Text(value)
-                .font(.system(.caption, design: .monospaced))
-                .foregroundStyle(valueColor ?? .primary)
+                .font(.ripul(.caption, family: .code))
+                .foregroundStyle(valueColor ?? Color.ripul(.text))
             if let detail {
                 Text(detail)
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
+                    .font(.ripul(.caption2))
+                    .foregroundStyle(.ripul(.textTertiary))
             }
             Spacer()
         }
@@ -606,8 +606,8 @@ public struct RelayHostStatsView: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 6) {
                 Text("In-flight commands")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
+                    .font(.ripul(.caption, weight: .semibold))
+                    .foregroundStyle(.ripul(.textSecondary))
                 infoIcon("""
                 Per-chat list of agent commands currently being executed on the host. An entry appears when a command (agent:start or agent:resume) enters its execution chain and is removed when the chain's finally block fires.
 
@@ -617,27 +617,27 @@ public struct RelayHostStatsView: View {
             ForEach(cmds) { cmd in
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Text(cmd.kind)
-                        .font(.system(.caption2, design: .monospaced))
-                        .foregroundStyle(.primary)
+                        .font(.ripul(.caption2, family: .code))
+                        .foregroundStyle(.ripul(.text))
                         .frame(width: 90, alignment: .leading)
                     Text(cmd.chatId)
-                        .font(.system(.caption2, design: .monospaced))
-                        .foregroundStyle(.secondary)
+                        .font(.ripul(.caption2, family: .code))
+                        .foregroundStyle(.ripul(.textSecondary))
                         .lineLimit(1)
                         .truncationMode(.middle)
                     Spacer()
                     if cmd.awaitingInput {
                         Text("waiting for you")
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
+                            .font(.ripul(.caption2))
+                            .foregroundStyle(.ripul(.textTertiary))
                     } else if let last = cmd.lastActivityAt {
                         Text("active \(ageString(last, now: now)) ago")
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
+                            .font(.ripul(.caption2))
+                            .foregroundStyle(.ripul(.textTertiary))
                     }
                     Text(ageString(cmd.startedAt, now: now))
-                        .font(.system(.caption2, design: .monospaced))
-                        .foregroundStyle(room.stallReason(for: cmd) != nil ? .orange : .secondary)
+                        .font(.ripul(.caption2, family: .code))
+                        .foregroundStyle(room.stallReason(for: cmd) != nil ? Color.ripul(.warning) : Color.ripul(.textSecondary))
                 }
             }
         }
@@ -653,8 +653,8 @@ public struct RelayHostStatsView: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 6) {
                 Text("Chain breadcrumbs")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
+                    .font(.ripul(.caption, weight: .semibold))
+                    .foregroundStyle(.ripul(.textSecondary))
                 infoIcon("""
                 Per-chat breadcrumb of the most recent await boundary inside the execution chain. Setup steps: queued, chain-entered, ensureChatLoaded, initializeChatActions, saveUserMessage, ensureChatTab, getModelById. Turn steps: executeAgentWithPrompt (agent:start), resumeWithContext (agent:resume). Cleared when the chain's finally fires. Age is time at THIS step.
 
@@ -664,18 +664,18 @@ public struct RelayHostStatsView: View {
             ForEach(steps) { step in
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Text(step.step)
-                        .font(.system(.caption2, design: .monospaced))
-                        .foregroundStyle(.primary)
+                        .font(.ripul(.caption2, family: .code))
+                        .foregroundStyle(.ripul(.text))
                         .frame(width: 140, alignment: .leading)
                     Text(step.chatId)
-                        .font(.system(.caption2, design: .monospaced))
-                        .foregroundStyle(.secondary)
+                        .font(.ripul(.caption2, family: .code))
+                        .foregroundStyle(.ripul(.textSecondary))
                         .lineLimit(1)
                         .truncationMode(.middle)
                     Spacer()
                     Text(ageString(step.ts, now: now))
-                        .font(.system(.caption2, design: .monospaced))
-                        .foregroundStyle(RoomStats.isStepStalled(step, now: now, inFlight: inFlightFor(step.chatId)) ? .orange : .secondary)
+                        .font(.ripul(.caption2, family: .code))
+                        .foregroundStyle(RoomStats.isStepStalled(step, now: now, inFlight: inFlightFor(step.chatId)) ? Color.ripul(.warning) : Color.ripul(.textSecondary))
                 }
             }
         }
@@ -686,8 +686,8 @@ public struct RelayHostStatsView: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 6) {
                 Text("Queue backlog")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
+                    .font(.ripul(.caption, weight: .semibold))
+                    .foregroundStyle(.ripul(.textSecondary))
                 infoIcon("""
                 Commands currently QUEUED behind the running turn on a chat — they cannot start until the in-flight turn on that same chat completes. Each chat has its own serial chain, so a backlog on one chat does not hold up others.
 
@@ -697,20 +697,20 @@ public struct RelayHostStatsView: View {
                 """)
                 Spacer()
                 Text("\(total) waiting")
-                    .font(.system(.caption2, design: .monospaced))
-                    .foregroundStyle(.secondary)
+                    .font(.ripul(.caption2, family: .code))
+                    .foregroundStyle(.ripul(.textSecondary))
             }
             ForEach(rows) { row in
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Text(row.chatId)
-                        .font(.system(.caption2, design: .monospaced))
-                        .foregroundStyle(.secondary)
+                        .font(.ripul(.caption2, family: .code))
+                        .foregroundStyle(.ripul(.textSecondary))
                         .lineLimit(1)
                         .truncationMode(.middle)
                     Spacer()
                     Text("\(row.depth)")
-                        .font(.system(.caption2, design: .monospaced))
-                        .foregroundStyle(.primary)
+                        .font(.ripul(.caption2, family: .code))
+                        .foregroundStyle(.ripul(.text))
                 }
             }
         }
@@ -721,8 +721,8 @@ public struct RelayHostStatsView: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
                 Text("Peaks since \(absTime(peaks.since))")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
+                    .font(.ripul(.caption, weight: .semibold))
+                    .foregroundStyle(.ripul(.textSecondary))
                 infoIcon("""
                 High-watermarks since the host launched (or you last reset). The live gauges above recover once a freeze clears, so these peaks are how you diagnose a stall after the fact — they record the worst the pipeline got.
 
@@ -735,7 +735,7 @@ public struct RelayHostStatsView: View {
                     Button("Reset") {
                         Task { await bridge.resetHostPeaks() }
                     }
-                    .font(.caption2)
+                    .font(.ripul(.caption2))
                     .buttonStyle(.bordered)
                     .controlSize(.mini)
                 }
@@ -743,8 +743,8 @@ public struct RelayHostStatsView: View {
 
             if peaks.isQuiet {
                 Text("Nothing has run since reset.")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
+                    .font(.ripul(.caption2))
+                    .foregroundStyle(.ripul(.textTertiary))
             } else {
                 peakRow(
                     "Max queue backlog",
@@ -786,16 +786,16 @@ public struct RelayHostStatsView: View {
     private func peakRow(_ label: String, value: String, detail: String?, warn: Bool) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
             Text(label)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .font(.ripul(.caption))
+                .foregroundStyle(.ripul(.textSecondary))
                 .frame(width: 170, alignment: .leading)
             Text(value)
-                .font(.system(.caption, design: .monospaced))
-                .foregroundStyle(warn ? .orange : .primary)
+                .font(.ripul(.caption, family: .code))
+                .foregroundStyle(warn ? Color.ripul(.warning) : Color.ripul(.text))
             if let detail {
                 Text(detail)
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
+                    .font(.ripul(.caption2))
+                    .foregroundStyle(.ripul(.textTertiary))
                     .lineLimit(1)
                     .truncationMode(.middle)
             }
@@ -807,11 +807,11 @@ public struct RelayHostStatsView: View {
     private func incidentCount(_ label: String, _ count: Int, warn: Bool = true) -> some View {
         HStack(spacing: 3) {
             Text("\(count)")
-                .font(.system(.caption2, design: .monospaced).weight(.semibold))
-                .foregroundStyle(warn && count > 0 ? .orange : .secondary)
+                .font(.ripul(.caption2, family: .code).weight(.semibold))
+                .foregroundStyle(warn && count > 0 ? Color.ripul(.warning) : Color.ripul(.textSecondary))
             Text(label)
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
+                .font(.ripul(.caption2))
+                .foregroundStyle(.ripul(.textTertiary))
         }
     }
 
@@ -831,35 +831,35 @@ public struct RelayHostStatsView: View {
                 Text(errors + warnings == 0
                      ? "No warnings or errors in the last hour"
                      : "Last hour: \(errors) error\(errors == 1 ? "" : "s"), \(warnings) warning\(warnings == 1 ? "" : "s")")
-                    .font(.caption)
-                    .foregroundStyle(errors > 0 ? .red : warnings > 0 ? .orange : .secondary)
+                    .font(.ripul(.caption))
+                    .foregroundStyle(errors > 0 ? Color.ripul(.danger) : warnings > 0 ? Color.ripul(.warning) : Color.ripul(.textSecondary))
                 Spacer(minLength: 0)
                 if routineCount > 0 {
                     Button(showRoutineComms ? "Hide routine" : "Show \(routineCount) routine") {
                         showRoutineComms.toggle()
                     }
-                    .font(.caption2)
+                    .font(.ripul(.caption2))
                     .buttonStyle(.borderless)
                 }
             }
             if visible.isEmpty {
                 Text(commsEntries.isEmpty ? "Nothing recorded." : "Only routine entries recorded.")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
+                    .font(.ripul(.caption2))
+                    .foregroundStyle(.ripul(.textTertiary))
             }
             ForEach(Array(visible.enumerated()), id: \.element.id) { index, e in
                 if index == firstOlder, let pageLoadedAt {
                     Text("Before this page loaded at \(absTime(pageLoadedAt))")
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(.tertiary)
+                        .font(.ripul(.caption2, weight: .semibold))
+                        .foregroundStyle(.ripul(.textTertiary))
                         .padding(.top, 4)
                 }
                 commsRow(e)
                     .opacity(firstOlder.map { index >= $0 } == true ? 0.55 : 1)
             }
             Text("Newest first · kept across relaunches · info = routine, warn = recovered but worth a look, error = failed")
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
+                .font(.ripul(.caption2))
+                .foregroundStyle(.ripul(.textTertiary))
                 .padding(.top, 2)
         }
         .padding(12)
@@ -877,17 +877,17 @@ public struct RelayHostStatsView: View {
     private func commsRow(_ e: CommsEntry) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             Text(commsTime(e.ts))
-                .font(.system(.caption2, design: .monospaced))
-                .foregroundStyle(.secondary)
+                .font(.ripul(.caption2, family: .code))
+                .foregroundStyle(.ripul(.textSecondary))
                 .frame(width: 70, alignment: .leading)
             Text(e.source)
-                .font(.system(.caption2, design: .monospaced).weight(.semibold))
+                .font(.ripul(.caption2, family: .code).weight(.semibold))
                 .foregroundStyle(e.color)
                 .frame(width: 104, alignment: .leading)
                 .lineLimit(1)
             Text(e.count > 1 ? "\(e.message)  ×\(e.count)" : e.message)
-                .font(.caption2)
-                .foregroundStyle(e.isRoutine ? .secondary : .primary)
+                .font(.ripul(.caption2))
+                .foregroundStyle(e.isRoutine ? .ripul(.textSecondary) : .ripul(.text))
                 .lineLimit(3)
                 .truncationMode(.tail)
             Spacer(minLength: 0)
@@ -956,7 +956,7 @@ public struct RelayHostStatsView: View {
 
     private var cardBackground: Color {
         #if os(iOS)
-        return Color(uiColor: .secondarySystemBackground)
+        return Color.ripul(system: .secondarySystemBackground)
         #else
         return Color(nsColor: .controlBackgroundColor)
         #endif
@@ -1341,10 +1341,10 @@ fileprivate struct RoomStats: Identifiable {
             // An asleep or shut-down machine is not a fault of this app; only a
             // machine the registry still thinks is up is worth a warning.
             if presumedOnline == false {
-                return HealthStatus(label: "OFFLINE", color: .secondary,
+                return HealthStatus(label: "OFFLINE", color: .ripul(.textSecondary),
                                     detail: "Not answering, and the machine list agrees it's offline: probably asleep or shut down.")
             }
-            return HealthStatus(label: "NOT ANSWERING", color: .orange,
+            return HealthStatus(label: "NOT ANSWERING", color: .ripul(.warning),
                                 detail: "\(consecutiveFailures) pings in a row got no answer (\(error ?? "?")), though the machine list still shows it online. Its host page may be wedged or its network down.")
         }
         // Frames alone prove nothing — pings and self-echo raise them on an idle
@@ -1352,19 +1352,19 @@ fileprivate struct RoomStats: Identifiable {
         if recentlyDropped, let droppedTotal {
             return HealthStatus(
                 label: "WEDGED",
-                color: .orange,
+                color: .ripul(.warning),
                 detail: "Commands are arriving and being dropped unanswered (\(droppedTotal) since the page loaded). The comms log's command-dropped entries say which check dropped them."
             )
         }
         if error != nil {
-            return HealthStatus(label: "HEALTHY", color: .green, detail: "One ping went unanswered (\(error ?? "?")); the next will tell.")
+            return HealthStatus(label: "HEALTHY", color: .ripul(.success), detail: "One ping went unanswered (\(error ?? "?")); the next will tell.")
         }
         let stalls = inFlight.compactMap { stallReason(for: $0) }
         if let first = stalls.first {
             let more = stalls.count > 1 ? " (+\(stalls.count - 1) more)" : ""
-            return HealthStatus(label: "STALLED", color: .orange, detail: first + more)
+            return HealthStatus(label: "STALLED", color: .ripul(.warning), detail: first + more)
         }
-        return HealthStatus(label: "HEALTHY", color: .green, detail: nil)
+        return HealthStatus(label: "HEALTHY", color: .ripul(.success), detail: nil)
     }
 
     /// Build a stats card from a host's own HostHealthSnapshot (read on the
@@ -1501,8 +1501,8 @@ fileprivate struct InfoIcon: View {
             showingPopover.toggle()
         } label: {
             Image(systemName: "info.circle")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .font(.ripulIcon(.caption))
+                .foregroundStyle(.ripul(.textSecondary))
                 .contentShape(Rectangle())
                 .frame(width: 18, height: 18)
         }
@@ -1511,8 +1511,8 @@ fileprivate struct InfoIcon: View {
         .popover(isPresented: $showingPopover, arrowEdge: .top) {
             ScrollView {
                 Text(tooltip)
-                    .font(.caption)
-                    .foregroundStyle(.primary)
+                    .font(.ripul(.caption))
+                    .foregroundStyle(.ripul(.text))
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(12)
                     .textSelection(.enabled)
@@ -1622,7 +1622,7 @@ fileprivate struct CommsEntry: Identifiable {
 
     var isError: Bool { severity == "error" }
     var isRoutine: Bool { severity == "info" }
-    var color: Color { isError ? .red : isRoutine ? .secondary : .orange }
+    var color: Color { isError ? .ripul(.danger) : isRoutine ? .ripul(.textSecondary) : .ripul(.warning) }
     var label: String { isError ? "ERROR" : isRoutine ? "INFO" : "WARN" }
 }
 
@@ -1633,7 +1633,7 @@ fileprivate struct Finding: Identifiable {
     enum Level: Int, Comparable {
         case info, warn, error
         static func < (a: Level, b: Level) -> Bool { a.rawValue < b.rawValue }
-        var color: Color { self == .error ? .red : self == .warn ? .orange : .secondary }
+        var color: Color { self == .error ? .ripul(.danger) : self == .warn ? .ripul(.warning) : .ripul(.textSecondary) }
     }
     let id: String
     let level: Level
@@ -1675,7 +1675,7 @@ fileprivate enum StatusSummary {
         case "RELAY DOWN":
             out.append(Finding(id: "bridge", level: .error, title: "Not connected to the relay", detail: d.diagnosis, action: .retryRelay))
         default:
-            if d.statusColor == .red {
+            if d.statusColor == Color.ripul(.danger) {
                 out.append(Finding(id: "bridge", level: .error, title: d.statusLabel.capitalized, detail: d.diagnosis, action: .retryRelay))
             }
         }
@@ -1875,7 +1875,7 @@ fileprivate struct BridgeDiagnostics {
 
     var diagnosis: String = ""
     var statusLabel: String = "Initialising…"
-    var statusColor: Color = .secondary
+    var statusColor: Color = .ripul(.textSecondary)
     var statusIcon: String = "hourglass"
 
     /// Compute the single-line `diagnosis`, the status label, and a colour
@@ -1883,14 +1883,14 @@ fileprivate struct BridgeDiagnostics {
     mutating func compute() {
         if hostStatusAvailable == nil {
             statusLabel = "Initialising…"
-            statusColor = .secondary
+            statusColor = .ripul(.textSecondary)
             statusIcon = "hourglass"
             diagnosis = "Waiting for first poll…"
             return
         }
 
         if hostStatusAvailable == false {
-            statusColor = .red
+            statusColor = .ripul(.danger)
             statusIcon = "exclamationmark.triangle.fill"
             let probeSuffix = probeDigest.map { " Probe: \(probeHealth ?? "?") — \($0)." } ?? ""
 
@@ -1917,7 +1917,7 @@ fileprivate struct BridgeDiagnostics {
 
         if hostEnabled == false {
             statusLabel = "HOST DISABLED"
-            statusColor = .orange
+            statusColor = .ripul(.warning)
             statusIcon = "power"
             diagnosis = "Host bridge is mounted but hostEnabled=false. Toggle Host Enabled in Settings → Server, or call __ripulSetHostEnabled(true) to start hosting."
             return
@@ -1925,7 +1925,7 @@ fileprivate struct BridgeDiagnostics {
 
         if registered == false && (roomId == nil || roomId?.isEmpty == true) {
             statusLabel = "NO ROOM REGISTERED"
-            statusColor = .orange
+            statusColor = .ripul(.warning)
             statusIcon = "house.slash"
             diagnosis = "Host is enabled but registered=false and no roomId is cached. The machine-registry call has not yet returned. Check auth state (signed-in?) and network. If this persists, the registry endpoint is failing."
             return
@@ -1939,14 +1939,14 @@ fileprivate struct BridgeDiagnostics {
         if let stability {
             if stability.dropsLast5m >= RelayStability.unstableDrops, let other = stability.replacedBy {
                 statusLabel = "RELAY UNSTABLE"
-                statusColor = .orange
+                statusColor = .ripul(.warning)
                 statusIcon = "person.2.slash"
                 diagnosis = "Two connections are taking turns as this machine: \(stability.dropsLast5m) swaps in the last 5 minutes. The relay keeps one connection per identity, and the last one to replace this page was: \(other). Close that page or app; while both run, this machine drops out for a second or two at every swap."
                 return
             }
             if stability.dropsLast5m >= RelayStability.unstableDrops {
                 statusLabel = "RELAY UNSTABLE"
-                statusColor = .orange
+                statusColor = .ripul(.warning)
                 statusIcon = "exclamationmark.arrow.triangle.2.circlepath"
                 diagnosis = "\(connected ? "Connected right now, but the" : "The") relay socket has dropped \(stability.dropsLast5m) times in the last 5 minutes. Each drop leaves this machine unreachable until it reconnects."
                     + (stability.lastDropSentence.map { " \($0)" } ?? "")
@@ -1954,7 +1954,7 @@ fileprivate struct BridgeDiagnostics {
             }
             if connected {
                 statusLabel = "HEALTHY"
-                statusColor = .green
+                statusColor = .ripul(.success)
                 statusIcon = "checkmark.circle.fill"
                 diagnosis = ""
                 return
@@ -1964,7 +1964,7 @@ fileprivate struct BridgeDiagnostics {
                 // Not a warning: long-held sockets drop now and then, and this
                 // one is already on its way back.
                 statusLabel = "RECONNECTING"
-                statusColor = .secondary
+                statusColor = .ripul(.textSecondary)
                 statusIcon = "arrow.triangle.2.circlepath"
                 diagnosis = "Brief drop, reconnecting (\(Int(downSeconds))s so far)."
                     + (stability.lastDropSentence.map { " \($0)" } ?? "")
@@ -1972,7 +1972,7 @@ fileprivate struct BridgeDiagnostics {
             }
             if stability.downForMs != nil {
                 statusLabel = "RELAY DOWN"
-                statusColor = .red
+                statusColor = .ripul(.danger)
                 statusIcon = "wifi.exclamationmark"
                 diagnosis = "Not connected for \(RelayStability.duration(stability.downForMs ?? 0)), after \(stability.downAttempts) failed attempt\(stability.downAttempts == 1 ? "" : "s"). This machine is unreachable from other devices."
                     + (stability.lastDropSentence.map { " \($0)" } ?? "")
@@ -1981,7 +1981,7 @@ fileprivate struct BridgeDiagnostics {
             // Not connected and no outage on record: the first connection is
             // still being made.
             statusLabel = "CONNECTING"
-            statusColor = .secondary
+            statusColor = .ripul(.textSecondary)
             statusIcon = "arrow.triangle.2.circlepath"
             diagnosis = "Opening the first relay connection (relayState=\(relayState ?? "unknown"))."
             return
@@ -1989,7 +1989,7 @@ fileprivate struct BridgeDiagnostics {
 
         if let rs = relayState, rs != "connected" {
             statusLabel = "RELAY \(rs.uppercased())"
-            statusColor = (rs == "connecting" || rs == "reconnecting") ? .secondary : .red
+            statusColor = (rs == "connecting" || rs == "reconnecting") ? .ripul(.textSecondary) : .ripul(.danger)
             statusIcon = "wifi.exclamationmark"
             diagnosis = "The relay socket is \(rs) at this instant. This web build reports no drop history, so the panel cannot tell a one-second reconnect from an outage."
             return
@@ -1997,7 +1997,7 @@ fileprivate struct BridgeDiagnostics {
 
         if connected {
             statusLabel = "HEALTHY"
-            statusColor = .green
+            statusColor = .ripul(.success)
             statusIcon = "checkmark.circle.fill"
             diagnosis = ""
             return
@@ -2005,7 +2005,7 @@ fileprivate struct BridgeDiagnostics {
 
         // Fallback — shouldn't normally reach here.
         statusLabel = "UNKNOWN"
-        statusColor = .secondary
+        statusColor = .ripul(.textSecondary)
         statusIcon = "questionmark.circle"
         diagnosis = "Bridge state did not match any known pattern."
     }

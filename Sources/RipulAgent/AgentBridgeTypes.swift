@@ -247,6 +247,14 @@ public struct ModelInfo: Identifiable, Equatable, Codable {
     /// decides; nil (older webs, cached rows) means offered.
     public let pickable: Bool?
 
+    // ── A person's own entries (nil on older webs and cached rows) ──
+    /// Set on a person's own entry: the id of the row it is based on.
+    public let personalOf: String?
+    /// What the entry is given: full | claude | lean | chat.
+    public let cliToolProfile: String?
+    /// Whether a person may base an entry of their own on this row.
+    public let canPersonalise: Bool?
+
     /// Whether pickers on this device offer the model. iPhone, iPad and
     /// Catalyst honour `pickable`; the Mac host offers everything.
     public var isOfferedOnThisDevice: Bool {
@@ -287,7 +295,10 @@ public struct ModelInfo: Identifiable, Equatable, Codable {
         perMInput: Double? = nil,
         perMOutput: Double? = nil,
         tier: String? = nil,
-        pickable: Bool? = nil
+        pickable: Bool? = nil,
+        personalOf: String? = nil,
+        cliToolProfile: String? = nil,
+        canPersonalise: Bool? = nil
     ) {
         self.id = id
         self.name = name
@@ -310,6 +321,9 @@ public struct ModelInfo: Identifiable, Equatable, Codable {
         self.perMOutput = perMOutput
         self.tier = tier
         self.pickable = pickable
+        self.personalOf = personalOf
+        self.cliToolProfile = cliToolProfile
+        self.canPersonalise = canPersonalise
     }
 }
 
@@ -318,6 +332,28 @@ public struct ModelInfo: Identifiable, Equatable, Codable {
 /// Codable because the session list persists the per-machine scan results, not
 /// just the rows it derived from them — a machine that hasn't answered yet on
 /// this launch keeps its last-known sessions instead of having them vanish.
+/// The agent that started a chat with spawn_agent, as its host reports it.
+public struct SessionStartedBy: Equatable, Hashable, Codable, Sendable {
+    /// The starting agent's chat id on its host (`cli_<uuid>`).
+    public let agentId: String
+    /// That agent's row in the same list, when it is listed: its `id`.
+    public let sessionId: String?
+    /// That agent's title: its row's when listed, else as it was when it sent the task.
+    public let title: String?
+
+    public init(agentId: String, sessionId: String? = nil, title: String? = nil) {
+        self.agentId = agentId
+        self.sessionId = sessionId
+        self.title = title
+    }
+
+    /// From a session row as the host sent it. Nil for a chat a person started.
+    init?(wire: Any?) {
+        guard let fields = wire as? [String: Any], let agentId = fields["agentId"] as? String, !agentId.isEmpty else { return nil }
+        self.init(agentId: agentId, sessionId: fields["sessionId"] as? String, title: fields["title"] as? String)
+    }
+}
+
 public struct RemoteSessionInfo: Identifiable, Equatable, Codable {
     public let id: String
     public let sourceChatId: String
@@ -348,6 +384,8 @@ public struct RemoteSessionInfo: Identifiable, Equatable, Codable {
     public var teamVisibility: String? = nil
     /// On a Mac a team shares: the account that started this chat.
     public var creatorUserId: String? = nil
+    /// Set when another agent started this chat.
+    public var startedBy: SessionStartedBy? = nil
 }
 
 /// A todo item owned by the signed-in user, surfaced to the native "Pick to do"

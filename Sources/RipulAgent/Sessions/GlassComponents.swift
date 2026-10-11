@@ -58,19 +58,19 @@ public struct GlassSectionPanel<Content: View, Trailing: View, Center: View, Col
             HStack(spacing: 8) {
                 if collapsible {
                     Image(systemName: "chevron.right")
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(.secondary)
+                        .font(.ripulIcon(.caption2, weight: .semibold))
+                        .foregroundStyle(.ripul(.textSecondary))
                         .rotationEffect(.degrees(isExpanded ? 90 : 0))
                         .animation(.easeInOut(duration: 0.2), value: isExpanded)
                 }
                 Text(title)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.secondary)
+                    .font(.ripul(.subheadline, weight: .semibold))
+                    .foregroundStyle(.ripul(.textSecondary))
                     .textCase(.uppercase)
                 if let subtitle, !subtitle.isEmpty, !isExpanded {
                     Text(subtitle)
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
+                        .font(.ripul(.caption))
+                        .foregroundStyle(.ripul(.textTertiary))
                         .lineLimit(1)
                         .truncationMode(.tail)
                 }
@@ -122,11 +122,11 @@ public struct GlassSearchField: View {
     public var body: some View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .font(.ripulIcon(.caption))
+                .foregroundStyle(.ripul(.textSecondary))
             TextField(placeholder, text: $text)
                 .textFieldStyle(.plain)
-                .font(.subheadline)
+                .font(.ripul(.subheadline))
                 .autocorrectionDisabled()
                 #if os(iOS)
                 .textInputAutocapitalization(.never)
@@ -135,8 +135,8 @@ public struct GlassSearchField: View {
             if !text.isEmpty {
                 Button { text = "" } label: {
                     Image(systemName: "xmark.circle.fill")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .font(.ripulIcon(.caption))
+                        .foregroundStyle(.ripul(.textSecondary))
                 }
                 .uiKitIdentifier("GlassSearchField.clearButton")
                 .buttonStyle(.plain)
@@ -164,9 +164,9 @@ public struct GlassSelectButton: View {
         Button(action: action) {
             HStack(spacing: 4) {
                 Image(systemName: isSelecting ? "xmark" : "checkmark.circle")
-                    .font(.caption2.weight(.semibold))
+                    .font(.ripulIcon(.caption2, weight: .semibold))
                 Text(isSelecting ? "Cancel" : "Select")
-                    .font(.caption.weight(.medium))
+                    .font(.ripul(.caption, weight: .medium))
             }
             .textCase(nil)
             .padding(.horizontal, 8)
@@ -409,18 +409,18 @@ public enum FileTypeIcon {
     public static func color(for path: String) -> Color {
         let ext = pathExtension(path)
         switch ext {
-        case "swift": return .orange
-        case "js", "jsx": return .yellow
-        case "ts", "tsx": return .blue
-        case "py": return .green
-        case "json": return .yellow
-        case "yaml", "yml", "toml": return .purple
-        case "md", "txt", "rtf": return .gray
-        case "png", "jpg", "jpeg", "gif", "svg", "webp": return .pink
-        case "css", "scss", "less": return .cyan
-        case "html": return .orange
-        case "sh", "bash", "zsh": return .green
-        default: return .secondary
+        case "swift": return .orange  // theme-exempt: a file type's colour is data
+        case "js", "jsx": return .yellow  // theme-exempt: a file type's colour is data
+        case "ts", "tsx": return .blue  // theme-exempt: a file type's colour is data
+        case "py": return .green  // theme-exempt: a file type's colour is data
+        case "json": return .yellow  // theme-exempt: a file type's colour is data
+        case "yaml", "yml", "toml": return .purple  // theme-exempt: a file type's colour is data
+        case "md", "txt", "rtf": return .gray  // theme-exempt: a file type's colour is data
+        case "png", "jpg", "jpeg", "gif", "svg", "webp": return .pink  // theme-exempt: a file type's colour is data
+        case "css", "scss", "less": return .cyan  // theme-exempt: a file type's colour is data
+        case "html": return .orange  // theme-exempt: a file type's colour is data
+        case "sh", "bash", "zsh": return .green  // theme-exempt: a file type's colour is data
+        default: return .secondary  // theme-exempt: a file type's colour is data
         }
     }
 

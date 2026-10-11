@@ -49,6 +49,12 @@
         }
       }
       var retries = 0
+      /// A slow retry waits for this time even when the shared timer fires sooner.
+      var notBefore: CFTimeInterval = 0
+      /// Why this embed is still the web's, as last logged (DEBUG).
+      var why = ""
+      /// What stopped the last `place`.
+      var failure = ""
       var lastHeight: CGFloat?
       var visible = false
       init(token: String, kind: String, snapshot: [String: Any]) {
@@ -70,6 +76,8 @@
     private var parked: [Key] = []
     private static let parkedLimit = 5
     private var lastAttachAt: CFTimeInterval = 0
+    /// Eight quick tries, then one every half second for about a minute.
+    private static let maxRetries = 8 + 120
     private static let fadeKey = "NativeEmbed.appear"
     var entryCount: Int { entries.count }
     var attachmentCount: Int { entries.values.filter { $0.visible }.count }
@@ -143,6 +151,15 @@
       else { return false }
       return attachment.reposition(geometry: g) { $0.rect }
     }
+    /// One line each time the reason an embed is not native changes, so a row
+    /// that stays web says why (Catalyst, 2026-10-09: it said nothing).
+    private func note(_ key: Key, _ entry: Entry, _ why: String) {
+      #if DEBUG
+      guard entry.why != why else { return }
+      entry.why = why
+      if !why.isEmpty { NSLog("[SLOT] embed %@ %@ not native: %@", entry.kind, key.element, why) }
+      #endif
+    }
     private func schedule(_ key: Key, delay: TimeInterval = 0.032) {
       pending.insert(key)
       if timer == nil {
@@ -180,10 +197,16 @@
         guard entry.geometry?.anchor != nil else {
           // The renderer signals editing completion through onSizeChange.
           // Keep the responder alive without an idle polling loop.
+          note(key, entry, entry.geometry == nil ? "no position reported yet" : "the web reports it hidden or far off screen")
           if entry.renderer?.isEditing != true { park(key, entry: entry) }
           continue
         }
+        if entry.retries >= 8, CACurrentMediaTime() < entry.notBefore {
+          schedule(key, delay: 0.1)
+          continue
+        }
         guard mayAttach(entry) else {
+          note(key, entry, "waiting for scrolling to stop")
           schedule(key, delay: entry.renderer == nil ? 0.08 : 1.0 / 60)
           continue
         }
@@ -191,17 +214,35 @@
           entry.retries += 1
           if entry.retries < 8 {
             schedule(key)
+          } else if entry.retries < Self.maxRetries {
+            // WebKit can take far longer than a quarter of a second to give
+            // a slot its view (Catalyst, a busy chat). Giving up here left the
+            // web copy showing until the slot next changed, so the row turned
+            // native minutes later or never. Keep asking, slowly.
+            note(key, entry, "still trying: \(entry.failure)")
+            entry.notBefore = CACurrentMediaTime() + 0.5
+            schedule(key, delay: 0.5)
           } else if entry.renderer?.isEditing != true {
+            note(key, entry, "gave up after \(entry.retries) tries: \(entry.failure)")
             detach(key, entry: entry)
           }
+        } else {
+          note(key, entry, "")
         }
       }
     }
     private func place(_ key: Key, entry: Entry) -> Bool {
-      guard let webView, let g = entry.slotGeometry else { return false }
+      guard let webView, let g = entry.slotGeometry else {
+        entry.failure = "the position report is incomplete"
+        return false
+      }
       if entry.renderer == nil {
-        guard let renderer = registry.make(entry.kind) else { return false }
+        guard let renderer = registry.make(entry.kind) else {
+          entry.failure = "no renderer for \(entry.kind)"
+          return false
+        }
         do { try renderer.update(snapshot: entry.snapshot) } catch {
+          entry.failure = "the renderer refused the snapshot"
           detach(key, entry: entry, resetSize: true)
           return false
         }
@@ -233,12 +274,18 @@
       }()
       guard let placed = attachment.place(content: controller.view, controller: controller, geometry: g,
                                           frame: { $0.rect })
-      else { return false }
+      else {
+        entry.failure = "no scroller or slot view matched the report"
+        return false
+      }
       let frame = placed.rect
       let desired =
         ceil(renderer.sizeThatFits(width: frame.width).height * max(1, webView.traitCollection.displayScale))
         / max(1, webView.traitCollection.displayScale)
-      guard desired.isFinite, desired > 0, desired <= 20000 else { return false }
+      guard desired.isFinite, desired > 0, desired <= 20000 else {
+        entry.failure = "the renderer measured \(desired) for width \(frame.width)"
+        return false
+      }
       let height = desired / placed.pageScale
       // DOM space must be committed before showing an initially attached view.
       // Existing focused controls keep their identity while their slot grows.

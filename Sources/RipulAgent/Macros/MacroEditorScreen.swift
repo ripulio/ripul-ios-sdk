@@ -59,7 +59,7 @@ struct MacroEditScreen: View {
     var body: some View {
         NavigationStack {
             List {
-                Section("Details") {
+                Section(themed: "Details") {
                     TextField("Name", text: $name)
                         .autocorrectionDisabled()
                         .uiKitIdentifier("MacroEditScreen.nameField")
@@ -68,7 +68,7 @@ struct MacroEditScreen: View {
                 }
 
                 if !derivedParameters.isEmpty {
-                    Section("Parameters (used when replaying)") {
+                    Section(themed: "Parameters (used when replaying)") {
                         ForEach(derivedParameters, id: \.name) { parameter in
                             TextField(
                                 parameter.description.isEmpty ? parameter.name : "\(parameter.name) — \(parameter.description)",
@@ -93,18 +93,18 @@ struct MacroEditScreen: View {
                                 leadingIcon(for: index, kind: step.kind)
                                 VStack(alignment: .leading, spacing: 1) {
                                     Text(step.recordedLabel)
-                                        .font(.subheadline)
-                                        .foregroundStyle(.primary)
+                                        .font(.ripul(.subheadline))
+                                        .foregroundStyle(.ripul(.text))
                                         .lineLimit(1)
                                     Text(summary(for: step))
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
+                                        .font(.ripul(.caption))
+                                        .foregroundStyle(.ripul(.textSecondary))
                                         .lineLimit(1)
                                 }
                                 Spacer()
                                 Image(systemName: "chevron.right")
-                                    .font(.caption2)
-                                    .foregroundStyle(.tertiary)
+                                    .font(.ripulIcon(.caption2))
+                                    .foregroundStyle(.ripul(.textTertiary))
                             }
                             .contentShape(Rectangle())
                         }
@@ -116,17 +116,17 @@ struct MacroEditScreen: View {
                             } label: {
                                 Label("Insert wait", systemImage: "plus")
                             }
-                            .tint(.blue)
+                            .tint(Color.ripul(.info))
                             .uiKitIdentifier("MacroEditScreen.step.\(index).insertAfter")
                         }
                     }
                     .onDelete { clearRunState(); steps.remove(atOffsets: $0) }
                     .onMove { clearRunState(); steps.move(fromOffsets: $0, toOffset: $1) }
-                } header: {
+                } header: { RipulSectionHeader {
                     Text("Steps")
-                } footer: {
+                } } footer: { RipulSectionFooter {
                     Text("Drag to reorder. Swipe right to insert a wait after a step. Tap a step to edit it.")
-                }
+                } }
 
                 Section {
                     Button {
@@ -163,8 +163,8 @@ struct MacroEditScreen: View {
                                 : "Stopped at step \((outcome.failedStepIndex ?? 0) + 1) of \(outcome.totalSteps) — \(outcome.error ?? "unknown error")",
                             systemImage: outcome.success ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
                         )
-                        .foregroundStyle(outcome.success ? .green : .red)
-                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(outcome.success ? .ripul(.success) : .ripul(.danger))
+                        .font(.ripul(.subheadline, weight: .medium))
                     }
                 }
             }
@@ -178,7 +178,7 @@ struct MacroEditScreen: View {
                 ToolbarItem(placement: .topBarLeading) {
                     Button { copyLog() } label: {
                         Label(didCopy ? "Copied" : "Copy log", systemImage: didCopy ? "checkmark" : "doc.on.doc")
-                            .font(.subheadline)
+                            .font(.ripul(.subheadline))
                     }
                     .disabled(outcome == nil || lastRunMacro == nil)
                     .uiKitIdentifier("MacroEditScreen.copyLogButton")
@@ -199,13 +199,13 @@ struct MacroEditScreen: View {
             } message: {
                 Text(saveError ?? "")
             }
-            .sheet(item: $editingStep) { stepIndex in
+            .ripulSheet(item: $editingStep) { stepIndex in
                 MacroStepEditSheet(step: steps[stepIndex.value]) { edited in
                     clearRunState()
                     steps[stepIndex.value] = edited
                 }
             }
-            .sheet(item: $insertChoice) { choice in
+            .ripulSheet(item: $insertChoice) { choice in
                 MacroInsertWaitSheet(afterIndex: choice.index) { step in
                     clearRunState()
                     let at = min(choice.index + 1, steps.count)
@@ -224,11 +224,11 @@ struct MacroEditScreen: View {
             case .running:
                 ProgressView().frame(width: 20, height: 20)
             case .succeeded:
-                Image(systemName: "checkmark.circle.fill").foregroundStyle(.green).frame(width: 20)
+                Image(systemName: "checkmark.circle.fill").foregroundStyle(.ripul(.success)).frame(width: 20)
             case .failed:
-                Image(systemName: "xmark.octagon.fill").foregroundStyle(.red).frame(width: 20)
+                Image(systemName: "xmark.octagon.fill").foregroundStyle(.ripul(.danger)).frame(width: 20)
             case .pending:
-                Image(systemName: "circle").foregroundStyle(.tertiary).frame(width: 20)
+                Image(systemName: "circle").foregroundStyle(.ripul(.textTertiary)).frame(width: 20)
             }
         } else {
             Image(systemName: icon(for: kind))
@@ -372,7 +372,7 @@ struct MacroEditScreen: View {
     }
 }
 
-/// Identifiable wrapper for `.sheet(item:)` — `Int` doesn't conform.
+/// Identifiable wrapper for `.ripulSheet(item:)` — `Int` doesn't conform.
 private struct StepIndex: Identifiable {
     let value: Int
     var id: Int { value }
@@ -432,12 +432,12 @@ private struct MacroStepEditSheet: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("Label") {
+                Section(themed: "Label") {
                     TextField("Shown in the step list and logs", text: $label)
                 }
 
                 if step.kind != .pause {
-                    Section("Selector (all optional — every given predicate must match)") {
+                    Section(themed: "Selector (all optional — every given predicate must match)") {
                         TextField("id", text: $idText).autocorrectionDisabled()
                         TextField("text", text: $text).autocorrectionDisabled()
                         Picker("role", selection: $role) {
@@ -453,23 +453,23 @@ private struct MacroStepEditSheet: View {
 
                 switch step.kind {
                 case .setValue:
-                    Section("Value ({{name}} = filled at call time)") {
+                    Section(themed: "Value ({{name}} = filled at call time)") {
                         TextField("e.g. 09:00, 2026-08-02 09:00, on, 2", text: $payloadText)
                     }
                 case .type:
-                    Section("Text to type ({{name}} = filled at call time)") {
+                    Section(themed: "Text to type ({{name}} = filled at call time)") {
                         TextField("Text", text: $payloadText, axis: .vertical)
                         Toggle("Append instead of replace", isOn: $append)
                     }
                 case .scroll:
-                    Section("Scroll") {
+                    Section(themed: "Scroll") {
                         Picker("Direction", selection: $direction) {
                             ForEach(["up", "down", "left", "right"], id: \.self) { Text($0).tag($0) }
                         }
                         TextField("Amount (0.1–2.0)", text: $amountText).keyboardType(.decimalPad)
                     }
                 case .wait:
-                    Section("Wait") {
+                    Section(themed: "Wait") {
                         Picker("Until it is", selection: $state) {
                             Text("visible").tag("visible")
                             Text("gone").tag("gone")
@@ -477,7 +477,7 @@ private struct MacroStepEditSheet: View {
                         TextField("Timeout (seconds)", text: $timeoutText).keyboardType(.numberPad)
                     }
                 case .pause:
-                    Section("Pause") {
+                    Section(themed: "Pause") {
                         TextField("Seconds", text: $secondsText).keyboardType(.decimalPad)
                     }
                 case .tap:
@@ -566,16 +566,16 @@ private struct MacroInsertWaitSheet: View {
                             .autocorrectionDisabled()
                         TextField("Timeout (seconds)", text: $timeoutText)
                             .keyboardType(.numberPad)
-                    } footer: {
+                    } footer: { RipulSectionFooter {
                         Text("The step resolves as soon as an element containing this text is \(mode == .appear ? "visible" : "gone"); it fails after the timeout.")
-                    }
+                    } }
                 case .pause:
                     Section {
                         TextField("Seconds", text: $secondsText)
                             .keyboardType(.decimalPad)
-                    } footer: {
+                    } footer: { RipulSectionFooter {
                         Text("Always succeeds after this long — settle time for animations and transitions.")
-                    }
+                    } }
                 }
             }
             .navigationTitle("Insert wait")

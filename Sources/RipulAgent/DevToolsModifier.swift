@@ -84,7 +84,7 @@ struct DevToolsModifier: ViewModifier {
                 present()
             }
             #if os(iOS)
-            .sheet(isPresented: $showSheet) {
+            .ripulSheet(isPresented: $showSheet) {
                 NavigationStack {
                     ConsoleLogViewer(bridge: bridge)
                         .toolbar {
@@ -118,6 +118,10 @@ struct DevToolsModifier: ViewModifier {
             ScrollElementTool(),
             WaitForElementTool(),
             OpenAppURLTool(),
+            LayerAnimationsTool(),
+            // The View Explorer's own readout as text, Appearance included: what a
+            // person sees when they select an element, checked without a person.
+            ExplorerProbeTool(),
         ]
         #endif
         bridge.registerBuiltInTools(tools)

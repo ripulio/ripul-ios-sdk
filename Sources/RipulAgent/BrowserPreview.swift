@@ -15,6 +15,8 @@ public struct BrowserPreviewSnapshot {
 final class BrowserPreviewState: ObservableObject {
     typealias Capture = (Int?) async throws -> BrowserPreviewSnapshot
     var capture: Capture?
+    /// Opens the real page in the host's browser. The preview itself is a picture and takes no touches.
+    var onOpen: ((Int?) -> Void)?
     @Published private(set) var chatId: String?
     @Published private(set) var title = "Browser"
     @Published private(set) var message: String?
@@ -41,6 +43,13 @@ final class BrowserPreviewState: ObservableObject {
         if !sameChat { self.chatId = chatId }
         // A later tool call follows its tab without undoing the user's minimise.
         if !automatic || !sameChat { collapsed = false }
+    }
+
+    /// Go to the real page, and put the picture away: both showing the same tab is one too many.
+    func openInBrowser() {
+        let tab = tabId
+        collapsed = true
+        onOpen?(tab)
     }
 
     func close() {
@@ -92,7 +101,7 @@ private struct BrowserPreviewImage: View {
     @ObservedObject var frame: HostScreenPreviewFrame
     var body: some View {
         if let image = frame.image { Image(uiImage: image).resizable().scaledToFit() }
-        else { Color.black }
+        else { Color.ripul(system: .black) }
     }
 }
 
@@ -115,10 +124,10 @@ struct BrowserPreviewPanel: View {
                         BrowserPreviewImage(frame: state.frame).allowsHitTesting(false).opacity(state.collapsed ? 0 : 1)
                         if state.collapsed {
                             control("globe", label: "Expand browser preview", id: "expand", size: 56) { state.collapsed = false }
-                                .contextMenu { Button("Close preview", role: .destructive) { state.close() } }
+                                .contextMenu { MenuIcons { Button("Close preview", role: .destructive) { state.close() } }}
                         } else {
                             if let message = state.message {
-                                Text(message).font(.caption).multilineTextAlignment(.center)
+                                Text(message).font(.ripul(.caption)).multilineTextAlignment(.center)
                                     .padding(8).padding(.top, 44).frame(maxWidth: .infinity, maxHeight: .infinity)
                             } else if state.imageSize == .zero {
                                 ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -127,13 +136,16 @@ struct BrowserPreviewPanel: View {
                             HStack(spacing: 0) {
                                 control("xmark", label: "Close browser preview", id: "close") { state.close() }
                                 Spacer(minLength: 0)
+                                if state.onOpen != nil {
+                                    control("arrow.up.forward.app", label: "Open in Browser", id: "open") { state.openInBrowser() }
+                                }
                                 control("minus", label: "Minimise browser preview", id: "minimize") { state.collapsed = true }
                             }.padding(4)
                         }
                     }
                     .frame(width: state.collapsed ? 56 : width, height: state.collapsed ? 56 : width / ratio)
                     .clipShape(outline).glassEffect(.regular, in: outline)
-                    .shadow(color: .black.opacity(0.2), radius: 10, y: 3)
+                    .shadow(color: Color.ripul(system: .black).opacity(0.2), radius: 10, y: 3)
                     .accessibilityElement(children: .contain).accessibilityLabel(state.title)
                     .accessibilityIdentifier("BrowserPreview.surface")
                     .animation(reduceMotion ? nil : .spring(response: 0.38, dampingFraction: 0.88), value: state.collapsed)
@@ -144,7 +156,7 @@ struct BrowserPreviewPanel: View {
 
     private func control(_ symbol: String, label: String, id: String, size: CGFloat = 44, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Image(systemName: symbol).font(.system(size: size == 56 ? 22 : 14, weight: .semibold))
+            Image(systemName: symbol).font(.ripulIcon(size: size == 56 ? 22 : 14, weight: .semibold))
                 .frame(width: size, height: size).contentShape(Rectangle())
                 .glassEffect(.regular.interactive(), in: Circle())
         }.buttonStyle(.plain).accessibilityLabel(label).uiKitIdentifier("BrowserPreview.\(id)")
@@ -163,7 +175,7 @@ final class BrowserPreviewController: UIViewController {
     override func loadView() { view = HostScreenPreviewPassthroughView() }
     override func viewDidLoad() {
         super.viewDidLoad()
-        let host = UIHostingController(rootView: BrowserPreviewPanel(state: state))
+        let host = UIHostingController(rootView: BrowserPreviewPanel(state: state).ripulThemeRoot())
         host.view.backgroundColor = .clear
         addChild(host); view.addSubview(host.view)
         host.view.frame = view.bounds; host.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]

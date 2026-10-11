@@ -1054,11 +1054,6 @@ state: _sessions = [ChatSession(id: "tab-1", sourceChatId: "chat-1", displayName
 state: _activeSessionId = "tab-2"
 state: fetchSessionsCallCount = 1
 
-## joinShareLink / throwing
-result: ShareLinkJoinResult(tabId: nil, label: nil, error: "A JavaScript exception occurred")
-page saw: [["__ripulJoinShareLink",["tok"]]]
-nslog: [AgentBridge] joinShareLink error: A JavaScript exception occurred
-
 ## truncateSession / detached
 result: "(removed: -1, error: "webView is nil")"
 
@@ -2632,7 +2627,7 @@ page saw: [["__ripulListRemoteSessions",["mac-1"]]]
 nslog: [AgentBridge] listRemoteSessions: unexpected result type: Optional({
 
 ## listRemoteSessionsAnswer / answered
-result: "(sessions: [RemoteSessionInfo(id: "s1", sourceChatId: "c1", displayName: "Remote", createdAt: date(1700000000.0), lastModified: date(1700000005.0), isRunning: true, projectName: "p", cwd: "/w", gitBranch: "main", messageCount: 3, provider: "claude-cli", providerLabel: "Claude", model: "m", hostChatId: "h1", machineId: "mac-1")], answered: true)"
+result: "(sessions: [RemoteSessionInfo(id: "s1", sourceChatId: "c1", displayName: "Remote", createdAt: date(1700000000.0), lastModified: date(1700000005.0), isRunning: true, projectName: "p", cwd: "/w", gitBranch: "main", messageCount: 3, provider: "claude-cli", providerLabel: "Claude", model: "m", hostChatId: "h1", machineId: "mac-1", teamVisibility: nil, creatorUserId: nil)], answered: true)"
 page saw: [["__ripulListRemoteSessions",["mac-1"]]]
 nslog: [AgentBridge] listRemoteSessions: 1 sessions on mac-1
 console: LOG [relay] debug_timeline listRemoteSessions(mac-1): a | b

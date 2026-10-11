@@ -41,7 +41,7 @@ struct CmsModalBlockView: View {
             .frame(width: 0, height: 0)
             .onAppear { sync(hasSelection) }
             .onChange(of: hasSelection) { has in sync(has) }
-            .sheet(isPresented: $sheetPresented, onDismiss: clearSelection) {
+            .ripulSheet(isPresented: $sheetPresented, onDismiss: clearSelection) {
                 sheetBody
             }
     }

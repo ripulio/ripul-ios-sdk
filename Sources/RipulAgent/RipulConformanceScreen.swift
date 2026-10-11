@@ -124,7 +124,7 @@ public enum RipulConformance {
         var top = appRoot
         while let presented = top.presentedViewController, !presented.isBeingDismissed { top = presented }
         if top is UIHostingController<RipulConformanceView> { return false }   // already up
-        let host = UIHostingController(rootView: RipulConformanceView())
+        let host = UIHostingController(rootView: RipulConformanceView().ripulThemeRoot())
         host.modalPresentationStyle = .pageSheet
         top.present(host, animated: true)
         return true
@@ -150,7 +150,7 @@ struct RipulConformanceView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
                 Group {
-                    Text("UIKit").font(.headline)
+                    Text("UIKit").font(.ripul(.headline))
                     RipulUIKitButtonRow(id: RipulConformance.prefix + "uikit.button") { note("uikit.button") }
                         .frame(height: 44)
                     RipulUIKitTextFieldRow(id: RipulConformance.prefix + "uikit.textfield", text: $uikitText)
@@ -161,7 +161,7 @@ struct RipulConformanceView: View {
                         .frame(height: 44)
                 }
                 Group {
-                    Text("SwiftUI").font(.headline)
+                    Text("SwiftUI").font(.ripul(.headline))
                     Button("SwiftUI Button") { note("swiftui.button") }
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .uiKitIdentifier(RipulConformance.prefix + "swiftui.button")
@@ -201,7 +201,7 @@ struct RipulConformanceView: View {
                     .frame(height: 44)
                 }
                 Group {
-                    Text("Anchor").font(.headline)
+                    Text("Anchor").font(.ripul(.headline))
                     // Two wired but deliberately ANONYMOUS controls in one
                     // stamped container — no id, no title, no accessibility
                     // element on either half, so the tap POINT is the only
@@ -215,8 +215,8 @@ struct RipulConformanceView: View {
                         .frame(height: 44)
                 }
                 if !log.fired.isEmpty {
-                    Text("Activations").font(.headline)
-                    ForEach(log.fired, id: \.self) { Text($0).font(.caption.monospaced()) }
+                    Text("Activations").font(.ripul(.headline))
+                    ForEach(log.fired, id: \.self) { Text($0).font(.ripul(.caption, family: .code)) }
                 }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -285,9 +285,9 @@ struct RipulUIKitTextViewRow: UIViewRepresentable {
         let v = UITextView()
         v.text = "UIKit UITextView"
         v.accessibilityIdentifier = id
-        v.font = .preferredFont(forTextStyle: .body)
+        v.font = .ripul(.body)
         v.layer.borderWidth = 1
-        v.layer.borderColor = UIColor.separator.cgColor
+        v.layer.borderColor = UIColor.ripul(.separator).cgColor
         v.delegate = context.coordinator
         return v
     }
@@ -318,10 +318,10 @@ struct RipulSplitControlRow: UIViewRepresentable {
         let container = UIView()
         container.accessibilityIdentifier = id
         let left = RipulHalfControl()
-        left.backgroundColor = UIColor.systemIndigo.withAlphaComponent(0.35)
+        left.backgroundColor = UIColor.ripul(system: .systemIndigo).withAlphaComponent(0.35)
         left.addAction(UIAction { _ in RipulConformanceLog.shared.note("split.left") }, for: .touchUpInside)
         let right = RipulHalfControl()
-        right.backgroundColor = UIColor.systemOrange.withAlphaComponent(0.35)
+        right.backgroundColor = UIColor.ripul(system: .systemOrange).withAlphaComponent(0.35)
         right.addAction(UIAction { _ in RipulConformanceLog.shared.note("split.right") }, for: .touchUpInside)
         for half in [left, right] {
             half.translatesAutoresizingMaskIntoConstraints = false

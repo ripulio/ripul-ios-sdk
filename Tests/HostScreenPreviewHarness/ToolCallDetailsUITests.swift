@@ -767,6 +767,43 @@ final class ToolCallDetailsUITests: XCTestCase {
         }
     }
 
+    func testAgentCallsLeadWithWhoAndKeepIdsUnderDetails() {
+        continueAfterFailure = false
+        let cases: [(String, String, [String])] = [
+            ("agent-spawn", "Started Check the upload retry", ["Claude Code · Opus", "Finished", "Task", "Reply", "kept", "Picked Claude Code: looks like design, planning or review."]),
+            ("agent-send", "Message to Check the upload retry", ["Working on it. The reply will arrive in this chat as a new message.", "Also say what happens to a parked part"]),
+            ("agent-await", "Reply from Check the upload retry", ["Replied", "Parked parts are retried"]),
+            ("agent-archive", "Archived Check the upload retry", ["Archived. Its transcript is kept and can be restored."]),
+            ("agent-list", "Recent agents", ["3 agents · 1 working · 1 needs input", "Fix the failing sync tests", "Needs input", "Task to Check the upload retry", "MacBook Pro"]),
+        ]
+        for (name, title, labels) in cases {
+            for light in [true, false] {
+                let app = XCUIApplication()
+                app.launchArguments = ["--tool-details-ui-tests", "--renderer=\(name)"] + (light ? ["--light-appearance"] : [])
+                app.launch()
+                app.buttons["Open tool details"].tap()
+                let summary = app.staticTexts["ToolCallDetails.summary.call-1"]
+                XCTAssertTrue(summary.waitForExistence(timeout: 5), name)
+                XCTAssertEqual(summary.label, title, name)
+                func shown(_ text: String) -> XCUIElement {
+                    app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", text)).firstMatch
+                }
+                for label in labels { XCTAssertTrue(shown(label).waitForExistence(timeout: 5), "\(name): missing \(label)") }
+                // Ids are how the calls address each other, not what the panel is read for.
+                for id in ["cli_3f9a2c1b", "agentmsg_"] { XCTAssertFalse(shown(id).exists, "\(name): \(id) is on the face") }
+                XCTAssertFalse(app.staticTexts["Parameters"].exists, name)
+                let face = XCTAttachment(screenshot: app.screenshot())
+                face.name = "Agent panel \(name) \(light ? "light" : "dark")"; face.lifetime = .keepAlways; add(face)
+
+                app.buttons["Details"].firstMatch.tap()
+                XCTAssertTrue(shown("cli_3f9a2c1b").waitForExistence(timeout: 3), "\(name): the id is kept under Details")
+                let details = XCTAttachment(screenshot: app.screenshot())
+                details.name = "Agent details \(name) \(light ? "light" : "dark")"; details.lifetime = .keepAlways; add(details)
+                app.terminate()
+            }
+        }
+    }
+
     func testCommonNativeRenderersShowContentInsteadOfJSON() {
         continueAfterFailure = false
         let cases: [(String, [String])] = [

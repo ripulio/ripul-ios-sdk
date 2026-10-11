@@ -64,7 +64,7 @@ struct TextPropertyRow: View {
 private enum TextEditorPresenter {
     static func present(_ target: TextEditingTarget) {
         guard let root = RipulChrome.presentationRoot() else { return }
-        let host = UIHostingController(rootView: TextEditorSheet(target: target))
+        let host = UIHostingController(rootView: TextEditorSheet(target: target).ripulThemeRoot())
         host.sheetPresentationController?.detents = [.large()]
         root.present(host, animated: true)
     }
@@ -98,7 +98,7 @@ struct ElementTextEditor: View {
         let _ = version
         Form {
             if let source = target.source {
-                Section("App text") {
+                Section(themed: "App text") {
                     Text(target.text.isEmpty ? "Empty text" : target.text).textSelection(.enabled)
                         .uiKitIdentifier("theme.text.result")
                     LabeledContent("Source", value: source)
@@ -109,11 +109,11 @@ struct ElementTextEditor: View {
                     TextField("Text for this element", text: $wording, axis: .vertical)
                         .lineLimit(3...12)
                         .uiKitIdentifier("theme.text.wording")
-                } header: { Text("Text for this element") } footer: {
+                } header: { RipulSectionHeader { Text("Text for this element") } } footer: { RipulSectionFooter {
                     Text(hasChanges
                          ? "Save updates this element in the unpublished theme draft."
                          : "Saved text previews immediately. Publish your theme when you’re ready to share it.")
-                }
+                } }
                 Section {
                     LabeledContent("Currently uses", value: target.token ?? (target.reference == nil ? "App text" : "Custom text"))
                     NavigationLink("Choose a text token") {
@@ -128,9 +128,9 @@ struct ElementTextEditor: View {
                     }
                     Button("Create a shared token from this text") { naming = true }
                         .uiKitIdentifier("theme.text.createToken")
-                } header: { Text("Text tokens & defaults") } footer: {
+                } header: { RipulSectionHeader { Text("Text tokens & defaults") } } footer: { RipulSectionFooter {
                     Text("Token and default changes preview immediately. Editing a shared token updates every element using it.")
-                }
+                } }
             }
             Section {
                 DisclosureGroup("Element details") {
@@ -213,7 +213,7 @@ struct TextTokenDefinitionScreen: View {
     var body: some View {
         let _ = version
         Form {
-            Section("Shared definition") {
+            Section(themed: "Shared definition") {
                 LabeledContent("Token", value: name)
                 Text(RipulElementText.tokenText(name) ?? "Unresolved token").textSelection(.enabled)
                 if case .token(let source) = RipulElementText.definition(name), !visited.contains(source), source != name {
@@ -260,14 +260,14 @@ public struct RipulTextLibraryScreen: View {
     public var body: some View {
         let _ = version
         List {
-            Section("Shared text tokens") {
+            Section(themed: "Shared text tokens") {
                 ForEach(RipulElementText.tokenNames.filter { matches($0 + " " + (RipulElementText.tokenText($0) ?? "")) }, id: \.self) { name in
                     NavigationLink { TextTokenDefinitionScreen(name: name) } label: {
                         VStack(alignment: .leading) { Text(name); Text(RipulElementText.tokenText(name) ?? "Unresolved token").foregroundStyle(.secondary) }
                     }
                 }
             }
-            Section("Individual overrides") {
+            Section(themed: "Individual overrides") {
                 ForEach(exceptions.filter { matches($0.id + " " + $0.text) }) { item in
                     NavigationLink { ElementTextEditor(target: .element(item)) } label: {
                         VStack(alignment: .leading) { Text(ThemeChangePresentation.readable(item.element)); Text(item.text).foregroundStyle(.secondary) }

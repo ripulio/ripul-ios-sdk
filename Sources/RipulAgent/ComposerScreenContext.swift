@@ -236,7 +236,7 @@ enum ComposerScreenContext {
         let renderer = UIGraphicsImageRenderer(bounds: bounds, format: format)
         let image = renderer.image { context in
             window.drawHierarchy(in: bounds, afterScreenUpdates: false)
-            context.cgContext.setFillColor(UIColor.black.cgColor)
+            context.cgContext.setFillColor(UIColor.ripul(system: .black).cgColor)
             for region in result.excluded {
                 context.cgContext.fill(CGRect(x: bounds.minX + region.minX * bounds.width, y: bounds.minY + region.minY * bounds.height,
                     width: region.width * bounds.width, height: region.height * bounds.height).insetBy(dx: -2, dy: -2))

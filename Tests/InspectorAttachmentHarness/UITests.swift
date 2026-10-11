@@ -35,6 +35,8 @@ final class InspectorAttachmentUITests: XCTestCase {
         addElement(in: app, typing: "Look at @el", returns: returns, expectedReturns: 2)
         XCTAssertEqual(status.label, "attachments=1; images=1; tab=0")
         XCTAssertEqual(field.value as? String, "Look at @Element A ")
+        XCTAssertEqual(app.staticTexts["attachmentHarness.web"].label, "web: selector=1 url=1 source=1",
+                       "A web element names a selector, its page and where its host says it lives")
 
         addElement(in: app, typing: "and compare it with @", returns: returns, expectedReturns: 3)
         XCTAssertEqual(status.label, "attachments=2; images=2; tab=0", "A second element adds to the first")

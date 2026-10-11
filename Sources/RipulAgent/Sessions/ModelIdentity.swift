@@ -26,7 +26,7 @@ public struct ModelIdentity: Equatable {
     /// Unicode glyph rendered in place of an SF Symbol (e.g. "☾", "✦", "❀").
     public let glyph: String
 
-    public var color: Color { Color(hex: colorHex) }
+    public var color: Color { Color(hex: colorHex) }  // theme-exempt: a provider's colour is data
 
     // MARK: Family table
 

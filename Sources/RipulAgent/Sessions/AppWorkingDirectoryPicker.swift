@@ -19,7 +19,7 @@ public struct AppWorkingDirectorySheet: ViewModifier {
                 guard let source = notification.object as? AgentBridge, source === bridge else { return }
                 isPresented = true
             }
-            .sheet(isPresented: $isPresented) {
+            .ripulSheet(isPresented: $isPresented) {
                 AppWorkingDirectoryPicker(bridge: bridge, onDismiss: { isPresented = false })
             }
     }

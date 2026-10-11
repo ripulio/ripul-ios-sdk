@@ -184,6 +184,23 @@ extension AgentBridge {
         return WebContextProbe.read(raw)
     }
 
+    /// Whether the page answers, with its callables installed, before the time
+    /// is up. For a caller that has just had the page reloaded under it and
+    /// can repeat what it was doing.
+    func pageAnswers(within seconds: TimeInterval) async -> Bool {
+        let deadline = Date().addingTimeInterval(seconds)
+        while !Task.isCancelled {
+            switch await probeWebContextHealth() {
+            case .healthy: return true
+            case .noWebView: return false
+            default: break
+            }
+            guard Date() < deadline else { return false }
+            try? await Task.sleep(nanoseconds: 500_000_000)
+        }
+        return false
+    }
+
     /// Set by the host app (macOS) to record web-view self-heal reloads into its
     /// persistent restart log — a heal reloads the whole web app, which reads as
     /// "the host restarted". Args: (reason, attempt) where attempt 1 = plain

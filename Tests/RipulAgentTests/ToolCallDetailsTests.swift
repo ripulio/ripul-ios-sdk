@@ -32,6 +32,32 @@ final class ToolCallDetailsTests: XCTestCase {
         XCTAssertEqual(store.request?.calls.first?.result, "Started in background")
     }
 
+    @MainActor func testWorkflowRunArrivesWithItsPhasesAndAgents() {
+        let store = ToolCallDetailsStore()
+        let agents: [[String: Any]] = [
+            ["id": "1", "label": "read-a", "state": "done", "detail": "11,153 tokens · 1 tool use · 2s"],
+            ["id": "2", "label": "read-b", "state": "running", "detail": "Read …/b.txt"],
+            ["id": "3", "label": "read-c", "state": "queued"],
+        ]
+        let workflow: [String: Any] = ["progress": "1 of 3 agents done", "done": 1, "total": 3, "phases": [
+            ["id": "1", "title": "Read", "state": "running", "count": "1 of 3", "agents": agents, "omitted": 0],
+            ["id": "2", "title": "Join", "state": "queued", "count": "", "agents": [[String: Any]](), "omitted": 0],
+        ]]
+        var launch = call("w", result: "Workflow launched in background")
+        launch["status"] = "running"
+        launch["task"] = ["id": "w3bqqfkwa", "type": "local_workflow", "title": "Three readers then one joiner", "status": "running",
+                          "variant": "capture-probe", "entries": [[String: Any]](), "totalCount": 0, "synthetic": false, "workflow": workflow]
+        store.receive(["requestId": "run", "title": "Tool calls", "calls": [launch]], opening: true)
+
+        let task = store.request?.calls.first?.task
+        XCTAssertEqual(task?.subtitle, "Workflow · capture-probe")
+        XCTAssertEqual(task?.workflow?.progress, "1 of 3 agents done")
+        XCTAssertEqual(task?.workflow?.phases.map(\.title), ["Read", "Join"])
+        XCTAssertEqual(task?.workflow?.phases.first?.agents.map(\.state), ["done", "running", "queued"])
+        // An agent with nothing to say about itself still decodes.
+        XCTAssertNil(task?.workflow?.phases.first?.agents.last?.detail)
+    }
+
     @MainActor func testMultipleExpandedCallsSurviveResultsAndNewIterations() {
         let store = ToolCallDetailsStore()
         store.receive(["requestId": "one", "title": "Bash", "calls": [call("a"), call("b")]], opening: true)

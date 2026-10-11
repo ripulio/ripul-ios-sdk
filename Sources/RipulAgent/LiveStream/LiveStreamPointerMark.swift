@@ -87,10 +87,10 @@ final class LiveStreamPointerMark {
         let size = Self.diameter
         ring.bounds = CGRect(x: 0, y: 0, width: size, height: size)
         ring.path = UIBezierPath(ovalIn: ring.bounds.insetBy(dx: 2, dy: 2)).cgPath
-        ring.fillColor = UIColor.systemOrange.withAlphaComponent(0.28).cgColor
-        ring.strokeColor = UIColor.systemOrange.cgColor
+        ring.fillColor = UIColor.ripul(system: .systemOrange).withAlphaComponent(0.28).cgColor
+        ring.strokeColor = UIColor.ripul(system: .systemOrange).cgColor
         ring.lineWidth = 3
-        ring.shadowColor = UIColor.black.cgColor
+        ring.shadowColor = UIColor.ripul(system: .black).cgColor
         ring.shadowOpacity = 0.35
         ring.shadowRadius = 4
         ring.shadowOffset = .zero

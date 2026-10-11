@@ -41,14 +41,14 @@ struct MachinePanelCustomiserSheet: View {
                         entryRow(entry, isHidden: false)
                     }
                     .onMove(perform: move)
-                } header: {
+                } header: { RipulSectionHeader {
                     Text("Shown")
-                } footer: {
+                } } footer: { RipulSectionFooter {
                     Text("Drag to reorder. Tiles fill the grid at the top of the panel; rows sit in the list below it.")
-                }
+                } }
 
                 if !hidden.isEmpty {
-                    Section("Hidden") {
+                    Section(themed: "Hidden") {
                         ForEach(hidden) { entry in
                             entryRow(entry, isHidden: true)
                         }
@@ -56,10 +56,10 @@ struct MachinePanelCustomiserSheet: View {
                 }
 
                 if !unavailable.isEmpty {
-                    Section("Unavailable While Offline") {
+                    Section(themed: "Unavailable While Offline") {
                         ForEach(unavailable) { entry in
                             Label(entry.label, systemImage: entry.icon)
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(.ripul(.textSecondary))
                         }
                     }
                 }
@@ -79,8 +79,8 @@ struct MachinePanelCustomiserSheet: View {
             .toolbar {
                 ToolbarItem(placement: .principal) {
                     VStack(spacing: 0) {
-                        Text("Customise Panel").font(.headline)
-                        Text(machineName).font(.caption).foregroundStyle(.secondary)
+                        Text("Customise Panel").font(.ripul(.headline))
+                        Text(machineName).font(.ripul(.caption)).foregroundStyle(.ripul(.textSecondary))
                     }
                 }
                 ToolbarItem(placement: .confirmationAction) {
@@ -98,7 +98,7 @@ struct MachinePanelCustomiserSheet: View {
                 .frame(width: 22)
             Text(entry.label)
                 .lineLimit(1)
-                .foregroundStyle(isHidden ? .secondary : .primary)
+                .foregroundStyle(isHidden ? .ripul(.textSecondary) : .ripul(.text))
             Spacer(minLength: 8)
 
             Picker("Placement", selection: placementBinding(for: entry)) {
@@ -118,7 +118,7 @@ struct MachinePanelCustomiserSheet: View {
                 store.set(layout.settingHidden(entry.id, !isHidden), for: machineId)
             } label: {
                 Image(systemName: isHidden ? "eye.slash" : "eye")
-                    .foregroundStyle(entry.essential ? Color.secondary.opacity(0.4) : (isHidden ? .secondary : .accentColor))
+                    .foregroundStyle(entry.essential ? Color.ripul(.textSecondary).opacity(0.4) : (isHidden ? Color.ripul(.textSecondary) : .accentColor))
                     .frame(width: 28)
             }
             .buttonStyle(.borderless)

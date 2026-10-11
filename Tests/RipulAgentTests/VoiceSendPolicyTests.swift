@@ -7,6 +7,71 @@ final class VoiceSendPolicyTests: XCTestCase {
                                      transcriptIdleFor: idle, audioIsFresh: fresh)
     }
 
+    private func run(_ text: String, quiet: Double = 5, unchanged: Double = 1.5, repeats: Int = 1,
+                     fresh: Bool = true) -> String? {
+        VoiceSendPolicy.commandToRun(text: text, quietFor: quiet, wordsUnchangedFor: unchanged,
+                                     unchangedRepeats: repeats, audioIsFresh: fresh)
+    }
+
+    func testACommandEndsWhenTheRecogniserRepeatsItself() {
+        // No closing phrase is needed, and none is waited for.
+        XCTAssertEqual(run(" go back to my chats "), "go back to my chats")
+        // A stalled microphone is not a pause.
+        XCTAssertNil(run("go back to my chats", unchanged: 3, repeats: 3, fresh: false))
+        XCTAssertNil(run("   ", unchanged: 9, repeats: 9))
+    }
+
+    func testTimeAloneNeverEndsACommand() {
+        // Measured on a phone: the recogniser reports about once a second, so
+        // a wait of 0.8 seconds expired between two reports and ended
+        // sentences mid-word ("Open the chat about app or-"). Without a
+        // repeat there is no evidence the person has stopped.
+        XCTAssertNil(run("Open the chat about app", unchanged: 0.9, repeats: 0))
+        XCTAssertNil(run("Open the chat about app", unchanged: 3, repeats: 0))
+        // Nor does a repeat hard on the heels of a change.
+        XCTAssertNil(run("Open the chat about app", unchanged: 0.3, repeats: 1))
+    }
+
+    func testAVoiceJustHeardHoldsItBack() {
+        // When the level check can hear the speaker, a voice in the last half
+        // second means the words are about to change.
+        XCTAssertNil(run("Open the chat", quiet: 0.2))
+        // When it cannot (quiet reads as forever), the repeat still decides.
+        XCTAssertEqual(run("Open the chat", quiet: 999), "Open the chat")
+    }
+
+    func testAnUnfinishedSentenceIsGivenLonger() {
+        for trailing in ["Open the one about", "Open the one about-", "Open the chat called…", "Go to my", "Open the tunnel chat and"] {
+            XCTAssertTrue(VoiceSendPolicy.looksUnfinished(trailing), trailing)
+            XCTAssertNil(run(trailing, unchanged: 1.5, repeats: 1), trailing)
+            XCTAssertNil(run(trailing, unchanged: 2.5, repeats: 2), trailing)
+            XCTAssertEqual(run(trailing, unchanged: 3.5, repeats: 3), trailing)
+        }
+        // Words that end real commands are not mistaken for trailing off.
+        for whole in ["carry on", "log in", "open the last one", "what is this chat about?", "stop", "go back to my chats."] {
+            let unfinished = VoiceSendPolicy.looksUnfinished(whole)
+            XCTAssertEqual(unfinished, whole.hasSuffix("about?"), whole)
+        }
+    }
+
+    func testTheClosingPhraseStillEndsACommandAndSooner() {
+        // An explicit end needs no repeat. The text comes back whole; the
+        // phrase is dropped where the sentence is sent.
+        XCTAssertEqual(run("go back to my chats. Send command.", unchanged: 0.7, repeats: 0),
+                       "go back to my chats. Send command.")
+        XCTAssertNil(run("go back to my chats", unchanged: 0.7, repeats: 0))
+    }
+
+    func testRepunctuatedWordsAreTheSameWords() {
+        XCTAssertEqual(VoiceSendPolicy.words("Go back to my chats."), VoiceSendPolicy.words("go back, to my  chats"))
+        XCTAssertNotEqual(VoiceSendPolicy.words("Go back to my chats"), VoiceSendPolicy.words("Go back to my chat"))
+    }
+
+    func testALoudRoomStillEndsEventually() {
+        XCTAssertEqual(run("go back to my chats", quiet: 0, unchanged: 6, repeats: 0), "go back to my chats")
+        XCTAssertNil(run("go back to my chats", quiet: 0, unchanged: 5, repeats: 5))
+    }
+
     func testAutomaticKeepsExistingPauseAndNoiseEscape() {
         func automatic(_ quiet: Double, _ idle: Double) -> String? {
             VoiceSendPolicy.messageToSend(mode: .automatic, text: "Hello. Send command.",

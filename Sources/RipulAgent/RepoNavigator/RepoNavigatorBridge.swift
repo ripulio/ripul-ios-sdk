@@ -172,6 +172,19 @@ extension AgentBridge {
         }
     }
 
+    /// Every branch placed against the one it came from. The Mac reads the
+    /// whole history for this (RepoLineageBuilder); the phone gets a row a
+    /// branch. A host older than the endpoint answers with an error.
+    public func repoLineage(machineId: String, repoPath: String) async -> Result<RepoLineage, RepoNavigatorError> {
+        let result = await callRepoNavigator(
+            "return await window.__ripulRepoLineage?.(machineId, repoPath) ?? { repoPath: '', branches: [], truncated: false, error: 'Repo navigator is not available in this build.' };",
+            ["machineId": machineId, "repoPath": repoPath])
+        switch result {
+        case .failure(let message): return .failure(message)
+        case .success(let value): return decodeRepoObject(RepoLineage.self, from: value)
+        }
+    }
+
     /// One commit's full message, per-file stats, and unified diff (capped
     /// host-side; check `patchTruncated`).
     public func repoCommitDetail(machineId: String, repoPath: String, sha: String) async -> Result<CommitDetail, RepoNavigatorError> {

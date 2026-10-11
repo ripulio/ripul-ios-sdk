@@ -69,13 +69,13 @@ public struct WorkingDirectoryPicker: View {
         NavigationStack {
             List {
                 if let explanation {
-                    Section { Text(explanation).font(.footnote).foregroundStyle(.secondary) }
+                    Section { Text(explanation).font(.ripul(.footnote)).foregroundStyle(.ripul(.textSecondary)) }
                 }
                 if isLoading {
                     Section { ProgressView("Loading directories…") }
                 } else if let error {
                     Section {
-                        Text(error).font(.footnote).foregroundStyle(.secondary)
+                        Text(error).font(.ripul(.footnote)).foregroundStyle(.ripul(.textSecondary))
                         if let onRetry { Button("Retry", action: onRetry) }
                     }
                 } else {
@@ -85,8 +85,8 @@ public struct WorkingDirectoryPicker: View {
                 if directories.isEmpty && !isLoading && error == nil {
                     Section {
                         Text("No favourite directories yet. Add them in the host's CLI settings.")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
+                            .font(.ripul(.footnote))
+                            .foregroundStyle(.ripul(.textSecondary))
                             .uiKitIdentifier("\(identifierPrefix).emptyState")
                     }
                 } else if !isLoading && error == nil {
@@ -94,9 +94,9 @@ public struct WorkingDirectoryPicker: View {
                         ForEach(directories, id: \.self) { dir in
                             directoryRow(dir)
                         }
-                    } header: {
+                    } header: { RipulSectionHeader {
                         Text("Favourites")
-                    }
+                    } }
                 }
 
                 if let onBrowse {
@@ -143,14 +143,14 @@ public struct WorkingDirectoryPicker: View {
                 VStack(alignment: .leading, spacing: 1) {
                     if let defaultPath, !defaultPath.isEmpty {
                         Text(DirectoryPathDisplay.parse(defaultPath).joined)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .font(.ripul(.caption))
+                            .foregroundStyle(.ripul(.textSecondary))
                             .lineLimit(1)
                             .truncationMode(.head)
                     }
                     Text("Default")
-                        .font(.headline)
-                        .foregroundStyle(.primary)
+                        .font(.ripul(.headline))
+                        .foregroundStyle(.ripul(.text))
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 checkmark(isSelected: selection == nil)
@@ -181,8 +181,8 @@ public struct WorkingDirectoryPicker: View {
 
     private func icon(_ systemName: String) -> some View {
         Image(systemName: systemName)
-            .font(.system(size: 15))
-            .foregroundStyle(.secondary)
+            .font(.ripulIcon(size: 15))
+            .foregroundStyle(.ripul(.textSecondary))
             .frame(width: 20)
     }
 
@@ -190,7 +190,7 @@ public struct WorkingDirectoryPicker: View {
     private func checkmark(isSelected: Bool) -> some View {
         if isSelected {
             Image(systemName: "checkmark")
-                .font(.system(size: 14, weight: .semibold))
+                .font(.ripulIcon(size: 14, weight: .semibold))
                 .foregroundStyle(.tint)
         }
     }
@@ -245,7 +245,7 @@ public struct WorkingDirectoryPickerSheet: ViewModifier {
     }
 
     public func body(content: Content) -> some View {
-        content.sheet(isPresented: $isPresented) { picker }
+        content.ripulSheet(isPresented: $isPresented) { picker }
     }
 
     private var picker: some View {

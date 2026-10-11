@@ -1,6 +1,7 @@
 #if os(iOS)
 import SwiftUI
 import UIKit
+import WebKit
 
 // MARK: - RipulElementTap
 
@@ -215,6 +216,12 @@ final class RipulExplorerOverlayWindow: RipulChromeWindow {
 public enum RipulViewExplorer {
     static weak var contextBridge: AgentBridge?
 
+    /// For a host that owns web views an element can be picked in (browser
+    /// tabs, say): lines telling an agent where the web view is and how to
+    /// reach it again, added to the element's description. Empty for a web
+    /// view the host has nothing to say about.
+    public static var webElementSource: ((WKWebView) -> [String])?
+
     private static var attachmentBridge: AgentBridge? {
         if let contextBridge { return contextBridge }
         // Host gestures and tool launches do not have the console's bridge to
@@ -330,7 +337,7 @@ public enum RipulViewExplorer {
             hostWindow: target,
             startRecording: recording,
             onDismiss: { dismiss() }
-        ))
+        ).ripulThemeRoot())
         hosting.view.backgroundColor = .clear
         hosting.view.tag = ripulViewExplorerOverlayTag
         win.installRoot(hosting)

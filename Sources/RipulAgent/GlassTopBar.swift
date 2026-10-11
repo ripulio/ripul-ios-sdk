@@ -57,11 +57,18 @@ public struct GlassTopBarScope {
     public var detail: String?
     /// Called with an option other than the current one.
     public var select: (Option) -> Void
+    /// The current option IS what the screen is showing (a repo, on that
+    /// repo's screen), so its name is the lozenge's title and `detail` the
+    /// line under it. Otherwise the screen's own title stays and the scope
+    /// reads under it (the Mac a list belongs to).
+    public var currentIsTitle = false
 
-    public init(options: [Option], current: Option, detail: String? = nil, select: @escaping (Option) -> Void) {
+    public init(options: [Option], current: Option, detail: String? = nil, currentIsTitle: Bool = false,
+                select: @escaping (Option) -> Void) {
         self.options = options
         self.current = current
         self.detail = detail
+        self.currentIsTitle = currentIsTitle
         self.select = select
     }
 
@@ -86,7 +93,20 @@ private struct GlassTopBarScopePicker: View {
     let scope: GlassTopBarScope
     let dismiss: () -> Void
 
+    /// More options than this and the list scrolls, so a long one (every
+    /// repo on a Mac) still fits a phone.
+    private static var rowsBeforeScrolling: Int { 9 }
+
     var body: some View {
+        if scope.options.count > Self.rowsBeforeScrolling {
+            ScrollView { rows }
+                .frame(height: CGFloat(Self.rowsBeforeScrolling) * 44 + 22)
+        } else {
+            rows
+        }
+    }
+
+    private var rows: some View {
         VStack(spacing: 0) {
             ForEach(Array(scope.options.enumerated()), id: \.element.id) { index, option in
                 if index > 0 { Divider() }
@@ -404,17 +424,17 @@ public struct GlassTopBar<MenuContent: View, CenterContent: View>: View {
                 // Mac's icon. As a caption-sized grey glyph inside the
                 // subtitle it was there, and nobody saw it.
                 Image(systemName: scope.current.icon)
-                    .font(.system(size: 16))
-                    .foregroundStyle(.blue)
+                    .font(.ripulIcon(size: 16))
+                    .foregroundStyle(.ripul(.info))
                     .contentTransition(.symbolEffect(.replace))
                     .uiKitIdentifier("GlassTopBar.scope.icon")
             }
             VStack(alignment: scope == nil ? .center : .leading, spacing: 1) {
                 HStack(spacing: 4) {
-                    Text(title)
-                        .font(.caption)
+                    Text(scope?.currentIsTitle == true ? scope?.current.title ?? title : title)
+                        .font(.ripul(.caption))
                         .fontWeight(.semibold)
-                        .foregroundColor(.primary)
+                        .foregroundColor(.ripul(.text))
                         .lineLimit(1)
                         .contentTransition(.interpolate)
                     if let key = screenKey, let screenTip {
@@ -423,21 +443,23 @@ public struct GlassTopBar<MenuContent: View, CenterContent: View>: View {
                 }
                 if let scope {
                     HStack(spacing: 3) {
-                        Text(scope.detail.map { scope.current.title + " · " + $0 } ?? scope.current.title)
+                        Text(scope.currentIsTitle
+                             ? scope.detail ?? ""
+                             : scope.detail.map { scope.current.title + " · " + $0 } ?? scope.current.title)
                             .lineLimit(1)
                             .truncationMode(.middle)
                             .contentTransition(.interpolate)
                         if switchesScope {
-                            Image(systemName: "chevron.down").font(.system(size: 7, weight: .bold))
+                            Image(systemName: "chevron.down").font(.ripulIcon(size: 7, weight: .bold))
                         }
                     }
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+                    .font(.ripul(.caption2))
+                    .foregroundStyle(.ripul(.textSecondary))
                     .uiKitIdentifier("GlassTopBar.scope")
                 } else if let subtitle {
                     Text(subtitle)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
+                        .font(.ripul(.caption2))
+                        .foregroundStyle(.ripul(.textSecondary))
                         .contentTransition(.interpolate)
                 }
             }
@@ -460,8 +482,8 @@ public struct GlassTopBar<MenuContent: View, CenterContent: View>: View {
                 Button(action: onLeading) {
                     Image(systemName: leadingIcon)
                         .contentTransition(.symbolEffect(.replace))
-                        .font(.system(size: 18, weight: .semibold))
-                        .foregroundStyle(.primary)
+                        .font(.ripulIcon(size: 18, weight: .semibold))
+                        .foregroundStyle(.ripul(.text))
                         .frame(width: 44, height: 44)
                         .modifier(GlassCircleModifier(glassStyle: "regular"))
                         .modifier(GlassEffectIDModifier(id: "leading", namespace: topBarNS))
@@ -522,17 +544,17 @@ private struct TrailingMenuHost<MenuContent: View>: View, Equatable {
     }
 
     var body: some View {
-        Menu {
+        Menu { MenuIcons {
             if supportsMultipleWindows, let open = workspace?.openWindow {
                 Button("New Window", systemImage: "plus.rectangle.on.rectangle") { open(nil) }
                     .accessibilityIdentifier("Workspace.newWindow")
                 Divider()
             }
             menu()
-        } label: {
+        }} label: {
             Image(systemName: "ellipsis")
-                .font(.system(size: 18, weight: .semibold))
-                .foregroundStyle(.primary)
+                .font(.ripulIcon(size: 18, weight: .semibold))
+                .foregroundStyle(.ripul(.text))
                 .frame(width: 44, height: 44)
                 .modifier(GlassCircleModifier(glassStyle: "regular"))
                 .modifier(GlassEffectIDModifier(id: "trailing", namespace: namespace))

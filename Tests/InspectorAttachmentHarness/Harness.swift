@@ -43,8 +43,14 @@ private struct InspectorAttachmentStatus: View {
     @ObservedObject var store: RipulComposerContextStore
     var body: some View {
         let items = store.attachments(for: "attachment-conversation")
-        Text("attachments=\(items.count); images=\(items.compactMap(\.screenshotAttachment).count); tab=\(store.attachments(for: "attachment-tab").count)")
-            .accessibilityIdentifier("attachmentHarness.status")
+        // What an agent is told about the web element: enough to find it again.
+        let web = items.map(\.selectedContent).first { $0.contains("Web element:") } ?? ""
+        VStack {
+            Text("attachments=\(items.count); images=\(items.compactMap(\.screenshotAttachment).count); tab=\(store.attachments(for: "attachment-tab").count)")
+                .accessibilityIdentifier("attachmentHarness.status")
+            Text("web: selector=\(web.contains("Selector: [data-ui=\"attachment.web\"]") ? 1 : 0) url=\(web.contains("\nURL: ") ? 1 : 0) source=\(web.contains("Harness tab 7") ? 1 : 0)")
+                .accessibilityIdentifier("attachmentHarness.web")
+        }
     }
 }
 
@@ -60,6 +66,8 @@ private final class InspectorAttachmentModel: ObservableObject {
 
     init() {
         configureChat()
+        // A host that owns the web view says how an agent reaches it again.
+        RipulViewExplorer.webElementSource = { [weak self] view in view === self?.web ? ["Harness tab 7"] : [] }
     }
 
     private func configureChat() {

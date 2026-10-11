@@ -430,7 +430,7 @@ struct CmsSimpleCalendarBlockView: View {
 
     private var slimRow: some View {
         HStack(spacing: 10) {
-            Menu {
+            Menu { MenuIcons {
                 ForEach(CmsRangePredicateOperator.menuOrder, id: \.rawValue) { op in
                     Button {
                         setOperator(op)
@@ -442,7 +442,7 @@ struct CmsSimpleCalendarBlockView: View {
                         }
                     }
                 }
-            } label: {
+            }} label: {
                 HStack(spacing: 4) {
                     Text(operatorValue.label)
                         .font(typographyFont("predicateTypography", base: 14, weight: .regular))
@@ -716,7 +716,7 @@ private struct DateChipPickerPresenter<PickerContent: View>: ViewModifier {
                     .presentationCompactAdaptation(.popover)
             }
         } else {
-            content.sheet(item: $target) { t in
+            content.ripulSheet(item: $target) { t in
                 picker(t)
             }
         }

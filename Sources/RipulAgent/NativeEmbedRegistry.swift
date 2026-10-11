@@ -34,6 +34,9 @@
       registry.register("artefact.declarative/v1") { NativeDeclarativeArtefactRenderer() }
       registry.register("user-interaction/v1") { NativeInteractionRenderer() }
       registry.register("map/v1") { NativeMapRenderer() }
+      registry.register("trainyard.train/v1") { NativeTrainRenderer() }
+      registry.register("workflow.run/v1") { NativeTaskRunRenderer(kind: .workflow) }
+      registry.register("agent.run/v1") { NativeTaskRunRenderer(kind: .agent) }
       return registry
     }
   }

@@ -22,16 +22,16 @@ struct VoiceProfilesScreen: View {
             if let loadError {
                 Section {
                     Label(loadError, systemImage: "exclamationmark.triangle")
-                        .foregroundStyle(.red)
-                        .font(.caption)
+                        .foregroundStyle(.ripul(.danger))
+                        .font(.ripul(.caption))
                 }
             }
 
             Section {
                 if profiles.isEmpty && !loading && loadError == nil {
                     Text("No voice profiles yet. Create one and bind site keys to it — many keys can share one profile.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .font(.ripul(.caption))
+                        .foregroundStyle(.ripul(.textSecondary))
                 }
                 ForEach(profiles) { profile in
                     NavigationLink {
@@ -47,14 +47,14 @@ struct VoiceProfilesScreen: View {
                                 Text(profile.name)
                                 if profile.allowUserOverride == false {
                                     Image(systemName: "lock.fill")
-                                        .font(.caption2)
-                                        .foregroundStyle(.secondary)
+                                        .font(.ripulIcon(.caption2))
+                                        .foregroundStyle(.ripul(.textSecondary))
                                 }
                             }
                             if let description = profile.description, !description.isEmpty {
                                 Text(description)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
+                                    .font(.ripul(.caption))
+                                    .foregroundStyle(.ripul(.textSecondary))
                                     .lineLimit(1)
                             }
                         }
@@ -64,9 +64,9 @@ struct VoiceProfilesScreen: View {
                 .onDelete { indexSet in
                     Task { await delete(at: indexSet) }
                 }
-            } footer: {
+            } footer: { RipulSectionFooter {
                 Text("Speech configuration site keys bind to. A locked profile (padlock) overrides user voice settings in its portals.")
-            }
+            } }
         }
         .navigationTitle("Voice Profiles")
         .toolbar {
@@ -158,12 +158,12 @@ struct VoiceProfileEditorScreen: View {
             if let saveError {
                 Section {
                     Label(saveError, systemImage: "exclamationmark.triangle")
-                        .foregroundStyle(.red)
-                        .font(.caption)
+                        .foregroundStyle(.ripul(.danger))
+                        .font(.ripul(.caption))
                 }
             }
 
-            Section("Profile") {
+            Section(themed: "Profile") {
                 TextField("Name", text: $name)
                     .uiKitIdentifier("VoiceProfileEditor.name")
                 TextField("Description (optional)", text: $profileDescription, axis: .vertical)
@@ -180,9 +180,9 @@ struct VoiceProfileEditorScreen: View {
                     Label("Dictation provider", systemImage: "mic.badge.plus")
                 }
                 .uiKitIdentifier("VoiceProfileEditor.sttProvider")
-            } header: {
+            } header: { RipulSectionHeader {
                 Text("Recognition")
-            }
+            } }
 
             Section {
                 Picker(selection: $voiceId) {
@@ -208,7 +208,7 @@ struct VoiceProfileEditorScreen: View {
                         Label("Pace", systemImage: "hare")
                         Spacer()
                         Text(String(format: "%.2f×", pace))
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(.ripul(.textSecondary))
                             .monospacedDigit()
                     }
                     Slider(value: $pace, in: 0.7...1.2, step: 0.05)
@@ -219,15 +219,15 @@ struct VoiceProfileEditorScreen: View {
                         Label("Expressiveness", systemImage: "theatermasks")
                         Spacer()
                         Text(String(format: "%.0f%%", expressiveness * 100))
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(.ripul(.textSecondary))
                             .monospacedDigit()
                     }
                     Slider(value: $expressiveness, in: 0...1, step: 0.05)
                         .uiKitIdentifier("VoiceProfileEditor.expressiveness")
                 }
-            } header: {
+            } header: { RipulSectionHeader {
                 Text("Delivery")
-            }
+            } }
 
             Section {
                 Picker(selection: $language) {
@@ -247,11 +247,11 @@ struct VoiceProfileEditorScreen: View {
                     .lineLimit(1...3)
                     .autocorrectionDisabled()
                     .uiKitIdentifier("VoiceProfileEditor.keyterms")
-            } header: {
+            } header: { RipulSectionHeader {
                 Text("Language & key terms")
-            } footer: {
+            } } footer: { RipulSectionFooter {
                 Text("Key terms are comma-separated vocabulary the recognizer should prefer. Profiles merge these with the user's own terms.")
-            }
+            } }
 
             Section {
                 Toggle(isOn: $voiceEnabled) {
@@ -270,13 +270,13 @@ struct VoiceProfileEditorScreen: View {
                     Label("Allow user override", systemImage: "person.badge.shield.checkmark")
                 }
                 .uiKitIdentifier("VoiceProfileEditor.allowOverride")
-            } header: {
+            } header: { RipulSectionHeader {
                 Text("Behavior")
-            } footer: {
+            } } footer: { RipulSectionFooter {
                 Text(voiceEnabled
                      ? "With override off, this profile is authoritative: portals bound to it ignore user voice settings."
                      : "Voice off: portals bound to this profile show no mic, no read-aloud, and no hands-free mode.")
-            }
+            } }
         }
         .navigationTitle(existing == nil ? "New Profile" : existing!.name)
         .toolbar {

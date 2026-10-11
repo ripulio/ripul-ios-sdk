@@ -67,6 +67,13 @@ public final class AgentBridge: NSObject {
     public let composerContexts = RipulComposerContextStore()
     public let audience: RipulChannelAudience
 
+    /// For a host that presents this chat itself, over its own screens (a
+    /// floating panel, say). Called as the composer's `@` → Element pick
+    /// begins: the host moves the chat out of the way and returns what puts
+    /// it back, which runs when the pick ends either way. Returning nil
+    /// leaves the chat where it is.
+    @ObservationIgnored public var chatPickPresentation: (() -> (() -> Void)?)?
+
     /// The host's tool registry this channel projects from. The bridge OWNS no
     /// tools (channel-bound built-ins aside) — it exposes
     /// `registry.entries(audience:)` for its exposed audiences. See
@@ -1077,6 +1084,14 @@ public final class AgentBridge: NSObject {
         browserPreviewAvailable = true
     }
 
+    /// Set by a host whose browser has a screen of its own: the preview's Open
+    /// button calls it with the previewed tab (nil for the active one) so the
+    /// person can get from the picture to the real, usable page.
+    public var onOpenBrowserPreview: ((Int?) -> Void)? {
+        get { browserPreview.onOpen }
+        set { browserPreview.onOpen = newValue }
+    }
+
     public func showBrowserPreview(tabId: Int? = nil, automatic: Bool = false) {
         guard let chatId = currentSourceChatId, browserPreviewAvailable else { return }
         browserPreview.open(chatId: chatId, tabId: tabId, automatic: automatic)
@@ -1218,6 +1233,10 @@ public final class AgentBridge: NSObject {
         }
         startNetworkPathMonitoring()
         startProcessLifecycleMonitoring()
+        // The page follows the theme document the app adopts (see `syncThemeDocument`).
+        themeDocumentSubscription = NotificationCenter.default.publisher(for: .ripulThemeDidChange)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in MainActor.assumeIsolated { self?.syncThemeDocument() } }
         // Route CPU spikes into the bridge console (visible in host_console_logs
         // / device_console_logs). onSpike is invoked on the main thread.
         cpuSampler.onSpike = { [weak self] line in self?.handleConsoleLog(line) }
@@ -1431,7 +1450,63 @@ public final class AgentBridge: NSObject {
             }
         }
         if !startupMonitoring { beginStartupMonitoring() }
+        // Before the page loads: `attach` is called between making the web view
+        // and its first request, so the document is there when the page starts.
+        sentThemeDocument = nil
+        syncThemeDocument()
         NSLog("[AgentBridge] Attached to WKWebView")
+    }
+
+    // MARK: - Theme document
+
+    /// What the page was last given: nil for nothing yet, `.some(nil)` for "no
+    /// document" after one had been sent.
+    @ObservationIgnored private var sentThemeDocument: Data??
+    @ObservationIgnored private var themeDocumentSubscription: AnyCancellable?
+
+    /// Hands the page the theme document the app has adopted (`RipulTheme.adopt`),
+    /// so the chat is drawn from the same document as the native screens.
+    ///
+    /// It goes two ways at once. A script that runs before the page's own puts it
+    /// on the window, so a page that loads or reloads from now on starts with it:
+    /// a document does not fit in the URL, where the appearance travels. And the
+    /// same script is run in the page that is open, which makes the theme again
+    /// with no reload. A later script wins over an earlier one, so each change
+    /// adds one; a document changes rarely.
+    ///
+    /// A host that has adopted no document sends nothing, and its page is as it
+    /// was. The page decides whether to use what it is given: only Ripul's own
+    /// presentation does (`firstPartyTheme.ts` in the web app). An older page
+    /// ignores the value, and a page given none uses the document it was built with.
+    func syncThemeDocument() {
+        guard let webView else { return }
+        let document = RipulTheme.adoptedDocumentData
+        if let sentThemeDocument {
+            if sentThemeDocument == document { return }
+        } else if document == nil {
+            return
+        }
+        sentThemeDocument = .some(document)
+        let script = Self.themeDocumentScript(document)
+        webView.configuration.userContentController.addUserScript(
+            WKUserScript(source: script, injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        webView.evaluateJavaScript(script, completionHandler: nil)
+    }
+
+    /// The script that gives a page the document, or takes it away again (nil).
+    /// Anything that is not a JSON object is sent as no document.
+    static func themeDocumentScript(_ document: Data?) -> String {
+        var literal = "null"
+        if let document,
+           let object = try? JSONSerialization.jsonObject(with: document) as? [String: Any],
+           let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]),
+           let json = String(data: data, encoding: .utf8) {
+            // JSON is a script expression as it stands, but for these two line
+            // separators, which older engines end a string literal on.
+            literal = json.replacingOccurrences(of: "\u{2028}", with: "\\u2028")
+                .replacingOccurrences(of: "\u{2029}", with: "\\u2029")
+        }
+        return "window.__ripulNativeThemeDocument = \(literal); window.dispatchEvent(new Event('ripul:native-theme-document'));"
     }
 
     /// Master switch for native console logging. Off (the default) means no
@@ -1664,6 +1739,10 @@ public final class AgentBridge: NSObject {
             handleAgentActivity(dict)
         case "todos:update":
             handleTodoStateUpdate(dict)
+        case "sessions:remoteChanged":
+            // A Mac pushed a change for a chat that is not in this device's
+            // copy of its list, or that the list shows the other way about.
+            NotificationCenter.default.post(name: Self.remoteSessionsChangedNotification, object: self)
         case "session:archived":
             // A host archived a chat (another device, the Mac itself, or an
             // agent). The session list drops the row and closes this device's
@@ -2512,7 +2591,10 @@ public final class AgentBridge: NSObject {
                     perMInput: (item["perMInput"] as? NSNumber)?.doubleValue,
                     perMOutput: (item["perMOutput"] as? NSNumber)?.doubleValue,
                     tier: item["tier"] as? String,
-                    pickable: item["pickable"] as? Bool
+                    pickable: item["pickable"] as? Bool,
+                    personalOf: item["personalOf"] as? String,
+                    cliToolProfile: item["cliToolProfile"] as? String,
+                    canPersonalise: item["canPersonalise"] as? Bool
                 )
             }
 
@@ -2677,7 +2759,21 @@ public final class AgentBridge: NSObject {
     /// can open it — a fire-and-forget hash change looked identical whether
     /// the join worked or not.
     public func joinShareLink(token: String) async -> ShareLinkJoinResult {
-        let reply = await callPage("__ripulJoinShareLink", [token], .ifMissing("{ ok: false, error: 'App is still starting up' }"))
+        var reply = await askPageToJoin(token)
+        if let thrown = reply.error {
+            // The call came back with no answer at all. On iPhone that is a
+            // page that has stopped answering ("JavaScript execution returned
+            // a result of an unsupported type"), and it stays that way until
+            // something reloads it. Classifying does that. Joining is safe to
+            // repeat, so wait for the page and ask once more: the user tapped
+            // Join, and should not have to learn that the page was reloaded.
+            let classified = await classifyJsCallFailure(thrown.localizedDescription, callable: "__ripulJoinShareLink")
+            guard await pageAnswers(within: 20) else {
+                return ShareLinkJoinResult(tabId: nil, label: nil, error: classified)
+            }
+            reply = await askPageToJoin(token)
+            if reply.error != nil { return ShareLinkJoinResult(tabId: nil, label: nil, error: classified) }
+        }
         if let reason = reply.failure() { return ShareLinkJoinResult(tabId: nil, label: nil, error: reason) }
         guard let dict = reply.dictionary else {
             return ShareLinkJoinResult(tabId: nil, label: nil, error: "No response from the web app")
@@ -2692,6 +2788,16 @@ public final class AgentBridge: NSObject {
             tabId: nil, label: nil,
             error: dict["error"] as? String ?? "Failed to join session"
         )
+    }
+
+    /// The answer is rebuilt as plain JSON before it crosses: WebKit refuses a
+    /// whole result over one value it cannot carry, and which values those are
+    /// has changed between iOS versions.
+    private func askPageToJoin(_ token: String) async -> PageReply {
+        await runPage("""
+            if (!window.__ripulJoinShareLink) return { ok: false, error: 'App is still starting up' };
+            return JSON.parse(JSON.stringify(await window.__ripulJoinShareLink(token) ?? null));
+            """, arguments: ["token": token], caller: "joinShareLink")
     }
 
     /// Truncate a chat session, keeping only the most recent `keepCount` actions.
@@ -2895,6 +3001,13 @@ public final class AgentBridge: NSObject {
     // MARK: - Session tags
 
     /// Bulk-fetch the user's session tags as `{ sessionId: [tags] }`.
+    /// A person pulled the session list to refresh: ask every Mac about every
+    /// chat's turn state. Nothing else asks. A Mac tells its room each change,
+    /// and the page asks only for what it missed (`runStatesSync.ts`).
+    public func refreshRunStates() async {
+        _ = await callPage("__ripulRefreshRunStates", [], .ifMissing("null"))
+    }
+
     /// One authed request via the web app's metadata service — used to decorate
     /// the native session list with lozenges. Returns empty on any failure.
     public func getSessionTags() async -> [String: [String]] {
@@ -3202,6 +3315,11 @@ public final class AgentBridge: NSObject {
     // MARK: - Send messages to web app
 
     public func setTheme(_ theme: AgentTheme) {
+        // The app's own page reads the appearance from this value, not from the
+        // message below (see `AgentWebView.appearanceScript`).
+        if theme == .light || theme == .dark {
+            evaluateJavaScript("window.__ripulNativeAppearance = '\(theme.rawValue)'; window.dispatchEvent(new Event('ripul:native-appearance'));")
+        }
         let requestId = UUID().uuidString
         send([
             "type": "\(messagePrefix)theme:set",
@@ -3716,8 +3834,12 @@ public final class AgentBridge: NSObject {
     /// Returns the element's name in the message ("Element A") for the text
     /// to use, or nil when the Explorer was closed without adding one.
     public func pickElementForChat() async -> String? {
-        await withCheckedContinuation { continuation in
+        // A host showing the chat itself moves it aside first, so everything
+        // on screen can be picked from, and says how to bring it back.
+        let putBack = chatPickPresentation?()
+        return await withCheckedContinuation { continuation in
             RipulViewExplorer.pickElementForChat(bridge: self, in: webView?.window ?? RipulChrome.appWindow(),
+                                                 onReturn: putBack,
                                                  onFinish: { continuation.resume(returning: $0) })
         }
     }

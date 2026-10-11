@@ -10,7 +10,7 @@ let ripulViewExplorerOverlayTag = 0x5249_5055   // "RIPU"
 
 /// Marketing version of the RipulAgent SDK, surfaced in the inspector's copy output as `sdk: …`
 /// so we can always tell which build is actually running on the device. Bump on every release.
-let ripulSDKVersion = "0.7.169"
+let ripulSDKVersion = "0.7.170"
 
 // MARK: - View Inspector Overlay
 //
@@ -287,6 +287,9 @@ struct InspectedView {
                                        // discoverable from a single tap on a SwiftUI row
     let registryMatchView: UIView?     // the resolved stamp's own view — carries the declared token
                                        // colours for a SwiftUI element (ripulDeclaredTokenColors)
+    /// The Appearance section as text, read when the view was inspected: the tokens that
+    /// style the element, or the sentence that says why none can be named.
+    var appearanceLines: [String] = []
 
     /// The view the Design-token section should read: the resolved stamp when a SwiftUI
     /// element was selected (its declared token colours live there), else the inspected view.
@@ -317,7 +320,7 @@ struct InspectedView {
             ?? resolvedIdentifier
             ?? (isSwiftUIHostedLeaf(view) ? accessibilityIdInTree(view) : nil)
         let vcChain = viewControllerChain(of: view)
-        return InspectedView(
+        var info = InspectedView(
             view: view,
             className: className,
             accessibilityId: resolvedId,
@@ -354,6 +357,8 @@ struct InspectedView {
             identifierIsInherited: Self.identifierIsInherited(view),
             registryMatchView: registryMatchView
         )
+        info.appearanceLines = RipulTokenInspector.readout(for: info.tokenAnchorView, selected: view).lines
+        return info
     }
 
     /// The nearest `UIControl` at or above `view` (its own class if `view` is one), with its
@@ -755,6 +760,10 @@ struct InspectedView {
         for a in controlActions { lines.append("action: \(a)") }
         if viewControllerChain.count > 1 {
             lines.append("vcChain: \(viewControllerChain.joined(separator: " ← "))")
+        }
+        if !appearanceLines.isEmpty {
+            lines.append("appearance:")
+            lines.append(contentsOf: appearanceLines.map { "  " + $0 })
         }
         // TEMP diagnostic: when a SwiftUI hosting cell/leaf resolves NO identifier, dump the raw
         // accessibility picture so we can see WHERE SwiftUI actually stores `.accessibilityIdentifier`
@@ -2113,23 +2122,28 @@ struct RulerGuides: View {
 @available(iOS 16.0, *)
 struct InspectorTokenSection: View {
     let view: UIView
+    /// The view the person picked, when the explorer resolved it to the stamp `view`.
+    var selected: UIView?
     @State private var refresh = 0
 
     var body: some View {
         let _ = refresh
-        let provider = RipulTokenInspector.provider
-        let bindings = provider?.tokenBindings(for: view) ?? []
+        let readout = RipulTokenInspector.readout(for: view, selected: selected)
+        let bindings = readout.bindings
         VStack(alignment: .leading, spacing: 10) {
             Text("Appearance")
                 .font(.system(size: 10, weight: .semibold, design: .monospaced))
                 .foregroundStyle(.pink).textCase(.uppercase).tracking(0.5)
-            if bindings.isEmpty {
-                Text(provider == nil ? "no token provider registered" : "no token reported for this view")
-                    .font(.system(size: 10, design: .monospaced))
+            if let note = readout.note {
+                // Why nothing, or less than everything, could be named.
+                Text(note)
+                    .font(.system(size: 11))
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .uiKitIdentifier("inspector.appearance.note")
             }
             ForEach(bindings) { binding in
-                if binding.kind == .information {
+                if binding.kind == .information || binding.isReadOnly {
                     RipulAppearanceRow(binding: binding)
                 } else {
                     Button {
@@ -2168,7 +2182,7 @@ struct InspectorAppearanceTab: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            InspectorTokenSection(view: info.tokenAnchorView)
+            InspectorTokenSection(view: info.tokenAnchorView, selected: info.view)
 
             let textProperties = RipulElementText.properties(for: info.tokenAnchorView, identifier: info.accessibilityId)
             ForEach(textProperties) { assignment in
@@ -2887,17 +2901,17 @@ struct MacroSaveSheet: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("Name") {
+                Section(themed: "Name") {
                     TextField("clock_in", text: $name)
                         .autocorrectionDisabled()
                         .uiKitIdentifier("MacroSaveSheet.nameField")
                 }
-                Section("Description (what the agent reads to decide when to use this)") {
+                Section(themed: "Description (what the agent reads to decide when to use this)") {
                     TextField("Clocks in for the current shift.", text: $description, axis: .vertical)
                         .uiKitIdentifier("MacroSaveSheet.descriptionField")
                 }
                 if !detectedParameterNames.isEmpty {
-                    Section("Parameters") {
+                    Section(themed: "Parameters") {
                         ForEach(detectedParameterNames, id: \.self) { paramName in
                             TextField("What is {{\(paramName)}}?",
                                      text: Binding(get: { parameterDescriptions[paramName] ?? "" },
@@ -2905,7 +2919,7 @@ struct MacroSaveSheet: View {
                         }
                     }
                 }
-                Section("Steps (\(steps.count))") {
+                Section(themed: "Steps (\(steps.count))") {
                     ForEach(steps) { step in
                         Text(step.recordedLabel)
                             .font(.system(size: 12, design: .monospaced))
@@ -3266,7 +3280,7 @@ struct InspectorHUD: View {
         // The HUD always has a dark surface, even when its host app is light.
         // Resolve all adaptive labels and controls against that surface.
         .environment(\.colorScheme, .dark)
-        .sheet(item: $contextPreview) { draft in
+        .ripulSheet(item: $contextPreview) { draft in
             ComposerContextPreview(item: draft.item) { attachment in
                 draft.attach(attachment)
                 folded = true
@@ -3964,7 +3978,7 @@ public struct ViewInspectorOverlay: View {
                 } message: {
                     Text(recordingError ?? "")
                 }
-                .sheet(isPresented: $showSaveSheet) {
+                .ripulSheet(isPresented: $showSaveSheet) {
                     MacroSaveSheet(steps: recordedSteps, onSave: onSaveMacro, onDiscard: onDiscardRecording)
                 }
         }

@@ -49,7 +49,7 @@ public struct NoPairedMacView<Actions: View>: View {
                 HStack(spacing: 6) {
                     // A hidden twin of the help button, so the title stays centred.
                     helpIcon.hidden().accessibilityHidden(true)
-                    Text("No Paired Mac")
+                    Text("No Paired Mac").ripulEmptyStateTitle()
                     // Borderless: in a List row a plain button would take the whole row's tap.
                     Button { showingHelp = true } label: { helpIcon }
                         .buttonStyle(.borderless)
@@ -61,15 +61,16 @@ public struct NoPairedMacView<Actions: View>: View {
             }
         } description: {
             Text(purpose)
+                .ripulEmptyStateDescription()
         } actions: {
             actions
         }
-        .sheet(isPresented: $showingHelp) { ConnectMacHelpScreen(signedIn: signedIn) }
+        .ripulSheet(isPresented: $showingHelp) { ConnectMacHelpScreen(signedIn: signedIn) }
         .uiKitIdentifier("NoPairedMacView")
     }
 
     private var helpIcon: some View {
-        Image(systemName: "questionmark.circle").font(.body.weight(.regular))
+        Image(systemName: "questionmark.circle").font(.ripulIcon(.body, weight: .regular))
     }
 }
 

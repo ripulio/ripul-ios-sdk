@@ -68,14 +68,14 @@ struct ClaudeAccountSection: View {
     var body: some View {
         Section {
             if !machine.isOnline {
-                Text("Connect to this Mac to manage accounts.").foregroundStyle(.secondary)
+                Text("Connect to this Mac to manage accounts.").foregroundStyle(.ripul(.textSecondary))
             } else {
                 if loading && accounts.isEmpty {
                     ProgressView("Loading accounts…").uiKitIdentifier("ClaudeAccountSwitcherSheet.loading")
                 }
                 ForEach(accounts) { account in accountRow(account) }
                 if let error, !error.isEmpty {
-                    Text(error).font(.caption).foregroundStyle(.orange)
+                    Text(error).font(.ripul(.caption)).foregroundStyle(.ripul(.warning))
                     Button("Retry") { Task { await refresh() } }.disabled(loading)
                 }
                 if addingAccount {
@@ -96,18 +96,18 @@ struct ClaudeAccountSection: View {
                         .uiKitIdentifier("ClaudeAccountSwitcherSheet.addAccount")
                 }
             }
-        } header: {
+        } header: { RipulSectionHeader {
             HStack {
                 Label(machine.displayName, systemImage: "desktopcomputer")
                 Spacer()
                 if !machine.isOnline { Text("Offline") }
             }
-        } footer: {
+        } } footer: { RipulSectionFooter {
             if machine.isOnline {
                 Text("New sessions use the selected account. Running sessions switch after their current reply.")
                     .fixedSize(horizontal: false, vertical: true)
             }
-        }
+        } }
         .task(id: refreshToken) {
             repeat {
                 await refresh()
@@ -115,7 +115,7 @@ struct ClaudeAccountSection: View {
             } while !Task.isCancelled
         }
         .onChange(of: scenePhase) { phase in if phase == .active { Task { await refresh() } } }
-        .sheet(item: $signInProfile) { profile in
+        .ripulSheet(item: $signInProfile) { profile in
             HostSignInSheet(machine: machine, bridge: bridge, profile: profile.slug, profileName: profile.name,
                             startSignInImmediately: profile.loggedIn)
         }
@@ -152,21 +152,21 @@ struct ClaudeAccountSection: View {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 10) {
                     Image(systemName: "person.circle")
-                        .foregroundStyle(isActive ? Color.accentColor : Color.secondary)
+                        .foregroundStyle(isActive ? Color.accentColor : Color.ripul(.textSecondary))
                     VStack(alignment: .leading, spacing: 2) {
                         Text(account.isDefault ? "\(account.name) (this Mac's login)" : account.name)
-                            .font(.subheadline.weight(isActive ? .semibold : .regular))
-                            .foregroundStyle(.primary)
+                            .font(.ripul(.subheadline).weight(isActive ? .semibold : .regular))
+                            .foregroundStyle(.ripul(.text))
                         Text(account.email ?? (account.loggedIn ? "Signed in" : "Not signed in — tap to sign in"))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .font(.ripul(.caption))
+                            .foregroundStyle(.ripul(.textSecondary))
                     }
                     Spacer()
                     if switchingTo == account.slug {
                         ProgressView()
                     } else if isActive {
                         Image(systemName: "checkmark.circle.fill")
-                            .foregroundStyle(.green)
+                            .foregroundStyle(.ripul(.success))
                     }
                 }
                 if account.loggedIn {
@@ -178,11 +178,11 @@ struct ClaudeAccountSection: View {
         .buttonStyle(.plain)
         .disabled(loading || switchingTo != nil)
         .uiKitIdentifier("ClaudeAccountSwitcherSheet.accountRow.\(account.slug)")
-        .contextMenu {
+        .contextMenu { MenuIcons {
             if account.loggedIn {
                 Button("Sign in again", systemImage: "arrow.clockwise") { signInProfile = account }
             }
-        }
+        }}
         // The default profile is the Mac's own login — removing it would sign the Mac
         // out of Claude entirely, so only extra profiles offer removal.
         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
@@ -197,7 +197,7 @@ struct ClaudeAccountSection: View {
         }
         if account.loggedIn, account.usage?.error != nil {
             Button("Sign in again") { signInProfile = account }
-                .font(.subheadline)
+                .font(.ripul(.subheadline))
                 .disabled(loading || switchingTo != nil)
                 .uiKitIdentifier("ClaudeAccountSwitcherSheet.accountRow.\(account.slug).signInAgain")
         }

@@ -41,7 +41,7 @@ struct ComposerActionButtons: View {
         ForEach(actions) { action in
             Button { onAction?(action.id) } label: {
                 Image(systemName: action.sfSymbol)
-                    .font(.system(size: 16, weight: .semibold))
+                    .font(.ripulIcon(size: 16, weight: .semibold))
                     .frame(width: 36, height: 36)
                     .contentShape(Circle())
                     .modifier(GlassCircleModifier(glassStyle: "clear"))
@@ -89,12 +89,12 @@ struct ReplyTargetStrip: View {
                 .frame(width: 3)
             VStack(alignment: .leading, spacing: 2) {
                 Text(target.label)
-                    .font(.caption.weight(.semibold))
+                    .font(.ripul(.caption, weight: .semibold))
                     .foregroundStyle(Color.accentColor)
                     .lineLimit(1)
                 Text(target.excerpt)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+                    .font(.ripul(.footnote))
+                    .foregroundStyle(.ripul(.textSecondary))
                     .lineLimit(2)
             }
             Spacer(minLength: 0)
@@ -102,8 +102,8 @@ struct ReplyTargetStrip: View {
                 onCancel?()
             } label: {
                 Image(systemName: "xmark.circle.fill")
-                    .font(.body)
-                    .foregroundStyle(.secondary)
+                    .font(.ripulIcon(.body))
+                    .foregroundStyle(.ripul(.textSecondary))
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Cancel reply")

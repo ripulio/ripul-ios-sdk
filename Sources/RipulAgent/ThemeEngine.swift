@@ -71,6 +71,10 @@ public enum RipulKnob: Codable, Equatable {
 public struct RipulThemeDocument: Equatable {
     /// Palette name -> hex ("warmPurple" -> "6F2D80").
     public var primitives: [String: String] = [:]
+    /// Palette name -> the dark-appearance value, for the primitives the document writes
+    /// as `{ "light": …, "dark": … }`. `primitives` holds the light value. Empty for a
+    /// document of plain strings, which then reads and writes exactly as before.
+    public var primitivesDark: [String: String] = [:]
     /// Semantic label -> reference (a primitive name, ANOTHER label, or a literal hex).
     public var semantic: [String: String] = [:]
     /// Component token -> reference (another component, a semantic label, a primitive, or hex).
@@ -99,12 +103,41 @@ extension RipulThemeDocument: Codable {
         init?(intValue: Int) { return nil }
     }
 
+    /// A palette entry: a colour string, or a light and dark pair.
+    private enum PaletteEntry: Codable {
+        case single(String)
+        case pair(light: String, dark: String)
+        private enum Keys: String, CodingKey { case light, dark }
+
+        init(from decoder: Decoder) throws {
+            if let string = try? decoder.singleValueContainer().decode(String.self) { self = .single(string); return }
+            let c = try decoder.container(keyedBy: Keys.self)
+            let light = try c.decode(String.self, forKey: .light)
+            self = .pair(light: light, dark: try c.decodeIfPresent(String.self, forKey: .dark) ?? light)
+        }
+
+        func encode(to encoder: Encoder) throws {
+            switch self {
+            case .single(let string):
+                var c = encoder.singleValueContainer(); try c.encode(string)
+            case .pair(let light, let dark):
+                var c = encoder.container(keyedBy: Keys.self)
+                try c.encode(light, forKey: .light); try c.encode(dark, forKey: .dark)
+            }
+        }
+    }
+
     public init(from decoder: Decoder) throws {
         self.init()
         let spec = decoder.userInfo[.ripulThemeSpec] as? RipulThemeSpec
         let c = try decoder.container(keyedBy: SliceKeys.self)
         let paletteKey = spec?.primitivesKey ?? "colors"
-        primitives = try c.decodeIfPresent([String: String].self, forKey: SliceKeys(stringValue: paletteKey)!) ?? [:]
+        for (name, entry) in try c.decodeIfPresent([String: PaletteEntry].self, forKey: SliceKeys(stringValue: paletteKey)!) ?? [:] {
+            switch entry {
+            case .single(let string): primitives[name] = string
+            case .pair(let light, let dark): primitives[name] = light; primitivesDark[name] = dark
+            }
+        }
         let semanticKey = spec?.semanticKey ?? "semantic"
         semantic = try c.decodeIfPresent([String: String].self, forKey: SliceKeys(stringValue: semanticKey)!) ?? [:]
         let componentsKey = spec?.componentsKey ?? "components"
@@ -125,7 +158,16 @@ extension RipulThemeDocument: Codable {
     public func encode(to encoder: Encoder) throws {
         let spec = encoder.userInfo[.ripulThemeSpec] as? RipulThemeSpec
         var c = encoder.container(keyedBy: SliceKeys.self)
-        try c.encode(primitives, forKey: SliceKeys(stringValue: spec?.primitivesKey ?? "colors")!)
+        let paletteKey = SliceKeys(stringValue: spec?.primitivesKey ?? "colors")!
+        if primitivesDark.isEmpty {
+            try c.encode(primitives, forKey: paletteKey)
+        } else {
+            var entries: [String: PaletteEntry] = [:]
+            for (name, light) in primitives {
+                entries[name] = primitivesDark[name].map { .pair(light: light, dark: $0) } ?? .single(light)
+            }
+            try c.encode(entries, forKey: paletteKey)
+        }
         try c.encode(semantic, forKey: SliceKeys(stringValue: spec?.semanticKey ?? "semantic")!)
         try c.encode(components, forKey: SliceKeys(stringValue: spec?.componentsKey ?? "components")!)
         try c.encode(elementColors, forKey: SliceKeys(stringValue: "elementColors")!)
@@ -589,19 +631,20 @@ public enum RipulThemeEngine {
         return try? d.decode(RipulThemeDocument.self, from: data)
     }
 
-    private static func loadBundled() -> RipulThemeDocument? {
+    private static func bundledData() -> Data? {
         guard let spec,
-              let url = Bundle.main.url(forResource: spec.bundleResource, withExtension: "json"),
-              let data = try? Data(contentsOf: url) else { return nil }
-        return decode(data)
+              let url = Bundle.main.url(forResource: spec.bundleResource, withExtension: "json") else { return nil }
+        return try? Data(contentsOf: url)
     }
 
-    private static func loadOverride() -> RipulThemeDocument? {
-        guard let spec,
-              let json = UserDefaults.standard.string(forKey: spec.overrideDefaultsKey),
-              let data = json.data(using: .utf8) else { return nil }
-        return decode(data)
+    private static func overrideData() -> Data? {
+        guard let spec else { return nil }
+        return UserDefaults.standard.string(forKey: spec.overrideDefaultsKey)?.data(using: .utf8)
     }
+
+    private static func loadBundled() -> RipulThemeDocument? { bundledData().flatMap(decode) }
+
+    private static func loadOverride() -> RipulThemeDocument? { overrideData().flatMap(decode) }
 
     public static var hasOverride: Bool {
         guard let spec else { return false }
@@ -840,7 +883,7 @@ public enum RipulThemeEngine {
             return color(component: ref, chain: chain.union([ref])).ripulTagged(name)
         }
         if isSemanticLabel(ref) { return color(label: ref).ripulTagged(name) }
-        if let hex = primitiveHex(ref), let resolved = UIColor(ripulHexString: hex) {
+        if let resolved = primitiveColour(ref) {
             return resolved.ripulTagged(name)
         }
         guard let resolved = UIColor(ripulHexString: ref) else { return .magenta }
@@ -858,7 +901,7 @@ public enum RipulThemeEngine {
             guard !chain.contains(target), isSemanticLabel(target) else { return .magenta }
             return color(label: target, chain: chain.union([target])).ripulTagged(name)
         }
-        if let hex = primitiveHex(ref), let resolved = UIColor(ripulHexString: hex) {
+        if let resolved = primitiveColour(ref) {
             return resolved.ripulTagged(name)
         }
         if isSemanticLabel(ref), !chain.contains(ref) {
@@ -866,6 +909,15 @@ public enum RipulThemeEngine {
         }
         guard let resolved = UIColor(ripulHexString: ref) else { return .magenta }
         return resolved.ripulTagged(name)
+    }
+
+    /// A primitive's colour: one dynamic colour when the document gives it a dark value.
+    /// Always a fresh object, so the caller may tag it.
+    private static func primitiveColour(_ name: String) -> UIColor? {
+        guard let hex = primitiveHex(name), let light = UIColor(ripulHexString: hex) else { return nil }
+        let key = name.hasPrefix("palette:") ? String(name.dropFirst(8)) : name
+        guard let dark = current.primitivesDark[key].flatMap({ UIColor(ripulHexString: $0) }) else { return light }
+        return UIColor { $0.userInterfaceStyle == .dark ? dark.resolvedColor(with: $0) : light.resolvedColor(with: $0) }
     }
 
     /// Resolve a token NAME — a component token OR a semantic label — to its colour.

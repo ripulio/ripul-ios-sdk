@@ -79,4 +79,31 @@ public extension View {
                     selection: Binding<PresentationDetent>? = nil) -> some View {
         modifier(RipulSheetPresentation(size: size, detents: detents, selection: selection))
     }
+
+    /// Use these in place of SwiftUI's `.sheet(isPresented:)` and
+    /// `.sheet(item:)`. They present the same sheet, sized for a desktop
+    /// window on Catalyst unless the call says otherwise, so a new sheet is
+    /// right there without anyone remembering to size it. A bare `.sheet`
+    /// gets UIKit's phone-sized box on Catalyst; `scripts/check_sheet_sizing.py`
+    /// in the native app refuses one.
+    ///
+    /// The content is a theme root (`ripulThemeRoot()`), so a sheet follows the theme
+    /// without its call site saying so.
+    ///
+    /// When the content declares a size of its own with `ripulSheet(_:detents:)`
+    /// and it is not `.page`, pass the same `size` here: which of the two
+    /// declarations SwiftUI honours is not documented.
+    func ripulSheet<Content: View>(isPresented: Binding<Bool>,
+                                   size: RipulSheetSize = .page,
+                                   onDismiss: (() -> Void)? = nil,
+                                   @ViewBuilder content: @escaping () -> Content) -> some View {
+        sheet(isPresented: isPresented, onDismiss: onDismiss) { content().ripulSheet(size).ripulThemeRoot() }
+    }
+
+    func ripulSheet<Item: Identifiable, Content: View>(item: Binding<Item?>,
+                                                       size: RipulSheetSize = .page,
+                                                       onDismiss: (() -> Void)? = nil,
+                                                       @ViewBuilder content: @escaping (Item) -> Content) -> some View {
+        sheet(item: item, onDismiss: onDismiss) { content($0).ripulSheet(size).ripulThemeRoot() }
+    }
 }

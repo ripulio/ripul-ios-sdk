@@ -1,7 +1,7 @@
 #if os(iOS)
 import UIKit
 
-/// Identifiable wrapper so `.sheet(item:)` carries the URL into the sheet.
+/// Identifiable wrapper so `.ripulSheet(item:)` carries the URL into the sheet.
 public struct InviteSheetItem: Identifiable {
     public let id = UUID()
     public let shareURL: String

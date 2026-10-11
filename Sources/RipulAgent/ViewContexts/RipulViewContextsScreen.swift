@@ -17,25 +17,25 @@ public struct RipulViewContextsScreen: View {
         List {
             if let error {
                 Section {
-                    Text(error).foregroundStyle(.red)
+                    Text(error).foregroundStyle(.ripul(.danger))
                     Button("Retry") { Task { await load() } }
                 }
             }
             if loading { ProgressView("Loading view contexts…") }
             if !loading && contexts.isEmpty && error == nil {
                 Text("No view contexts yet. Add one to configure tabs and chat features.")
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.ripul(.textSecondary))
             }
             ForEach(contexts.filter { search.isEmpty || $0.name.localizedCaseInsensitiveContains(search) || $0.id.localizedCaseInsensitiveContains(search) }) { context in
                 Button { creating = false; editing = context } label: {
                     VStack(alignment: .leading, spacing: 4) {
                         HStack {
-                            Text(context.name).font(.headline)
-                            if context.isSystem { Label("System", systemImage: "lock").font(.caption) }
+                            Text(context.name).font(.ripul(.headline))
+                            if context.isSystem { Label("System", systemImage: "lock").font(.ripul(.caption)) }
                         }
-                        if !context.description.isEmpty { Text(context.description).font(.subheadline) }
-                        Text(context.id).font(.caption).foregroundStyle(.secondary)
-                    }.foregroundStyle(.primary)
+                        if !context.description.isEmpty { Text(context.description).font(.ripul(.subheadline)) }
+                        Text(context.id).font(.ripul(.caption)).foregroundStyle(.ripul(.textSecondary))
+                    }.foregroundStyle(.ripul(.text))
                 }
                 .uiKitIdentifier("RipulViewContexts.row.\(context.id)")
             }
@@ -54,7 +54,7 @@ public struct RipulViewContextsScreen: View {
         }
         .task { await load() }
         .refreshable { await load() }
-        .sheet(item: $editing) { context in
+        .ripulSheet(item: $editing) { context in
             NavigationStack {
                 RipulViewContextEditor(context: context, creating: creating, client: client) {
                     await load()
@@ -96,7 +96,7 @@ private struct RipulViewContextEditor: View {
 
     var body: some View {
         Form {
-            if let error { Section { Text(error).foregroundStyle(.red) } }
+            if let error { Section { Text(error).foregroundStyle(.ripul(.danger)) } }
             if context.isSystem { Section { Label("System contexts are read-only.", systemImage: "lock") } }
             Group {
                 identitySection
@@ -167,9 +167,9 @@ private struct RipulViewContextEditor: View {
                     Text("\(context.defaultTabId) (not selected)").tag(context.defaultTabId)
                 }
             }
-        } header: { Text("Details and navigation") } footer: {
+        } header: { RipulSectionHeader { Text("Details and navigation") } } footer: { RipulSectionFooter {
             Text("Use tab IDs from your solution, separated by commas. The default tab must be selected. IDs may contain letters, numbers, underscores and hyphens.")
-        }.disabled(context.isSystem)
+        } }.disabled(context.isSystem)
     }
 
     @MainActor private func save(delete: Bool = false) async {
@@ -243,7 +243,7 @@ private struct RipulViewFeatureControl: View {
                             values[field.key] = value; invalidNumbers.remove(field.key)
                         } else { invalidNumbers.insert(field.key) }
                     }
-                if invalidNumbers.contains(field.key) { Text("Enter a non-negative number.").foregroundStyle(.red) }
+                if invalidNumbers.contains(field.key) { Text("Enter a non-negative number.").foregroundStyle(.ripul(.danger)) }
             case .allowlist:
                 Picker(field.title, selection: Binding(
                     get: { values[field.key] is [String] ? "custom" : (values[field.key] as? Bool).map { $0 ? "all" : "none" } ?? "default" },
@@ -266,7 +266,7 @@ private struct RipulViewFeatureControl: View {
                     )).textInputAutocapitalization(.never).autocorrectionDisabled()
                 }
             }
-        } header: { Text(field.title) }
+        } header: { RipulSectionHeader { Text(field.title) } }
         .uiKitIdentifier("RipulViewContexts.\(field.key)")
     }
 }
@@ -284,7 +284,7 @@ private struct RipulViewActionButtons: View {
             ))
             if features["chatActionButtons"] != nil {
                 ForEach(buttons.indices, id: \.self) { index in
-                    Section("Button \(index + 1)") {
+                    Section(themed: "Button \(index + 1)") {
                         ForEach(["id", "label", "icon", "tooltip", "eventName"], id: \.self) { key in
                             TextField(key, text: Binding(
                                 get: { buttons.indices.contains(index) ? buttons[index][key] as? String ?? "" : "" },

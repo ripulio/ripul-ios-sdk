@@ -89,8 +89,8 @@ public struct RipulSiteKeysScreen: View {
             if let error = model.errorMessage {
                 Section {
                     Label(error, systemImage: "exclamationmark.triangle")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
+                        .font(.ripul(.footnote))
+                        .foregroundStyle(.ripul(.textSecondary))
                 }
             }
             Section {
@@ -100,18 +100,18 @@ public struct RipulSiteKeysScreen: View {
                 }
                 if model.siteKeys.isEmpty && !model.loading {
                     Text("No site keys.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
+                        .font(.ripul(.footnote))
+                        .foregroundStyle(.ripul(.textSecondary))
                 }
-            } footer: {
+            } footer: { RipulSectionFooter {
                 Text("A context only reaches real sessions once a key allows it. The default is what sessions boot into; surfaces let an app screen ask for a context by name.")
-            }
+            } }
         }
         .uiKitIdentifier("RipulSiteKeys.list")
         .navigationTitle("Site Keys")
         .refreshable { await model.load() }
         .task { await model.load() }
-        .sheet(item: $editing) { key in
+        .ripulSheet(item: $editing) { key in
             NavigationStack {
                 RipulSiteKeyContextEditorView(model: model, key: key)
             }
@@ -122,20 +122,20 @@ public struct RipulSiteKeysScreen: View {
     private func keyRow(_ key: RipulSiteKeySummary) -> some View {
         HStack(spacing: 10) {
             Image(systemName: key.hasContextBinding ? "key.fill" : "key")
-                .foregroundStyle(key.hasContextBinding ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
+                .foregroundStyle(key.hasContextBinding ? AnyShapeStyle(.tint) : AnyShapeStyle(.ripul(.textSecondary)))
                 .frame(width: 24)
             VStack(alignment: .leading, spacing: 2) {
                 Text(key.name)
-                    .font(.subheadline.weight(.semibold))
+                    .font(.ripul(.subheadline, weight: .semibold))
                 Text(summary(key))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(.ripul(.caption))
+                    .foregroundStyle(.ripul(.textSecondary))
                     .lineLimit(2)
             }
             Spacer()
             Image(systemName: "chevron.right")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
+                .font(.ripulIcon(.caption))
+                .foregroundStyle(.ripul(.textTertiary))
         }
         .contentShape(Rectangle())
     }
@@ -177,7 +177,7 @@ struct RipulSiteKeyContextEditorView: View {
                         "This key inherits its contexts from \(delegate). Changes here are stored but ignored at runtime until the delegation is removed.",
                         systemImage: "exclamationmark.triangle"
                     )
-                    .font(.footnote)
+                    .font(.ripul(.footnote))
                 }
             }
 
@@ -189,10 +189,10 @@ struct RipulSiteKeyContextEditorView: View {
                         HStack {
                             VStack(alignment: .leading, spacing: 1) {
                                 Text(context.name)
-                                    .foregroundStyle(.primary)
+                                    .foregroundStyle(.ripul(.text))
                                 Text(context.id)
-                                    .font(.caption.monospaced())
-                                    .foregroundStyle(.secondary)
+                                    .font(.ripul(.caption, family: .code))
+                                    .foregroundStyle(.ripul(.textSecondary))
                             }
                             Spacer()
                             if allowed.contains(context.id) {
@@ -204,13 +204,13 @@ struct RipulSiteKeyContextEditorView: View {
                     }
                     .buttonStyle(.plain)
                 }
-            } header: {
+            } header: { RipulSectionHeader {
                 Text("Allowed contexts")
-            } footer: {
+            } } footer: { RipulSectionFooter {
                 Text(allowed.isEmpty
                      ? "None selected: this key's sessions run with no context — every tool available, no curated prompt."
                      : "Sessions may enter any of these; anything else is refused by the server.")
-            }
+            } }
 
             if !allowed.isEmpty {
                 Section {
@@ -222,17 +222,17 @@ struct RipulSiteKeyContextEditorView: View {
                             Text(model.name(forContextId: id)).tag(id)
                         }
                     }
-                } header: {
+                } header: { RipulSectionHeader {
                     Text("Default context")
-                } footer: {
+                } } footer: { RipulSectionFooter {
                     Text("What a session boots into when it doesn't ask for a specific context or surface.")
-                }
+                } }
 
                 Section {
                     ForEach(surfaceMap.keys.sorted(), id: \.self) { surface in
                         HStack {
                             Text(surface)
-                                .font(.callout.monospaced())
+                                .font(.ripul(.callout, family: .code))
                             Spacer()
                             Picker("", selection: Binding(
                                 get: { surfaceMap[surface] ?? allowed.first ?? "" },
@@ -253,7 +253,7 @@ struct RipulSiteKeyContextEditorView: View {
                         TextField("surface name (e.g. records)", text: $newSurfaceName)
                             .autocorrectionDisabled()
                             .textInputAutocapitalization(.never)
-                            .font(.callout.monospaced())
+                            .font(.ripul(.callout, family: .code))
                         Button("Add") {
                             let name = newSurfaceName.trimmingCharacters(in: .whitespaces)
                             guard !name.isEmpty, let first = allowed.first else { return }
@@ -262,11 +262,11 @@ struct RipulSiteKeyContextEditorView: View {
                         }
                         .disabled(newSurfaceName.trimmingCharacters(in: .whitespaces).isEmpty)
                     }
-                } header: {
+                } header: { RipulSectionHeader {
                     Text("Surfaces")
-                } footer: {
+                } } footer: { RipulSectionFooter {
                     Text("An app screen asks for a context by name (surface=records). Re-pointing a screen then becomes a config change here, not an app release.")
-                }
+                } }
             }
         }
         .navigationTitle(key.name)

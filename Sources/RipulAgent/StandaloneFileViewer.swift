@@ -85,7 +85,7 @@ public struct StandaloneFileViewer: View {
 
     public var body: some View {
         ZStack(alignment: .top) {
-            (colorScheme == .dark ? Color.black : Color.white)
+            (colorScheme == .dark ? Color.ripul(system: .black) : Color.ripul(system: .white))
                 .ignoresSafeArea()
 
             // Kept invisible until the page's own first navigation finishes loading
@@ -149,8 +149,8 @@ public struct StandaloneFileViewer: View {
         HStack(spacing: 8) {
             HStack(spacing: 6) {
                 Image(systemName: "magnifyingglass")
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundColor(Color(uiColor: .secondaryLabel))
+                    .font(.ripulIcon(size: 14, weight: .medium))
+                    .foregroundColor(Color.ripul(system: .secondaryLabel))
                     .uiKitIdentifier("StandaloneFileViewer.search.icon")
 
                 TextField("Find in file", text: $searchQuery)
@@ -158,8 +158,8 @@ public struct StandaloneFileViewer: View {
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled(true)
                     .submitLabel(.search)
-                    .font(.body)
-                    .foregroundColor(Color(uiColor: .label))
+                    .font(.ripul(.body))
+                    .foregroundColor(Color.ripul(system: .label))
                     .uiKitIdentifier("StandaloneFileViewer.search.textField")
                     .onChange(of: searchQuery) { _, newValue in
                         Task { await runFind(newValue) }
@@ -170,13 +170,13 @@ public struct StandaloneFileViewer: View {
 
                 if matchTotal > 0 {
                     Text("\(matchCurrent) of \(matchTotal)")
-                        .font(.caption.monospacedDigit())
-                        .foregroundColor(Color(uiColor: .secondaryLabel))
+                        .font(.ripul(.caption).monospacedDigit())
+                        .foregroundColor(Color.ripul(system: .secondaryLabel))
                         .uiKitIdentifier("StandaloneFileViewer.search.matchCount")
                 } else if !searchQuery.isEmpty {
                     Text("No matches")
-                        .font(.caption)
-                        .foregroundColor(Color(uiColor: .secondaryLabel))
+                        .font(.ripul(.caption))
+                        .foregroundColor(Color.ripul(system: .secondaryLabel))
                         .uiKitIdentifier("StandaloneFileViewer.search.noMatches")
                 }
 
@@ -184,7 +184,7 @@ public struct StandaloneFileViewer: View {
                     Task { await runFindPrev() }
                 } label: {
                     Image(systemName: "chevron.up")
-                        .font(.system(size: 14, weight: .semibold))
+                        .font(.ripulIcon(size: 14, weight: .semibold))
                         .frame(width: 28, height: 28)
                 }
                 .disabled(matchTotal == 0)
@@ -194,7 +194,7 @@ public struct StandaloneFileViewer: View {
                     Task { await runFindNext() }
                 } label: {
                     Image(systemName: "chevron.down")
-                        .font(.system(size: 14, weight: .semibold))
+                        .font(.ripulIcon(size: 14, weight: .semibold))
                         .frame(width: 28, height: 28)
                 }
                 .disabled(matchTotal == 0)
@@ -204,14 +204,14 @@ public struct StandaloneFileViewer: View {
             .padding(.vertical, 6)
             .background(
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(Color(uiColor: .secondarySystemBackground))
+                    .fill(Color.ripul(system: .secondarySystemBackground))
             )
 
             Button("Done") {
                 exitSearchMode()
             }
             .uiKitIdentifier("StandaloneFileViewer.search.doneButton")
-            .font(.body)
+            .font(.ripul(.body))
             .foregroundColor(.accentColor)
         }
         .padding(.horizontal, 12)

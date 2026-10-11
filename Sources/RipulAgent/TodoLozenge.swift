@@ -49,18 +49,18 @@ public struct TodoLozenge: View {
             VStack(spacing: 1) {
                 HStack(spacing: 4) {
                     Image(systemName: allDone ? "checkmark.circle.fill" : "list.bullet.clipboard")
-                        .font(.caption2)
+                        .font(.ripulIcon(.caption2))
                     Text("\(completed)/\(total)")
-                        .font(.caption2.monospacedDigit())
+                        .font(.ripul(.caption2).monospacedDigit())
                 }
-                .foregroundStyle(allDone ? Color.green : Color.secondary)
+                .foregroundStyle(allDone ? Color.ripul(.success) : Color.ripul(.textSecondary))
 
                 Text(allDone ? "Plan done" : (inProgress?.activeForm ?? inProgress?.content ?? "Plan"))
-                    .font(.caption)
+                    .font(.ripul(.caption))
                     .fontWeight(.semibold)
                     .lineLimit(1)
                     .truncationMode(.tail)
-                    .foregroundStyle(allDone ? Color.green : Color.primary)
+                    .foregroundStyle(allDone ? Color.ripul(.success) : Color.ripul(.text))
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
@@ -68,7 +68,7 @@ public struct TodoLozenge: View {
         }
         .buttonStyle(.plain)
         #if os(iOS)
-        .sheet(isPresented: $showingExpanded) {
+        .ripulSheet(isPresented: $showingExpanded) {
             NavigationView {
                 TodoListExpandedView(state: state) {
                     bridge.dismissTodoState(chatId: chatId)
@@ -120,17 +120,17 @@ public struct TodoListExpandedView: View {
                 ForEach(Array(state.todos.enumerated()), id: \.offset) { _, todo in
                     TodoRow(todo: todo)
                 }
-            } header: {
+            } header: { RipulSectionHeader {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("\(completed) of \(total) complete")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                        .font(.ripul(.subheadline))
+                        .foregroundStyle(.ripul(.textSecondary))
                     ProgressView(value: fraction)
-                        .tint(.green)
+                        .tint(Color.ripul(.success))
                 }
                 .textCase(nil)
                 .padding(.vertical, 6)
-            }
+            } }
 
             Section {
                 Button(role: .destructive, action: onDismiss) {
@@ -156,12 +156,12 @@ private struct TodoRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(todo.content)
                     .strikethrough(todo.status == "completed")
-                    .font(.body)
-                    .foregroundStyle(todo.status == "completed" ? Color.secondary : Color.primary)
+                    .font(.ripul(.body))
+                    .foregroundStyle(todo.status == "completed" ? Color.ripul(.textSecondary) : Color.ripul(.text))
                 if todo.status == "in_progress", let activeForm = todo.activeForm {
                     Text(activeForm)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
+                        .font(.ripul(.footnote))
+                        .foregroundStyle(.ripul(.textSecondary))
                 }
             }
         } icon: {
@@ -174,13 +174,13 @@ private struct TodoRow: View {
         switch todo.status {
         case "completed":
             Image(systemName: "checkmark.circle.fill")
-                .foregroundStyle(.green)
+                .foregroundStyle(.ripul(.success))
         case "in_progress":
             Image(systemName: "circle.lefthalf.filled")
-                .foregroundStyle(.blue)
+                .foregroundStyle(.ripul(.info))
         default:
             Image(systemName: "circle")
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.ripul(.textSecondary))
         }
     }
 }

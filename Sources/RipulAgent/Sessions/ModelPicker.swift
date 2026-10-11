@@ -121,6 +121,8 @@ public struct ModelPickerSections: View {
     let onRetry: (() -> Void)?
     let onEdit: ((ModelInfo) -> Void)?
     let onDelete: ((ModelInfo) -> Void)?
+    let onPersonalise: ((ModelInfo) -> Void)?
+    let onDeletePersonal: ((ModelInfo) -> Void)?
     /// Called with the picked model, or nil for the "Default" row.
     ///
     /// **Optional**: when it is nil the picker isn't choosing anything, it is
@@ -150,6 +152,8 @@ public struct ModelPickerSections: View {
         onRetry: (() -> Void)? = nil,
         onEdit: ((ModelInfo) -> Void)? = nil,
         onDelete: ((ModelInfo) -> Void)? = nil,
+        onPersonalise: ((ModelInfo) -> Void)? = nil,
+        onDeletePersonal: ((ModelInfo) -> Void)? = nil,
         onPick: ((ModelInfo?) -> Void)? = nil
     ) {
         self.models = models
@@ -168,6 +172,8 @@ public struct ModelPickerSections: View {
         self.onRetry = onRetry
         self.onEdit = onEdit
         self.onDelete = onDelete
+        self.onPersonalise = onPersonalise
+        self.onDeletePersonal = onDeletePersonal
         self.onPick = onPick
     }
 
@@ -227,7 +233,7 @@ public struct ModelPickerSections: View {
                 // of the way while a query is active.
                 if !searching {
                     if let effort {
-                        Section("Reasoning effort") { effortRow(effort) }
+                        Section(themed: "Reasoning effort") { effortRow(effort) }
                     }
                     if showsDefaultRow {
                         Section { defaultRow }
@@ -235,7 +241,7 @@ public struct ModelPickerSections: View {
                 }
 
                 if searching {
-                    Section(matches.isEmpty ? "No matches" : "Results") {
+                    Section(themed: matches.isEmpty ? "No matches" : "Results") {
                         ForEach(matches) { row(for: $0) }
                     }
                 } else {
@@ -243,20 +249,20 @@ public struct ModelPickerSections: View {
                         Section {
                             ForEach(pinnedModels) { row(for: $0) }
                                 .onMove(perform: movePinned)
-                        } header: {
+                        } header: { RipulSectionHeader {
                             Text("Pinned")
-                        } footer: {
+                        } } footer: { RipulSectionFooter {
                             Text("Also the quick-start circles, in this order, left to right. Drag to reorder; tap the pin to remove.")
-                        }
+                        } }
                     }
                     ForEach(sections(for: unpinned)) { section in
                         Section {
                             ForEach(section.models) { row(for: $0) }
-                        } header: {
+                        } header: { RipulSectionHeader {
                             Text(section.title)
-                        } footer: {
+                        } } footer: { RipulSectionFooter {
                             if let footer = section.footer { Text(footer) }
-                        }
+                        } }
                     }
                 }
             }
@@ -275,11 +281,11 @@ public struct ModelPickerSections: View {
         if let loadFailure {
             VStack(alignment: .leading, spacing: 8) {
                 Label("Failed to load models", systemImage: "exclamationmark.triangle")
-                    .font(.subheadline.weight(.medium))
+                    .font(.ripul(.subheadline, weight: .medium))
                     .uiKitIdentifier("\(identifierPrefix).error.title")
                 Text(loadFailure)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(.ripul(.caption))
+                    .foregroundStyle(.ripul(.textSecondary))
                     .uiKitIdentifier("\(identifierPrefix).error.message")
                 if let onRetry {
                     Button("Retry", action: onRetry)
@@ -293,14 +299,14 @@ public struct ModelPickerSections: View {
                 ProgressView().controlSize(.small)
                     .uiKitIdentifier("\(identifierPrefix).loading.spinner")
                 Text("Loading models…")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    .font(.ripul(.subheadline))
+                    .foregroundStyle(.ripul(.textSecondary))
                     .uiKitIdentifier("\(identifierPrefix).loading.label")
             }
         } else {
             Text("No models available yet.")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+                .font(.ripul(.subheadline))
+                .foregroundStyle(.ripul(.textSecondary))
                 .uiKitIdentifier("\(identifierPrefix).empty.label")
         }
     }
@@ -342,7 +348,9 @@ public struct ModelPickerSections: View {
             out.append(PickerSection(
                 id: "cli:\(key)",
                 title: provider.displayLabel,
-                footer: "Runs through the \(provider.displayLabel) harness you signed in on that machine — spends that account's allowance, not Ripul's API credits. Needs a machine.",
+                footer: key == ProviderConstants.shellProviderKey
+                    ? "A terminal on that machine: each message runs as a command, and the reply is its output. No model, so nothing is spent. Needs a machine."
+                    : "Runs through the \(provider.displayLabel) harness you signed in on that machine — spends that account's allowance, not Ripul's API credits. Needs a machine.",
                 models: sortedForDisplay(bucket)
             ))
         }
@@ -393,7 +401,7 @@ public struct ModelPickerSections: View {
         } label: {
             HStack {
                 Text("Default")
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(.ripul(.text))
                     .uiKitIdentifier("\(identifierPrefix).defaultModelRow.label")
                 Spacer()
                 if selectedId == nil {
@@ -409,22 +417,22 @@ public struct ModelPickerSections: View {
     }
 
     private func effortRow(_ effort: ModelPickerEffort) -> some View {
-        Menu {
+        Menu { MenuIcons {
             Button(effort.defaultLevel.map { "Default (\(ModelPickerEffort.label($0)))" } ?? "Default") {
                 effort.onChange(nil)
             }
             ForEach(effort.levels, id: \.self) { level in
                 Button(ModelPickerEffort.label(level)) { effort.onChange(level) }
             }
-        } label: {
+        }} label: {
             HStack {
-                Text("Effort").foregroundStyle(.primary)
+                Text("Effort").foregroundStyle(.ripul(.text))
                 Spacer()
                 Text(effort.current.map(ModelPickerEffort.label) ?? "Default")
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.ripul(.textSecondary))
                 Image(systemName: "chevron.up.chevron.down")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+                    .font(.ripulIcon(.caption2))
+                    .foregroundStyle(.ripul(.textSecondary))
             }
             .contentShape(Rectangle())
         }
@@ -448,12 +456,12 @@ public struct ModelPickerSections: View {
                         .frame(width: 24)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(model.name)
-                            .font(.body)
-                            .foregroundStyle(available ? .primary : .secondary)
+                            .font(.ripul(.body))
+                            .foregroundStyle(available ? .ripul(.text) : .ripul(.textSecondary))
                             .uiKitIdentifier("\(identifierPrefix).modelRow.\(model.id).name")
                         Text(subtitle(for: target, available: available))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .font(.ripul(.caption))
+                            .foregroundStyle(.ripul(.textSecondary))
                             .lineLimit(1)
                             .uiKitIdentifier("\(identifierPrefix).modelRow.\(model.id).subtitle")
                     }
@@ -470,22 +478,68 @@ public struct ModelPickerSections: View {
             .disabled(!available)
             .uiKitIdentifier("\(identifierPrefix).modelRow.\(model.id)")
 
+            // What a chat on this model is given. On the row, not behind a
+            // swipe: nobody found it there.
+            if let onPersonalise, model.canPersonalise == true || model.personalOf != nil {
+                Button { onPersonalise(model) } label: {
+                    Text("Edit Tools")
+                        .font(.ripul(.caption))
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .uiKitIdentifier("\(identifierPrefix).modelRow.\(model.id).editTools")
+            }
+
             if cache != nil {
                 pinButton(for: model)
             }
         }
         .padding(.vertical, 2)
         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-            if let onDelete, model.isCli {
-                Button(role: .destructive) { onDelete(model) } label: {
-                    Label("Delete", systemImage: "trash")
+            // A person's own entry is theirs to change; it is not a catalog
+            // row, so the catalog's Edit and Delete are not offered on it.
+            if model.personalOf != nil {
+                if let onDeletePersonal {
+                    Button(role: .destructive) { onDeletePersonal(model) } label: {
+                        Label("Remove", systemImage: "trash")
+                    }
+                }
+                if let onPersonalise {
+                    Button { onPersonalise(model) } label: {
+                        Label("Edit Tools", systemImage: "slider.horizontal.3")
+                    }
+                    .tint(Color.ripul(.info))
+                }
+            } else {
+                if let onDelete, model.isCli {
+                    Button(role: .destructive) { onDelete(model) } label: {
+                        Label("Delete", systemImage: "trash")
+                    }
+                }
+                if let onEdit, model.isCli {
+                    Button { onEdit(model) } label: {
+                        Label("Edit", systemImage: "pencil")
+                    }
+                    .tint(Color.ripul(.info))
+                }
+                if let onPersonalise, model.canPersonalise == true {
+                    Button { onPersonalise(model) } label: {
+                        Label("Edit Tools", systemImage: "slider.horizontal.3")
+                    }
+                    .tint(Color.ripul(system: .systemTeal))
                 }
             }
-            if let onEdit, model.isCli {
-                Button { onEdit(model) } label: {
-                    Label("Edit", systemImage: "pencil")
+        }
+        .contextMenu {
+            if model.personalOf != nil {
+                if let onPersonalise {
+                    Button { onPersonalise(model) } label: { Label("Edit Tools or Name", systemImage: "slider.horizontal.3") }
                 }
-                .tint(.blue)
+                if let onDeletePersonal {
+                    Button(role: .destructive) { onDeletePersonal(model) } label: { Label("Remove", systemImage: "trash") }
+                }
+            } else if let onPersonalise, model.canPersonalise == true {
+                Button { onPersonalise(model) } label: { Label("Edit Tools or Make a Copy", systemImage: "slider.horizontal.3") }
             }
         }
     }
@@ -496,11 +550,11 @@ public struct ModelPickerSections: View {
             ProgressView().controlSize(.small)
         } else if let identity = target.identity {
             Text(identity.glyph)
-                .font(.system(size: 15, weight: .semibold))
+                .font(.ripul(size: 15, weight: .semibold))
                 .foregroundStyle(identity.color)
         } else {
             Image(systemName: target.providerSymbol ?? "message.fill")
-                .font(.system(size: 13, weight: .semibold))
+                .font(.ripulIcon(size: 13, weight: .semibold))
                 .foregroundStyle(target.color)
         }
     }
@@ -513,8 +567,8 @@ public struct ModelPickerSections: View {
             togglePin(model)
         } label: {
             Image(systemName: pinned ? "pin.fill" : "pin")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(pinned ? Color.accentColor : Color.secondary)
+                .font(.ripulIcon(size: 12, weight: .semibold))
+                .foregroundStyle(pinned ? Color.accentColor : Color.ripul(.textSecondary))
                 .frame(width: 28, height: 28)
                 .contentShape(Rectangle())
         }
@@ -535,6 +589,7 @@ public struct ModelPickerSections: View {
     private func billingLabel(for target: QuickLaunchTarget) -> String {
         if target.model.isSubscription { return "Your Claude subscription" }
         guard let key = target.providerKey else { return "Ripul platform credits" }
+        if key == ProviderConstants.shellProviderKey { return "No model, nothing spent" }
         return "Your \(ProviderConstants.legacyLabel(for: key)) sign-in"
     }
 
@@ -649,6 +704,8 @@ public struct ModelPickerList: View {
     let onRetry: (() -> Void)?
     let onEdit: ((ModelInfo) -> Void)?
     let onDelete: ((ModelInfo) -> Void)?
+    let onPersonalise: ((ModelInfo) -> Void)?
+    let onDeletePersonal: ((ModelInfo) -> Void)?
     let onPick: ((ModelInfo?) -> Void)?
 
     public init(
@@ -668,6 +725,8 @@ public struct ModelPickerList: View {
         onRetry: (() -> Void)? = nil,
         onEdit: ((ModelInfo) -> Void)? = nil,
         onDelete: ((ModelInfo) -> Void)? = nil,
+        onPersonalise: ((ModelInfo) -> Void)? = nil,
+        onDeletePersonal: ((ModelInfo) -> Void)? = nil,
         onPick: ((ModelInfo?) -> Void)? = nil
     ) {
         self.models = models
@@ -686,6 +745,8 @@ public struct ModelPickerList: View {
         self.onRetry = onRetry
         self.onEdit = onEdit
         self.onDelete = onDelete
+        self.onPersonalise = onPersonalise
+        self.onDeletePersonal = onDeletePersonal
         self.onPick = onPick
     }
 
@@ -708,6 +769,8 @@ public struct ModelPickerList: View {
                 onRetry: onRetry,
                 onEdit: onEdit,
                 onDelete: onDelete,
+                onPersonalise: onPersonalise,
+                onDeletePersonal: onDeletePersonal,
                 onPick: onPick
             )
         }
@@ -744,6 +807,8 @@ public struct ModelPickerSheetContent: View {
     let onCreate: (() -> Void)?
     let onEdit: ((ModelInfo) -> Void)?
     let onDelete: ((ModelInfo) -> Void)?
+    let onPersonalise: ((ModelInfo) -> Void)?
+    let onDeletePersonal: ((ModelInfo) -> Void)?
     let onPick: (ModelInfo?) -> Void
     let onDismiss: () -> Void
 
@@ -767,6 +832,8 @@ public struct ModelPickerSheetContent: View {
         onCreate: (() -> Void)? = nil,
         onEdit: ((ModelInfo) -> Void)? = nil,
         onDelete: ((ModelInfo) -> Void)? = nil,
+        onPersonalise: ((ModelInfo) -> Void)? = nil,
+        onDeletePersonal: ((ModelInfo) -> Void)? = nil,
         onPick: @escaping (ModelInfo?) -> Void,
         onDismiss: @escaping () -> Void
     ) {
@@ -787,6 +854,8 @@ public struct ModelPickerSheetContent: View {
         self.onCreate = onCreate
         self.onEdit = onEdit
         self.onDelete = onDelete
+        self.onPersonalise = onPersonalise
+        self.onDeletePersonal = onDeletePersonal
         self.onPick = onPick
         self.onDismiss = onDismiss
     }
@@ -810,6 +879,8 @@ public struct ModelPickerSheetContent: View {
                 onRetry: onRetry,
                 onEdit: onEdit,
                 onDelete: onDelete,
+                onPersonalise: onPersonalise,
+                onDeletePersonal: onDeletePersonal,
                 onPick: onPick
             )
             .searchable(

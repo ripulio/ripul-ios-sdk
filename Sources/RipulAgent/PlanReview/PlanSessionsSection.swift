@@ -64,8 +64,8 @@ public struct PlanSessionsSection: View {
                     showLinkPicker.wrappedValue = true
                 } label: {
                     Image(systemName: "link.badge.plus")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
+                        .font(.ripulIcon(.caption, weight: .semibold))
+                        .foregroundStyle(.ripul(.textSecondary))
                 }
                 .buttonStyle(.plain)
                 .uiKitIdentifier("PlanSessionsSection.linkButton")
@@ -88,35 +88,35 @@ public struct PlanSessionsSection: View {
                         // A VISIBLE unlink affordance — the long-press menu
                         // below stays, but a machine tag the user cannot see
                         // removed deserves a control they can see.
-                        Menu {
+                        Menu { MenuIcons {
                             Button(role: .destructive) {
                                 setLink(session, linked: false)
                             } label: {
                                 Label("Unlink from plan", systemImage: "minus.circle")
                             }
-                        } label: {
+                        }} label: {
                             Image(systemName: "ellipsis")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(.secondary)
+                                .font(.ripulIcon(.caption, weight: .semibold))
+                                .foregroundStyle(.ripul(.textSecondary))
                                 .frame(width: 28, height: 44)
                                 .contentShape(Rectangle())
                         }
                         .uiKitIdentifier("PlanSessionsSection.rowMenu")
                     }
-                    .contextMenu {
+                    .contextMenu { MenuIcons {
                         Button(role: .destructive) {
                             setLink(session, linked: false)
                         } label: {
                             Label("Unlink from plan", systemImage: "minus.circle")
                         }
-                    }
+                    }}
                     .padding(.horizontal, 8)
                     .uiKitIdentifier("PlanSessionsSection.row")
                 }
                 if matching.isEmpty {
                     Text("No sessions yet — runs started from this plan appear here, or link one with the + button.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .font(.ripul(.caption))
+                        .foregroundStyle(.ripul(.textSecondary))
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 16)
                         .padding(.vertical, 8)

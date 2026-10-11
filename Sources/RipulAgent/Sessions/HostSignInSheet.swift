@@ -97,7 +97,7 @@ public struct HostSignInSheet: View {
             HStack(spacing: 10) {
                 ProgressView()
                 Text("Checking sign-in status…")
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.ripul(.textSecondary))
             }
             .uiKitIdentifier("HostSignInSheet.loading")
 
@@ -118,43 +118,43 @@ public struct HostSignInSheet: View {
                 HStack(spacing: 10) {
                     ProgressView()
                     Text("Verifying…")
-                        .font(.headline)
+                        .font(.ripul(.headline))
                 }
                 Text("The Mac is redeeming the code and confirming the sign-in. This can take up to 90 seconds.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(.ripul(.caption))
+                    .foregroundStyle(.ripul(.textSecondary))
             }
             .uiKitIdentifier("HostSignInSheet.submitting")
 
         case .success(let status):
             VStack(alignment: .leading, spacing: 12) {
                 Label("Signed in", systemImage: "checkmark.circle.fill")
-                    .font(.headline)
-                    .foregroundStyle(.green)
+                    .font(.ripul(.headline))
+                    .foregroundStyle(.ripul(.success))
                 if let status {
                     accountRows(status)
                 }
                 Text("Claude Code sessions on \(machine.displayName) are now billed to this sign-in.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(.ripul(.caption))
+                    .foregroundStyle(.ripul(.textSecondary))
             }
             .uiKitIdentifier("HostSignInSheet.success")
 
         case .failed(let message):
             VStack(alignment: .leading, spacing: 12) {
                 Label("Sign-in failed", systemImage: "exclamationmark.triangle.fill")
-                    .font(.headline)
-                    .foregroundStyle(.orange)
+                    .font(.ripul(.headline))
+                    .foregroundStyle(.ripul(.warning))
                 Text(message)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    .font(.ripul(.subheadline))
+                    .foregroundStyle(.ripul(.textSecondary))
                 Text("The code is single-use, so a failed attempt can't be retried — start over to get a fresh sign-in page.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(.ripul(.caption))
+                    .foregroundStyle(.ripul(.textSecondary))
                 Button("Start Over") {
                     Task { await startOver() }
                 }
-                .buttonStyle(.borderedProminent)
+                .ripulProminentButtonStyle()
                 .uiKitIdentifier("HostSignInSheet.failed.startOver")
             }
             .uiKitIdentifier("HostSignInSheet.failed")
@@ -167,14 +167,14 @@ public struct HostSignInSheet: View {
     private func signedInView(_ status: HostAuthStatusInfo) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             Label("Signed in", systemImage: "checkmark.circle.fill")
-                .font(.headline)
-                .foregroundStyle(.green)
+                .font(.ripul(.headline))
+                .foregroundStyle(.ripul(.success))
             accountRows(status)
             Divider()
             Button("Sign in with a different account") {
                 Task { await begin() }
             }
-            .font(.subheadline)
+            .font(.ripul(.subheadline))
             .uiKitIdentifier("HostSignInSheet.signedIn.switchAccount")
         }
         .uiKitIdentifier("HostSignInSheet.signedIn")
@@ -198,11 +198,11 @@ public struct HostSignInSheet: View {
     private func detailRow(_ icon: String, _ value: String) -> some View {
         HStack(spacing: 8) {
             Image(systemName: icon)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .font(.ripulIcon(.caption))
+                .foregroundStyle(.ripul(.textSecondary))
                 .frame(width: 18)
             Text(value)
-                .font(.subheadline)
+                .font(.ripul(.subheadline))
         }
     }
 
@@ -212,15 +212,15 @@ public struct HostSignInSheet: View {
     private func idleView(error: String?) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             Label("Not signed in", systemImage: "person.crop.circle.badge.xmark")
-                .font(.headline)
-                .foregroundStyle(.secondary)
+                .font(.ripul(.headline))
+                .foregroundStyle(.ripul(.textSecondary))
             Text("Claude Code on \(machine.displayName) has no Claude account. Sign in from this device — the account stays on the Mac.")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+                .font(.ripul(.subheadline))
+                .foregroundStyle(.ripul(.textSecondary))
             if let error, !error.isEmpty {
                 Text(error)
-                    .font(.caption)
-                    .foregroundStyle(.orange)
+                    .font(.ripul(.caption))
+                    .foregroundStyle(.ripul(.warning))
             }
             Button {
                 Task { await begin() }
@@ -228,7 +228,7 @@ public struct HostSignInSheet: View {
                 Label("Sign in with Claude", systemImage: "person.badge.key")
                     .frame(maxWidth: .infinity)
             }
-            .buttonStyle(.borderedProminent)
+            .ripulProminentButtonStyle()
             .controlSize(.large)
             .uiKitIdentifier("HostSignInSheet.idle.signIn")
         }
@@ -241,15 +241,15 @@ public struct HostSignInSheet: View {
     private func pendingElsewhereView(sessionId: String) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             Label("Sign-in already in progress", systemImage: "hourglass")
-                .font(.headline)
+                .font(.ripul(.headline))
             Text("The Mac is waiting for a sign-in code. If you already have the code, paste it below; otherwise start over for a fresh sign-in page.")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+                .font(.ripul(.subheadline))
+                .foregroundStyle(.ripul(.textSecondary))
             codeEntry(sessionId: sessionId)
             Button("Start Over") {
                 Task { await startOver() }
             }
-            .font(.subheadline)
+            .font(.ripul(.subheadline))
             .uiKitIdentifier("HostSignInSheet.pending.startOver")
         }
         .uiKitIdentifier("HostSignInSheet.pending")
@@ -261,14 +261,14 @@ public struct HostSignInSheet: View {
     private func awaitingCodeView(sessionId: String, authUrl: String) -> some View {
         VStack(alignment: .leading, spacing: 16) {
             VStack(alignment: .leading, spacing: 8) {
-                Text("Step 1").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                Text("Step 1").font(.ripul(.caption, weight: .semibold)).foregroundStyle(.ripul(.textSecondary))
                 Button {
                     openAuthUrl(authUrl)
                 } label: {
                     Label("Open the sign-in page", systemImage: "safari")
                         .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(.borderedProminent)
+                .ripulProminentButtonStyle()
                 .controlSize(.large)
                 .uiKitIdentifier("HostSignInSheet.awaiting.openUrl")
 
@@ -276,17 +276,17 @@ public struct HostSignInSheet: View {
                     copyLink(authUrl)
                 } label: {
                     Label(didCopyLink ? "Link copied" : "Copy link instead", systemImage: didCopyLink ? "checkmark" : "doc.on.doc")
-                        .font(.caption)
+                        .font(.ripul(.caption))
                 }
                 .buttonStyle(.borderless)
                 .uiKitIdentifier("HostSignInSheet.awaiting.copyUrl")
             }
 
             VStack(alignment: .leading, spacing: 8) {
-                Text("Step 2").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                Text("Step 2").font(.ripul(.caption, weight: .semibold)).foregroundStyle(.ripul(.textSecondary))
                 Text("Sign in, then copy the code the page shows and paste it here.")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    .font(.ripul(.subheadline))
+                    .foregroundStyle(.ripul(.textSecondary))
                 codeEntry(sessionId: sessionId)
             }
 
@@ -296,7 +296,7 @@ public struct HostSignInSheet: View {
                     await refreshStatus()
                 }
             }
-            .font(.subheadline)
+            .font(.ripul(.subheadline))
             .uiKitIdentifier("HostSignInSheet.awaiting.cancel")
         }
         .uiKitIdentifier("HostSignInSheet.awaiting")
@@ -308,7 +308,7 @@ public struct HostSignInSheet: View {
     @ViewBuilder
     private func codeEntry(sessionId: String) -> some View {
         TextField("Paste code here", text: $code)
-            .font(.system(.body, design: .monospaced))
+            .font(.ripul(.body, family: .code))
             .autocorrectionDisabled()
             #if os(iOS)
             .textInputAutocapitalization(.never)

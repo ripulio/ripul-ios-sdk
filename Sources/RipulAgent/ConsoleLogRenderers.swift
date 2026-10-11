@@ -151,7 +151,7 @@ private struct HostPingSummary: View {
         return parsed.summary.isEmpty ? "Error" : parsed.summary
     }
 
-    private var headlineColor: Color { level == "ERROR" ? .red : .primary }
+    private var headlineColor: Color { level == "ERROR" ? .ripul(.danger) : .ripul(.text) }
 
     var body: some View {
         HStack(spacing: 6) {
@@ -159,9 +159,9 @@ private struct HostPingSummary: View {
             Text(headline)
                 .foregroundStyle(headlineColor)
                 .fontWeight(.medium)
-            Text("·").foregroundStyle(.tertiary)
+            Text("·").foregroundStyle(.ripul(.textTertiary))
             Text(displayName)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.ripul(.textSecondary))
                 .lineLimit(1)
                 .truncationMode(.tail)
         }
@@ -232,9 +232,9 @@ private struct RipulSyncSummary: View {
 
     private var headlineColor: Color {
         switch level {
-        case "ERROR": return .red
-        case "WARN":  return .orange
-        default:      return .primary
+        case "ERROR": return .ripul(.danger)
+        case "WARN":  return .ripul(.warning)
+        default:      return .ripul(.text)
         }
     }
 
@@ -245,9 +245,9 @@ private struct RipulSyncSummary: View {
                 .foregroundStyle(headlineColor)
                 .fontWeight(.medium)
             if !chat.isEmpty {
-                Text("·").foregroundStyle(.tertiary)
+                Text("·").foregroundStyle(.ripul(.textTertiary))
                 Text("chat=\(chat)")
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.ripul(.textSecondary))
                     .lineLimit(1)
                     .truncationMode(.tail)
             }
@@ -334,7 +334,7 @@ private struct JSONFallbackSummary: View {
     let level: String
 
     private var summaryColor: Color {
-        level == "ERROR" ? .red : .primary
+        level == "ERROR" ? .ripul(.danger) : .ripul(.text)
     }
 
     var body: some View {
@@ -349,7 +349,7 @@ private struct JSONFallbackSummary: View {
                     .truncationMode(.tail)
             } else if parsed.tag == nil {
                 Text("{json}")
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.ripul(.textTertiary))
             }
         }
     }
@@ -384,23 +384,23 @@ struct TagPill: View {
 
     private var background: Color {
         switch style {
-        case .neutral: return Color.secondary.opacity(0.15)
-        case .destructive: return Color.red.opacity(0.15)
-        case .info: return Color.blue.opacity(0.15)
+        case .neutral: return Color.ripul(.textSecondary).opacity(0.15)
+        case .destructive: return Color.ripul(.danger).opacity(0.15)
+        case .info: return Color.ripul(.info).opacity(0.15)
         }
     }
 
     private var foreground: Color {
         switch style {
-        case .neutral: return .secondary
-        case .destructive: return .red
-        case .info: return .blue
+        case .neutral: return .ripul(.textSecondary)
+        case .destructive: return .ripul(.danger)
+        case .info: return .ripul(.info)
         }
     }
 
     var body: some View {
         Text(text)
-            .font(.system(.caption2, design: .monospaced))
+            .font(.ripul(.caption2, family: .code))
             .fontWeight(.medium)
             .foregroundStyle(foreground)
             .padding(.horizontal, 5)
@@ -425,7 +425,7 @@ struct RendererDetailPanel<Content: View>: View {
         .padding(.horizontal, 10)
         .background(
             RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .fill(Color.secondary.opacity(0.08))
+                .fill(Color.ripul(.textSecondary).opacity(0.08))
         )
     }
 }
@@ -443,15 +443,15 @@ struct RendererDetailRow: View {
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             Text(label)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.ripul(.textSecondary))
                 .frame(width: 130, alignment: .trailing)
             Text(value)
-                .foregroundStyle(.primary)
+                .foregroundStyle(.ripul(.text))
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .font(.system(.caption2, design: .monospaced))
+        .font(.ripul(.caption2, family: .code))
     }
 }
 

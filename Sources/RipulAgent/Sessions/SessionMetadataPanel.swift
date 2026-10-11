@@ -20,8 +20,11 @@ public struct SessionMetadataPanel: View {
     @State private var metadata: AgentBridge.SessionMetadata?
     @State private var loading = false
     @State private var storage: AgentBridge.SessionStorageBreakdown?
+    @State private var anchorList: (chatId: String, anchors: [AgentBridge.HumanChatAnchor])?
 
     // Section expansion
+    @State private var messagesExpanded = true
+    @State private var messagesSearch = ""
     @State private var filesExpanded = true
     @State private var deploysExpanded = true
     @State private var participantsExpanded = true
@@ -46,6 +49,7 @@ public struct SessionMetadataPanel: View {
         ScrollView {
             VStack(spacing: 12) {
                 descriptionSection
+                messagesSection
                 modelSection
                 filesSection
                 deploymentsSection
@@ -63,13 +67,29 @@ public struct SessionMetadataPanel: View {
             .padding(.bottom, 32)
         }
         .uiKitIdentifier("SessionMetadataPanel")
-        .task { await loadMetadata() }
-        .onChange(of: session?.sourceChatId) { _ in
+        // Keyed on the chat, so a switch cancels the old load and starts one
+        // for the new chat. (The old one-argument `onChange` ran its closure
+        // with the view from BEFORE the change, so a switch reloaded the chat
+        // just left.)
+        .task(id: session?.sourceChatId) {
+            guard let chatId = session?.sourceChatId else { return }
             metadata = nil
             storage = nil
-            Task { await loadMetadata() }
+            messagesSearch = ""
+            if debugExpanded { Task { await loadStorage() } }
+            await loadMetadata(chatId)
         }
-        .onChange(of: debugExpanded) { expanded in
+        .task(id: session?.sourceChatId) {
+            guard let chatId = session?.sourceChatId else { return }
+            await loadAnchors(chatId, waitForChat: true)
+        }
+        // A turn starting means a message was just sent; ending means the
+        // chat settled. Either way the anchor list may have grown.
+        .onChange(of: bridge.isAgentRunning) {
+            guard let chatId = session?.sourceChatId else { return }
+            Task { await loadAnchors(chatId) }
+        }
+        .onChange(of: debugExpanded) { _, expanded in
             if expanded && storage == nil {
                 Task { await loadStorage() }
             }
@@ -78,11 +98,33 @@ public struct SessionMetadataPanel: View {
 
     // MARK: - Data Loading
 
-    private func loadMetadata() async {
-        guard let sessionId = session?.sourceChatId else { return }
+    private func loadMetadata(_ chatId: String) async {
         loading = true
-        metadata = await bridge.getSessionMetadata(sessionId: sessionId)
+        let loaded = await bridge.getSessionMetadata(sessionId: chatId)
+        guard !Task.isCancelled else { return }
+        metadata = loaded
         loading = false
+    }
+
+    /// `waitForChat`: a chat just switched to may not be in the page's memory
+    /// yet and answers empty, so try again for a few seconds before settling.
+    private func loadAnchors(_ chatId: String, waitForChat: Bool = false) async {
+        for attempt in 0..<(waitForChat ? 5 : 1) {
+            if attempt > 0 { try? await Task.sleep(nanoseconds: 1_000_000_000) }
+            guard !Task.isCancelled else { return }
+            guard let loaded = await bridge.getHumanChatAnchors(sessionId: chatId) else { continue }
+            if anchorList?.chatId != chatId || anchorList?.anchors != loaded {
+                anchorList = (chatId, loaded)
+            }
+            if !loaded.isEmpty { return }
+        }
+    }
+
+    /// The anchors for the chat on screen. A reply that lands for a chat
+    /// already left is stored under that chat's id and never shown here.
+    private var anchors: [AgentBridge.HumanChatAnchor] {
+        guard let list = anchorList, list.chatId == session?.sourceChatId else { return [] }
+        return list.anchors
     }
 
     private func loadStorage() async {
@@ -106,8 +148,8 @@ public struct SessionMetadataPanel: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
                 Text("DESCRIPTION")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
+                    .font(.ripul(.caption, weight: .semibold))
+                    .foregroundStyle(.ripul(.textSecondary))
                 Spacer()
                 if !editingDescription {
                     Button {
@@ -115,8 +157,8 @@ public struct SessionMetadataPanel: View {
                         editingDescription = true
                     } label: {
                         Image(systemName: "pencil")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .font(.ripulIcon(.caption))
+                            .foregroundStyle(.ripul(.textSecondary))
                     }
                     .buttonStyle(.plain)
                     .uiKitIdentifier("SessionMetadataPanel.description.edit")
@@ -127,7 +169,7 @@ public struct SessionMetadataPanel: View {
                 TextField("What is this session about?", text: $descriptionDraft, axis: .vertical)
                     .lineLimit(2...6)
                     .textFieldStyle(.roundedBorder)
-                    .font(.subheadline)
+                    .font(.ripul(.subheadline))
                     .uiKitIdentifier("SessionMetadataPanel.description.input")
 
                 HStack {
@@ -136,8 +178,8 @@ public struct SessionMetadataPanel: View {
                         editingDescription = false
                     } label: {
                         Image(systemName: "xmark")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .font(.ripulIcon(.caption))
+                            .foregroundStyle(.ripul(.textSecondary))
                             .frame(width: 32, height: 32)
                     }
                     .buttonStyle(.plain)
@@ -146,8 +188,8 @@ public struct SessionMetadataPanel: View {
                         editingDescription = false
                     } label: {
                         Image(systemName: "checkmark")
-                            .font(.caption)
-                            .foregroundStyle(.blue)
+                            .font(.ripulIcon(.caption))
+                            .foregroundStyle(.ripul(.info))
                             .frame(width: 32, height: 32)
                     }
                     .buttonStyle(.plain)
@@ -155,8 +197,8 @@ public struct SessionMetadataPanel: View {
                 }
             } else {
                 Text(metadata?.description?.isEmpty == false ? metadata!.description! : "Tap to add a description...")
-                    .font(.subheadline)
-                    .foregroundStyle(metadata?.description?.isEmpty == false ? .primary : .tertiary)
+                    .font(.ripul(.subheadline))
+                    .foregroundStyle(metadata?.description?.isEmpty == false ? .ripul(.text) : .ripul(.textTertiary))
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .contentShape(Rectangle())
                     .onTapGesture {
@@ -171,6 +213,99 @@ public struct SessionMetadataPanel: View {
         .modifier(GlassPanelBackground())
     }
 
+    // MARK: - Messages
+
+    /// Every message a person typed, as anchors into the chat: tap one to
+    /// jump there; hover (pointer) or long-press shows the whole message.
+    @ViewBuilder
+    private var messagesSection: some View {
+        if !anchors.isEmpty {
+            let numbered = Array(anchors.enumerated()).map { NumberedAnchor(number: $0.offset + 1, anchor: $0.element) }
+            let query = messagesSearch.trimmingCharacters(in: .whitespaces)
+            let shown = query.isEmpty ? numbered : numbered.filter { $0.anchor.text.localizedCaseInsensitiveContains(query) }
+            GlassListSection(
+                title: "Messages",
+                subtitle: "\(anchors.count)",
+                isExpanded: $messagesExpanded,
+                data: shown,
+                id: \.anchor.correlationId,
+                searchPlaceholder: anchors.count > 8 ? "Search messages" : nil,
+                searchText: anchors.count > 8 ? $messagesSearch : nil,
+                maxVisibleItems: 6
+            ) { item in
+                messageRow(item)
+            }
+            .uiKitIdentifier("SessionMetadataPanel.messages")
+        }
+    }
+
+    private struct NumberedAnchor {
+        let number: Int
+        let anchor: AgentBridge.HumanChatAnchor
+    }
+
+    @ViewBuilder
+    private func messageRow(_ item: NumberedAnchor) -> some View {
+        let anchor = item.anchor
+        Button {
+            bridge.scrollToChatMessage(correlationId: anchor.correlationId)
+        } label: {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text("\(item.number)")
+                    .font(.ripul(.caption2).monospacedDigit().weight(.semibold))
+                    .foregroundStyle(.ripul(.textTertiary))
+                    .frame(width: 28, alignment: .trailing)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(anchor.text)
+                        .font(.ripul(.subheadline))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    if let sender = anchor.senderDisplayName, !sender.isEmpty {
+                        Text(sender)
+                            .font(.ripul(.caption2))
+                            .foregroundStyle(.ripul(.textTertiary))
+                            .lineLimit(1)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                if let ts = anchor.timestamp {
+                    Text(RelativeTimeText.string(for: ts, relativeTo: Date()))
+                        .font(.ripul(.caption2))
+                        .foregroundStyle(.ripul(.textSecondary))
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(anchor.text)
+        .contextMenu { MenuIcons {
+            Button {
+                bridge.scrollToChatMessage(correlationId: anchor.correlationId)
+            } label: {
+                Label("Jump to Message", systemImage: "arrow.turn.down.right")
+            }
+            Button {
+                #if os(iOS)
+                UIPasteboard.general.string = anchor.text
+                #elseif os(macOS)
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(anchor.text, forType: .string)
+                #endif
+            } label: {
+                Label("Copy", systemImage: "doc.on.doc")
+            }
+        }} preview: {
+            ScrollView {
+                Text(anchor.text)
+                    .font(.ripul(.body))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(16)
+            }
+            .frame(idealWidth: 320, maxHeight: 400)
+        }
+        .uiKitIdentifier("SessionMetadataPanel.messageRow")
+    }
+
     // MARK: - Model
 
     @ViewBuilder
@@ -178,17 +313,17 @@ public struct SessionMetadataPanel: View {
         if let model = metadata?.model, !model.isEmpty {
             VStack(alignment: .leading, spacing: 4) {
                 Text("MODEL")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
+                    .font(.ripul(.caption, weight: .semibold))
+                    .foregroundStyle(.ripul(.textSecondary))
                 Text(model)
-                    .font(.subheadline.weight(.semibold))
+                    .font(.ripul(.subheadline, weight: .semibold))
                     .uiKitIdentifier("SessionMetadataPanel.model.name")
                 if let history = metadata?.modelHistory, history.count > 1 {
                     let others = history.filter { $0 != model }
                     if !others.isEmpty {
                         Text("Also used: \(others.joined(separator: ", "))")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
+                            .font(.ripul(.caption2))
+                            .foregroundStyle(.ripul(.textSecondary))
                     }
                 }
             }
@@ -215,33 +350,33 @@ public struct SessionMetadataPanel: View {
             ) { file in
                 HStack(spacing: 8) {
                     Image(systemName: FileTypeIcon.icon(for: file.filePath ?? file.fileName))
-                        .font(.caption)
+                        .font(.ripulIcon(.caption))
                         .foregroundStyle(FileTypeIcon.color(for: file.filePath ?? file.fileName))
                         .frame(width: 28)
                     VStack(alignment: .leading, spacing: 1) {
                         Text(file.fileName)
-                            .font(.subheadline)
+                            .font(.ripul(.subheadline))
                             .lineLimit(1)
                         if let path = file.filePath {
                             Text(shortenPath(path))
-                                .font(.caption2)
-                                .foregroundStyle(.tertiary)
+                                .font(.ripul(.caption2))
+                                .foregroundStyle(.ripul(.textTertiary))
                                 .lineLimit(1)
                         }
                     }
                     Spacer()
                     if file.editCount > 1 {
                         Text("\(file.editCount)x")
-                            .font(.caption2.monospacedDigit().weight(.semibold))
-                            .foregroundStyle(.secondary)
+                            .font(.ripul(.caption2).monospacedDigit().weight(.semibold))
+                            .foregroundStyle(.ripul(.textSecondary))
                             .padding(.horizontal, 5)
                             .padding(.vertical, 1)
-                            .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
+                            .background(.ripul(.textQuaternary), in: RoundedRectangle(cornerRadius: 6))
                     }
                     if let ts = file.lastSeenAt {
                         Text(relativeTime(ts))
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
+                            .font(.ripul(.caption2))
+                            .foregroundStyle(.ripul(.textSecondary))
                     }
                 }
                 .uiKitIdentifier("SessionMetadataPanel.fileRow")
@@ -264,20 +399,20 @@ public struct SessionMetadataPanel: View {
             ) { deploy in
                 HStack(spacing: 8) {
                     Image(systemName: deploy.target == "pages" ? "globe" : "desktopcomputer")
-                        .font(.caption)
-                        .foregroundStyle(.blue)
+                        .font(.ripulIcon(.caption))
+                        .foregroundStyle(.ripul(.info))
                         .frame(width: 28)
                     Text(deploy.target.uppercased())
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
+                        .font(.ripul(.caption, weight: .semibold))
+                        .foregroundStyle(.ripul(.textSecondary))
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
-                        .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
+                        .background(.ripul(.textQuaternary), in: RoundedRectangle(cornerRadius: 6))
                     Spacer()
                     if let ts = deploy.timestamp {
                         Text(relativeTime(ts))
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
+                            .font(.ripul(.caption2))
+                            .foregroundStyle(.ripul(.textTertiary))
                     }
                 }
                 .uiKitIdentifier("SessionMetadataPanel.deployRow")
@@ -342,31 +477,31 @@ public struct SessionMetadataPanel: View {
             ) { participant in
                 HStack(spacing: 8) {
                     Image(systemName: participant.kind == "agent" ? "cpu" : "person")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .font(.ripulIcon(.caption))
+                        .foregroundStyle(.ripul(.textSecondary))
                         .frame(width: 28)
                     VStack(alignment: .leading, spacing: 1) {
                         Text(participant.displayName ?? participant.id)
-                            .font(.subheadline)
+                            .font(.ripul(.subheadline))
                             .lineLimit(1)
                         if let group = participant.group, !group.isEmpty {
                             Text(group)
-                                .font(.caption2)
-                                .foregroundStyle(.tertiary)
+                                .font(.ripul(.caption2))
+                                .foregroundStyle(.ripul(.textTertiary))
                                 .lineLimit(1)
                         }
                     }
                     Spacer()
                     Text(participant.kind.uppercased())
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(.secondary)
+                        .font(.ripul(.caption2, weight: .semibold))
+                        .foregroundStyle(.ripul(.textSecondary))
                         .padding(.horizontal, 5)
                         .padding(.vertical, 1)
-                        .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
+                        .background(.ripul(.textQuaternary), in: RoundedRectangle(cornerRadius: 6))
                     if let ts = participant.lastSeenAt {
                         Text(relativeTime(ts))
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
+                            .font(.ripul(.caption2))
+                            .foregroundStyle(.ripul(.textSecondary))
                     }
                 }
                 .uiKitIdentifier("SessionMetadataPanel.participantRow")
@@ -382,18 +517,18 @@ public struct SessionMetadataPanel: View {
             // Header
             HStack {
                 Image(systemName: "chevron.right")
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.secondary)
+                    .font(.ripulIcon(.caption2, weight: .semibold))
+                    .foregroundStyle(.ripul(.textSecondary))
                     .rotationEffect(.degrees(notesExpanded ? 90 : 0))
                     .animation(.easeInOut(duration: 0.2), value: notesExpanded)
                 Text("Notes")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.secondary)
+                    .font(.ripul(.subheadline, weight: .semibold))
+                    .foregroundStyle(.ripul(.textSecondary))
                     .textCase(.uppercase)
                 if let notes = metadata?.notes, !notes.isEmpty, !notesExpanded {
                     Text("\(notes.count)")
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
+                        .font(.ripul(.caption))
+                        .foregroundStyle(.ripul(.textTertiary))
                 }
                 Spacer()
                 if !addingNote {
@@ -401,8 +536,8 @@ public struct SessionMetadataPanel: View {
                         addingNote = true
                     } label: {
                         Image(systemName: "plus")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .font(.ripulIcon(.caption))
+                            .foregroundStyle(.ripul(.textSecondary))
                     }
                     .buttonStyle(.plain)
                     .uiKitIdentifier("SessionMetadataPanel.notes.add")
@@ -423,7 +558,7 @@ public struct SessionMetadataPanel: View {
                             TextField("Add a note...", text: $noteDraft, axis: .vertical)
                                 .lineLimit(2...4)
                                 .textFieldStyle(.roundedBorder)
-                                .font(.subheadline)
+                                .font(.ripul(.subheadline))
                                 .uiKitIdentifier("SessionMetadataPanel.notes.input")
                             HStack {
                                 Spacer()
@@ -432,8 +567,8 @@ public struct SessionMetadataPanel: View {
                                     noteDraft = ""
                                 } label: {
                                     Image(systemName: "xmark")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
+                                        .font(.ripulIcon(.caption))
+                                        .foregroundStyle(.ripul(.textSecondary))
                                         .frame(width: 32, height: 32)
                                 }
                                 .buttonStyle(.plain)
@@ -445,8 +580,8 @@ public struct SessionMetadataPanel: View {
                                     addingNote = false
                                 } label: {
                                     Image(systemName: "checkmark")
-                                        .font(.caption)
-                                        .foregroundStyle(.blue)
+                                        .font(.ripulIcon(.caption))
+                                        .foregroundStyle(.ripul(.info))
                                         .frame(width: 32, height: 32)
                                 }
                                 .buttonStyle(.plain)
@@ -463,11 +598,11 @@ public struct SessionMetadataPanel: View {
                             HStack(alignment: .top, spacing: 8) {
                                 VStack(alignment: .leading, spacing: 3) {
                                     Text(note.text)
-                                        .font(.subheadline)
+                                        .font(.ripul(.subheadline))
                                     if let ts = note.createdAt ?? note.timestamp {
                                         Text(relativeTime(ts))
-                                            .font(.caption2)
-                                            .foregroundStyle(.secondary)
+                                            .font(.ripul(.caption2))
+                                            .foregroundStyle(.ripul(.textSecondary))
                                     }
                                 }
                                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -475,21 +610,21 @@ public struct SessionMetadataPanel: View {
                                     patch(["removeNoteId": note.id])
                                 } label: {
                                     Image(systemName: "trash")
-                                        .font(.caption2)
-                                        .foregroundStyle(.secondary)
+                                        .font(.ripulIcon(.caption2))
+                                        .foregroundStyle(.ripul(.textSecondary))
                                 }
                                 .buttonStyle(.plain)
                                 .uiKitIdentifier("SessionMetadataPanel.notes.delete")
                             }
                             .padding(.horizontal, 16)
                             .padding(.vertical, 8)
-                            .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 10))
+                            .background(.ripul(.textQuaternary).opacity(0.5), in: RoundedRectangle(cornerRadius: 10))
                             .padding(.horizontal, 12)
                         }
                     } else if !addingNote {
                         Text("No notes yet. Tap + to add one.")
-                            .font(.caption)
-                            .foregroundStyle(.tertiary)
+                            .font(.ripul(.caption))
+                            .foregroundStyle(.ripul(.textTertiary))
                             .padding(.horizontal, 16)
                             .padding(.bottom, 8)
                     }
@@ -512,16 +647,16 @@ public struct SessionMetadataPanel: View {
         VStack(spacing: 0) {
             HStack(spacing: 6) {
                 Image(systemName: "wrench.and.screwdriver")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(.ripulIcon(.caption))
+                    .foregroundStyle(.ripul(.textSecondary))
                 Text("CLI Tools")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.secondary)
+                    .font(.ripul(.subheadline, weight: .semibold))
+                    .foregroundStyle(.ripul(.textSecondary))
                     .textCase(.uppercase)
                 Spacer()
                 Image(systemName: cliToolsExpanded ? "chevron.up" : "chevron.down")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
+                    .font(.ripulIcon(.caption2))
+                    .foregroundStyle(.ripul(.textTertiary))
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
@@ -536,8 +671,8 @@ public struct SessionMetadataPanel: View {
                         .padding(.bottom, 8)
                 } else {
                     Text("No session selected.")
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
+                        .font(.ripul(.caption))
+                        .foregroundStyle(.ripul(.textTertiary))
                         .padding(.horizontal, 16)
                         .padding(.bottom, 10)
                 }
@@ -554,16 +689,16 @@ public struct SessionMetadataPanel: View {
         VStack(spacing: 0) {
             HStack(spacing: 6) {
                 Image(systemName: "ant")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(.ripulIcon(.caption))
+                    .foregroundStyle(.ripul(.textSecondary))
                 Text("Debug")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.secondary)
+                    .font(.ripul(.subheadline, weight: .semibold))
+                    .foregroundStyle(.ripul(.textSecondary))
                     .textCase(.uppercase)
                 Spacer()
                 Image(systemName: debugExpanded ? "chevron.up" : "chevron.down")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
+                    .font(.ripulIcon(.caption2))
+                    .foregroundStyle(.ripul(.textTertiary))
                 if debugExpanded {
                     Button {
                         #if os(iOS)
@@ -574,8 +709,8 @@ public struct SessionMetadataPanel: View {
                         #endif
                     } label: {
                         Image(systemName: "doc.on.doc")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .font(.ripulIcon(.caption))
+                            .foregroundStyle(.ripul(.textSecondary))
                     }
                     .buttonStyle(.plain)
                     .uiKitIdentifier("SessionMetadataPanel.debug.copy")
@@ -606,8 +741,8 @@ public struct SessionMetadataPanel: View {
                     }
                     if let storage {
                         Text("STORAGE")
-                            .font(.caption2.weight(.semibold).monospaced())
-                            .foregroundStyle(.tertiary)
+                            .font(.ripul(.caption2, weight: .semibold, family: .code))
+                            .foregroundStyle(.ripul(.textTertiary))
                             .padding(.top, 6)
                             .padding(.bottom, 2)
                         debugRow("Total", "\(Self.formatBytes(storage.totalBytes)) / \(storage.count)")
@@ -630,12 +765,12 @@ public struct SessionMetadataPanel: View {
     private func debugRow(_ label: String, _ value: String) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             Text(label)
-                .font(.caption2.weight(.semibold).monospaced())
-                .foregroundStyle(.tertiary)
+                .font(.ripul(.caption2, weight: .semibold, family: .code))
+                .foregroundStyle(.ripul(.textTertiary))
                 .frame(width: 95, alignment: .leading)
             Text(value)
-                .font(.caption2.monospaced())
-                .foregroundStyle(.secondary)
+                .font(.ripul(.caption2, family: .code))
+                .foregroundStyle(.ripul(.textSecondary))
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .textSelection(.enabled)
@@ -663,8 +798,8 @@ public struct SessionMetadataPanel: View {
 
     private var emptyState: some View {
         Text("Session milestones will appear here as you work \u{2014} files edited, deployments, and more.")
-            .font(.subheadline)
-            .foregroundStyle(.tertiary)
+            .font(.ripul(.subheadline))
+            .foregroundStyle(.ripul(.textTertiary))
             .multilineTextAlignment(.center)
             .padding(.vertical, 32)
             .uiKitIdentifier("SessionMetadataPanel.empty")

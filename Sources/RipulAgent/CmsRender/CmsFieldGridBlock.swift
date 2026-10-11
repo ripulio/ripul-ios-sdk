@@ -206,7 +206,7 @@ struct CmsFieldGridBlockView: View {
     /// Record picker title mode — a native Menu whose pick drives the
     /// query's SHARED selection (the Record Navigator cursor model).
     private func recordPicker(rows: [[String: CmsJSON]], current: [String: CmsJSON]?) -> some View {
-        Menu {
+        Menu { MenuIcons {
             ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
                 Button {
                     runtime.setSelectedRows(querySlug, rows: [row])
@@ -218,7 +218,7 @@ struct CmsFieldGridBlockView: View {
                     }
                 }
             }
-        } label: {
+        }} label: {
             HStack(spacing: 4) {
                 Text(current.map(recordLabel) ?? "Pick a record")
                     .font(.system(size: 14, weight: .medium))

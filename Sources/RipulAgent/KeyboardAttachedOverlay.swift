@@ -32,6 +32,19 @@ enum ComposerContentLayout {
 /// Resting coordinates are independent of keyboard animation and content size.
 /// The same progress changes horizontal space and vertical placement together.
 enum ComposerChromeLayout {
+    /// The pill the composer's body folds to beside the navigation button.
+    static let compactHeight: CGFloat = 48
+
+    /// How far the composer's centre descends from full to compact, for a
+    /// thumb pushing it down to follow: its bottom edge drops by the
+    /// navigation's clearance, and its body folds to the pill about that
+    /// centre. Both are linear in progress, so the centre is too.
+    static func pushTravel(navigationInset: CGFloat, bodyHeight: CGFloat) -> CGFloat {
+        // Not measured yet, the body is taken not to fold at all.
+        let fold = bodyHeight > 0 ? (bodyHeight - compactHeight) / 2 : 0
+        return max(0, max(0, navigationInset) + fold)
+    }
+
     static func placement(bounds: CGRect, safeBottom: CGFloat, safeLeading: CGFloat, safeTrailing: CGFloat = 0,
                           navigation: CGRect, progress: CGFloat, bounce: CGFloat,
                           keyboardInset: CGFloat) -> (leading: CGFloat, trailing: CGFloat, bottom: CGFloat) {

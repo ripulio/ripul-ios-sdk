@@ -63,6 +63,10 @@ public struct UnifiedSession: Identifiable, Codable {
     /// session showing `Peter_Maude_(iPhone)` from the scan and its own raw
     /// `cli_<uuid>` from the local tab, alternating.
     public let titleFromScan: Bool
+    /// The agent that started this chat with spawn_agent, when one did. The
+    /// list shows such a chat under the chat that started it, so its title
+    /// does not have to say where it came from.
+    public let startedBy: SessionStartedBy?
 
     public var isOpenInRipul: Bool { ripulSession != nil || cachedIsOpen }
 
@@ -115,7 +119,7 @@ public struct UnifiedSession: Identifiable, Codable {
     enum CodingKeys: String, CodingKey {
         case id, title, lastUsed, gitBranch, messageCount, projectName, projectPath
         case provider, providerLabel, model, machineName, machineId, matchKeys, cachedIsOpen
-        case tags, metadataKey, hasKnownActivity, titleFromScan
+        case tags, metadataKey, hasKnownActivity, titleFromScan, startedBy
     }
 
     public init(from decoder: Decoder) throws {
@@ -141,6 +145,7 @@ public struct UnifiedSession: Identifiable, Codable {
         // has unknown title provenance, so assume the weaker one and let the
         // first real scan claim it.
         titleFromScan = try c.decodeIfPresent(Bool.self, forKey: .titleFromScan) ?? false
+        startedBy = try c.decodeIfPresent(SessionStartedBy.self, forKey: .startedBy)
         ripulSession = nil
     }
 
@@ -157,9 +162,11 @@ public struct UnifiedSession: Identifiable, Codable {
         matchKeys: [String] = [], tags: [String] = [], metadataKey: String? = nil,
         cachedIsOpen: Bool? = nil,
         titleFromScan: Bool = false,
+        startedBy: SessionStartedBy? = nil,
         ripulSession: ChatSession?
     ) {
         self.titleFromScan = titleFromScan
+        self.startedBy = startedBy
         self.id = id; self.title = title; self.lastUsed = lastUsed
         self.hasKnownActivity = hasKnownActivity
         self.gitBranch = gitBranch; self.messageCount = messageCount
@@ -211,6 +218,7 @@ public struct UnifiedSession: Identifiable, Codable {
             // A title supplied here came from the local tab, so the row is no
             // longer scan-titled; without a new title the provenance stands.
             titleFromScan: newTitle == nil ? titleFromScan : false,
+            startedBy: startedBy,
             ripulSession: match
         )
     }
@@ -259,6 +267,7 @@ public struct UnifiedSession: Identifiable, Codable {
             matchKeys: matchKeys, tags: tags, metadataKey: metadataKey,
             cachedIsOpen: cachedIsOpen,
             titleFromScan: titleFromScan,
+            startedBy: startedBy,
             ripulSession: ripulSession
         )
     }
@@ -274,6 +283,7 @@ public struct UnifiedSession: Identifiable, Codable {
             matchKeys: matchKeys, tags: tags, metadataKey: metadataKey,
             cachedIsOpen: cachedIsOpen,
             titleFromScan: titleFromScan,
+            startedBy: startedBy,
             ripulSession: ripulSession
         )
     }
@@ -291,6 +301,7 @@ public struct UnifiedSession: Identifiable, Codable {
             matchKeys: matchKeys, tags: tags, metadataKey: metadataKey,
             cachedIsOpen: cachedIsOpen,
             titleFromScan: titleFromScan,
+            startedBy: startedBy,
             ripulSession: ripulSession
         )
     }
@@ -354,6 +365,8 @@ public struct UnifiedSession: Identifiable, Codable {
             tags: (tags.isEmpty && keepTagsWhenEmpty) ? previous.tags : tags,
             metadataKey: metadataKey,
             cachedIsOpen: keepOpen ? true : cachedIsOpen,
+            // Who started a chat never changes; a scan that could not say keeps what was known.
+            startedBy: startedBy ?? previous.startedBy,
             ripulSession: ripulSession
         )
     }
@@ -538,6 +551,7 @@ public struct UnifiedSession: Identifiable, Codable {
                 tags: resolveTags(rowKeys),
                 metadataKey: canonicalKey(r.sourceChatId),
                 titleFromScan: true,
+                startedBy: r.startedBy,
                 ripulSession: ripulMatch
             ))
         }
@@ -644,6 +658,8 @@ extension UnifiedSession: Equatable {
         lhs.projectName == rhs.projectName &&
         lhs.gitBranch == rhs.gitBranch &&
         lhs.tags == rhs.tags &&
+        // Decides where the row sits: under the chat that started it, or by itself.
+        lhs.startedBy == rhs.startedBy &&
         // Both affect session-list state: projectPath re-roots the folder tree,
         // cachedIsOpen is half of `isOpenInRipul`. Omitting
         // them let a rebuild that ONLY corrects one of them be dropped by the

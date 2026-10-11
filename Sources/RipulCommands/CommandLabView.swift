@@ -63,6 +63,7 @@ public struct CommandLabView: View {
                 Text("Model").tag(CommandResolver.Mode.model)
                 Text("Rules").tag(CommandResolver.Mode.rules)
                 Text("Rules, then model").tag(CommandResolver.Mode.rulesThenModel)
+                Text("Orchestrator").tag(CommandResolver.Mode.orchestrator)
             }
             .accessibilityIdentifier("CommandLab.mode")
             Stepper("Tries: \(lab.tries)", value: $lab.tries, in: 1...10)
@@ -140,6 +141,9 @@ public struct CommandLabView: View {
             ForEach(outcome.inputs.sorted { $0.key < $1.key }, id: \.key) { name, value in
                 Text("\(name): \(value)").font(.subheadline)
             }
+            ForEach(outcome.thenRuns ?? [], id: \.self) { step in
+                Text("then \(step)").font(.subheadline)
+            }
             HStack(spacing: 8) {
                 if outcome.fellBack { Text("fell back").font(.caption).foregroundStyle(.orange) }
                 Text("\(Int(outcome.averageMilliseconds.rounded())) ms").font(.caption).foregroundStyle(.secondary)
@@ -186,6 +190,7 @@ public struct CommandLabView: View {
                 Text("Model").tag(CommandResolver.Mode.model)
                 Text("Rules").tag(CommandResolver.Mode.rules)
                 Text("Rules, then model").tag(CommandResolver.Mode.rulesThenModel)
+                Text("Orchestrator").tag(CommandResolver.Mode.orchestrator)
             }
             .disabled(!lab.live.isEnabled)
             .accessibilityIdentifier("CommandLab.live.mode")
@@ -371,8 +376,11 @@ struct CommandMapsView: View {
             }
         }
         .navigationTitle("Maps")
+        // This module stands apart from RipulAgent, so it cannot use
+        // `ripulSheet`; the Catalyst size is declared here instead.
         .sheet(isPresented: $importing) {
             ImportMapSheet(lab: lab, isPresented: $importing)
+                .modifier(CatalystPageSheet())
         }
     }
 }
@@ -696,5 +704,16 @@ struct AddressWordsEditor: View {
         }
         .navigationTitle("App words")
         .onChange(of: lab.map) { _, _ in lab.saveMap() }
+    }
+}
+
+private struct CatalystPageSheet: ViewModifier {
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        #if targetEnvironment(macCatalyst)
+        if #available(iOS 18.0, *) { content.presentationSizing(.page) } else { content }
+        #else
+        content
+        #endif
     }
 }

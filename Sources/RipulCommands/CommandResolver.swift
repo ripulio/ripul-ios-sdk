@@ -19,16 +19,24 @@ public struct CommandResolver: Sendable {
         case rules
         /// Rules first; the model is asked only when the rules would fall back.
         case rulesThenModel
+        /// The orchestrator decides, with the app's actions as its tools.
+        /// `rulesThenModel` stands in when it is not set up, cannot be reached
+        /// or does not answer in time.
+        case orchestrator
     }
 
     public let registry: CommandRegistry
     /// Bounds a single model call. A spoken interaction that has not resolved
     /// in this long should fall back rather than leave someone at a silent mic.
     public var timeout: Duration
+    /// The host's route to a tool-calling model, when it has one.
+    public var orchestrator: CommandOrchestrator?
 
-    public init(registry: CommandRegistry, timeout: Duration = .seconds(5)) {
+    public init(registry: CommandRegistry, timeout: Duration = .seconds(5),
+                orchestrator: CommandOrchestrator? = nil) {
         self.registry = registry
         self.timeout = timeout
+        self.orchestrator = orchestrator
     }
 
     public static var isModelAvailable: Bool { OnDeviceModel.isUsable }
@@ -61,11 +69,13 @@ public struct CommandResolver: Sendable {
         for source in registry.sources {
             entities[source.id] = await source.candidates()
         }
-        return CommandSnapshot(entities: entities)
+        return CommandSnapshot(entities: entities, situation: await registry.situation?())
     }
 
+    /// `fresh` asks the orchestrator's transport not to answer from a cache;
+    /// the other resolvers have none.
     public func resolve(_ sentence: String, map: CommandMap, mode: Mode = .model,
-                        snapshot given: CommandSnapshot? = nil) async -> CommandResolution {
+                        snapshot given: CommandSnapshot? = nil, fresh: Bool = false) async -> CommandResolution {
         let snapshot: CommandSnapshot
         if let given { snapshot = given } else { snapshot = await self.snapshot(for: map) }
         switch mode {
@@ -81,7 +91,55 @@ public struct CommandResolver: Sendable {
             var modelled = await resolveWithModel(sentence, map: map, snapshot: snapshot)
             modelled.notes.insert("rules would have fallen back, so the model was asked", at: 0)
             return modelled
+        case .orchestrator:
+            return await resolveWithOrchestrator(sentence, map: map, snapshot: snapshot, fresh: fresh)
         }
+    }
+
+    public func resolveWithOrchestrator(_ sentence: String, map: CommandMap, snapshot: CommandSnapshot,
+                                        fresh: Bool = false) async -> CommandResolution {
+        let trimmed = sentence.trimmingCharacters(in: .whitespacesAndNewlines)
+        var resolution = CommandResolution(engine: .orchestrator, sentence: trimmed)
+        guard !trimmed.isEmpty else {
+            resolution.notes.append("nothing was said")
+            return resolution
+        }
+        let start = ContinuousClock.now
+        // What answers when the orchestrator cannot: exactly the resolver that
+        // was live before it existed, so being offline costs nothing that
+        // worked yesterday.
+        func standIn(_ why: String) async -> CommandResolution {
+            var stood = await resolve(trimmed, map: map, mode: .rulesThenModel, snapshot: snapshot)
+            stood.notes.insert("\(why); used rules, then the model", at: 0)
+            stood.duration = ContinuousClock.now - start
+            return stood
+        }
+        guard let orchestrator else { return await standIn("no orchestrator is set up") }
+
+        let request = OrchestratorPrompt.request(sentence: trimmed, map: map, registry: registry,
+                                                 snapshot: snapshot, limit: orchestrator.maxListed, fresh: fresh)
+        resolution.instructions = OrchestratorPrompt.describe(request.tools)
+        resolution.prompt = [request.lists, request.situation.map { "Situation: \($0)" }, "Sentence: \(trimmed)"]
+            .compactMap { $0 }.joined(separator: "\n")
+        do {
+            let reply = try await withThrowingTaskGroup(of: OrchestratorReply?.self) { group in
+                group.addTask { try await orchestrator.transport(request) }
+                group.addTask {
+                    try await Task.sleep(for: self.timeout)
+                    return nil
+                }
+                let first = try await group.next() ?? nil
+                group.cancelAll()
+                return first
+            }
+            guard let reply else { return await standIn("the orchestrator did not answer within \(timeout)") }
+            OrchestratorBinder.bind(reply, into: &resolution, map: map, registry: registry, snapshot: snapshot,
+                                    maxSteps: orchestrator.maxSteps, maxListed: orchestrator.maxListed)
+        } catch {
+            return await standIn("the orchestrator failed (\(error.localizedDescription))")
+        }
+        resolution.duration = ContinuousClock.now - start
+        return resolution
     }
 
     public func resolveWithRules(_ sentence: String, map: CommandMap, snapshot: CommandSnapshot) -> CommandResolution {
@@ -114,10 +172,15 @@ public struct CommandResolver: Sendable {
         return ruled
     }
 
-    /// Runs the resolved action. Does nothing for a resolution with no command.
+    /// Runs the resolved action, then any later steps in order, stopping at
+    /// the first that throws. Does nothing for a resolution with no command.
     public func perform(_ resolution: CommandResolution) async throws {
         guard let actionId = resolution.actionId, let action = registry.action(actionId) else { return }
         try await action.perform(resolution.values)
+        for step in resolution.laterSteps {
+            guard let action = registry.action(step.actionId) else { continue }
+            try await action.perform(step.values)
+        }
     }
 }
 

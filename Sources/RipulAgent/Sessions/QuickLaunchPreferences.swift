@@ -45,8 +45,8 @@ public struct QuickLaunchTarget: Identifiable, Equatable {
     /// Circle tint: model colour, falling back to the harness colour.
     public var color: Color {
         if let identity { return identity.color }
-        if let hex = providerColorHex { return Color(hex: hex) }
-        return Color(hex: ProviderConstants.ripul.color)
+        if let hex = providerColorHex { return Color(hex: hex) }  // theme-exempt: a provider's colour is data
+        return Color(hex: ProviderConstants.ripul.color)  // theme-exempt: a provider's colour is data
     }
 
     /// Resolve a target from a catalog model, or nil if it isn't launchable.

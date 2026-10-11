@@ -37,8 +37,8 @@ struct RipulProfilePhotoEditor: View {
             .clipShape(Circle())
             .accessibilityLabel("Profile photo")
             VStack(alignment: .leading, spacing: 2) {
-                Text(name ?? email ?? "Signed in").font(.headline)
-                if let email, name != nil { Text(email).font(.subheadline).foregroundStyle(.secondary) }
+                Text(name ?? email ?? "Signed in").font(.ripul(.headline))
+                if let email, name != nil { Text(email).font(.ripul(.subheadline)).foregroundStyle(.ripul(.textSecondary)) }
             }
         }
         .padding(.vertical, 4)
@@ -99,8 +99,8 @@ struct RipulProfilePhotoEditor: View {
         }
         .buttonStyle(.borderless)
         Text("Your photo appears in your teams and group conversations. Without a photo, your initials appear instead.")
-            .font(.caption).foregroundStyle(.secondary)
-        if let errorMessage { Text(errorMessage).font(.caption).foregroundStyle(.red) }
+            .font(.ripul(.caption)).foregroundStyle(.ripul(.textSecondary))
+        if let errorMessage { Text(errorMessage).font(.ripul(.caption)).foregroundStyle(.ripul(.danger)) }
 
     }
 
@@ -109,7 +109,7 @@ struct RipulProfilePhotoEditor: View {
         let value = words.count > 1
             ? String(words.first!.prefix(1)) + String(words.last!.prefix(1))
             : String(words.first?.prefix(2) ?? "?")
-        return Text(value.uppercased()).font(.title3.weight(.semibold)).foregroundStyle(.tint)
+        return Text(value.uppercased()).font(.ripul(.title3, weight: .semibold)).foregroundStyle(.tint)
     }
 
     @MainActor private func upload(_ data: Data) async throws {

@@ -154,14 +154,14 @@ public struct SlidePanelOverlay<Content: View>: View {
         if shouldMount {
             ZStack {
                 if showsScrim {
-                    Color.black.opacity(Double(max(0, 1 - offset / screenWidth)) * 0.3)
+                    Color.ripul(system: .black).opacity(Double(max(0, 1 - offset / screenWidth)) * 0.3)
                         .ignoresSafeArea()
                         .onTapGesture { performDismiss() }
                 }
 
                 content()
                     .safeAreaInset(edge: .top) { Color.clear.frame(height: topInset) }
-                    .background(Color(uiColor: .systemBackground))
+                    .background(Color.ripul(.canvas))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .modifier(SlideEffect(offset: offset))
                     .overlay(alignment: .leading) {
@@ -342,7 +342,7 @@ public struct InteractiveEdgeSwipeView: UIViewRepresentable {
             // solid background-coloured UIView. The user can't see WKWebView repainting
             // underneath, and touches can't reach it (no accidental scroll during drag).
             let overlay = UIView(frame: target.bounds)
-            overlay.backgroundColor = UIColor.systemBackground
+            overlay.backgroundColor = UIColor.ripul(.canvas)
             overlay.isUserInteractionEnabled = false
             overlay.autoresizingMask = [.flexibleWidth, .flexibleHeight]
             target.addSubview(overlay)

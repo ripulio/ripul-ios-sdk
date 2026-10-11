@@ -57,8 +57,8 @@ struct ProviderKeyRow: View {
 
             if let errorMessage {
                 Text(errorMessage)
-                    .font(.caption)
-                    .foregroundStyle(.red)
+                    .font(.ripul(.caption))
+                    .foregroundStyle(.ripul(.danger))
             }
         }
         .padding(.vertical, 4)
@@ -81,17 +81,17 @@ struct ProviderKeyRow: View {
             if busy {
                 ProgressView()
             } else if isConfigured {
-                Menu {
+                Menu { MenuIcons {
                     Button("Replace Key…") {
                         keyInput = ""
                         errorMessage = nil
                         entering = true
                     }
                     Button("Remove Key", role: .destructive) { confirmingRemove = true }
-                } label: {
+                }} label: {
                     Text("••••\(status?.hint ?? "")")
-                        .font(.callout.monospaced())
-                        .foregroundStyle(.secondary)
+                        .font(.ripul(.callout, family: .code))
+                        .foregroundStyle(.ripul(.textSecondary))
                 }
                 .uiKitIdentifier("ProviderKeyRow.storedMenu")
             }
@@ -102,13 +102,13 @@ struct ProviderKeyRow: View {
         VStack(alignment: .leading, spacing: 2) {
             if let label = status?.accountLabel {
                 Text(label)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(.ripul(.caption))
+                    .foregroundStyle(.ripul(.textSecondary))
             }
             if let added = addedDescription {
                 Text(added)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(.ripul(.caption))
+                    .foregroundStyle(.ripul(.textSecondary))
             }
         }
     }
@@ -126,7 +126,7 @@ struct ProviderKeyRow: View {
 
         HStack {
             Link("Get a key", destination: provider.consoleURL)
-                .font(.caption)
+                .font(.ripul(.caption))
 
             Spacer()
 
@@ -136,7 +136,7 @@ struct ProviderKeyRow: View {
                     keyInput = ""
                     errorMessage = nil
                 }
-                .font(.caption)
+                .font(.ripul(.caption))
             }
 
             Button("Save") { Task { await save() } }

@@ -28,16 +28,16 @@ public struct RipulToolDetailView: View {
                 VStack(alignment: .leading, spacing: 18) {
                     if let why = absentExplanation {
                         Text(why)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .font(.ripul(.caption))
+                            .foregroundStyle(.ripul(.textSecondary))
                             .padding(10)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
+                            .background(.ripul(.textQuaternary), in: RoundedRectangle(cornerRadius: 8))
                     }
                     if !tool.description.isEmpty {
                         section("Description") {
                             Text(tool.description)
-                                .font(.callout)
+                                .font(.ripul(.callout))
                                 .textSelection(.enabled)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
@@ -56,24 +56,24 @@ public struct RipulToolDetailView: View {
                                 Button(schemaExpanded ? "Hide raw JSON" : "Show raw JSON") {
                                     withAnimation(.easeInOut(duration: 0.18)) { schemaExpanded.toggle() }
                                 }
-                                .font(.caption)
+                                .font(.ripul(.caption))
                                 .uiKitIdentifier("ToolDetail.schema.toggle")
                                 Spacer()
                                 Button {
                                     copy(tool.schemaJSON)
                                 } label: {
                                     Label(copied ? "Copied" : "Copy", systemImage: copied ? "checkmark" : "doc.on.doc")
-                                        .font(.caption)
+                                        .font(.ripul(.caption))
                                 }
                                 .uiKitIdentifier("ToolDetail.schema.copy")
                             }
                             if schemaExpanded {
                                 Text(tool.schemaJSON)
-                                    .font(.caption2.monospaced())
+                                    .font(.ripul(.caption2, family: .code))
                                     .textSelection(.enabled)
                                     .frame(maxWidth: .infinity, alignment: .leading)
                                     .padding(10)
-                                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
+                                    .background(.ripul(.textQuaternary), in: RoundedRectangle(cornerRadius: 8))
                             }
                         }
                     }
@@ -104,7 +104,7 @@ public struct RipulToolDetailView: View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
             VStack(alignment: .leading, spacing: 3) {
                 Text(tool.name)
-                    .font(.headline.monospaced())
+                    .font(.ripul(.headline, family: .code))
                     .textSelection(.enabled)
                     .lineLimit(2)
                 HStack(spacing: 6) {
@@ -126,18 +126,18 @@ public struct RipulToolDetailView: View {
 
     private func badge(_ text: String) -> some View {
         Text(text)
-            .font(.caption2)
-            .foregroundStyle(.secondary)
+            .font(.ripul(.caption2))
+            .foregroundStyle(.ripul(.textSecondary))
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
-            .background(.quaternary, in: Capsule())
+            .background(.ripul(.textQuaternary), in: Capsule())
     }
 
     private func section<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(title)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
+                .font(.ripul(.caption, weight: .semibold))
+                .foregroundStyle(.ripul(.textSecondary))
                 .textCase(.uppercase)
             content()
         }
@@ -146,24 +146,24 @@ public struct RipulToolDetailView: View {
     private func parameterRow(_ param: RipulToolInventory.Parameter) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 6) {
-                Text(param.name).font(.callout.monospaced())
-                Text(param.type).font(.caption).foregroundStyle(.secondary)
+                Text(param.name).font(.ripul(.callout, family: .code))
+                Text(param.type).font(.ripul(.caption)).foregroundStyle(.ripul(.textSecondary))
                 if param.required {
                     Text("required")
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(.orange)
+                        .font(.ripul(.caption2, weight: .semibold))
+                        .foregroundStyle(.ripul(.warning))
                 }
             }
             if !param.description.isEmpty {
                 Text(param.description)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(.ripul(.caption))
+                    .foregroundStyle(.ripul(.textSecondary))
                     .fixedSize(horizontal: false, vertical: true)
             }
             if !param.enumValues.isEmpty {
                 Text(param.enumValues.joined(separator: " · "))
-                    .font(.caption2.monospaced())
-                    .foregroundStyle(.tertiary)
+                    .font(.ripul(.caption2, family: .code))
+                    .foregroundStyle(.ripul(.textTertiary))
                     .fixedSize(horizontal: false, vertical: true)
             }
         }

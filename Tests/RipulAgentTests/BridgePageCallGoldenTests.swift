@@ -235,7 +235,8 @@ final class BridgePageCallGoldenTests: XCTestCase {
         Probe(name: "getSlashCommands.hidden") { await $0.getSlashCommands(showHidden: true) },
         Probe(name: "closeSession", prepare: twoSessions) { await $0.closeSession(id: "tab-1") },
         Probe(name: "leaveSharedChat", prepare: twoSessions) { describe(await $0.leaveSharedChat(id: "tab-1")) },
-        Probe(name: "joinShareLink") { await $0.joinShareLink(token: "tok") },
+        // A join that gets no answer probes the page and asks again; that path carries timings.
+        Probe(name: "joinShareLink", states: [.detached, .missing, .null, .scalar, .refused, .answered]) { await $0.joinShareLink(token: "tok") },
         Probe(name: "truncateSession") { describe(await $0.truncateSession(chatId: "chat-1", keepCount: 5)) },
         Probe(name: "evictSessionChannel") { describe(await $0.evictSessionChannel(chatId: "chat-1")) },
         Probe(name: "importCliSession") {

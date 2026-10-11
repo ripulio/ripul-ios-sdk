@@ -200,6 +200,7 @@ public struct RipulSessionsView: View {
         guard let wanted = RipulOpenSessionRequest.pendingSessionId else { return }
         guard onPickUnifiedSession == nil else {
             RipulOpenSessionRequest.pendingSessionId = nil
+            RipulOpenSessionRequest.finished(wanted, tabId: nil)
             return
         }
         // By row id, or any id the chat is known by (its host chat id, a
@@ -227,7 +228,12 @@ public struct RipulSessionsView: View {
             workspace.restoresPendingSession = false
         }
         bridge.handleConsoleLog("LOG: [SIRI] opening session \(session.title)")
-        model.openSession(session, onSelect: onSelectSession, onDismiss: onDismiss)
+        let onSelect = onSelectSession
+        model.openSession(session, onSelect: { tab in
+            await onSelect(tab)
+            // Whoever asked may be waiting to act on this chat.
+            RipulOpenSessionRequest.finished(wanted, tabId: tab.id)
+        }, onDismiss: onDismiss)
     }
 
     /// Runs Move to Machine for `ripul://move-chat`. The row is found by any id
@@ -288,6 +294,7 @@ public struct RipulSessionsView: View {
             try? await Task.sleep(for: .seconds(5))
             guard !Task.isCancelled, RipulOpenSessionRequest.pendingSessionId == wanted else { return }
             RipulOpenSessionRequest.pendingSessionId = nil
+            RipulOpenSessionRequest.finished(wanted, tabId: nil)
             bridge.handleConsoleLog("LOG: [SIRI] \(wanted) never listed — request dropped")
         }
         RipulOpenSessionRequest.rescan = (wanted, task)
@@ -357,7 +364,15 @@ public struct RipulSessionsView: View {
             restartingMachineId: model.restartingMachineId,
             restartSucceededId: model.restartSucceededId,
             selectedSessionId: bridge.activeSessionId,
-            onRefresh: { await model.refresh() },
+            onRefresh: {
+                // The inbox is on this screen too, and `model.refresh()` leaves it
+                // to its manager. Not awaited: neither read should wait on the other.
+                Task { await inviteManager?.fetchInvites() }
+                // Which chats are running is pushed by each Mac. A pull is the
+                // one time every chat is asked about.
+                Task { await bridge.refreshRunStates() }
+                await model.refresh()
+            },
             allowRipulAgents: allowRipulAgents,
             onDiscoverActions: quickActionsEnabled ? { machine in
                 Task {
@@ -423,9 +438,9 @@ public struct RipulSessionsView: View {
                 // DevTools console (ConsoleLogViewer), presented by whoever hosts
                 // this view.
                 Text("Sessions")
-                    .font(.caption)
+                    .font(.ripul(.caption))
                     .fontWeight(.semibold)
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(.ripul(.text))
                     .lineLimit(1)
                     .padding(.horizontal, 12)
                     .frame(minHeight: 44)
@@ -480,15 +495,23 @@ public struct RipulSessionsView: View {
         })
         #endif
         .connectionDiagnosis($errorDetails, subject: errorSubject, bridge: bridge)
+        // Move to Machine reports here, step by step, rather than in the
+        // notice at the foot of the list, where a failed move went unseen.
+        .ripulSheet(isPresented: Binding(
+            get: { model.moveState != nil && !model.moveSheetHidden },
+            set: { if !$0 { model.dismissMoveSheet() } }
+        )) {
+            MoveChatSheetHost(model: model)
+        }
     }
 
     private func sessionInfoNotice(_ note: String) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
             Label(note, systemImage: "info.circle.fill")
-                .font(.subheadline)
+                .font(.ripul(.subheadline))
             Spacer(minLength: 0)
             Button("Dismiss") { model.infoNotice = nil }
-                .font(.subheadline)
+                .font(.ripul(.subheadline))
                 .uiKitIdentifier("RipulSessions.info.dismiss")
         }
         .padding(16)
@@ -502,11 +525,11 @@ public struct RipulSessionsView: View {
         let diagnosis = ConnectionDiagnosis.classify(rawError: error, phase: nil, action: subject?.action)
         return VStack(alignment: .leading, spacing: 8) {
             Label(diagnosis.summary, systemImage: "exclamationmark.triangle.fill")
-                .font(.subheadline.weight(.semibold))
+                .font(.ripul(.subheadline, weight: .semibold))
             if let hint = diagnosis.hint {
                 Text(hint)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(.ripul(.caption))
+                    .foregroundStyle(.ripul(.textSecondary))
             }
             HStack {
                 Button("Details") {
@@ -521,7 +544,7 @@ public struct RipulSessionsView: View {
                 }
                 .uiKitIdentifier("RipulSessions.error.dismiss")
             }
-            .font(.subheadline)
+            .font(.ripul(.subheadline))
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -541,17 +564,17 @@ private struct ChooseModeBannerHost: View {
             HStack(spacing: 8) {
                 Image(systemName: "scope")
                 Text("Select a session to work in \u{201C}\(chooseMode.appName ?? "the app")\u{201D}")
-                    .font(.subheadline.weight(.semibold))
+                    .font(.ripul(.subheadline, weight: .semibold))
                     .lineLimit(2)
                 Spacer()
                 Button("Cancel") { chooseMode.cancel() }
-                    .font(.subheadline.weight(.semibold))
+                    .font(.ripul(.subheadline, weight: .semibold))
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
             .frame(maxWidth: .infinity)
             .background(Color.accentColor)
-            .foregroundStyle(.white)
+            .foregroundStyle(.ripul(.onAccent))
         }
     }
 }

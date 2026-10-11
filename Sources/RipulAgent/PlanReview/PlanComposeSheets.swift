@@ -41,7 +41,7 @@ struct PlanCommentSheet: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("Against") {
+                Section(themed: "Against") {
                     Picker("Section", selection: $anchor) {
                         Text("The plan as a whole").tag(PlanAnchorConstants.planWide)
                         ForEach(anchors) { section in
@@ -59,15 +59,15 @@ struct PlanCommentSheet: View {
                     }
                     .pickerStyle(.segmented)
                     .uiKitIdentifier("PlanCommentSheet.severityPicker")
-                } header: {
+                } header: { RipulSectionHeader {
                     Text("Severity")
-                } footer: {
+                } } footer: { RipulSectionFooter {
                     Text(severity == .blocking
                          ? "Holds the plan open until it is resolved or declined."
                          : "Recorded, but does not hold the plan open.")
-                }
+                } }
 
-                Section("Comment") {
+                Section(themed: "Comment") {
                     TextField("What needs to change, and why", text: $body_, axis: .vertical)
                         .lineLimit(4...12)
                         .focused($bodyFocused)
@@ -130,10 +130,10 @@ struct PlanTaskSheet: View {
         NavigationStack {
             Form {
                 if let sourceComment {
-                    Section("Discharges") {
+                    Section(themed: "Discharges") {
                         Text(sourceComment.body)
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
+                            .font(.ripul(.callout))
+                            .foregroundStyle(.ripul(.textSecondary))
                     }
                 }
                 Section {
@@ -143,9 +143,9 @@ struct PlanTaskSheet: View {
                         .uiKitIdentifier("PlanTaskSheet.titleField")
                     TextField("Owner (optional)", text: $owner)
                         .uiKitIdentifier("PlanTaskSheet.ownerField")
-                } footer: {
+                } footer: { RipulSectionFooter {
                     Text("Marking a task done does not close the comment it came from — the reviewer who raised it decides that.")
-                }
+                } }
             }
             .navigationTitle("New task")
             #if os(iOS)

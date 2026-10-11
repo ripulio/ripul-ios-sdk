@@ -249,8 +249,8 @@ public struct GlassRichList<Item: Identifiable, Row: View, Swipe: View, RowMenu:
                 ProgressView().controlSize(.small)
                     .uiKitIdentifier("\(identifierPrefix).loadingSpinner")
                 Text("Loading…")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(.ripul(.caption))
+                    .foregroundStyle(.ripul(.textSecondary))
                 Spacer()
             }
             .padding(.horizontal, 16)
@@ -266,8 +266,8 @@ public struct GlassRichList<Item: Identifiable, Row: View, Swipe: View, RowMenu:
 
     private func emptyText(_ message: String, identifier: String) -> some View {
         Text(message)
-            .font(.caption)
-            .foregroundStyle(.secondary)
+            .font(.ripul(.caption))
+            .foregroundStyle(.ripul(.textSecondary))
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 16)
             .padding(.vertical, 8)
@@ -290,7 +290,7 @@ public struct GlassRichList<Item: Identifiable, Row: View, Swipe: View, RowMenu:
                     .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                         if !isSelecting { swipe(item) }
                     }
-                    .contextMenu { if !isSelecting { rowMenu(item) } }
+                    .contextMenu { MenuIcons { if !isSelecting { rowMenu(item) } }}
                     .listRowBackground(background(for: item))
                     .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
             }
@@ -333,7 +333,7 @@ public struct GlassRichList<Item: Identifiable, Row: View, Swipe: View, RowMenu:
                             onTap(item)
                         }
                     }
-                    .contextMenu { if !isSelecting { rowMenu(item) } }
+                    .contextMenu { MenuIcons { if !isSelecting { rowMenu(item) } }}
 
                 if item.id != items.last?.id {
                     Divider().padding(.leading, 16)
@@ -358,8 +358,8 @@ public struct GlassRichList<Item: Identifiable, Row: View, Swipe: View, RowMenu:
         }
         switch activity(item) {
         case .opening: return Color.accentColor.opacity(0.12)
-        case .archiving: return Color.orange.opacity(0.12)
-        case .deleting: return Color.red.opacity(0.12)
+        case .archiving: return Color.ripul(.warning).opacity(0.12)
+        case .deleting: return Color.ripul(.danger).opacity(0.12)
         case .idle: return Color.clear
         }
     }

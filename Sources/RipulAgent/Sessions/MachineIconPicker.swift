@@ -47,9 +47,9 @@ struct MachineIconPicker: View {
                     ForEach(Self.availableIcons, id: \.section) { group in
                         VStack(alignment: .leading, spacing: 10) {
                             Text(group.section)
-                                .font(.caption)
+                                .font(.ripul(.caption))
                                 .fontWeight(.semibold)
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(.ripul(.textSecondary))
                                 .textCase(.uppercase)
                                 .padding(.horizontal, 4)
 
@@ -102,12 +102,12 @@ struct MachineIconPicker: View {
             dismiss()
         } label: {
             Image(systemName: icon)
-                .font(.system(size: 22))
-                .foregroundStyle(isSelected ? .white : .primary)
+                .font(.ripulIcon(size: 22))
+                .foregroundStyle(isSelected ? Color.ripul(.onAccent) : Color.ripul(.text))
                 .frame(width: 48, height: 48)
                 .background(
                     RoundedRectangle(cornerRadius: 10)
-                        .fill(isSelected ? Color.accentColor : Color.primary.opacity(0.08))
+                        .fill(isSelected ? Color.accentColor : Color.ripul(.text).opacity(0.08))
                 )
         }
         .buttonStyle(.plain)

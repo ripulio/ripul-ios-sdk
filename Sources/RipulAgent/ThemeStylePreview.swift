@@ -100,10 +100,10 @@ public struct RipulStylePickerView: View {
                     ForEach(RipulThemeEngine.allStyleNames(kind: kind), id: \.self) { name in
                         styleRow(name: name, label: name)
                     }
-                } footer: {
+                } footer: { RipulSectionFooter {
                     Text("Each preview is the real component rendered with that style. "
                          + "Tap to assign — applies live.")
-                }
+                } }
                 if hasOverrides {
                     Section {
                         Button(role: .destructive) {
@@ -111,9 +111,9 @@ public struct RipulStylePickerView: View {
                         } label: {
                             Text("Clear overrides")
                         }
-                    } footer: {
+                    } footer: { RipulSectionFooter {
                         Text("This element has knobs set on itself — they beat the named style.")
-                    }
+                    } }
                 }
             }
             .navigationTitle(title)
@@ -168,7 +168,7 @@ public enum RipulStylePickerPresenter {
         // Same as the remap sheet: fired from the explorer, so it presents from
         // the top-most chrome window rather than from under it.
         guard let top = RipulChrome.presentationRoot() else { return }
-        let host = UIHostingController(rootView: RipulStylePickerView(kind: kind, element: element))
+        let host = UIHostingController(rootView: RipulStylePickerView(kind: kind, element: element).ripulThemeRoot())
         if let sheet = host.sheetPresentationController {
             sheet.detents = [.medium(), .large()]
         }

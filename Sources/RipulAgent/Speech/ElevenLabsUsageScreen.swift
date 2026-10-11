@@ -22,22 +22,22 @@ struct ElevenLabsUsageScreen: View {
                             .uiKitIdentifier("ElevenLabsUsage.credits")
                     }
                 } else if loading {
-                    HStack(spacing: 8) { ProgressView(); Text("Checking…").foregroundStyle(.secondary) }
+                    HStack(spacing: 8) { ProgressView(); Text("Checking…").foregroundStyle(.ripul(.textSecondary)) }
                 }
                 if let error {
-                    Text(error).font(.caption).foregroundStyle(.red).uiKitIdentifier("ElevenLabsUsage.error")
+                    Text(error).font(.ripul(.caption)).foregroundStyle(.ripul(.danger)).uiKitIdentifier("ElevenLabsUsage.error")
                 }
-            } header: {
+            } header: { RipulSectionHeader {
                 Text("Plan")
-            }
+            } }
             if let usage { billing(usage); daily(usage) }
             Section {
                 Link(destination: URL(string: "https://elevenlabs.io/app/subscription")!) {
                     Label("Manage subscription", systemImage: "arrow.up.right.square")
                 }.uiKitIdentifier("ElevenLabsUsage.manage")
-            } footer: {
+            } footer: { RipulSectionFooter {
                 Text("Figures come straight from ElevenLabs. Invoices, payment methods and plan changes live in your ElevenLabs account.")
-            }
+            } }
         }
         .navigationTitle(title)
         #if os(macOS)
@@ -52,10 +52,10 @@ struct ElevenLabsUsageScreen: View {
     }
 
     @ViewBuilder private func billing(_ usage: ElevenLabsUsage) -> some View {
-        Section("Billing") {
+        Section(themed: "Billing") {
             if let status = usage.statusName {
                 LabeledContent("Status") {
-                    Text(status).foregroundStyle(usage.status == "past_due" || usage.status == "incomplete" ? .red : .secondary)
+                    Text(status).foregroundStyle(usage.status == "past_due" || usage.status == "incomplete" ? Color.ripul(.danger) : Color.ripul(.textSecondary))
                 }
             }
             if let period = usage.billingPeriodName { LabeledContent("Billed", value: period) }
@@ -69,7 +69,7 @@ struct ElevenLabsUsageScreen: View {
                 LabeledContent("Next invoice", value: "None scheduled")
             }
             if usage.openInvoiceCount > 0 {
-                LabeledContent("Unpaid invoices") { Text("\(usage.openInvoiceCount)").foregroundStyle(.red) }
+                LabeledContent("Unpaid invoices") { Text("\(usage.openInvoiceCount)").foregroundStyle(.ripul(.danger)) }
             }
         }
         .uiKitIdentifier("ElevenLabsUsage.billing")
@@ -85,13 +85,13 @@ struct ElevenLabsUsageScreen: View {
                 .accessibilityLabel("Daily credit usage, last 30 days")
                 .uiKitIdentifier("ElevenLabsUsage.chart")
             } else if usage.daily == nil {
-                Text("Daily usage needs a key with usage read access.").font(.caption).foregroundStyle(.secondary)
+                Text("Daily usage needs a key with usage read access.").font(.ripul(.caption)).foregroundStyle(.ripul(.textSecondary))
             } else {
-                Text("No usage in the last 30 days.").font(.caption).foregroundStyle(.secondary)
+                Text("No usage in the last 30 days.").font(.ripul(.caption)).foregroundStyle(.ripul(.textSecondary))
             }
-        } header: {
+        } header: { RipulSectionHeader {
             Text("Daily usage")
-        }
+        } }
     }
 
     private func refresh() async {
@@ -113,7 +113,7 @@ private struct DailyCreditBars: View {
     var body: some View {
         let peak = max(days.map(\.credits).max() ?? 0, 1)
         VStack(alignment: .leading, spacing: 4) {
-            Text("\(Int(peak).formatted()) max").font(.caption2).foregroundStyle(.secondary)
+            Text("\(Int(peak).formatted()) max").font(.ripul(.caption2)).foregroundStyle(.ripul(.textSecondary))
             GeometryReader { geo in
                 HStack(alignment: .bottom, spacing: 2) {
                     ForEach(days) { day in

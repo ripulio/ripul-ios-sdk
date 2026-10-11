@@ -10,7 +10,7 @@ public struct RipulLocalPreferencesSection: View {
         self.bridge = bridge; self.tokenProvider = tokenProvider
     }
     public var body: some View {
-        Section("Appearance and voice") {
+        Section(themed: "Appearance and voice") {
             NavigationLink { VoiceSettingsScreen(tokenProvider: tokenProvider) } label: {
                 Label("Voice", systemImage: "waveform")
             }.uiKitIdentifier("ProfileScreen.preferences.voice")
@@ -26,11 +26,13 @@ public struct RipulLocalPreferencesSection: View {
             } label: { Label("Theme", systemImage: "paintpalette") }
                 .uiKitIdentifier("ProfileScreen.preferences.theme")
                 .onChange(of: theme) { _ in apply() }
+                // Nothing saved means Auto, which is what the picker already shows.
+                // Until 9 October 2026 this copied the page's current theme into the
+                // setting instead, so opening Profile while a chat happened to be dark
+                // saved "Dark Gradient" as a choice nobody made, and the app then
+                // launched dark on a light Mac.
                 .task {
                     if SpeechPreferences.store.object(forKey: "ripul.localTheme") != nil { apply() }
-                    else if let existing = try? await bridge.callAsyncJavaScript("return window.__ripulGetTheme?.()") as? String {
-                        theme = existing
-                    }
                 }
         }
     }

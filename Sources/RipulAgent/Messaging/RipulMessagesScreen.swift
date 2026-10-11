@@ -229,11 +229,11 @@ public struct RipulMessagesScreen: View {
                     RipulUserAvatar(user: user)
                     VStack(alignment: .leading, spacing: 1) {
                         Text(user.displayName)
-                            .font(.subheadline.weight(.medium))
+                            .font(.ripul(.subheadline, weight: .medium))
                             .lineLimit(1)
                         Text(Self.deviceCaption(model.devices(for: user.id)))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .font(.ripul(.caption))
+                            .foregroundStyle(.ripul(.textSecondary))
                     }
                 }
                 .uiKitIdentifier("Messages.recipient")
@@ -270,19 +270,19 @@ public struct RipulMessagesScreen: View {
             }
             .disabled(model.teams.isEmpty)
             .uiKitIdentifier("Messages.chooseTeams")
-        } header: {
+        } header: { RipulSectionHeader {
             Text("To")
-        } footer: {
+        } } footer: { RipulSectionFooter {
             if let error = model.loadError {
                 Text(error)
             } else if model.selectedUserIds.isEmpty && model.selectedTeamIds.isEmpty {
                 Text("One person, several, or whole teams. Swipe a recipient to remove it.")
             }
-        }
+        } }
     }
 
     private var messageSection: some View {
-        Section("Message") {
+        Section(themed: "Message") {
             TextField("Title", text: $model.title)
                 .uiKitIdentifier("Messages.title")
             TextField("Message", text: $model.body, axis: .vertical)
@@ -308,18 +308,18 @@ public struct RipulMessagesScreen: View {
                     .autocorrectionDisabled()
                     .uiKitIdentifier("Messages.customLink")
             }
-        } header: {
+        } header: { RipulSectionHeader {
             Text("When Tapped")
-        } footer: {
+        } } footer: { RipulSectionFooter {
             if !model.linkIsValid && !model.customLink.isEmpty {
                 Text("Use an https:// address, or ripul://share/<token>.")
-                    .foregroundStyle(.red)
+                    .foregroundStyle(.ripul(.danger))
             }
-        }
+        } }
     }
 
     private func lastSentSection(_ result: RipulAdminMessageResult) -> some View {
-        Section("Last Sent") {
+        Section(themed: "Last Sent") {
             LabeledContent("Delivered", value: Self.devicesText(result.delivered))
             if result.failed > 0 {
                 LabeledContent("Failed", value: Self.devicesText(result.failed))
@@ -371,12 +371,12 @@ struct RipulMessagePeoplePicker: View {
         let unreachable = filtered.filter { model.devices(for: $0.id) == 0 }
         List {
             if !reachable.isEmpty {
-                Section("Can Receive (\(reachable.count))") {
+                Section(themed: "Can Receive (\(reachable.count))") {
                     ForEach(reachable) { row($0) }
                 }
             }
             if !unreachable.isEmpty {
-                Section("No Device (\(unreachable.count))") {
+                Section(themed: "No Device (\(unreachable.count))") {
                     ForEach(unreachable) { row($0) }
                 }
             }
@@ -402,12 +402,12 @@ struct RipulMessagePeoplePicker: View {
                 RipulUserAvatar(user: user)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(user.displayName)
-                        .font(.subheadline.weight(.medium))
-                        .foregroundStyle(.primary)
+                        .font(.ripul(.subheadline, weight: .medium))
+                        .foregroundStyle(.ripul(.text))
                         .lineLimit(1)
                     Text(user.email)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .font(.ripul(.caption))
+                        .foregroundStyle(.ripul(.textSecondary))
                         .lineLimit(1)
                 }
                 Spacer(minLength: 8)
@@ -436,12 +436,12 @@ struct RipulMessageTeamsPicker: View {
                 HStack {
                     VStack(alignment: .leading, spacing: 1) {
                         Text(team.name)
-                            .font(.subheadline.weight(.medium))
-                            .foregroundStyle(.primary)
+                            .font(.ripul(.subheadline, weight: .medium))
+                            .foregroundStyle(.ripul(.text))
                         if let description = team.description, !description.isEmpty {
                             Text(description)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                                .font(.ripul(.caption))
+                                .foregroundStyle(.ripul(.textSecondary))
                                 .lineLimit(2)
                         }
                     }

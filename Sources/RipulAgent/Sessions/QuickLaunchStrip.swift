@@ -148,14 +148,14 @@ struct QuickLaunchStrip: View {
             // Model-aligned: the same text glyph the chat's respondent lozenge
             // uses for this family.
             Text(identity.glyph)
-                .font(.system(size: 15, weight: .semibold))
+                .font(.ripul(size: 15, weight: .semibold))
                 .foregroundStyle(identity.color)
                 .overlay(alignment: .bottomTrailing) { harnessBadge(for: target) }
         } else {
             // Unknown family — fall back to the harness glyph so the button is
             // still recognisable rather than blank.
             Image(systemName: target.providerSymbol ?? "message.fill")
-                .font(.system(size: 14, weight: .semibold))
+                .font(.ripulIcon(size: 14, weight: .semibold))
                 .foregroundStyle(target.color)
         }
     }
@@ -167,8 +167,8 @@ struct QuickLaunchStrip: View {
     private func harnessBadge(for target: QuickLaunchTarget) -> some View {
         if let symbol = target.providerSymbol {
             Image(systemName: symbol)
-                .font(.system(size: 7, weight: .bold))
-                .foregroundStyle(.secondary)
+                .font(.ripulIcon(size: 7, weight: .bold))
+                .foregroundStyle(.ripul(.textSecondary))
                 .offset(x: 4, y: 3)
         }
     }

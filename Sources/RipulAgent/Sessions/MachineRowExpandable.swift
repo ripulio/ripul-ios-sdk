@@ -182,8 +182,8 @@ public struct MachineRowExpandable: View {
     }
 
     private var claudeAccountTint: Color {
-        guard let status = hostAuthStatus else { return .secondary }
-        return status.loggedIn ? .green : .orange
+        guard let status = hostAuthStatus else { return Color.ripul(.textSecondary) }
+        return status.loggedIn ? Color.ripul(.success) : Color.ripul(.warning)
     }
 
     @State private var showCodexAccounts = false
@@ -223,7 +223,7 @@ public struct MachineRowExpandable: View {
         .onChange(of: isConnecting) { connecting in
             if !connecting { loadingTile = nil }
         }
-        .sheet(isPresented: $showIconPicker) {
+        .ripulSheet(isPresented: $showIconPicker) {
             MachineIconPicker(
                 machineName: machine.displayName,
                 currentIcon: machineIcon
@@ -231,14 +231,14 @@ public struct MachineRowExpandable: View {
                 onSetIcon?(icon)
             }
         }
-        .sheet(isPresented: $showCustomiser) {
+        .ripulSheet(isPresented: $showCustomiser) {
             MachinePanelCustomiserSheet(
                 machineId: machine.machineId,
                 machineName: machine.displayName,
                 entries: panelEntries
             )
         }
-        .sheet(isPresented: $showScripts) {
+        .ripulSheet(isPresented: $showScripts) {
             if let hostAuthBridge {
                 // A saved or deleted script changes the tiles, so re-read the
                 // catalog now rather than on the next expand.
@@ -247,25 +247,25 @@ public struct MachineRowExpandable: View {
                 }
             }
         }
-        .sheet(isPresented: $showCodexAccounts) {
+        .ripulSheet(isPresented: $showCodexAccounts) {
             if let hostAuthBridge {
                 CodexAccountSwitcherSheet(machineId: machine.machineId, machineName: machine.displayName,
                     direct: machine.meta?["connection"] == "direct", bridge: hostAuthBridge)
             }
         }
-        .sheet(isPresented: $showHostSettings) {
+        .ripulSheet(isPresented: $showHostSettings) {
             if let hostAuthBridge {
                 HostSettingsSheet(machineId: machine.machineId, machineName: machine.displayName, bridge: hostAuthBridge)
             }
         }
-        .sheet(isPresented: $showSignInSheet, onDismiss: { refreshHostAuthStatus() }) {
+        .ripulSheet(isPresented: $showSignInSheet, onDismiss: { refreshHostAuthStatus() }) {
             if let hostAuthBridge {
                 ClaudeAccountSwitcherSheet(machine: machine, bridge: hostAuthBridge) { _ in
                     refreshHostAuthStatus()
                 }
             }
         }
-        .sheet(item: $showActionSheet) { action in
+        .ripulSheet(item: $showActionSheet) { action in
             RemoteActionSheet(action: action) { params in
                 guard let onExecuteAction else {
                     return ["status": "error", "error": "Execute not available"]
@@ -273,7 +273,7 @@ public struct MachineRowExpandable: View {
                 return await onExecuteAction(action, params)
             }
         }
-        .sheet(isPresented: Binding(
+        .ripulSheet(isPresented: Binding(
             get: { showResultSheet != nil },
             set: { if !$0 { showResultSheet = nil } }
         )) {
@@ -321,19 +321,19 @@ public struct MachineRowExpandable: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 12) {
                 Image(systemName: machineIcon ?? machine.defaultIconName)
-                    .font(.system(size: 16))
-                    .foregroundStyle(.blue)
+                    .font(.ripulIcon(size: 16))
+                    .foregroundStyle(.ripul(accentOr: .info)) // a machine's icon is in the app's colour, not a notice
                     .frame(width: 28)
 
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 6) {
                         Text(machine.displayName)
-                            .font(.body)
+                            .font(.ripul(.body))
                             .lineLimit(1)
                             .uiKitIdentifier("MachineRowExpandable.name")
                         if machine.isOnline {
                             Circle()
-                                .fill(Color.green)
+                                .fill(Color.ripul(.success))
                                 .frame(width: 8, height: 8)
                                 .uiKitIdentifier("MachineRowExpandable.onlineDot")
                         }
@@ -343,31 +343,31 @@ public struct MachineRowExpandable: View {
                         HStack(spacing: 4) {
                             ProgressView().controlSize(.mini)
                             Text("Restarting…")
-                                .font(.caption)
+                                .font(.ripul(.caption))
                         }
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(.ripul(.warning))
                     } else if isRestartSucceeded {
                         HStack(spacing: 4) {
                             Image(systemName: "checkmark.circle.fill")
-                                .font(.caption2)
+                                .font(.ripulIcon(.caption2))
                             Text("Restarted")
-                                .font(.caption)
+                                .font(.ripul(.caption))
                         }
-                        .foregroundStyle(.green)
+                        .foregroundStyle(.ripul(.success))
                     } else if isMachineDisabled {
                         Text("Disabled")
-                            .font(.caption)
-                            .foregroundStyle(.orange)
+                            .font(.ripul(.caption))
+                            .foregroundStyle(.ripul(.warning))
                     } else if !machine.isOnline {
                         Text("Offline")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .font(.ripul(.caption))
+                            .foregroundStyle(.ripul(.textSecondary))
                     } else {
                         Text(activeSessions.isEmpty
                              ? "Online"
                              : "\(activeSessions.count) active \(activeSessions.count == 1 ? "session" : "sessions")")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .font(.ripul(.caption))
+                            .foregroundStyle(.ripul(.textSecondary))
                     }
                 }
 
@@ -375,8 +375,8 @@ public struct MachineRowExpandable: View {
 
                 if isDefault {
                     Image(systemName: "star.fill")
-                        .font(.caption)
-                        .foregroundStyle(.yellow)
+                        .font(.ripulIcon(.caption))
+                        .foregroundStyle(Color.ripul(system: .systemYellow))
                 }
 
                 if isConnecting || isRestarting, !quickLaunchAsButton {
@@ -403,8 +403,8 @@ public struct MachineRowExpandable: View {
                 // than the system disclosure's tinted one, so the solo panel
                 // and the Sessions / Folders panels read as the same control.
                 Image(systemName: "chevron.right")
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.secondary)
+                    .font(.ripulIcon(.caption2, weight: .semibold))
+                    .foregroundStyle(.ripul(.textSecondary))
                     .rotationEffect(.degrees(isExpanded ? 90 : 0))
                     .animation(.easeInOut(duration: 0.2), value: isExpanded)
                     .uiKitIdentifier("MachineRowExpandable.chevron")
@@ -620,7 +620,7 @@ public struct MachineRowExpandable: View {
             icon: "plus.message.fill",
             label: "New Agent",
             subtitle: "Start a fresh Ripul agent",
-            tint: .blue,
+            tint: Color.ripul(accentOr: .info), // the app's own action, in the app's colour
             defaultPlacement: .tile,
             available: actionable && createNewChat == nil && allowRipulAgents,
             isLoading: loadingTile == "newAgent",
@@ -638,7 +638,7 @@ public struct MachineRowExpandable: View {
                 icon: provider.sfSymbol,
                 label: provider.label,
                 subtitle: "Start a new remote \(provider.label) session",
-                tint: Color(hex: provider.color),
+                tint: Color(hex: provider.color),  // theme-exempt: a provider's colour is data
                 defaultPlacement: .tile,
                 available: actionable && createNewChat == nil && onNewCliSession != nil,
                 isLoading: loadingTile == provider.id,
@@ -659,7 +659,7 @@ public struct MachineRowExpandable: View {
                 icon: action.icon ?? "bolt",
                 label: action.displayName,
                 subtitle: action.description,
-                tint: action.destructive ? .red : (action.isPrimary ? .cyan : .secondary),
+                tint: action.destructive ? Color.ripul(.danger) : (action.isPrimary ? Color.ripul(system: .systemCyan) : Color.ripul(.textSecondary)),
                 defaultPlacement: action.isPrimary ? .tile : .row,
                 available: actionable,
                 isLoading: loadingTile == action.id,
@@ -688,7 +688,7 @@ public struct MachineRowExpandable: View {
             icon: "person.2",
             label: "Codex accounts",
             subtitle: "Switch the host’s Codex account",
-            tint: .secondary,
+            tint: Color.ripul(.textSecondary),
             defaultPlacement: .row,
             available: actionable && hostAuthBridge != nil
         ) {
@@ -702,7 +702,7 @@ public struct MachineRowExpandable: View {
             icon: "gearshape",
             label: "Host Settings",
             subtitle: "Working folder, CLI and power settings",
-            tint: .secondary,
+            tint: Color.ripul(.textSecondary),
             defaultPlacement: .row,
             available: actionable && hostAuthBridge != nil
                 && machine.meta?["connection"] != "direct" && machine.teamId == nil
@@ -715,7 +715,7 @@ public struct MachineRowExpandable: View {
             icon: "chevron.left.forwardslash.chevron.right",
             label: "Edit Scripts",
             subtitle: "Write and edit this host’s scripts",
-            tint: .cyan,
+            tint: Color.ripul(system: .systemCyan),
             defaultPlacement: .row,
             available: actionable && hostAuthBridge != nil
         ) {
@@ -727,7 +727,7 @@ public struct MachineRowExpandable: View {
             icon: "arrow.triangle.2.circlepath",
             label: "Restart Host",
             subtitle: "Relaunch the host app",
-            tint: .orange,
+            tint: Color.ripul(.warning),
             defaultPlacement: .row,
             // Stays through a restart so progress and result stay visible even
             // once the machine has dropped offline.
@@ -745,7 +745,7 @@ public struct MachineRowExpandable: View {
             icon: isDefault ? "star.fill" : "star",
             label: isDefault ? "Default Machine" : "Set as Default",
             subtitle: "Use this machine for new sessions",
-            tint: .yellow,
+            tint: Color.ripul(system: .systemYellow),
             defaultPlacement: .row
         ) {
             onSetDefault?(isDefault ? "" : machine.machineId)
@@ -756,7 +756,7 @@ public struct MachineRowExpandable: View {
             icon: machineIcon ?? "photo.on.rectangle",
             label: "Set Icon",
             subtitle: "Pick this machine’s icon",
-            tint: .purple,
+            tint: Color.ripul(system: .systemPurple),
             defaultPlacement: .row
         ) {
             showIconPicker = true
@@ -767,7 +767,7 @@ public struct MachineRowExpandable: View {
             icon: "slider.horizontal.3",
             label: "Customise Panel",
             subtitle: "Reorder, resize and hide these",
-            tint: .secondary,
+            tint: Color.ripul(.textSecondary),
             defaultPlacement: .row,
             // Hiding the way back into the editor would strand the layout.
             essential: true,
@@ -782,7 +782,7 @@ public struct MachineRowExpandable: View {
                 icon: isMachineDisabled ? "checkmark.circle" : "nosign",
                 label: isMachineDisabled ? "Enable" : "Disable",
                 subtitle: isMachineDisabled ? "Show this machine’s actions" : "Hide this machine’s actions",
-                tint: isMachineDisabled ? .green : .red,
+                tint: isMachineDisabled ? Color.ripul(.success) : Color.ripul(.danger),
                 defaultPlacement: .row,
                 // A disabled machine shows almost nothing else, so this must
                 // always be there to undo it.
@@ -841,7 +841,7 @@ private struct MachineActionTile: View {
     let icon: String
     let label: String
     let subtitle: String
-    var tint: Color = .blue
+    var tint: Color = Color.ripul(accentOr: .info) // a tile with no colour of its own is in the app's colour
     var isLoading: Bool = false
     // Any entry can now be placed as a tile, so the tile carries the same
     // transient labels the row does: a Restart moved into the grid must still
@@ -869,21 +869,21 @@ private struct MachineActionTile: View {
                         .frame(height: 22)
                 } else if isSucceeded {
                     Image(systemName: "checkmark.circle.fill")
-                        .font(.system(size: 22, weight: .medium))
-                        .foregroundStyle(.green)
+                        .font(.ripulIcon(size: 22, weight: .medium))
+                        .foregroundStyle(.ripul(.success))
                 } else {
                     Image(systemName: icon)
-                        .font(.system(size: 22, weight: .medium))
+                        .font(.ripulIcon(size: 22, weight: .medium))
                         .foregroundStyle(tint)
                 }
                 VStack(spacing: 2) {
                     Text(displayLabel)
-                        .font(.caption)
+                        .font(.ripul(.caption))
                         .fontWeight(.semibold)
-                        .foregroundStyle(isSucceeded ? .green : .primary)
+                        .foregroundStyle(isSucceeded ? Color.ripul(.success) : Color.ripul(.text))
                     Text(subtitle)
-                        .font(.system(size: 10))
-                        .foregroundStyle(.secondary)
+                        .font(.ripul(size: 10))
+                        .foregroundStyle(.ripul(.textSecondary))
                         .lineLimit(2, reservesSpace: true)
                         .multilineTextAlignment(.center)
                 }
@@ -903,7 +903,7 @@ private struct MachineActionTile: View {
 private struct MachineActionRow: View {
     let icon: String
     let label: String
-    var tint: Color = .secondary
+    var tint: Color = Color.ripul(.textSecondary)
     var isLoading: Bool = false
     var isSucceeded: Bool = false
     var loadingLabel: String? = nil
@@ -928,23 +928,23 @@ private struct MachineActionRow: View {
                         .frame(width: 18, height: 18)
                 } else if isSucceeded {
                     Image(systemName: "checkmark.circle.fill")
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(.green)
+                        .font(.ripulIcon(size: 14, weight: .medium))
+                        .foregroundStyle(.ripul(.success))
                         .frame(width: 18)
                 } else {
                     Image(systemName: icon)
-                        .font(.system(size: 14, weight: .medium))
+                        .font(.ripulIcon(size: 14, weight: .medium))
                         .foregroundStyle(tint)
                         .frame(width: 18)
                 }
                 Text(displayLabel)
-                    .font(.subheadline)
-                    .foregroundStyle(isSucceeded ? .green : .primary)
+                    .font(.ripul(.subheadline))
+                    .foregroundStyle(isSucceeded ? Color.ripul(.success) : Color.ripul(.text))
                 Spacer()
                 if !isLoading && !isSucceeded {
                     Image(systemName: "chevron.right")
-                        .font(.caption2)
-                        .foregroundStyle(.quaternary)
+                        .font(.ripulIcon(.caption2))
+                        .foregroundStyle(.ripul(.textQuaternary))
                 }
             }
             .padding(.horizontal, 12)
@@ -969,11 +969,11 @@ private struct GlassTileBackground: ViewModifier {
                 .background {
                     RoundedRectangle(cornerRadius: 14)
                         .fill(.ultraThinMaterial)
-                        .shadow(color: .black.opacity(0.08), radius: 4, y: 2)
+                        .shadow(color: Color.ripul(system: .black).opacity(0.08), radius: 4, y: 2)
                 }
                 .overlay {
                     RoundedRectangle(cornerRadius: 14)
-                        .strokeBorder(.white.opacity(0.25), lineWidth: 0.5)
+                        .strokeBorder(Color.ripul(system: .white).opacity(0.25), lineWidth: 0.5)
                 }
         }
         #else
@@ -986,11 +986,11 @@ private struct GlassTileBackground: ViewModifier {
                 .background {
                     RoundedRectangle(cornerRadius: 14)
                         .fill(.ultraThinMaterial)
-                        .shadow(color: .black.opacity(0.08), radius: 4, y: 2)
+                        .shadow(color: Color.ripul(system: .black).opacity(0.08), radius: 4, y: 2)
                 }
                 .overlay {
                     RoundedRectangle(cornerRadius: 14)
-                        .strokeBorder(.white.opacity(0.25), lineWidth: 0.5)
+                        .strokeBorder(Color.ripul(system: .white).opacity(0.25), lineWidth: 0.5)
                 }
         }
         #endif

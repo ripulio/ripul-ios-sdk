@@ -19,10 +19,42 @@ public enum RipulVoiceModeRequest {
     /// True while a request is waiting to be honoured.
     public static var pending = false
 
-    public static func start() {
+    /// Whether the waiting request is for a command session.
+    public static var pendingCommands = false
+
+    /// `commands` opens a command session: every finished sentence is offered
+    /// to `commandRouter` before it is sent to the agent, and a sentence ends
+    /// on a pause alone. See `CommandOutcome`.
+    public static func start(commands: Bool = false) {
+        pendingCommands = commands
         pending = true
         NotificationCenter.default.post(name: notification, object: nil)
     }
+
+    // MARK: Command sessions
+    //
+    // Voice mode as a way of operating the app, not only of talking to an
+    // agent. The words are recognised by voice mode's own transcription
+    // instead of Siri's, and the host decides what each sentence was for.
+
+    /// What the host made of one finished sentence.
+    public enum CommandOutcome: Sendable {
+        /// It was a command for the app, and the app ran it. A notice, if
+        /// there is one to show, says what went wrong. Listening resumes.
+        case ran(notice: String?)
+        /// The host sent it to an agent itself, in a chat it chose. Voice mode
+        /// waits for the reply and speaks it, as if it had sent the message.
+        case sent
+        /// Not a command: send it to the agent in the current chat, as voice
+        /// mode always does.
+        case forAgent
+        /// The person has finished. Voice mode ends.
+        case finished
+    }
+
+    /// Set once by the host. Without one a command session is ordinary voice
+    /// mode.
+    @MainActor public static var commandRouter: ((String) async -> CommandOutcome)?
 }
 
 /// Wires both delivery routes plus the readiness retry onto a view.

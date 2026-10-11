@@ -30,8 +30,8 @@ struct FileViewerSheet: View {
                     dismiss()
                 } label: {
                     Image(systemName: "xmark")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(.secondary)
+                        .font(.ripulIcon(size: 14, weight: .semibold))
+                        .foregroundStyle(.ripul(.textSecondary))
                         .frame(width: 32, height: 32)
                         .modifier(InteractiveGlassCircleModifier())
                 }
@@ -39,7 +39,7 @@ struct FileViewerSheet: View {
                 Spacer()
 
                 Text(fileName)
-                    .font(.subheadline.weight(.semibold))
+                    .font(.ripul(.subheadline, weight: .semibold))
                     .lineLimit(1)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 6)
@@ -57,8 +57,8 @@ struct FileViewerSheet: View {
                     #endif
                 } label: {
                     Image(systemName: "doc.on.doc")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(.secondary)
+                        .font(.ripulIcon(size: 14, weight: .semibold))
+                        .foregroundStyle(.ripul(.textSecondary))
                         .frame(width: 32, height: 32)
                         .modifier(InteractiveGlassCircleModifier())
                 }
@@ -69,8 +69,8 @@ struct FileViewerSheet: View {
 
             // Full path subtitle
             Text(request.filePath)
-                .font(.system(size: 11, design: .monospaced))
-                .foregroundStyle(.secondary)
+                .font(.ripul(size: 11, family: .code))
+                .foregroundStyle(.ripul(.textSecondary))
                 .lineLimit(2)
                 .truncationMode(.middle)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -87,15 +87,15 @@ struct FileViewerSheet: View {
                             HStack(alignment: .top, spacing: 0) {
                                 // Line number gutter
                                 Text("\(index + 1)")
-                                    .font(.system(size: 12, design: .monospaced))
-                                    .foregroundStyle(.tertiary)
+                                    .font(.ripul(size: 12, family: .code))
+                                    .foregroundStyle(.ripul(.textTertiary))
                                     .frame(width: CGFloat(gutterDigits) * 9 + 12, alignment: .trailing)
                                     .padding(.trailing, 8)
 
                                 // Line content
                                 Text(line.isEmpty ? " " : line)
-                                    .font(.system(size: 12, design: .monospaced))
-                                    .foregroundStyle(.primary)
+                                    .font(.ripul(size: 12, family: .code))
+                                    .foregroundStyle(.ripul(.text))
                                     .textSelection(.enabled)
                             }
                             .padding(.vertical, 1)
@@ -108,14 +108,14 @@ struct FileViewerSheet: View {
                 Spacer()
                 VStack(spacing: 12) {
                     Image(systemName: "doc.text")
-                        .font(.system(size: 36))
-                        .foregroundStyle(.tertiary)
+                        .font(.ripulIcon(size: 36))
+                        .foregroundStyle(.ripul(.textTertiary))
                     Text("File content not available")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                        .font(.ripul(.subheadline))
+                        .foregroundStyle(.ripul(.textSecondary))
                     Text("Open from a Read tool call to view content.")
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
+                        .font(.ripul(.caption))
+                        .foregroundStyle(.ripul(.textTertiary))
                 }
                 Spacer()
             }

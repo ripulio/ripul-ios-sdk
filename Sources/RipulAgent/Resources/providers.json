@@ -83,6 +83,27 @@
         "antigravity-cli"
       ],
       "defaultModelId": "antigravity-cli-raw-default"
+    },
+    {
+      "id": "shell",
+      "providerKey": "shell-cli",
+      "label": "Shell",
+      "fullLabel": "Shell",
+      "keywords": [
+        "shell",
+        "terminal",
+        "zsh"
+      ],
+      "color": "#eab308",
+      "webIcon": "Terminal",
+      "sfSymbol": "apple.terminal.fill",
+      "modelPrefixes": [
+        "shell-cli"
+      ],
+      "defaultModelId": "shell-cli-raw-default",
+      "composerActions": [
+        "stdin"
+      ]
     }
   ],
   "defaultColor": "#94a3b8",

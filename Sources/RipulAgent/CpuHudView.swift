@@ -37,9 +37,9 @@ public struct CpuHudView: View {
     }
 
     private func color(_ pct: Double) -> Color {
-        if pct >= 80 { return .red }
-        if pct >= 40 { return .orange }
-        return .green
+        if pct >= 80 { return .ripul(.danger) }
+        if pct >= 40 { return .ripul(.warning) }
+        return .ripul(.success)
     }
 
     public var body: some View {
@@ -88,33 +88,33 @@ public struct CpuHudView: View {
                 .stroke(color(sampler.totalPercent).opacity(0.35), lineWidth: 1)
         )
         .overlay(resizeHandle, alignment: .bottomTrailing)
-        .shadow(color: .black.opacity(0.18), radius: 6, y: 2)
+        .shadow(color: Color.ripul(system: .black).opacity(0.18), radius: 6, y: 2)
     }
 
     // Header doubles as the move handle.
     private var header: some View {
         HStack(spacing: 8) {
             Image(systemName: "line.3.horizontal")
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
+                .font(.ripulIcon(.caption2))
+                .foregroundStyle(.ripul(.textTertiary))
             Circle()
                 .fill(color(sampler.totalPercent))
                 .frame(width: 8, height: 8)
             Text(String(format: "%.0f%%", sampler.totalPercent))
-                .font(.system(.title3, design: .monospaced).weight(.semibold))
+                .font(.ripul(.title3, family: .code).weight(.semibold))
                 .foregroundStyle(color(sampler.totalPercent))
             Text("CPU")
-                .font(.system(.caption, design: .monospaced))
-                .foregroundStyle(.secondary)
+                .font(.ripul(.caption, family: .code))
+                .foregroundStyle(.ripul(.textSecondary))
             // Pause / resume sampling — freezes the readout and stops the 5Hz work.
             Button {
                 if sampler.isRunning { sampler.stop() } else { sampler.start() }
             } label: {
                 Image(systemName: sampler.isRunning ? "pause.circle" : "play.circle.fill")
-                    .font(.body)
+                    .font(.ripulIcon(.body))
             }
             .buttonStyle(.plain)
-            .foregroundStyle(sampler.isRunning ? Color.secondary : Color.green)
+            .foregroundStyle(sampler.isRunning ? Color.ripul(.textSecondary) : Color.ripul(.success))
             Spacer(minLength: 6)
             sparkline
                 .frame(width: 72, height: 22)
@@ -140,15 +140,15 @@ public struct CpuHudView: View {
         VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 8) {
                 Text("main")
-                    .font(.system(.caption, design: .monospaced))
-                    .foregroundStyle(.secondary)
+                    .font(.ripul(.caption, family: .code))
+                    .foregroundStyle(.ripul(.textSecondary))
                 Text(String(format: "%.0f%%", sampler.mainThreadPercent))
-                    .font(.system(.caption, design: .monospaced))
+                    .font(.ripul(.caption, family: .code))
                     .foregroundStyle(color(sampler.mainThreadPercent))
                 if let top = sampler.threads.first, !top.isMain {
                     Text("· \(top.name)")
-                        .font(.system(.caption2, design: .monospaced))
-                        .foregroundStyle(.secondary)
+                        .font(.ripul(.caption2, family: .code))
+                        .foregroundStyle(.ripul(.textSecondary))
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }
@@ -156,16 +156,16 @@ public struct CpuHudView: View {
             if sampler.systemAvailable {
                 HStack(spacing: 8) {
                     Text("sys")
-                        .font(.system(.caption, design: .monospaced))
-                        .foregroundStyle(.secondary)
+                        .font(.ripul(.caption, family: .code))
+                        .foregroundStyle(.ripul(.textSecondary))
                     Text(String(format: "%.0f%%", sampler.systemPercent))
-                        .font(.system(.caption, design: .monospaced))
+                        .font(.ripul(.caption, family: .code))
                         .foregroundStyle(color(sampler.systemPercent))
                     Text("· web")
-                        .font(.system(.caption, design: .monospaced))
-                        .foregroundStyle(.secondary)
+                        .font(.ripul(.caption, family: .code))
+                        .foregroundStyle(.ripul(.textSecondary))
                     Text(String(format: "%.0f%%", sampler.webOtherPercent))
-                        .font(.system(.caption, design: .monospaced))
+                        .font(.ripul(.caption, family: .code))
                         .foregroundStyle(color(sampler.webOtherPercent))
                 }
             }
@@ -181,37 +181,37 @@ public struct CpuHudView: View {
                 } label: {
                     Label(sampler.isMeasuring ? "Stop & avg" : "Mark start",
                           systemImage: sampler.isMeasuring ? "stop.circle.fill" : "record.circle")
-                        .font(.caption)
+                        .font(.ripul(.caption))
                 }
                 .buttonStyle(.borderless)
-                .foregroundStyle(sampler.isMeasuring ? Color.red : Color.accentColor)
+                .foregroundStyle(sampler.isMeasuring ? Color.ripul(.danger) : Color.accentColor)
                 Spacer(minLength: 0)
                 Button { copyStats() } label: {
                     Label(justCopied ? "Copied" : "Copy",
                           systemImage: justCopied ? "checkmark" : "doc.on.doc")
-                        .font(.caption2)
+                        .font(.ripul(.caption2))
                 }
                 .buttonStyle(.borderless)
-                .foregroundStyle(justCopied ? Color.green : Color.secondary)
+                .foregroundStyle(justCopied ? Color.ripul(.success) : Color.ripul(.textSecondary))
                 Button { sampler.resetPeak() } label: {
-                    Text("reset peak").font(.caption2)
+                    Text("reset peak").font(.ripul(.caption2))
                 }
                 .buttonStyle(.borderless)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.ripul(.textSecondary))
             }
             if let m = sampler.measurement {
                 VStack(alignment: .leading, spacing: 1) {
                     Text(String(format: "%@ %.1fs · %d samples",
                                 sampler.isMeasuring ? "measuring" : "window", m.durationSec, m.samples))
-                        .font(.system(.caption2, design: .monospaced))
-                        .foregroundStyle(.secondary)
+                        .font(.ripul(.caption2, family: .code))
+                        .foregroundStyle(.ripul(.textSecondary))
                     Text(String(format: "avg tot %.0f%% · main %.0f%% · peak %.0f%%",
                                 m.avgTotal, m.avgMain, m.peakTotal))
-                        .font(.system(.caption2, design: .monospaced))
+                        .font(.ripul(.caption2, family: .code))
                     if sampler.systemAvailable {
                         Text(String(format: "avg sys %.0f%% · web %.0f%%", m.avgSystem, m.avgWeb))
-                            .font(.system(.caption2, design: .monospaced))
-                            .foregroundStyle(.secondary)
+                            .font(.ripul(.caption2, family: .code))
+                            .foregroundStyle(.ripul(.textSecondary))
                     }
                 }
             }
@@ -225,12 +225,12 @@ public struct CpuHudView: View {
         } label: {
             HStack(spacing: 6) {
                 Image(systemName: threadsExpanded ? "chevron.down" : "chevron.right")
-                    .font(.caption2)
+                    .font(.ripulIcon(.caption2))
                 Text("Threads (\(sampler.threads.count))")
-                    .font(.system(.caption, design: .monospaced))
+                    .font(.ripul(.caption, family: .code))
                 Spacer(minLength: 0)
             }
-            .foregroundStyle(.secondary)
+            .foregroundStyle(.ripul(.textSecondary))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -243,13 +243,13 @@ public struct CpuHudView: View {
                 ForEach(sampler.threads.prefix(20)) { t in
                     HStack(spacing: 8) {
                         Text(t.name)
-                            .font(.system(.caption2, design: .monospaced))
-                            .foregroundStyle(t.isMain ? .primary : .secondary)
+                            .font(.ripul(.caption2, family: .code))
+                            .foregroundStyle(t.isMain ? .ripul(.text) : .ripul(.textSecondary))
                             .lineLimit(1)
                             .truncationMode(.middle)
                         Spacer(minLength: 6)
                         Text(String(format: "%.0f%%", t.percent))
-                            .font(.system(.caption2, design: .monospaced))
+                            .font(.ripul(.caption2, family: .code))
                             .foregroundStyle(color(t.percent))
                     }
                 }
@@ -261,8 +261,8 @@ public struct CpuHudView: View {
 
     private var resizeHandle: some View {
         Image(systemName: "arrow.up.left.and.arrow.down.right")
-            .font(.system(size: 11, weight: .bold))
-            .foregroundStyle(.secondary)
+            .font(.ripulIcon(size: 11, weight: .bold))
+            .foregroundStyle(.ripul(.textSecondary))
             .padding(6)
             .contentShape(Rectangle())
             .gesture(

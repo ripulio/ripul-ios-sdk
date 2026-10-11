@@ -21,6 +21,20 @@ final class InviteProtocol: URLProtocol {
     }
     override func stopLoading() {}
 }
+/// Counts one inbox's own requests: activating the app wakes every inbox in the process.
+final class Counter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+    func next() -> Int { lock.lock(); defer { lock.unlock() }; count += 1; return count }
+    var value: Int { lock.lock(); defer { lock.unlock() }; return count }
+}
+let noInvites = "{\"invites\":[]}"
+/// An invitation's push, as the server sends it.
+func push(_ token: String, to user: String) -> [AnyHashable: Any] {
+    ["type": "sessionInvite", "shareToken": token, "roomId": "room", "chatId": "chat", "label": "Plans",
+     "inviterUserId": "owner", "inviterName": "Olive", "targetEmail": "alice@example.test",
+     "targetUserId": user, "createdAt": "now"]
+}
 func body(_ token: String) -> String {
     "{\"invites\":[{\"token\":\"\(token)\",\"roomId\":\"room\",\"inviterUserId\":\"owner\",\"targetEmail\":\"alice@example.test\",\"createdAt\":\"now\"}]}"
 }
@@ -119,5 +133,132 @@ func body(_ token: String) -> String {
         guest.addRecentEmail(" Carol@Example.test ")
         precondition(RipulInviteManager(cache: cache).recentEmails == ["carol@example.test"])
         print("PASS: recent invite emails persist in the host's cache")
+
+        // An inbox signed in as alice whose only reads are the ones a check asks for.
+        func inbox(as bearer: String = "alice-token", grace: Duration = .seconds(60), retryDelay: Duration = .seconds(2)) -> RipulInviteManager {
+            let inbox = RipulInviteManager(session: session, refreshInterval: .seconds(60), retryDelay: retryDelay, pushedGrace: grace)
+            inbox.configure(token: { _ in bearer }, account: { "alice" })
+            return inbox
+        }
+
+        do {
+            let phone = inbox()
+            InviteProtocol.reset { _, n in (200, n == 1 ? noInvites : body("pushed"), 0.05) }
+            phone.receivePush(push("pushed", to: "alice"))
+            // Shown before any request has even been made.
+            precondition(InviteProtocol.requests == 0 && phone.invites.map(\.token) == ["pushed"])
+            precondition(phone.invites[0].inviterName == "Olive" && phone.invites[0].label == "Plans" && phone.invites[0].chatId == "chat")
+            try await Task.sleep(for: .milliseconds(200))
+            // The read the push started came back without it: the row stays.
+            precondition(InviteProtocol.requests == 1 && phone.invites.map(\.token) == ["pushed"])
+            await phone.fetchInvites()
+            // Listed now, so the server's row takes over: one row, not two.
+            precondition(phone.invites.map(\.token) == ["pushed"] && phone.invites[0].inviterName == nil)
+            print("PASS: a pushed invitation shows at once, survives a read that lacks it, and is not doubled")
+        }
+
+        do {
+            let phone = inbox()
+            InviteProtocol.reset { _, _ in (200, noInvites, 0) }
+            phone.receivePush(push("bobs", to: "bob"))
+            precondition(phone.invites.isEmpty)
+            try await Task.sleep(for: .milliseconds(100))
+            precondition(phone.invites.isEmpty && InviteProtocol.requests == 1)
+            print("PASS: a push addressed to another account is read for, never shown")
+        }
+
+        do {
+            let phone = inbox()
+            InviteProtocol.reset { _, _ in (200, body("listed"), 0) }
+            phone.receivePush(["type": "sessionInvite", "shareToken": "listed", "roomId": "room"])
+            precondition(phone.invites.isEmpty)
+            try await Task.sleep(for: .milliseconds(100))
+            precondition(phone.invites.map(\.token) == ["listed"])
+            print("PASS: a push without the row still reads the inbox")
+        }
+
+        do {
+            let phone = inbox(grace: .milliseconds(250))
+            InviteProtocol.reset { _, _ in (200, noInvites, 0) }
+            phone.receivePush(push("withdrawn", to: "alice"))
+            try await Task.sleep(for: .milliseconds(100))
+            precondition(phone.invites.map(\.token) == ["withdrawn"])
+            try await Task.sleep(for: .milliseconds(250))
+            await phone.fetchInvites()
+            precondition(phone.invites.isEmpty)
+            phone.receivePush(push("unwanted", to: "alice"))
+            await phone.dismissInvite(phone.invites[0])
+            try await Task.sleep(for: .milliseconds(100))
+            precondition(phone.invites.isEmpty)
+            print("PASS: a pushed invitation the inbox never lists goes after its grace, and at once when dismissed")
+        }
+
+        do {
+            // The Ripul app's token source reaches through a web view; this one never answers.
+            var parked: [CheckedContinuation<Void, Never>] = []
+            var answers = false
+            let phone = RipulInviteManager(session: session, refreshInterval: .seconds(60), tokenTimeout: .milliseconds(80))
+            phone.configure(
+                token: { _ in
+                    if !answers { await withCheckedContinuation { parked.append($0) } }
+                    return "alice-token"
+                },
+                account: { "alice" }
+            )
+            InviteProtocol.reset { _, _ in (200, body("after"), 0) }
+            await phone.fetchInvites()
+            precondition(InviteProtocol.requests == 0 && phone.lastFetchStatus == "Waiting for sign-in" && !phone.isLoading)
+            answers = true
+            await phone.fetchInvites()
+            precondition(phone.invites.map(\.token) == ["after"])
+            parked.forEach { $0.resume() }
+            print("PASS: a token source that never answers does not freeze the inbox")
+        }
+
+        do {
+            let phone = inbox(as: "retry-token", retryDelay: .milliseconds(50))
+            let reads = Counter()
+            InviteProtocol.reset { request, _ in
+                guard request.value(forHTTPHeaderField: "Authorization") == "Bearer retry-token" else { return (200, noInvites, 0) }
+                return reads.next() == 1 ? (503, "{}", 0) : (200, body("recovered"), 0)
+            }
+            NotificationCenter.default.post(name: NSApplication.didBecomeActiveNotification, object: nil)
+            try await Task.sleep(for: .milliseconds(400))
+            // The regular refresh is a minute away: only the retry can have read again.
+            precondition(reads.value == 2 && phone.invites.map(\.token) == ["recovered"])
+            NotificationCenter.default.post(name: NSApplication.didResignActiveNotification, object: nil)
+            try await Task.sleep(for: .milliseconds(40))
+            let quiet = Counter()
+            InviteProtocol.reset { request, _ in
+                if request.value(forHTTPHeaderField: "Authorization") == "Bearer retry-token" { _ = quiet.next() }
+                return (503, "{}", 0)
+            }
+            await phone.fetchInvites()
+            try await Task.sleep(for: .milliseconds(300))
+            precondition(quiet.value == 1)
+            print("PASS: a failed read is tried again shortly while the app is active, and not in the background")
+        }
+
+        do {
+            // A read caught waiting for its token when the app leaves, and still
+            // waiting when it is back: the read asked for on return queues behind it.
+            let phone = RipulInviteManager(session: session, refreshInterval: .seconds(60))
+            phone.configure(
+                token: { _ in try? await Task.sleep(for: .milliseconds(150)); return "resume-token" },
+                account: { "alice" }
+            )
+            InviteProtocol.reset { request, _ in
+                (200, request.value(forHTTPHeaderField: "Authorization") == "Bearer resume-token" ? body("back") : noInvites, 0)
+            }
+            NotificationCenter.default.post(name: NSApplication.didBecomeActiveNotification, object: nil)
+            try await Task.sleep(for: .milliseconds(30))
+            NotificationCenter.default.post(name: NSApplication.didResignActiveNotification, object: nil)
+            try await Task.sleep(for: .milliseconds(30))
+            NotificationCenter.default.post(name: NSApplication.didBecomeActiveNotification, object: nil)
+            try await Task.sleep(for: .milliseconds(600))
+            precondition(phone.invites.map(\.token) == ["back"])
+            NotificationCenter.default.post(name: NSApplication.didResignActiveNotification, object: nil)
+            print("PASS: the read asked for on return to the app is not lost behind one cancelled as it left")
+        }
     }
 }

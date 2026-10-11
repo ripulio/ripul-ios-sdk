@@ -105,7 +105,7 @@ public struct CmsPageView: View {
                         showDiagnostics: $showDiagnostics
                     )
                 }
-                .sheet(isPresented: $showDiagnostics) {
+                .ripulSheet(isPresented: $showDiagnostics) {
                     CmsRuntimeDiagnosticsView(runtime: loader.runtime)
                 }
                 // Screen-edge swipe zones (page setting, default on): thin
@@ -536,7 +536,7 @@ private struct CmsDesignPill: View {
 
     var body: some View {
         pillContent
-            .sheet(isPresented: inspectorOpen) {
+            .ripulSheet(isPresented: inspectorOpen) {
                 if let blockId = runtime.selectedBlockId, let ctrl = controller {
                     CmsPropertyInspectorView(blockId: blockId, controller: ctrl)
                         .environmentObject(runtime)

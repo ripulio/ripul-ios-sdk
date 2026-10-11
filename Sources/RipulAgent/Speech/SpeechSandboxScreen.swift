@@ -31,7 +31,7 @@ public struct SpeechSandboxScreen: View {
 
     public var body: some View {
         Form {
-            Section("Provider") {
+            Section(themed: "Provider") {
                 Picker("Provider", selection: $selectedProviderId) {
                     ForEach(providers, id: \.id) { p in
                         Text(p.label).tag(p.id)
@@ -41,9 +41,9 @@ public struct SpeechSandboxScreen: View {
                 .uiKitIdentifier("SpeechSandboxScreen.providerPicker")
             }
 
-            Section("Voice") {
+            Section(themed: "Voice") {
                 if let voicesError {
-                    Text(voicesError).foregroundStyle(.red)
+                    Text(voicesError).foregroundStyle(.ripul(.danger))
                 } else {
                     Picker("Voice", selection: $selectedVoiceId) {
                         ForEach(voices) { voice in
@@ -55,7 +55,7 @@ public struct SpeechSandboxScreen: View {
                 }
             }
 
-            Section("Text to speech") {
+            Section(themed: "Text to speech") {
                 TextField("Text", text: $ttsText, axis: .vertical)
                     .lineLimit(2...5)
                     .uiKitIdentifier("SpeechSandboxScreen.ttsText")
@@ -73,7 +73,7 @@ public struct SpeechSandboxScreen: View {
                 }
             }
 
-            Section("Live transcription") {
+            Section(themed: "Live transcription") {
                 Button {
                     toggleTranscription()
                 } label: {
@@ -81,26 +81,26 @@ public struct SpeechSandboxScreen: View {
                         isTranscribing ? "Stop transcribing" : "Start live transcription",
                         systemImage: isTranscribing ? "stop.circle" : "waveform"
                     )
-                    .foregroundStyle(isTranscribing ? Color.red : Color.accentColor)
+                    .foregroundStyle(isTranscribing ? Color.ripul(.danger) : Color.accentColor)
                 }
                 .uiKitIdentifier("SpeechSandboxScreen.transcribeToggle")
 
                 if isTranscribing || !partialTranscript.isEmpty || !committedSegments.isEmpty {
                     (Text(committedSegments.joined(separator: " "))
                         + Text(committedSegments.isEmpty ? "" : " ")
-                        + Text(partialTranscript).foregroundStyle(.secondary))
+                        + Text(partialTranscript).foregroundStyle(.ripul(.textSecondary)))
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .uiKitIdentifier("SpeechSandboxScreen.transcript")
                 } else {
                     Text("Transcript appears here.")
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(.ripul(.textTertiary))
                 }
             }
 
             if let errorMessage {
                 Section {
                     Text(errorMessage)
-                        .foregroundStyle(.red)
+                        .foregroundStyle(.ripul(.danger))
                         .uiKitIdentifier("SpeechSandboxScreen.error")
                 }
             }

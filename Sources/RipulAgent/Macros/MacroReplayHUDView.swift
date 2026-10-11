@@ -20,39 +20,39 @@ struct MacroReplayHUDView: View {
                     .frame(width: 20, height: 20)
                 VStack(alignment: .leading, spacing: 1) {
                     Text("Replaying \(controller.macroName)")
-                        .font(.subheadline.weight(.semibold))
+                        .font(.ripul(.subheadline, weight: .semibold))
                         .lineLimit(1)
                     Text("\(controller.currentIndex + 1)/\(controller.stepLabels.count) · \(controller.currentLabel ?? "")")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .font(.ripul(.caption))
+                        .foregroundStyle(.ripul(.textSecondary))
                         .lineLimit(1)
                 }
             case .finished:
                 if let outcome = controller.outcome {
                     Image(systemName: outcome.success ? "checkmark.circle.fill" : "xmark.octagon.fill")
-                        .foregroundStyle(outcome.success ? .green : .red)
+                        .foregroundStyle(outcome.success ? .ripul(.success) : .ripul(.danger))
                         .frame(width: 20, height: 20)
                     VStack(alignment: .leading, spacing: 1) {
                         Text(outcome.success
                              ? "\(controller.macroName) completed"
                              : "\(controller.macroName) stopped at step \((outcome.failedStepIndex ?? 0) + 1)")
-                            .font(.subheadline.weight(.semibold))
+                            .font(.ripul(.subheadline, weight: .semibold))
                             .lineLimit(1)
                         if let error = outcome.error {
                             Text(error)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                                .font(.ripul(.caption))
+                                .foregroundStyle(.ripul(.textSecondary))
                                 .lineLimit(1)
                         } else {
                             Text("Tap to return to the editor")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                                .font(.ripul(.caption))
+                                .foregroundStyle(.ripul(.textSecondary))
                                 .lineLimit(1)
                         }
                     }
                     Image(systemName: "chevron.right")
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
+                        .font(.ripulIcon(.caption))
+                        .foregroundStyle(.ripul(.textTertiary))
                 }
             case .hidden:
                 EmptyView()
@@ -64,8 +64,8 @@ struct MacroReplayHUDView: View {
                 controller.dismiss()
             } label: {
                 Image(systemName: "xmark")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.primary)
+                    .font(.ripulIcon(size: 13, weight: .semibold))
+                    .foregroundStyle(.ripul(.text))
                     .frame(width: 32, height: 32)
                     .modifier(GlassCircleModifier(glassStyle: "regular"))
             }

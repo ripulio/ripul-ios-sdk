@@ -77,7 +77,7 @@ struct TopSafeAreaGlassRegion<Backdrop: View>: View {
                     .frame(height: solidHeight + fadeHeight)
                     .mask {
                         VStack(spacing: 0) {
-                            Color.black.frame(height: solidHeight)
+                            Color.black.frame(height: solidHeight)  // theme-exempt: a mask, only its alpha is used
                             LinearGradient(colors: [.black, .clear],
                                 startPoint: .top, endPoint: .bottom)
                                 .frame(height: fadeHeight)

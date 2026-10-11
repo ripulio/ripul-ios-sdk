@@ -146,9 +146,9 @@ private struct HostScreenPreviewImage: View {
             } else {
                 VStack(spacing: 8) {
                     Image(systemName: "rectangle.slash")
-                    Text("Preview unavailable").font(.caption)
+                    Text("Preview unavailable").font(.ripul(.caption))
                 }
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.ripul(.textSecondary))
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
@@ -186,12 +186,12 @@ private struct HostScreenPreviewView: View {
                     let collapsed = state.isCollapsed
                     ZStack(alignment: .topTrailing) {
                         HostScreenPreviewImage(frame: state.frame)
-                            .background(Color(uiColor: .systemBackground))
+                            .background(Color.ripul(.canvas))
                             .opacity(collapsed ? 0 : 1)
                         if collapsed {
                             Button { state.isCollapsed = false } label: {
                                 Image(systemName: "pip")
-                                    .font(.system(size: 22, weight: .medium))
+                                    .font(.ripulIcon(size: 22, weight: .medium))
                                     .frame(width: 56, height: 56)
                                     .contentShape(Rectangle())
                             }
@@ -201,7 +201,7 @@ private struct HostScreenPreviewView: View {
                         } else {
                             Button { state.isCollapsed = true } label: {
                                 Image(systemName: "minus")
-                                    .font(.system(size: 16, weight: .semibold))
+                                    .font(.ripulIcon(size: 16, weight: .semibold))
                                     .frame(width: 44, height: 44)
                                     .contentShape(Rectangle())
                                     .glassEffect(.regular.interactive(), in: Circle())
@@ -215,7 +215,7 @@ private struct HostScreenPreviewView: View {
                     .frame(width: collapsed ? 56 : width, height: collapsed ? 56 : width / ratio)
                     .clipShape(RoundedRectangle(cornerRadius: collapsed ? 28 : 18))
                     .glassEffect(.regular, in: RoundedRectangle(cornerRadius: collapsed ? 28 : 18))
-                    .shadow(color: .black.opacity(0.18), radius: 10, y: 3)
+                    .shadow(color: Color.ripul(system: .black).opacity(0.18), radius: 10, y: 3)
                     .animation(reduceMotion ? nil : .spring(response: 0.38, dampingFraction: 0.88), value: collapsed)
                 }
                 .id(ratio)
@@ -259,7 +259,7 @@ final class HostScreenPreviewController: UIViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        let host = UIHostingController(rootView: HostScreenPreviewView(state: state))
+        let host = UIHostingController(rootView: HostScreenPreviewView(state: state).ripulThemeRoot())
         host.view.backgroundColor = .clear
         addChild(host)
         host.view.frame = view.bounds

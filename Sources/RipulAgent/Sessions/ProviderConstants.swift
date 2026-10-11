@@ -99,6 +99,11 @@ public enum ProviderConstants {
     /// Resolved definition for Ripul agent sessions.
     public static let ripul = providers.first(where: { $0.id == "ripul" })!
 
+    /// Shell is a CLI provider with no model behind it: each message runs as a
+    /// command on the Mac. Copy that talks about sign-ins or allowances must
+    /// not be used for it.
+    public static let shellProviderKey = "shell-cli"
+
     /// Legacy persistence label for Claude Code sessions stored in UserDefaults.
     /// Existing sessions were saved with this value — used for matching, not display.
     public static let claudeCodeLegacyLabel = "Claude Code"
@@ -173,9 +178,9 @@ public enum ProviderConstants {
 
     public static func color(for provider: String?, providerLabel: String?) -> Color {
         guard let def = resolve(provider: provider, providerLabel: providerLabel) else {
-            return Color(hex: data.defaultColor)
+            return Color(hex: data.defaultColor)  // theme-exempt: a provider's colour is data
         }
-        return Color(hex: def.color)
+        return Color(hex: def.color)  // theme-exempt: a provider's colour is data
     }
 
     public static func icon(for provider: String?, providerLabel: String?) -> String {

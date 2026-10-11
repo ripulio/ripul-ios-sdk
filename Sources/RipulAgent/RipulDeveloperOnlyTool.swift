@@ -36,6 +36,7 @@ extension ShareSheetTool: RipulDeveloperOnlyTool {}
 extension ExplorerConformanceTool: RipulDeveloperOnlyTool {}
 extension SetValueTool: RipulDeveloperOnlyTool {}
 extension OpenAppURLTool: RipulDeveloperOnlyTool {}
+extension LayerAnimationsTool: RipulDeveloperOnlyTool {}
 #endif
 
 // MARK: - Theme control (ThemeControlTools.swift is #if os(iOS) — mirror that here)

@@ -17,7 +17,8 @@ import SwiftUI
 ///
 /// ## The chrome's own drag
 /// A drag toward the edge the chrome sits on opens nothing. A host that wants
-/// it — the Browser pushes its address bar down into the compact pill — passes
+/// it — the Browser pushes its address bar down into the compact pill, and the
+/// chat its composer — passes
 /// `onChromeDrag`, and the same recogniser hands it the drag once the axis
 /// locks that way. With `chromeTakesPull` it takes the pull toward the middle
 /// too, for chrome with a step of its own before the overview: the Browser's

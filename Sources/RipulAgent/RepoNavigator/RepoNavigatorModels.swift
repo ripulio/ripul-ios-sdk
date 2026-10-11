@@ -209,6 +209,28 @@ public struct RefDecoration: Codable, Sendable, Hashable {
         self.type = type
         self.isHead = isHead
     }
+
+    /// The branch this ref stands for, wherever it lives. A local branch and
+    /// a remote's copy of it are one branch, so the remote's prefix is
+    /// dropped ("origin/feature/x" → "feature/x"). nil for a ref that names
+    /// no branch: a tag, a detached HEAD, a remote's HEAD pointer.
+    public var branchName: String? {
+        switch type {
+        case .branch:
+            return name
+        case .remote:
+            let short = name.components(separatedBy: "/").dropFirst().joined(separator: "/")
+            return short.isEmpty || short == "HEAD" ? nil : short
+        case .tag, .head, .unknown:
+            return nil
+        }
+    }
+
+    /// A remote's HEAD pointer ("origin/HEAD"). It follows one of the
+    /// remote's branches and is not a branch itself.
+    public var isRemoteHeadPointer: Bool {
+        type == .remote && branchName == nil
+    }
 }
 
 public struct GraphCommit: Codable, Sendable, Identifiable, Hashable {

@@ -131,19 +131,19 @@ public struct RipulThemeColoursScreen: View {
                 ForEach(componentTree) { node in
                     NavigationLink(node.name) { RipulTokenNodeScreen(node: node) }
                 }
-            } header: {
+            } header: { RipulSectionHeader {
                 Text("Components")
-            } footer: {
+            } } footer: { RipulSectionFooter {
                 Text("What a colour is used for. Each follows a semantic role beneath it until "
                      + "you pin it to a specific colour here.")
-            }
+            } }
             Section {
                 ForEach(semanticTree) { node in
                     NavigationLink(node.name) { RipulTokenNodeScreen(node: node) }
                 }
-            } header: {
+            } header: { RipulSectionHeader {
                 Text("Semantic")
-            }
+            } }
             Section {
                 ForEach(RipulThemeEngine.customSemanticLabels, id: \.self) { RipulSemanticTokenRow(name: $0) }
                     .onDelete { idx in
@@ -162,22 +162,22 @@ public struct RipulThemeColoursScreen: View {
                     }
                     .disabled(sanitizedNewLabel == nil)
                 }
-            } header: {
+            } header: { RipulSectionHeader {
                 Text("Semantic · Custom")
-            } footer: {
+            } } footer: { RipulSectionFooter {
                 Text("Add your own semantic labels and map each to a primitive (or pin a colour). "
                      + "Swipe to delete. Component tokens can reference them by name.")
-            }
+            } }
             Section {
                 ForEach(primitiveTree) { node in
                     NavigationLink(node.name) { RipulTokenNodeScreen(node: node) }
                 }
-            } header: {
+            } header: { RipulSectionHeader {
                 Text("Primitive palette (advanced)")
-            } footer: {
+            } } footer: { RipulSectionFooter {
                 Text("The raw swatches beneath the semantic roles. Editing a primitive cascades to "
                      + "every role that references it — prefer editing the semantic roles above.")
-            }
+            } }
         }
         .navigationTitle("Colours")
         .navigationBarTitleDisplayMode(.inline)
@@ -253,7 +253,7 @@ struct RipulComponentTokenRow: View {
         HStack(spacing: 8) {
             Text(label).lineLimit(1).layoutPriority(1)
             Spacer(minLength: 8)
-            Menu {
+            Menu { MenuIcons {
                 ForEach(RipulThemeEngine.semanticLabels, id: \.self) { role in
                     Button {
                         RipulThemeEngine.setReference(component: name, to: role)
@@ -277,7 +277,7 @@ struct RipulComponentTokenRow: View {
                         }
                     }
                 }
-            } label: {
+            }} label: {
                 Text(refLabel(ref)).lineLimit(1).frame(maxWidth: .infinity, alignment: .trailing)
             }
             ColorPicker("", selection: Binding(
@@ -309,7 +309,7 @@ struct RipulSemanticTokenRow: View {
         HStack(spacing: 8) {
             Text(RipulThemeEngine.displayLabel(forLabel: name)).lineLimit(1).layoutPriority(1)
             Spacer(minLength: 8)
-            Menu {
+            Menu { MenuIcons {
                 ForEach(RipulThemeEngine.vocabulary?.primitives ?? [], id: \.name) { prim in
                     Button {
                         RipulThemeEngine.setReference(label: name, to: prim.name)
@@ -332,7 +332,7 @@ struct RipulSemanticTokenRow: View {
                         }
                     }
                 }
-            } label: {
+            }} label: {
                 Text(isPrimitive ? ref
                      : (RipulThemeEngine.isSemanticLabel(ref)
                         ? "\(RipulThemeEngine.displayLabel(forLabel: ref)) (label)" : "Custom"))

@@ -10,7 +10,7 @@ struct NativeToolSection<Content: View>: View {
     @ViewBuilder let content: Content
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text(title).font(.headline)
+            Text(title).font(.ripul(.headline))
             content
         }.frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -21,7 +21,7 @@ struct NativeToolSection<Content: View>: View {
 struct NativeToolCodeBlock: View {
     let text: String
     var title: String?
-    var titleFont: Font = .headline
+    var titleFont: Font = .ripul(.headline)
     var numbered = false
     var firstLine = 1
     var syntax: NativeToolCodeSyntax?
@@ -49,18 +49,18 @@ struct NativeToolCodeBlock: View {
         VStack(alignment: .leading, spacing: 10) {
             if let title { toolbar(title: title, font: titleFont, clean: clean) }
             VStack(alignment: .leading, spacing: 8) {
-                if title == nil { toolbar(title: lineCount, font: .caption, clean: clean) }
-                else { Text(lineCount).font(.caption).foregroundStyle(.secondary) }
+                if title == nil { toolbar(title: lineCount, font: .ripul(.caption), clean: clean) }
+                else { Text(lineCount).font(.ripul(.caption)).foregroundStyle(.ripul(.textSecondary)) }
                 if numbered {
                     wrapping {
                         LazyVStack(alignment: .leading, spacing: 2) {
                             ForEach(Array(lines.prefix(visibleLines).enumerated()), id: \.offset) { index, line in
                                 HStack(alignment: .top, spacing: 10) {
-                                    Text("\(firstLine + index)").foregroundStyle(.secondary).frame(minWidth: 28, alignment: .trailing)
+                                    Text("\(firstLine + index)").foregroundStyle(.ripul(.textSecondary)).frame(minWidth: 28, alignment: .trailing)
                                     Text(line.isEmpty ? AttributedString(" ") : index < colouredLines.count ? colouredLines[index] : AttributedString(line))
                                         .textSelection(.enabled).fixedSize(horizontal: !wraps, vertical: true)
                                         .frame(maxWidth: .infinity, alignment: .leading)
-                                }.font(.system(.caption, design: .monospaced))
+                                }.font(.ripul(.caption, family: .code))
                             }
                         }
                         .accessibilityIdentifier(identifier)
@@ -75,8 +75,8 @@ struct NativeToolCodeBlock: View {
                                         HStack(spacing: 8) {
                                             VStack { Divider() }
                                             Label("Piped input", systemImage: "arrow.down")
-                                                .font(.caption2.weight(.medium))
-                                                .foregroundStyle(.secondary)
+                                                .font(.ripul(.caption2, weight: .medium))
+                                                .foregroundStyle(.ripul(.textSecondary))
                                                 .fixedSize()
                                                 .accessibilityElement(children: .combine)
                                                 .accessibilityLabel("Piped input from previous command")
@@ -94,7 +94,7 @@ struct NativeToolCodeBlock: View {
                             let end = index + 1 < sectionStarts.count ? sectionStarts[index + 1] : colouredLines.count
                             wrapping {
                                 Text(colouredLines[(start + 1)..<end].reduce(colouredLines[start]) { $0 + AttributedString("\n") + $1 })
-                                    .font(.system(.callout, design: .monospaced)).textSelection(.enabled)
+                                    .font(.ripul(.callout, family: .code)).textSelection(.enabled)
                                     .fixedSize(horizontal: !wraps, vertical: true)
                                     .accessibilityIdentifier("\(identifier).part.\(index)")
                             }
@@ -105,13 +105,13 @@ struct NativeToolCodeBlock: View {
                 } else {
                     wrapping {
                         Text(attributed)
-                            .font(.system(.callout, design: .monospaced)).textSelection(.enabled)
+                            .font(.ripul(.callout, family: .code)).textSelection(.enabled)
                             .fixedSize(horizontal: !wraps, vertical: true)
                             .accessibilityIdentifier(identifier)
                     }
                 }
                 if lines.count > visibleLines {
-                    Button("Show more (\(lines.count - visibleLines) lines remaining)") { visibleLines += 200 }.font(.callout)
+                    Button("Show more (\(lines.count - visibleLines) lines remaining)") { visibleLines += 200 }.font(.ripul(.callout))
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -125,12 +125,12 @@ struct NativeToolCodeBlock: View {
                     }
                     Text(visible)
                 }
-                .font(.system(numbered ? .caption : .callout, design: .monospaced))
+                .font(.ripul(numbered ? .caption : .callout, family: .code))
                 .fixedSize()
                 .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { textWidth = $0 }
                 .hidden().accessibilityHidden(true).allowsHitTesting(false)
             }
-            .padding(12).background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 10))
+            .padding(12).background(.ripul(.textQuaternary).opacity(0.5), in: RoundedRectangle(cornerRadius: 10))
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .task(id: request) {
@@ -147,7 +147,7 @@ struct NativeToolCodeBlock: View {
             Spacer(minLength: 8)
             if panelWidth > 0 && textWidth > panelWidth + 0.5 {
                 Toggle("Wrap", isOn: $wraps)
-                    .toggleStyle(.switch).fixedSize().font(.caption)
+                    .toggleStyle(.switch).fixedSize().font(.ripul(.caption))
                     .accessibilityIdentifier("\(identifier).wrap")
             }
             Button {
@@ -158,7 +158,7 @@ struct NativeToolCodeBlock: View {
                 NSPasteboard.general.setString(clean, forType: .string)
                 #endif
             } label: { Label("Copy", systemImage: "doc.on.doc") }
-                .font(.caption).fixedSize().accessibilityIdentifier("\(identifier).copy")
+                .font(.ripul(.caption)).fixedSize().accessibilityIdentifier("\(identifier).copy")
         }
         .frame(minHeight: 32)
     }
@@ -180,7 +180,7 @@ struct NativeToolCodeBlock: View {
 struct NativeToolValueView: View {
     let value: CmsJSON
     var title: String?
-    var titleFont: Font = .headline
+    var titleFont: Font = .ripul(.headline)
     var identifier = "NativeTool.value"
     var textSyntax: NativeToolCodeSyntax?
     @State private var visibleItems = 40
@@ -202,13 +202,13 @@ struct NativeToolValueView: View {
             return AnyView(Text(ToolValue.cleanTerminal(text.isEmpty ? "Empty text" : text)).textSelection(.enabled).accessibilityIdentifier(identifier))
         case .number(let number): return AnyView(Text(CmsJSON.number(number).displayString).monospacedDigit().textSelection(.enabled))
         case .bool(let yes): return AnyView(Label(yes ? "Yes" : "No", systemImage: yes ? "checkmark.circle" : "minus.circle"))
-        case .null: return AnyView(Text("No value").foregroundStyle(.secondary))
+        case .null: return AnyView(Text("No value").foregroundStyle(.ripul(.textSecondary)))
         case .array(let items):
-            if items.isEmpty { return AnyView(Text("None").foregroundStyle(.secondary)) }
+            if items.isEmpty { return AnyView(Text("None").foregroundStyle(.ripul(.textSecondary))) }
             return AnyView(VStack(alignment: .leading, spacing: 12) {
                 ForEach(Array(items.prefix(visibleItems).enumerated()), id: \.offset) { index, item in
                     HStack(alignment: .top, spacing: 10) {
-                        Text("\(index + 1)").font(.caption).foregroundStyle(.secondary)
+                        Text("\(index + 1)").font(.ripul(.caption)).foregroundStyle(.ripul(.textSecondary))
                         NativeToolValueView(value: item, textSyntax: textSyntax)
                     }
                     if index < items.count - 1 { Divider() }
@@ -217,7 +217,7 @@ struct NativeToolValueView: View {
             })
         case .object(let object):
             if let source = NativeToolImage.source(object) { return AnyView(NativeToolImage(source: source)) }
-            if object.isEmpty { return AnyView(Text("None").foregroundStyle(.secondary)) }
+            if object.isEmpty { return AnyView(Text("None").foregroundStyle(.ripul(.textSecondary))) }
             return AnyView(VStack(alignment: .leading, spacing: 12) {
                 ForEach(object.keys.sorted(), id: \.self) { key in
                     if let item = object[key] {
@@ -226,10 +226,10 @@ struct NativeToolValueView: View {
                         } else {
                             let syntax = ["stdout", "stderr", "output", "text", "content"].contains(key) ? textSyntax : nil
                             if let text = item.stringValue, text.contains("\n") || (syntax != nil && !text.isEmpty) {
-                                NativeToolCodeBlock(text: text, title: ToolValue.title(key), titleFont: .caption, syntax: syntax, identifier: "NativeTool.value")
+                                NativeToolCodeBlock(text: text, title: ToolValue.title(key), titleFont: .ripul(.caption), syntax: syntax, identifier: "NativeTool.value")
                             } else {
                                 VStack(alignment: .leading, spacing: 4) {
-                                    Text(ToolValue.title(key)).font(.caption).foregroundStyle(.secondary)
+                                    Text(ToolValue.title(key)).font(.ripul(.caption)).foregroundStyle(.ripul(.textSecondary))
                                     if let raw = item.stringValue, let url = URL(string: raw), ["https", "http"].contains(url.scheme) {
                                         Link(raw, destination: url).textSelection(.enabled)
                                     } else {
@@ -267,7 +267,7 @@ struct NativeToolResultView: View {
         } else {
             NativeToolSection(title: title) {
                 if content.running { ProgressView("Waiting for result…") }
-                else { Text("No output was recorded.").foregroundStyle(.secondary) }
+                else { Text("No output was recorded.").foregroundStyle(.ripul(.textSecondary)) }
             }
         }
     }
@@ -279,10 +279,10 @@ struct NativeToolPath: View {
         if !path.isEmpty {
             Label {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text((path as NSString).lastPathComponent).font(.headline)
-                    Text(path).font(.system(.caption, design: .monospaced)).foregroundStyle(.secondary).textSelection(.enabled)
+                    Text((path as NSString).lastPathComponent).font(.ripul(.headline))
+                    Text(path).font(.ripul(.caption, family: .code)).foregroundStyle(.ripul(.textSecondary)).textSelection(.enabled)
                 }
-            } icon: { Image(systemName: "doc.text").foregroundStyle(.secondary) }
+            } icon: { Image(systemName: "doc.text").foregroundStyle(.ripul(.textSecondary)) }
         }
     }
 }
@@ -313,7 +313,7 @@ struct NativeToolImage: View {
     }
     var body: some View {
         Button { zoomed = true } label: { picture }.buttonStyle(.plain).accessibilityLabel("Enlarge image")
-            .sheet(isPresented: $zoomed) {
+            .ripulSheet(isPresented: $zoomed) {
                 NavigationStack { ScrollView([.horizontal, .vertical]) { picture.padding() }
                     .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { zoomed = false } } }
                 }

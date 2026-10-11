@@ -12,7 +12,7 @@ struct ComposerContextButton: View {
     @State private var captureTask: Task<Void, Never>?
 
     var body: some View {
-        Menu {
+        Menu { MenuIcons {
             Section("App context") {
                 ForEach(options.filter { $0.kind != .instruction }) { option in
                     Button { capture(option) } label: { Label(option.title, systemImage: option.systemImage) }
@@ -25,10 +25,10 @@ struct ComposerContextButton: View {
                     }
                 }
             }
-        } label: {
+        }} label: {
             Image(systemName: loading ? "hourglass" : "text.badge.plus")
-                .font(.system(size: 18, weight: .medium))
-                .foregroundStyle(.primary)
+                .font(.ripulIcon(size: 18, weight: .medium))
+                .foregroundStyle(.ripul(.text))
                 .frame(width: size, height: size)
                 .contentShape(Circle())
                 .modifier(GlassCircleModifier(glassStyle: "clear"))
@@ -38,7 +38,7 @@ struct ComposerContextButton: View {
         .accessibilityLabel("Add context")
         .accessibilityIdentifier("NativeChatInput.context")
         .help("Choose context to attach to your message")
-        .sheet(item: $preview) { draft in
+        .ripulSheet(item: $preview) { draft in
             ComposerContextPreview(item: draft.item) { draft.attach($0) }
         }
         .alert("Context unavailable", isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) {
@@ -83,18 +83,18 @@ struct ComposerContextChips: View {
                             }
                             .accessibilityLabel("Preview \(item.title), \(item.duration.rawValue)")
                             Button { store.remove(item.id, from: session) } label: {
-                                Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                                Image(systemName: "xmark.circle.fill").foregroundStyle(.ripul(.textSecondary))
                             }
                             .accessibilityLabel("Remove \(item.title)")
                         }
                         .buttonStyle(.plain)
-                        .font(.caption)
+                        .font(.ripul(.caption))
                         .padding(.horizontal, 10).padding(.vertical, 8)
-                        .background(.quaternary, in: Capsule())
+                        .background(.ripul(.textQuaternary), in: Capsule())
                     }
                 }.padding(.horizontal, 8).padding(.top, 6)
             }
-            .sheet(item: $preview) { item in ComposerContextPreview(item: item) { store.attach($0, to: session) } }
+            .ripulSheet(item: $preview) { item in ComposerContextPreview(item: item) { store.attach($0, to: session) } }
             .onChange(of: session) { _ in preview = nil }
         }
     }
@@ -124,25 +124,25 @@ struct ComposerContextPreview: View {
         NavigationStack {
             VStack(alignment: .leading, spacing: 16) {
                 Text("Review what will be attached. Nothing is sent until you send a message.")
-                    .font(.subheadline).foregroundStyle(.secondary)
+                    .font(.ripul(.subheadline)).foregroundStyle(.ripul(.textSecondary))
                 if item.isInstruction {
                     Picker("Include with", selection: $item.duration) {
                         ForEach(RipulContextAttachment.Duration.allCases, id: \.self) { Text($0.rawValue).tag($0) }
                     }
                 } else {
                     Label("Snapshot for the next message", systemImage: "clock")
-                        .font(.caption).foregroundStyle(.secondary)
+                        .font(.ripul(.caption)).foregroundStyle(.ripul(.textSecondary))
                 }
                 ScrollView {
                     VStack(alignment: .leading, spacing: 16) {
                         if let screen = item.screen {
-                            Text(screen.appDescription).font(.subheadline)
+                            Text(screen.appDescription).font(.ripul(.subheadline))
                             ForEach(RipulScreenContextComponent.allCases.filter { screen.available.contains($0) }, id: \.self) { component in
                                 Toggle(component == .instrumentedText && item.optionID == "ripul.selectedElement" ? "Element description" : component.title, isOn: selection(component))
                                     .accessibilityIdentifier("ComposerContext.\(component.rawValue)")
                             }
                             if screen.available.isEmpty {
-                                Text("No screen content is available with this app's context settings.").foregroundStyle(.secondary)
+                                Text("No screen content is available with this app's context settings.").foregroundStyle(.ripul(.textSecondary))
                             }
                             if screen.selected.contains(.instrumentedText), let text = screen.instrumentedText {
                                 Text(text).textSelection(.enabled)
@@ -153,7 +153,7 @@ struct ComposerContextPreview: View {
                             }
                             if screen.selected.contains(.fallbackText) {
                                 if let text = screen.fallbackText { Text(text).textSelection(.enabled) }
-                                else if let fallbackError { Text(fallbackError).foregroundStyle(.secondary) }
+                                else if let fallbackError { Text(fallbackError).foregroundStyle(.ripul(.textSecondary)) }
                                 else { ProgressView("Reading screen text…") }
                             }
                         } else {

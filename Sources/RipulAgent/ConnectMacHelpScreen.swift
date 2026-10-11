@@ -21,11 +21,11 @@ struct ConnectMacHelpScreen: View {
             List {
                 Section {
                     Text("Ripul's agents run on your Mac. This device reaches the Mac in one of two ways, and both need Ripul Host installed on it.")
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(.ripul(.textSecondary))
                 }
-                Section("Normal") {
+                Section(themed: "Normal") {
                     Text("Your Mac connects through your Ripul account. You can reach it from anywhere, and every screen can use it.")
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(.ripul(.textSecondary))
                     if !signedIn {
                         step(1, "Sign in on this device first. In Settings, set App startup to Normal, then sign in to your Ripul account.")
                     }
@@ -40,16 +40,16 @@ struct ConnectMacHelpScreen: View {
                 }
                 Section {
                     Text("This device talks straight to your Mac over the same Wi-Fi, or over Tailscale when you are away. Nothing goes through Ripul's servers, and no account is needed.")
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(.ripul(.textSecondary))
                     step(1, "Install Ripul Host on your Mac from the same page.")
                     step(2, "In Ripul Host, open Paired Phones and choose Pair iPhone.")
                     step(3, "Here, open Paired Macs and scan the code. Then approve this device on the Mac.")
-                } header: {
+                } header: { RipulSectionHeader {
                     Text("Direct")
-                } footer: {
+                } } footer: { RipulSectionFooter {
                     Text(signedIn ? "Direct pairing is for chats. With App startup set to Standalone in Settings, Files and the Dock use a paired Mac too. Every other screen needs the Normal connection."
                                   : "Direct pairing covers chats, Files and the Dock. Every other screen needs the Normal connection.")
-                }
+                } }
             }
             .navigationTitle("Connecting a Mac")
             #if os(iOS)

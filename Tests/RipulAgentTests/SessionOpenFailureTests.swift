@@ -81,6 +81,144 @@ final class SessionOpenFailureTests: XCTestCase {
         XCTAssertTrue(model.openSessionError?.hasPrefix("session-restore-timeout:") == true)
     }
 
+    /// An invited chat's row as the list holds it: the "machine" is the share,
+    /// named after the chat, and has no id any of this account's Macs answer to.
+    private func invitedRow(cached: Bool = true) -> UnifiedSession {
+        UnifiedSession(id: "shared_1", title: "Invite latency", lastUsed: Date(), gitBranch: nil,
+            messageCount: nil, projectName: nil, provider: nil, providerLabel: nil,
+            machineName: "Invite latency", machineId: nil,
+            cachedIsOpen: cached, ripulSession: nil)
+    }
+
+    /// A chat on a Mac this account no longer has: named, with no id to route by.
+    private func orphanedRow(cached: Bool = true) -> UnifiedSession {
+        UnifiedSession(id: "remote-1", title: "Old chat", lastUsed: Date(), gitBranch: nil,
+            messageCount: nil, projectName: nil, provider: nil, providerLabel: nil,
+            machineName: "Gone Mac", machineId: nil,
+            cachedIsOpen: cached, ripulSession: nil)
+    }
+
+    /// A page that is up, answers, and lists no tabs.
+    private static let emptyPage = """
+        window.__ripulOpenRemoteSession = async () => ({success:false, error:'unused'});
+        window.__ripulGetSessions = async () => ({sessions:[], activeId:null});
+        """
+
+    private func invitedTab() -> ChatSession {
+        ChatSession(id: "shared_1", sourceChatId: "shared_1", displayName: "Invite latency", createdAt: Date(),
+                    remoteMachineName: "Invite latency", isSharedGuest: true)
+    }
+
+    func testAnInvitedChatOpenedBeforeItsTabIsListedWaitsForTheTab() async throws {
+        // Straight after launch: the row is from the cache and the web app has
+        // not listed its tabs. This was refused at once as "isn't connected".
+        let bridge = AgentBridge()
+        let model = model(bridge)
+        let selected = expectation(description: "Invited chat selected")
+        model.openSession(invitedRow(), onSelect: { chat in
+            XCTAssertEqual(chat.id, "shared_1")
+            selected.fulfill()
+        }, onDismiss: { XCTFail("Do not dismiss before the tab is there") })
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertNil(model.openSessionError)
+        XCTAssertEqual(model.openingUnifiedSessionId, "shared_1")
+        bridge.isSessionsReady = true
+        bridge.sessions = [invitedTab()]
+        await fulfillment(of: [selected], timeout: 2)
+        XCTAssertNil(model.openSessionError)
+        XCTAssertNil(model.openingUnifiedSessionId)
+    }
+
+    func testAnInvitedChatWhoseRowIsOlderThanItsTabOpensAtOnce() async {
+        // The tab is listed but the row has not been rebuilt to hold it.
+        let bridge = AgentBridge()
+        let model = model(bridge)
+        bridge.sessions = [invitedTab()]
+        let selected = expectation(description: "Invited chat selected")
+        model.openSession(invitedRow(cached: false), onSelect: { chat in
+            XCTAssertEqual(chat.id, "shared_1")
+            selected.fulfill()
+        }, onDismiss: {})
+        await fulfillment(of: [selected], timeout: 0.5)
+        XCTAssertNil(model.openSessionError)
+    }
+
+    func testAChatWhoseMachineIsGoneStillSaysSoOnceThePageHasListedItsTabs() async {
+        // The open flag is stale: the page is up, and this chat is not one of its tabs.
+        let bridge = AgentBridge()
+        let model = model(bridge)
+        let web = await webFixture(bridge, script: Self.emptyPage)
+        model.openSession(orphanedRow(), onSelect: { _ in XCTFail("There is no tab to open") },
+                          onDismiss: { XCTFail("Keep the error visible on the list") })
+        await waitForFailure(model, timeout: 5)
+        XCTAssertTrue(model.openSessionError?.hasPrefix("machine-unavailable:") == true)
+        withExtendedLifetime(web) {}
+    }
+
+    func testAnInvitedChatWhoseTabIsGoneSendsTheUserBackToInvites() async {
+        // Not "isn't connected": an invited chat has no machine to wait for.
+        let bridge = AgentBridge()
+        let model = model(bridge)
+        let web = await webFixture(bridge, script: Self.emptyPage)
+        model.openSession(invitedRow(), onSelect: { _ in XCTFail("There is no tab to open") },
+                          onDismiss: { XCTFail("Keep the error visible on the list") })
+        await waitForFailure(model, timeout: 5)
+        XCTAssertTrue(model.openSessionError?.hasPrefix("invited-chat-closed:") == true)
+        XCTAssertEqual(ConnectionDiagnosis.classify(rawError: model.openSessionError, phase: nil).hint, "Open it again from Invites.")
+        withExtendedLifetime(web) {}
+    }
+
+    func testAChatThatWasNeverOpenHereIsRefusedWithoutWaiting() async {
+        let model = model(AgentBridge())
+        model.openSession(orphanedRow(cached: false), onSelect: { _ in XCTFail("There is no tab to open") },
+                          onDismiss: { XCTFail("Keep the error visible on the list") })
+        await waitForFailure(model, timeout: 0.5)
+        XCTAssertTrue(model.openSessionError?.hasPrefix("machine-unavailable:") == true)
+    }
+
+    func testAnInvitedChatIsFoundOnceThePageListsItAfterStarting() async throws {
+        // The page is up but lists the invited chat's tab only on its second
+        // listing, as it does while restoring that tab from its pairing.
+        let bridge = AgentBridge()
+        let model = model(bridge)
+        let web = await webFixture(bridge, script: """
+            window.__ripulOpenRemoteSession = async () => ({success:false, error:'unused'});
+            window.listings = 0;
+            window.__ripulGetSessions = async () => (++window.listings < 2
+                ? {sessions:[], activeId:null}
+                : {sessions:[{id:'shared_1', sourceChatId:'shared_1', displayName:'Invite latency',
+                              remoteMachineName:'Invite latency', isSharedGuest:true}], activeId:null});
+            """)
+        let selected = expectation(description: "Invited chat selected")
+        model.openSession(invitedRow(), onSelect: { chat in
+            XCTAssertEqual(chat.id, "shared_1")
+            selected.fulfill()
+        }, onDismiss: {})
+        await fulfillment(of: [selected], timeout: 5)
+        XCTAssertNil(model.openSessionError)
+        withExtendedLifetime(web) {}
+    }
+
+    func testAJoinThatGetsNoAnswerIsAskedAgainOnceThePageAnswers() async {
+        // The first call dies without an answer, as it does on a page that has
+        // stopped answering. This used to end as WebKit's own words on screen.
+        let bridge = AgentBridge()
+        let web = await webFixture(bridge, script: """
+            window.__ripulOpenRemoteSession = async () => ({success:false, error:'unused'});
+            window.__ripulGetSessions = async () => ({sessions:[], activeId:null});
+            window.joins = 0;
+            window.__ripulJoinShareLink = async (token) => {
+                if (++window.joins === 1) throw new Error('the page went away');
+                return {ok:true, tabId:'tab-shared', label:'Shared', chatId: undefined, modelId: undefined, viewOnly:false};
+            };
+            """)
+        let result = await bridge.joinShareLink(token: "tok")
+        XCTAssertEqual(result.tabId, "tab-shared")
+        XCTAssertNil(result.error)
+        let joins = try? await web.evaluateJavaScript("window.joins") as? Int
+        XCTAssertEqual(joins, 2)
+    }
+
     func testRestoreWaitsForTheRequestedChatAndIgnoresRepeatedTaps() async throws {
         let bridge = AgentBridge()
         let model = model(bridge)

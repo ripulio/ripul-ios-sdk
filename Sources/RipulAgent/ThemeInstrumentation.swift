@@ -107,12 +107,8 @@ public enum RipulThemeInstrumentation {
 
 // MARK: - Theme-change broadcast + live refresh
 
-extension Notification.Name {
-    /// Posted by the host's theme engine whenever the live theme changes. The SDK's refresh
-    /// modifier and hosting factory listen for exactly this name — a host adopting live
-    /// theming posts it from its apply path (one post per apply).
-    public static let ripulThemeDidChange = Notification.Name("ripulThemeDidChange")
-}
+// `Notification.Name.ripulThemeDidChange` — posted by the host's theme engine whenever the
+// live theme changes — is declared in ThemeCore/RipulTheme.swift, which compiles on macOS.
 
 @available(iOS 14.0, *)
 private struct RipulThemeVersionKey: EnvironmentKey {
@@ -181,8 +177,8 @@ extension View {
 }
 
 /// Host a SwiftUI island with LIVE theme adoption baked in: wraps `rootView` in
-/// `.refreshesOnThemeChange()` at the island root, so the `ripulThemeVersion` environment
-/// counter reaches every descendant. Use for EVERY `UIHostingController` that embeds themed
+/// `.ripulThemeRoot()` at the island root, so the theme's tint and default font and the
+/// `ripulThemeVersion` environment counter reach every descendant. Use for EVERY `UIHostingController` that embeds themed
 /// SwiftUI inside UIKit — and note the consumer half of the contract (documented on
 /// `refreshesOnThemeChange()`): a view only repaints on theme change if it READS
 /// `@Environment(\.ripulThemeVersion)` in its body. Type-erased to `AnyView` so host
@@ -191,6 +187,6 @@ extension View {
 ///     let host = ripulThemedHostingController(rootView: ReceiptView(model: model))
 @available(iOS 14.0, *)
 public func ripulThemedHostingController<Content: View>(rootView: Content) -> UIHostingController<AnyView> {
-    UIHostingController(rootView: AnyView(rootView.refreshesOnThemeChange()))
+    UIHostingController(rootView: AnyView(rootView.ripulThemeRoot()))
 }
 #endif

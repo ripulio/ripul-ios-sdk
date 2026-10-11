@@ -35,6 +35,88 @@ enum VoiceSendPolicy {
         return body
     }
 
+    // MARK: Command sessions
+    //
+    // WHAT A COMMAND SESSION CAN AND CANNOT MEASURE. It has two signals, and
+    // on 10 October 2026 both were shown to be weaker than they look.
+    //
+    //   The microphone level. On a phone it did not register the speaker at
+    //   all: sentences were ended mid-word ("Open the chat about app or-",
+    //   "Open the chat about agent ru-"), which a working level check cannot
+    //   do. So the level may only ever HOLD a send back, never justify one.
+    //
+    //   The recogniser's text. Scribe reports the open segment about once a
+    //   second and about a second behind the voice. A wait shorter than that
+    //   interval ends between two reports, while the person is still talking.
+    //
+    // What can be trusted is a REPEAT: the recogniser reporting again with the
+    // same words. That is its own statement that a further second of audio
+    // held nothing new. One repeat ends an ordinary sentence. It costs about
+    // two seconds from the last word, which is the price of the service's
+    // cadence, not a number to tune down: a shorter wait is what cut people
+    // off.
+
+    /// The words must also have stood this long. Guards against two reports
+    /// arriving back to back.
+    static let commandSessionPause: TimeInterval = 1.2
+
+    /// Repeats needed before a sentence that reads as unfinished is ended:
+    /// the person is probably finding the word.
+    static let unfinishedRepeats = 3
+
+    /// Whether a sentence stops where a sentence does not: on a dash or an
+    /// ellipsis the recogniser put there, a trailing comma, or a word that
+    /// needs something after it. Deliberately short. "On", "in", "to", "up"
+    /// and "with" end real commands ("carry on", "log in").
+    static func looksUnfinished(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let last = trimmed.last else { return false }
+        if "-–—…,".contains(last) || trimmed.hasSuffix("...") { return true }
+        let words = trimmed.lowercased()
+            .components(separatedBy: CharacterSet.letters.union(CharacterSet(charactersIn: "'’")).inverted)
+            .filter { !$0.isEmpty }
+        guard let word = words.last else { return false }
+        return danglingWords.contains(word)
+    }
+
+    /// The words alone: lowercased, with punctuation and spacing removed, so
+    /// two reports of the same words compare equal however they are written.
+    static func words(_ text: String) -> String {
+        text.lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+    }
+
+    private static let danglingWords: Set<String> = [
+        "about", "the", "a", "an", "of", "and", "or", "but", "my", "your",
+        "from", "into", "called", "named", "because", "if",
+    ]
+
+    /// A command session's sentence, once it has ended, or nil while it has
+    /// not. `unchangedRepeats` counts the recogniser's reports since the words
+    /// last changed; `wordsUnchangedFor` is the time since that change;
+    /// `quietFor` is the time since the microphone level last registered a
+    /// voice.
+    static func commandToRun(
+        text: String, quietFor: TimeInterval, wordsUnchangedFor: TimeInterval,
+        unchangedRepeats: Int, audioIsFresh: Bool
+    ) -> String? {
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return nil }
+        // A stalled microphone is not a pause. And a level that has just
+        // registered a voice holds everything: the words are about to change.
+        if audioIsFresh, quietFor >= 0.5 {
+            // The closing phrase of ordinary voice mode is an explicit end,
+            // so it needs no repeat.
+            if messageBeforeCommand(text) != nil, wordsUnchangedFor >= commandPause { return text }
+            let needed = looksUnfinished(text) ? unfinishedRepeats : 1
+            if unchangedRepeats >= needed, wordsUnchangedFor >= commandSessionPause { return text }
+        }
+        // A room too loud to read, or a recogniser that has gone quiet.
+        return wordsUnchangedFor >= 6 ? text : nil
+    }
+
     static func messageToSend(
         mode: VoiceSendMode, text: String, quietFor: TimeInterval,
         transcriptIdleFor: TimeInterval, audioIsFresh: Bool

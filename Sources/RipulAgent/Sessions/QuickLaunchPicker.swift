@@ -78,7 +78,7 @@ struct QuickLaunchPickerButton: View {
         } label: {
             if labelled {
                 Label(launching ? "Starting…" : (createNewChat == nil ? "New Session" : "New Chat"), systemImage: "plus")
-                    .font(.subheadline.weight(.semibold))
+                    .font(.ripul(.subheadline, weight: .semibold))
                     // Never wrap, never compress: the machine-row header used
                     // to place a spinner beside this pill that shrank it until
                     // "New Session" broke onto two lines.
@@ -88,8 +88,8 @@ struct QuickLaunchPickerButton: View {
                     .frame(height: 32)
             } else {
                 Image(systemName: "ellipsis")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.secondary)
+                    .font(.ripulIcon(size: 13, weight: .semibold))
+                    .foregroundStyle(.ripul(.textSecondary))
                     .frame(width: 32, height: 32)
             }
         }
@@ -104,7 +104,7 @@ struct QuickLaunchPickerButton: View {
         // The 2-tap account switch: long-press → "Switch Claude account…".
         // Lives on the launch button because "which account pays" is a launch
         // decision; Settings remains the discoverable home.
-        .contextMenu {
+        .contextMenu { MenuIcons {
             if let onSwitchCodexAccount {
                 Button("Switch Codex account…", systemImage: "person.2", action: onSwitchCodexAccount)
                     .uiKitIdentifier("\(identifierPrefix).quickModelPicker.switchCodexAccount")
@@ -117,7 +117,7 @@ struct QuickLaunchPickerButton: View {
                 }
                 .uiKitIdentifier("\(identifierPrefix).quickModelPicker.switchAccount")
             }
-        }
+        }}
         .popover(isPresented: $isPresented) {
             ModelPickerSheetContent(
                 title: "New session",

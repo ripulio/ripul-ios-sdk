@@ -14,7 +14,7 @@ struct GlassCardModifier: ViewModifier {
             content
                 .background(.clear)
                 .glassEffect(.clear, in: .rect(cornerRadius: 14))
-                .tint(isSelected ? Color.blue.opacity(0.3) : nil)
+                .tint(isSelected ? Color.ripul(system: .systemBlue).opacity(0.3) : nil)
         } else {
             content
                 .background(
@@ -23,16 +23,16 @@ struct GlassCardModifier: ViewModifier {
                 )
                 .overlay(
                     RoundedRectangle(cornerRadius: 14)
-                        .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
+                        .strokeBorder(Color.ripul(.text).opacity(0.08), lineWidth: 1)
                 )
-                .shadow(color: .black.opacity(0.06), radius: 4, y: 2)
+                .shadow(color: Color.ripul(system: .black).opacity(0.06), radius: 4, y: 2)
         }
         #elseif os(macOS)
         if #available(macOS 26.0, *) {
             content
                 .background(.clear)
                 .glassEffect(.clear, in: .rect(cornerRadius: 14))
-                .tint(isSelected ? Color.blue.opacity(0.3) : nil)
+                .tint(isSelected ? Color.ripul(system: .systemBlue).opacity(0.3) : nil)
         } else {
             content
                 .background(
@@ -41,9 +41,9 @@ struct GlassCardModifier: ViewModifier {
                 )
                 .overlay(
                     RoundedRectangle(cornerRadius: 14)
-                        .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
+                        .strokeBorder(Color.ripul(.text).opacity(0.08), lineWidth: 1)
                 )
-                .shadow(color: .black.opacity(0.06), radius: 4, y: 2)
+                .shadow(color: Color.ripul(system: .black).opacity(0.06), radius: 4, y: 2)
         }
         #endif
     }

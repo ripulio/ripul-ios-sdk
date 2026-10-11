@@ -309,8 +309,8 @@ public struct RipulToolCollectionsScreen: View {
 
                 if inScopeCollections.isEmpty && !model.isLoading {
                     Text("No collections group \(catalog.name) yet. Every one of these tools is passed to the agent individually.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
+                        .font(.ripul(.footnote))
+                        .foregroundStyle(.ripul(.textSecondary))
                         .padding(.horizontal, 4)
                 }
 
@@ -323,7 +323,7 @@ public struct RipulToolCollectionsScreen: View {
             }
             .padding(16)
         }
-        .background(Color(.systemGroupedBackground))
+        .background(Color.ripul(.surfaceSunken))
         .navigationTitle("Tool Collections")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -336,12 +336,12 @@ public struct RipulToolCollectionsScreen: View {
                 }
             }
         }
-        .sheet(isPresented: $creating) {
+        .ripulSheet(isPresented: $creating) {
             NavigationStack {
                 RipulToolCollectionEditorView(model: model, tools: tools, existing: nil)
             }
         }
-        .sheet(item: $editing) { collection in
+        .ripulSheet(item: $editing) { collection in
             NavigationStack {
                 RipulToolCollectionEditorView(
                     model: model,
@@ -368,7 +368,7 @@ public struct RipulToolCollectionsScreen: View {
                 RoundedRectangle(cornerRadius: 12)
                     .fill(highlighted
                           ? Color.accentColor.opacity(0.22)
-                          : Color(.secondarySystemGroupedBackground))
+                          : Color.ripul(.surface))
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 12)
@@ -379,7 +379,7 @@ public struct RipulToolCollectionsScreen: View {
 
     private var catalogCard: some View {
         card {
-            Text("ORGANISING").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+            Text("ORGANISING").font(.ripul(.caption2, weight: .semibold)).foregroundStyle(.ripul(.textSecondary))
             if catalogs.count > 1 {
                 Picker("Tool surface", selection: $selectedCatalogId) {
                     ForEach(catalogs) { entry in Text(entry.name).tag(entry.id) }
@@ -387,19 +387,19 @@ public struct RipulToolCollectionsScreen: View {
                 .pickerStyle(.segmented)
                 .accessibilityIdentifier("ripul.toolCollections.catalogPicker")
             } else {
-                Text(catalog.name).font(.subheadline.weight(.semibold))
+                Text(catalog.name).font(.ripul(.subheadline, weight: .semibold))
             }
-            Text(catalog.purpose).font(.caption).foregroundStyle(.secondary)
+            Text(catalog.purpose).font(.ripul(.caption)).foregroundStyle(.ripul(.textSecondary))
             Text("\(catalog.tools.count) tool\(catalog.tools.count == 1 ? "" : "s") registered")
-                .font(.caption2).foregroundStyle(.secondary)
+                .font(.ripul(.caption2)).foregroundStyle(.ripul(.textSecondary))
         }
     }
 
     private func noticeCard(_ message: String, isError: Bool) -> some View {
         card {
             Label(message, systemImage: isError ? "exclamationmark.triangle" : "arrow.clockwise.circle")
-                .font(.footnote)
-                .foregroundStyle(isError ? .red : .orange)
+                .font(.ripul(.footnote))
+                .foregroundStyle(isError ? .ripul(.danger) : .ripul(.warning))
         }
     }
 
@@ -417,30 +417,30 @@ public struct RipulToolCollectionsScreen: View {
             } label: {
                 HStack(spacing: 8) {
                     Image(systemName: "chevron.right")
-                        .font(.caption)
+                        .font(.ripulIcon(.caption))
                         .rotationEffect(.degrees(isOpen ? 90 : 0))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(.ripul(.textSecondary))
                     VStack(alignment: .leading, spacing: 2) {
                         HStack(spacing: 6) {
                             Text(collection.displayLabel)
-                                .font(.subheadline.weight(.semibold))
-                                .foregroundStyle(.primary)
+                                .font(.ripul(.subheadline, weight: .semibold))
+                                .foregroundStyle(.ripul(.text))
                             if collection.isIsolate {
                                 Text("isolate")
-                                    .font(.caption2)
+                                    .font(.ripul(.caption2))
                                     .padding(.horizontal, 5).padding(.vertical, 1)
-                                    .background(Color.secondary.opacity(0.15), in: Capsule())
+                                    .background(Color.ripul(.textSecondary).opacity(0.15), in: Capsule())
                             }
                             if let refs = contextRefs[collection.name], !refs.isEmpty {
                                 Text("used by \(refs.joined(separator: ", "))")
-                                    .font(.caption2)
+                                    .font(.ripul(.caption2))
                                     .foregroundStyle(.tint)
                                     .padding(.horizontal, 5).padding(.vertical, 1)
                                     .background(Color.accentColor.opacity(0.12), in: Capsule())
                             }
                         }
                         Text(summary(matcher: m, collection: collection))
-                            .font(.caption).foregroundStyle(.secondary)
+                            .font(.ripul(.caption)).foregroundStyle(.ripul(.textSecondary))
                     }
                     Spacer()
                 }
@@ -462,11 +462,11 @@ public struct RipulToolCollectionsScreen: View {
                 }
                 if m.memberCount == 0 {
                     Text("Empty — drag a tool here, or add a name pattern.")
-                        .font(.footnote).foregroundStyle(.secondary)
+                        .font(.ripul(.footnote)).foregroundStyle(.ripul(.textSecondary))
                 }
                 Button { editing = collection } label: {
                     Label("Edit patterns, mode, label…", systemImage: "slider.horizontal.3")
-                        .font(.footnote)
+                        .font(.ripul(.footnote))
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(Color.accentColor)
@@ -486,15 +486,15 @@ public struct RipulToolCollectionsScreen: View {
     private func memberRow(_ name: String, in collection: RipulToolCollection, kind: MemberKind) -> some View {
         let row = HStack(spacing: 8) {
             Image(systemName: kind == .picked ? "line.3.horizontal" : "circle.dotted")
-                .font(.caption2).foregroundStyle(.secondary)
+                .font(.ripulIcon(.caption2)).foregroundStyle(.ripul(.textSecondary))
             Text(name)
-                .font(.system(.footnote, design: .monospaced))
-                .foregroundStyle(kind == .picked ? .primary : .secondary)
+                .font(.ripul(.footnote, family: .code))
+                .foregroundStyle(kind == .picked ? .ripul(.text) : .ripul(.textSecondary))
             Spacer()
             switch kind {
             case .picked: EmptyView()
-            case .pattern: Text("pattern").font(.caption2).foregroundStyle(.secondary)
-            case .elsewhere: Text(originLabel(for: name)).font(.caption2).foregroundStyle(.secondary)
+            case .pattern: Text("pattern").font(.ripul(.caption2)).foregroundStyle(.ripul(.textSecondary))
+            case .elsewhere: Text(originLabel(for: name)).font(.ripul(.caption2)).foregroundStyle(.ripul(.textSecondary))
             }
         }
         .padding(.vertical, 3)
@@ -538,22 +538,22 @@ public struct RipulToolCollectionsScreen: View {
         let ungrouped = model.ungroupedTools(from: tools)
         return card(highlighted: dropTarget == ungroupedDropId) {
             HStack(spacing: 8) {
-                Image(systemName: "tray").font(.caption).foregroundStyle(.secondary)
+                Image(systemName: "tray").font(.ripulIcon(.caption)).foregroundStyle(.ripul(.textSecondary))
                 Text("Ungrouped in \(catalog.name) (\(ungrouped.count))")
-                    .font(.subheadline.weight(.semibold))
+                    .font(.ripul(.subheadline, weight: .semibold))
                 Spacer()
             }
             Text("Passed to that agent individually, costing tokens on every turn. Press and hold a tool, then drag it onto a collection.")
-                .font(.caption2).foregroundStyle(.secondary)
+                .font(.ripul(.caption2)).foregroundStyle(.ripul(.textSecondary))
             if !ungrouped.isEmpty { Divider() }
             ForEach(ungrouped) { tool in
                 HStack(spacing: 8) {
-                    Image(systemName: "line.3.horizontal").font(.caption2).foregroundStyle(.secondary)
+                    Image(systemName: "line.3.horizontal").font(.ripulIcon(.caption2)).foregroundStyle(.ripul(.textSecondary))
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(tool.name).font(.system(.footnote, design: .monospaced))
+                        Text(tool.name).font(.ripul(.footnote, family: .code))
                         if !tool.description.isEmpty {
                             Text(tool.description)
-                                .font(.caption2).foregroundStyle(.secondary).lineLimit(2)
+                                .font(.ripul(.caption2)).foregroundStyle(.ripul(.textSecondary)).lineLimit(2)
                         }
                     }
                     Spacer()
@@ -587,30 +587,30 @@ public struct RipulToolCollectionsScreen: View {
                 } label: {
                     HStack {
                         Text("Not organising \(catalog.name) (\(otherCollections.count))")
-                            .font(.footnote.weight(.semibold))
+                            .font(.ripul(.footnote, weight: .semibold))
                         Spacer()
                         Image(systemName: "chevron.right")
-                            .font(.caption2)
+                            .font(.ripulIcon(.caption2))
                             .rotationEffect(.degrees(showingOthers ? 90 : 0))
                     }
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.ripul(.textSecondary))
 
                 if showingOthers {
                     Divider()
                     ForEach(otherCollections) { collection in
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(collection.displayLabel).font(.footnote)
+                            Text(collection.displayLabel).font(.ripul(.footnote))
                             Text(elsewhereReason(collection))
-                                .font(.caption2).foregroundStyle(.secondary)
+                                .font(.ripul(.caption2)).foregroundStyle(.ripul(.textSecondary))
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.vertical, 2)
                     }
                     Text("Collections holding none of this surface's tools — the app's other surface, or Ripul's own platform collections.")
-                        .font(.caption2).foregroundStyle(.secondary)
+                        .font(.ripul(.caption2)).foregroundStyle(.ripul(.textSecondary))
                 }
             }
         }

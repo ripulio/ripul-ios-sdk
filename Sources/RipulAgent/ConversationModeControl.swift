@@ -15,7 +15,7 @@ public struct RipulConversationModeControl: View {
 
     public var body: some View {
         HStack(spacing: 10) {
-            Menu {
+            Menu { MenuIcons {
                 Button { onChange("agent") } label: {
                     Label("Agent — replies by default", systemImage: isGroupMode ? "circle" : "checkmark.circle.fill")
                 }
@@ -23,13 +23,13 @@ public struct RipulConversationModeControl: View {
                     Label("Group — agents reply when @mentioned", systemImage: isGroupMode ? "checkmark.circle.fill" : "circle")
                 }
                 Text("Mentioned agents can read the preceding group discussion. This mode applies to everyone.")
-            } label: {
+            }} label: {
                 HStack(spacing: 5) {
                     Image(systemName: isGroupMode ? "person.2" : "sparkles")
                     Text(isGroupMode ? "Group" : "Agent")
-                    Image(systemName: "chevron.down").font(.caption2)
+                    Image(systemName: "chevron.down").font(.ripulIcon(.caption2))
                 }
-                .font(.subheadline.weight(.medium))
+                .font(.ripul(.subheadline, weight: .medium))
                 .padding(.horizontal, 12).frame(minHeight: 36)
                 .background(.regularMaterial, in: Capsule())
             }
@@ -38,7 +38,7 @@ public struct RipulConversationModeControl: View {
             .accessibilityIdentifier("conversation.mode")
             if isGroupMode {
                 Button(action: onMention) {
-                    Label("Agent", systemImage: "at").font(.subheadline)
+                    Label("Agent", systemImage: "at").font(.ripul(.subheadline))
                         .padding(.horizontal, 10).frame(minHeight: 36)
                 }
                 .accessibilityLabel("Mention the current agent")

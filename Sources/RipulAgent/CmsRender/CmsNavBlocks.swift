@@ -276,7 +276,7 @@ struct CmsSidebarNavBlockView: View {
             Group {
                 if switchable, let source = headerSource {
                     let current = runtime.selectedRow(source)
-                    Menu {
+                    Menu { MenuIcons {
                         ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
                             Button {
                                 runtime.setSelectedRows(source, rows: [row])
@@ -293,7 +293,7 @@ struct CmsSidebarNavBlockView: View {
                             Divider()
                             Button("Settings") { runtime.navigate(toPage: target, viewRef: nil) }
                         }
-                    } label: { card }
+                    }} label: { card }
                     .buttonStyle(.plain)
                     .cmsInspectorID("Cms.sidebarNav.workspaceMenu")
                 } else if let target {
@@ -532,9 +532,9 @@ struct CmsTopNavBlockView: View {
     var body: some View {
         HStack(spacing: CmsCss.points(block.props.string("itemGap")) ?? 8) {
             if collapsed {
-                Menu {
+                Menu { MenuIcons {
                     menuEntries(items)
-                } label: {
+                }} label: {
                     Image(systemName: "line.3.horizontal")
                         .font(.system(size: 17, weight: .medium))
                         .foregroundColor(labelColor)
@@ -606,9 +606,9 @@ struct CmsTopNavBlockView: View {
         if item.iconOnly, let symbol = CmsNavIcon.symbol(for: item.icon) {
             iconOnlyEntry(item, symbol: symbol)
         } else if !item.children.isEmpty {
-            Menu {
+            Menu { MenuIcons {
                 menuEntries(item.children)
-            } label: {
+            }} label: {
                 barLabel(item, chevron: true)
             }
         } else {
@@ -641,7 +641,7 @@ struct CmsTopNavBlockView: View {
             .accessibilityLabel(item.label)
             .cmsInspectorID("Cms.topNav.iconItem")
         if !item.children.isEmpty {
-            Menu { menuEntries(item.children) } label: { glyph }
+            Menu { MenuIcons { menuEntries(item.children) }} label: { glyph }
         } else {
             Button { item.perform(runtime: runtime, openURL: openURL) } label: { glyph }
                 .buttonStyle(.plain)
@@ -700,9 +700,9 @@ struct CmsTopNavBlockView: View {
                         menuEntries(item.children)
                     }
                 } else if !item.children.isEmpty {
-                    Menu(item.label) {
+                    Menu(item.label) { MenuIcons {
                         menuEntries(item.children)
-                    }
+                    }}
                 } else {
                     Button {
                         item.perform(runtime: runtime, openURL: openURL)

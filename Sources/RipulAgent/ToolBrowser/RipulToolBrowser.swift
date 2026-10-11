@@ -43,9 +43,9 @@ public struct RipulToolBrowser: View {
                 )
             } else if let error {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text(error).font(.caption).foregroundStyle(.red)
+                    Text(error).font(.ripul(.caption)).foregroundStyle(.ripul(.danger))
                     Button("Retry") { Task { await load() } }
-                        .font(.caption)
+                        .font(.ripul(.caption))
                         .uiKitIdentifier("ToolBrowser.retry")
                 }
                 .padding(.horizontal, 16)
@@ -53,7 +53,7 @@ public struct RipulToolBrowser: View {
             } else {
                 HStack(spacing: 8) {
                     ProgressView().scaleEffect(0.7)
-                    Text("Loading tools…").font(.caption).foregroundStyle(.tertiary)
+                    Text("Loading tools…").font(.ripul(.caption)).foregroundStyle(.ripul(.textTertiary))
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 8)
@@ -133,7 +133,7 @@ public struct RipulToolBrowserView: View {
                 otherNode
             }
         }
-        .sheet(item: $selectedTool) { tool in
+        .ripulSheet(item: $selectedTool) { tool in
             RipulToolDetailView(tool: tool)
         }
         .uiKitIdentifier("ToolBrowser.view")
@@ -144,12 +144,12 @@ public struct RipulToolBrowserView: View {
     private var toolbar: some View {
         HStack(spacing: 8) {
             TextField("Search tools…", text: $search)
-                .font(.caption)
+                .font(.ripul(.caption))
                 .textFieldStyle(.roundedBorder)
                 .uiKitIdentifier("ToolBrowser.search")
             Text("\(inventory.resolvedNames.count) live · \(inventory.totalToolCount) total")
-                .font(.caption2.monospacedDigit())
-                .foregroundStyle(.tertiary)
+                .font(.ripul(.caption2).monospacedDigit())
+                .foregroundStyle(.ripul(.textTertiary))
                 .lineLimit(1)
                 .fixedSize()
             if let onRefresh {
@@ -159,7 +159,7 @@ public struct RipulToolBrowserView: View {
                     if loading {
                         ProgressView().scaleEffect(0.6)
                     } else {
-                        Image(systemName: "arrow.clockwise").font(.caption).foregroundStyle(.secondary)
+                        Image(systemName: "arrow.clockwise").font(.ripulIcon(.caption)).foregroundStyle(.ripul(.textSecondary))
                     }
                 }
                 .buttonStyle(.plain)
@@ -180,7 +180,7 @@ public struct RipulToolBrowserView: View {
         if let v = inventory.vantage {
             HStack(spacing: 5) {
                 Image(systemName: v.remote ? "checkmark.seal" : (v.fallback == nil ? "iphone" : "exclamationmark.triangle"))
-                    .font(.caption2)
+                    .font(.ripulIcon(.caption2))
                 if v.remote {
                     Text("Live from \(v.machineName) — what the session is served")
                 } else if let fallback = v.fallback {
@@ -189,8 +189,8 @@ public struct RipulToolBrowserView: View {
                     Text("As seen from this \(v.hostLabel)")
                 }
             }
-            .font(.caption2)
-            .foregroundStyle(v.remote ? Color.secondary : (v.fallback == nil ? Color.secondary : Color.orange))
+            .font(.ripul(.caption2))
+            .foregroundStyle(v.remote ? Color.ripul(.textSecondary) : (v.fallback == nil ? Color.ripul(.textSecondary) : Color.ripul(.warning)))
             .lineLimit(2)
             .padding(.horizontal, 16)
             .padding(.bottom, 6)
@@ -219,18 +219,18 @@ public struct RipulToolBrowserView: View {
                     } label: {
                         HStack(spacing: 8) {
                             Image(systemName: "chevron.right")
-                                .font(.caption2.weight(.semibold))
-                                .foregroundStyle(.tertiary)
+                                .font(.ripulIcon(.caption2, weight: .semibold))
+                                .foregroundStyle(.ripul(.textTertiary))
                                 .rotationEffect(.degrees(isOpen ? 90 : 0))
                                 .frame(width: 12)
                             VStack(alignment: .leading, spacing: 1) {
                                 Text(category.label)
-                                    .font(.caption.weight(.medium))
-                                    .foregroundStyle(category.enabled ? .primary : .secondary)
+                                    .font(.ripul(.caption, weight: .medium))
+                                    .foregroundStyle(category.enabled ? .ripul(.text) : .ripul(.textSecondary))
                                     .lineLimit(1)
                                 Text(categorySubtitle(category))
-                                    .font(.caption2)
-                                    .foregroundStyle(.tertiary)
+                                    .font(.ripul(.caption2))
+                                    .foregroundStyle(.ripul(.textTertiary))
                                     .lineLimit(1)
                             }
                             Spacer(minLength: 4)
@@ -263,8 +263,8 @@ public struct RipulToolBrowserView: View {
                     }
                     if !category.declaredPatterns.isEmpty {
                         Text("also matches: " + category.declaredPatterns.joined(separator: "  "))
-                            .font(.caption2.monospaced())
-                            .foregroundStyle(.tertiary)
+                            .font(.ripul(.caption2, family: .code))
+                            .foregroundStyle(.ripul(.textTertiary))
                             .lineLimit(2)
                             .padding(.leading, 36)
                             .padding(.trailing, 16)
@@ -272,8 +272,8 @@ public struct RipulToolBrowserView: View {
                     }
                     if !anyMatch {
                         Text("No tools in this category right now.")
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
+                            .font(.ripul(.caption2))
+                            .foregroundStyle(.ripul(.textTertiary))
                             .padding(.leading, 36)
                             .padding(.vertical, 4)
                     }
@@ -301,20 +301,20 @@ public struct RipulToolBrowserView: View {
     private func declaredRow(_ name: String) -> some View {
         HStack(spacing: 8) {
             Image(systemName: "questionmark.circle")
-                .font(.caption2)
-                .foregroundStyle(Color.secondary.opacity(0.5))
+                .font(.ripulIcon(.caption2))
+                .foregroundStyle(Color.ripul(.textSecondary).opacity(0.5))
                 .frame(width: 14)
             Text(name)
-                .font(.caption.monospaced())
-                .foregroundStyle(.tertiary)
+                .font(.ripul(.caption, family: .code))
+                .foregroundStyle(.ripul(.textTertiary))
                 .lineLimit(1)
             Spacer(minLength: 4)
             Text("declared")
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
+                .font(.ripul(.caption2))
+                .foregroundStyle(.ripul(.textTertiary))
                 .padding(.horizontal, 5)
                 .padding(.vertical, 1)
-                .background(.quaternary, in: RoundedRectangle(cornerRadius: 5))
+                .background(.ripul(.textQuaternary), in: RoundedRectangle(cornerRadius: 5))
         }
         .padding(.leading, 36)
         .padding(.trailing, 16)
@@ -334,14 +334,14 @@ public struct RipulToolBrowserView: View {
                 } label: {
                     HStack(spacing: 8) {
                         Image(systemName: "chevron.right")
-                            .font(.caption2.weight(.semibold))
-                            .foregroundStyle(.tertiary)
+                            .font(.ripulIcon(.caption2, weight: .semibold))
+                            .foregroundStyle(.ripul(.textTertiary))
                             .rotationEffect(.degrees(isOpen ? 90 : 0))
                             .frame(width: 12)
                         VStack(alignment: .leading, spacing: 1) {
-                            Text("Always on").font(.caption.weight(.medium)).lineLimit(1)
+                            Text("Always on").font(.ripul(.caption, weight: .medium)).lineLimit(1)
                             Text(inventory.uncategorized.count == 1 ? "1 tool · no category" : "\(inventory.uncategorized.count) tools · no category")
-                                .font(.caption2).foregroundStyle(.tertiary).lineLimit(1)
+                                .font(.ripul(.caption2)).foregroundStyle(.ripul(.textTertiary)).lineLimit(1)
                         }
                         Spacer(minLength: 4)
                     }
@@ -370,23 +370,23 @@ public struct RipulToolBrowserView: View {
         } label: {
             HStack(spacing: 8) {
                 Image(systemName: tool.visibleNow ? "eye" : "eye.slash")
-                    .font(.caption2)
-                    .foregroundStyle(tool.visibleNow ? Color.accentColor : Color.secondary.opacity(0.5))
+                    .font(.ripulIcon(.caption2))
+                    .foregroundStyle(tool.visibleNow ? Color.accentColor : Color.ripul(.textSecondary).opacity(0.5))
                     .frame(width: 14)
                 Text(tool.name)
-                    .font(.caption.monospaced())
-                    .foregroundStyle(dimmed ? .secondary : .primary)
+                    .font(.ripul(.caption, family: .code))
+                    .foregroundStyle(dimmed ? .ripul(.textSecondary) : .ripul(.text))
                     .lineLimit(1)
                 Spacer(minLength: 4)
                 Text(tool.absentReasonLabel ?? tool.originLabel)
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
+                    .font(.ripul(.caption2))
+                    .foregroundStyle(.ripul(.textTertiary))
                     .padding(.horizontal, 5)
                     .padding(.vertical, 1)
-                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 5))
+                    .background(.ripul(.textQuaternary), in: RoundedRectangle(cornerRadius: 5))
                 Image(systemName: "chevron.right")
-                    .font(.caption2)
-                    .foregroundStyle(.quaternary)
+                    .font(.ripulIcon(.caption2))
+                    .foregroundStyle(.ripul(.textQuaternary))
             }
             .contentShape(Rectangle())
         }

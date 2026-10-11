@@ -91,15 +91,15 @@ public struct DirectoryPathLabel: View {
 
         var nameFont: Font {
             switch self {
-            case .prominent: return .headline
-            case .compact: return .subheadline.weight(.semibold)
+            case .prominent: return .ripul(.headline)
+            case .compact: return .ripul(.subheadline, weight: .semibold)
             }
         }
 
         var prefixFont: Font {
             switch self {
-            case .prominent: return .caption
-            case .compact: return .caption2
+            case .prominent: return .ripul(.caption)
+            case .compact: return .ripul(.caption2)
             }
         }
     }
@@ -122,13 +122,13 @@ public struct DirectoryPathLabel: View {
             if let prefix = display.prefix, !prefix.isEmpty {
                 Text(prefix)
                     .font(prominence.prefixFont)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.ripul(.textSecondary))
                     .lineLimit(1)
                     .truncationMode(.head)
             }
             Text(display.name)
                 .font(prominence.nameFont)
-                .foregroundStyle(.primary)
+                .foregroundStyle(.ripul(.text))
                 .lineLimit(1)
                 .truncationMode(.middle)
         }

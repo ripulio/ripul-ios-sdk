@@ -51,7 +51,7 @@ public struct CmsPropertyInspectorView: View {
     private var blockPickerMenu: some View {
         let current = controller.block(blockId)
         let label = current.flatMap { $0.name ?? $0.slug } ?? current?.type ?? "Inspector"
-        return Menu {
+        return Menu { MenuIcons {
             ForEach(controller.allBlocks(), id: \.block.id) { entry in
                 Button {
                     runtime.selectedBlockId = entry.block.id
@@ -61,7 +61,7 @@ public struct CmsPropertyInspectorView: View {
                     Text("\(indent)\(name)")
                 }
             }
-        } label: {
+        }} label: {
             HStack(spacing: 3) {
                 Text(label)
                     .font(.headline)

@@ -79,7 +79,7 @@ struct MachinePanelEntry: Identifiable {
     let label: String
     /// Supporting line, shown on tiles.
     let subtitle: String
-    var tint: Color = .blue
+    var tint: Color = Color.ripul(accentOr: .info) // an entry with no colour of its own is in the app's colour
     let defaultPlacement: MachinePanelPlacement
     /// Offline or disabled machines drop their actionable entries entirely.
     var available: Bool = true

@@ -82,7 +82,7 @@ struct RipulToolCollectionEditorView: View {
                     .accessibilityIdentifier("ripul.toolCollections.save")
             }
         }
-        .sheet(isPresented: $pickingTools) {
+        .ripulSheet(isPresented: $pickingTools) {
             NavigationStack {
                 RipulToolPickerView(tools: tools, selected: $explicitTools)
             }
@@ -111,7 +111,7 @@ struct RipulToolCollectionEditorView: View {
         Section {
             if !isEditing {
                 TextField("data_tools", text: $name)
-                    .font(.system(.body, design: .monospaced))
+                    .font(.ripul(.body, family: .code))
                     .autocorrectionDisabled()
                     .textInputAutocapitalization(.never)
                     .accessibilityIdentifier("ripul.toolCollections.name")
@@ -119,13 +119,13 @@ struct RipulToolCollectionEditorView: View {
             TextField("Label shown to the agent", text: $label)
             TextField("What these tools do together", text: $descriptionText, axis: .vertical)
                 .lineLimit(2...4)
-        } header: {
+        } header: { RipulSectionHeader {
             Text(isEditing ? "Identity" : "Name")
-        } footer: {
+        } } footer: { RipulSectionFooter {
             Text(isEditing
                  ? "The name cannot be changed after creation."
                  : "A unique identifier. The label and description are what the agent reads when deciding whether to expand this collection.")
-        }
+        } }
     }
 
     private var modeSection: some View {
@@ -139,33 +139,33 @@ struct RipulToolCollectionEditorView: View {
             if mode == "isolate" {
                 TextField("Sub-agent system prompt (optional)", text: $prompt, axis: .vertical)
                     .lineLimit(3...8)
-                    .font(.system(.footnote, design: .monospaced))
+                    .font(.ripul(.footnote, family: .code))
             }
-        } header: {
+        } header: { RipulSectionHeader {
             Text("Mode")
-        } footer: {
+        } } footer: { RipulSectionFooter {
             Text(mode == "isolate"
                  ? "A focused sub-agent runs with only these tools, then reports back. Best when the area is self-contained."
                  : "Tools join the agent's current scope alongside everything else. Best when tasks mix this area with others.")
-        }
+        } }
     }
 
     private var patternsSection: some View {
         Section {
             ForEach(patterns, id: \.self) { pattern in
                 HStack {
-                    Text(pattern).font(.system(.footnote, design: .monospaced))
+                    Text(pattern).font(.ripul(.footnote, family: .code))
                     Spacer()
                     Text("\(matchCount(for: pattern))")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .font(.ripul(.caption))
+                        .foregroundStyle(.ripul(.textSecondary))
                 }
             }
             .onDelete { patterns.remove(atOffsets: $0) }
 
             HStack {
                 TextField("^calendar_", text: $patternEntry)
-                    .font(.system(.body, design: .monospaced))
+                    .font(.ripul(.body, family: .code))
                     .autocorrectionDisabled()
                     .textInputAutocapitalization(.never)
                     .onSubmit(addPattern)
@@ -174,20 +174,20 @@ struct RipulToolCollectionEditorView: View {
                     .disabled(patternEntry.trimmingCharacters(in: .whitespaces).isEmpty || patternError != nil)
             }
             if let patternError {
-                Text(patternError).font(.caption).foregroundStyle(.red)
+                Text(patternError).font(.ripul(.caption)).foregroundStyle(.ripul(.danger))
             }
-        } header: {
+        } header: { RipulSectionHeader {
             Text("Name Patterns")
-        } footer: {
+        } } footer: { RipulSectionFooter {
             Text("Regexes matched against tool names. Any tool matching joins this collection, so future tools following the convention are absorbed automatically — no regrouping. Match the name your app registers (get_events), not the prefixed one (host_get_events).")
-        }
+        } }
     }
 
     private var explicitToolsSection: some View {
         Section {
             ForEach(explicitTools, id: \.self) { tool in
                 Text(tool)
-                    .font(.system(.footnote, design: .monospaced))
+                    .font(.ripul(.footnote, family: .code))
                     // A group:// entry is a server-resolved reference, not a
                     // local tool — surface it rather than silently listing it
                     // as something that will never match here.
@@ -201,26 +201,26 @@ struct RipulToolCollectionEditorView: View {
                 Label("Pick Tools", systemImage: "plus.circle")
             }
             .accessibilityIdentifier("ripul.toolCollections.pickTools")
-        } header: {
+        } header: { RipulSectionHeader {
             Text("Picked Tools")
-        } footer: {
+        } } footer: { RipulSectionFooter {
             Text("Hand-picked members, in addition to anything the patterns capture.")
-        }
+        } }
     }
 
     private var previewSection: some View {
         Section {
             if matcher.memberCount == 0 {
                 Text("No members yet — this collection would not be shown to the agent.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+                    .font(.ripul(.footnote))
+                    .foregroundStyle(.ripul(.textSecondary))
             }
             ForEach(matcher.presentMatches, id: \.self) { toolName in
                 HStack {
-                    Text(toolName).font(.system(.footnote, design: .monospaced))
+                    Text(toolName).font(.ripul(.footnote, family: .code))
                     Spacer()
                     if matcher.patternMatches.contains(toolName) {
-                        Text("pattern").font(.caption2).foregroundStyle(.secondary)
+                        Text("pattern").font(.ripul(.caption2)).foregroundStyle(.ripul(.textSecondary))
                     }
                 }
             }
@@ -230,22 +230,22 @@ struct RipulToolCollectionEditorView: View {
             ForEach(matcher.absentMembers, id: \.self) { member in
                 HStack {
                     Text(member)
-                        .font(.system(.footnote, design: .monospaced))
-                        .foregroundStyle(.secondary)
+                        .font(.ripul(.footnote, family: .code))
+                        .foregroundStyle(.ripul(.textSecondary))
                     Spacer()
-                    Text("not in this app").font(.caption2).foregroundStyle(.secondary)
+                    Text("not in this app").font(.ripul(.caption2)).foregroundStyle(.ripul(.textSecondary))
                 }
             }
             ForEach(matcher.invalidPatterns, id: \.pattern) { invalid in
                 Label("\(invalid.pattern) — \(invalid.reason)", systemImage: "exclamationmark.triangle")
-                    .font(.caption)
-                    .foregroundStyle(.orange)
+                    .font(.ripul(.caption))
+                    .foregroundStyle(.ripul(.warning))
             }
-        } header: {
+        } header: { RipulSectionHeader {
             Text("\(matcher.memberCount) members · \(matcher.presentCount) in this app")
-        } footer: {
+        } } footer: { RipulSectionFooter {
             Text("Collections are account-wide. Members this build doesn't register are still part of the collection — they belong to the web app or another device.")
-        }
+        } }
     }
 
     private var deleteSection: some View {
@@ -351,7 +351,7 @@ struct RipulToolPickerView: View {
     @ViewBuilder
     private func section(title: String, items: [RipulRegisteredTool]) -> some View {
         if !items.isEmpty {
-            Section(title) {
+            Section(themed: title) {
                 ForEach(items) { tool in
                     Button {
                         toggle(tool.name)
@@ -359,12 +359,12 @@ struct RipulToolPickerView: View {
                         HStack(alignment: .top) {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(tool.name)
-                                    .font(.system(.footnote, design: .monospaced))
-                                    .foregroundStyle(.primary)
+                                    .font(.ripul(.footnote, family: .code))
+                                    .foregroundStyle(.ripul(.text))
                                 if !tool.description.isEmpty {
                                     Text(tool.description)
-                                        .font(.caption2)
-                                        .foregroundStyle(.secondary)
+                                        .font(.ripul(.caption2))
+                                        .foregroundStyle(.ripul(.textSecondary))
                                         .lineLimit(2)
                                 }
                             }

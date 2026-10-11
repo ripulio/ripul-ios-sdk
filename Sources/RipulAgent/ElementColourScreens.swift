@@ -88,7 +88,7 @@ struct ColourReferencePicker: View {
     var body: some View {
         List {
             ForEach(groups, id: \.0) { group in
-                Section(group.0) {
+                Section(themed: group.0) {
                     ForEach(group.1.filter { allows($0) && (query.isEmpty || $0.localizedCaseInsensitiveContains(query)) }, id: \.self) { name in
                         Button {
                             select(name); dismiss()
@@ -131,16 +131,16 @@ struct ColourTokenDefinitionScreen: View {
                 Text(token.name).font(.title3).textSelection(.enabled)
                 Text(token.tier).foregroundStyle(.secondary)
                 HStack { Text("Resulting colour"); Spacer(); Text(token.colour.ripulHexString); ColourValueSwatch(colour: token.colour) }
-            } footer: {
+            } footer: { RipulSectionFooter {
                 Text("Shared definition. Changes affect every element and token that uses \(token.name).")
-            }
+            } }
             if case .primitive = token {
-                Section("Colour value") {
+                Section(themed: "Colour value") {
                     ColorPicker("Edit palette colour", selection: Binding(get: { Color(token.colour) }, set: { token.set(UIColor($0).ripulHexString) }), supportsOpacity: false)
                         .uiKitIdentifier("theme.token.colour")
                 }
             } else {
-                Section("Colour source") {
+                Section(themed: "Colour source") {
                     if let source = token.source, !ancestors.union([token]).contains(source) {
                         NavigationLink {
                             ColourTokenDefinitionScreen(token: source, ancestors: ancestors.union([token]))
@@ -156,7 +156,7 @@ struct ColourTokenDefinitionScreen: View {
                         List {
                             Section {
                                 ColorPicker("Custom colour", selection: Binding(get: { Color(token.colour) }, set: { token.set(UIColor($0).ripulHexString) }), supportsOpacity: false)
-                            } footer: { Text("This replaces \(token.name)’s source reference with a fixed colour. Other uses of \(token.name) follow it.") }
+                            } footer: { RipulSectionFooter { Text("This replaces \(token.name)’s source reference with a fixed colour. Other uses of \(token.name) follow it.") } }
                         }.navigationTitle(token.name)
                     }
                 }
@@ -198,7 +198,7 @@ struct ElementColourScreen: View {
                     Button("Use default: \(assignment.defaultToken)") { assignment.setReference(nil) }
                         .uiKitIdentifier("theme.element.reset")
                 }
-            } header: { Text("This element") } footer: { Text("Only this element’s \(propertyLabel.lowercased()) changes. The shared token remains unchanged.") }
+            } header: { RipulSectionHeader { Text("This element") } } footer: { RipulSectionFooter { Text("Only this element’s \(propertyLabel.lowercased()) changes. The shared token remains unchanged.") } }
             Section {
                 if let token = ColourTokenAddress.token(assignment.reference) {
                     NavigationLink("Open \(token.name)") { ColourTokenDefinitionScreen(token: token) }
@@ -206,7 +206,7 @@ struct ElementColourScreen: View {
                 }
                 Button("Create a shared token from this colour") { naming = true }
                 if let nameError { Text(nameError).foregroundStyle(.red) }
-            } header: { Text("Shared definition") } footer: { Text("Use shared tokens to group elements. Editing a shared definition changes every place that uses it.") }
+            } header: { RipulSectionHeader { Text("Shared definition") } } footer: { RipulSectionFooter { Text("Use shared tokens to group elements. Editing a shared definition changes every place that uses it.") } }
         }
         .navigationTitle("Element appearance").navigationBarTitleDisplayMode(.inline)
         .alert("New shared token", isPresented: $naming) {
@@ -240,7 +240,7 @@ public struct RipulElementColourOverridesScreen: View {
             }
             if values.isEmpty { Text("No individual colour overrides") }
             ForEach(values.keys.sorted().filter { query.isEmpty || $0.localizedCaseInsensitiveContains(query) }, id: \.self) { element in
-                Section(ThemeChangePresentation.readable(element)) {
+                Section(themed: ThemeChangePresentation.readable(element)) {
                     ForEach((values[element] ?? [:]).keys.sorted(), id: \.self) { property in
                         let known = RipulElementColours.assignments.first { $0.element == element && $0.property == property }
                         if let known {

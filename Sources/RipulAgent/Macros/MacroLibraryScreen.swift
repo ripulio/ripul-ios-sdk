@@ -80,7 +80,7 @@ struct MacroLibraryScreen: View {
             } message: {
                 Text(errorMessage ?? "")
             }
-            .sheet(item: $editingMacro) { macro in
+            .ripulSheet(item: $editingMacro) { macro in
                 MacroEditScreen(macro: macro, client: client, onSaved: {
                     Task { await load(); onChange() }
                 })
@@ -96,7 +96,7 @@ struct MacroLibraryScreen: View {
                 // console panel never dismisses modal presentations (they're
                 // siblings of the panel in the window, not children of it),
                 // and dismissing them UIKit-side would desync the
-                // .sheet(isPresented:) bindings and re-present them.
+                // .ripulSheet(isPresented:) bindings and re-present them.
                 if phase == .running { dismiss() }
             }
         }
@@ -131,24 +131,24 @@ struct MacroLibraryScreen: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
                 Text(macro.name)
-                    .font(.headline)
+                    .font(.ripul(.headline))
                 Spacer()
                 Image(systemName: "chevron.right")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
+                    .font(.ripulIcon(.caption))
+                    .foregroundStyle(.ripul(.textTertiary))
                 Text(macro.published ? "Published" : "Draft")
-                    .font(.caption)
+                    .font(.ripul(.caption))
                     .padding(.horizontal, 8).padding(.vertical, 2)
-                    .background(macro.published ? Color.green.opacity(0.2) : Color.gray.opacity(0.2))
-                    .foregroundStyle(macro.published ? .green : .gray)
+                    .background(macro.published ? Color.ripul(.success).opacity(0.2) : Color.ripul(.neutral).opacity(0.2))
+                    .foregroundStyle(macro.published ? .ripul(.success) : .ripul(.neutral))
                     .clipShape(Capsule())
             }
             Text(macro.description)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+                .font(.ripul(.subheadline))
+                .foregroundStyle(.ripul(.textSecondary))
             Text("\(macro.steps.count) step\(macro.steps.count == 1 ? "" : "s")")
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
+                .font(.ripul(.caption2))
+                .foregroundStyle(.ripul(.textTertiary))
         }
         .padding(.vertical, 4)
         .contentShape(Rectangle())
@@ -169,7 +169,7 @@ struct MacroLibraryScreen: View {
                 Label(macro.published ? "Unpublish" : "Publish",
                      systemImage: macro.published ? "eye.slash" : "eye")
             }
-            .tint(macro.published ? .orange : .green)
+            .tint(macro.published ? Color.ripul(.warning) : Color.ripul(.success))
             .uiKitIdentifier("MacroLibraryScreen.row.\(macro.name).publishToggle")
         }
     }
@@ -214,8 +214,8 @@ private struct ContentUnavailableViewCompat: View {
     let message: String
     var body: some View {
         VStack(spacing: 8) {
-            Text(title).font(.headline)
-            Text(message).font(.subheadline).foregroundStyle(.secondary)
+            Text(title).font(.ripul(.headline))
+            Text(message).font(.ripul(.subheadline)).foregroundStyle(.ripul(.textSecondary))
         }
         .multilineTextAlignment(.center)
         .padding()

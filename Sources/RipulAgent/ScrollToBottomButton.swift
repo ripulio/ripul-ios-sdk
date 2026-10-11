@@ -17,20 +17,20 @@ public struct ScrollToBottomButton: View {
     public var body: some View {
         Button(action: action) {
             Image(systemName: "chevron.down")
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(.secondary)
+                .font(.ripulIcon(size: 14, weight: .semibold))
+                .foregroundStyle(.ripul(.textSecondary))
                 .frame(width: 36, height: 36)
         }
         #if os(macOS)
         .buttonStyle(.plain)
         #endif
         .modifier(GlassCircleModifier(glassStyle: nil))
-        .shadow(color: .black.opacity(0.1), radius: 4, y: 2)
+        .shadow(color: Color.ripul(system: .black).opacity(0.1), radius: 4, y: 2)
         .overlay(alignment: .topTrailing) {
             if unreadCount > 0 {
                 Text(unreadCount > 99 ? "99+" : "\(unreadCount)")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.white)
+                    .font(.ripul(size: 11, weight: .semibold))
+                    .foregroundStyle(.ripul(.onAccent))
                     .padding(.horizontal, 5)
                     .padding(.vertical, 1)
                     .frame(minWidth: 18)

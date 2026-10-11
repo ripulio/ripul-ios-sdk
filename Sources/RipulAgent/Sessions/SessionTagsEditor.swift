@@ -75,10 +75,10 @@ public struct SessionTagsEditor: View {
     public var body: some View {
         NavigationStack {
             Form {
-                Section("Tags") {
+                Section(themed: "Tags") {
                     if tags.isEmpty {
                         Text("No tags yet.")
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(.ripul(.textSecondary))
                             .uiKitIdentifier("SessionTagsEditor.empty")
                     } else {
                         ForEach(tags, id: \.self) { tag in
@@ -107,24 +107,24 @@ public struct SessionTagsEditor: View {
                             commitDraft()
                         } label: {
                             Image(systemName: "plus.circle.fill")
-                                .font(.title3)
+                                .font(.ripulIcon(.title3))
                         }
                         .buttonStyle(.plain)
-                        .foregroundStyle(canAdd ? Color.accentColor : Color.secondary)
+                        .foregroundStyle(canAdd ? Color.accentColor : Color.ripul(.textSecondary))
                         .disabled(!canAdd)
                         .uiKitIdentifier("SessionTagsEditor.addButton")
                     }
-                } footer: {
+                } footer: { RipulSectionFooter {
                     if atLimit {
                         Text("Tag limit reached (\(maxTags)).")
                     } else {
                         Text(session.title)
                             .lineLimit(1)
                     }
-                }
+                } }
 
                 if !filteredSuggestions.isEmpty {
-                    Section("Recent Tags") {
+                    Section(themed: "Recent Tags") {
                         ForEach(filteredSuggestions, id: \.self) { tag in
                             Button {
                                 addSuggested(tag)
@@ -133,7 +133,7 @@ public struct SessionTagsEditor: View {
                                     TagLozenge(text: tag)
                                     Spacer()
                                     Image(systemName: "plus.circle")
-                                        .foregroundStyle(.secondary)
+                                        .foregroundStyle(.ripul(.textSecondary))
                                 }
                                 .contentShape(Rectangle())
                             }

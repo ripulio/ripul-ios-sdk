@@ -62,22 +62,24 @@ struct HostScriptsSheet: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if !isSupported {
             ContentUnavailableView {
-                Label("No Scripts Here", systemImage: "terminal")
+                RipulEmptyStateLabel("No Scripts Here", systemImage: "terminal")
             } description: {
                 Text("\(machine.displayName) has no script store. Scripts are a Mac host feature over the relay. You can hide this row from Customise Panel.")
+                    .ripulEmptyStateDescription()
             }
         } else {
             List {
                 if let loadError {
                     Section {
-                        Text(loadError).foregroundStyle(.red).font(.callout)
+                        Text(loadError).foregroundStyle(.ripul(.danger)).font(.ripul(.callout))
                     }
                 }
                 if scripts.isEmpty {
                     ContentUnavailableView {
-                        Label("No Scripts Yet", systemImage: "terminal")
+                        RipulEmptyStateLabel("No Scripts Yet", systemImage: "terminal")
                     } description: {
                         Text("Tap + to write one. It appears as a tile in \(machine.displayName)’s panel.")
+                            .ripulEmptyStateDescription()
                     }
                     .listRowBackground(Color.clear)
                 } else {
@@ -97,9 +99,9 @@ struct HostScriptsSheet: View {
                         .onDelete { offsets in
                             pendingDelete = offsets.first.map { scripts[$0] }
                         }
-                    } footer: {
+                    } footer: { RipulSectionFooter {
                         Text("Each script is a tile in \(machine.displayName)’s panel.")
-                    }
+                    } }
                 }
             }
             .refreshable { await refresh() }
@@ -123,14 +125,14 @@ struct HostScriptsSheet: View {
                 Text(script.name).lineLimit(1)
                 if !script.description.isEmpty {
                     Text(script.description)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .font(.ripul(.caption))
+                        .foregroundStyle(.ripul(.textSecondary))
                         .lineLimit(1)
                 }
             }
         } icon: {
             Image(systemName: script.scriptType == "applescript" ? "applescript" : "terminal")
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.ripul(.textSecondary))
         }
     }
 
@@ -201,11 +203,11 @@ struct HostScriptEditorView: View {
                 TextField("Name", text: $draft.name)
                 TextField("Description", text: $draft.description, axis: .vertical)
                     .lineLimit(1...3)
-            } footer: {
+            } footer: { RipulSectionFooter {
                 Text("The name is the tile’s label in the machine panel.")
-            }
+            } }
 
-            Section("Type") {
+            Section(themed: "Type") {
                 Picker("Type", selection: $draft.scriptType) {
                     Text("Bash").tag("bash")
                     Text("AppleScript").tag("applescript")
@@ -214,9 +216,9 @@ struct HostScriptEditorView: View {
                 .labelsHidden()
             }
 
-            Section("Script") {
+            Section(themed: "Script") {
                 TextEditor(text: $draft.source)
-                    .font(.system(.callout, design: .monospaced))
+                    .font(.ripul(.callout, family: .code))
                     .frame(minHeight: 220)
                     .autocorrectionDisabled()
                     #if os(iOS)
@@ -229,7 +231,7 @@ struct HostScriptEditorView: View {
                     VStack(alignment: .leading, spacing: 8) {
                         HStack {
                             TextField("Name", text: $param.name)
-                                .font(.system(.body, design: .monospaced))
+                                .font(.ripul(.body, family: .code))
                                 .autocorrectionDisabled()
                                 #if os(iOS)
                                 .textInputAutocapitalization(.never)
@@ -241,9 +243,9 @@ struct HostScriptEditorView: View {
                             .fixedSize()
                         }
                         TextField("Description", text: $param.description)
-                            .font(.callout)
+                            .font(.ripul(.callout))
                         Toggle("Required", isOn: $param.required)
-                            .font(.callout)
+                            .font(.ripul(.callout))
                     }
                     .padding(.vertical, 4)
                 }
@@ -254,15 +256,15 @@ struct HostScriptEditorView: View {
                 } label: {
                     Label("Add Parameter", systemImage: "plus.circle")
                 }
-            } header: {
+            } header: { RipulSectionHeader {
                 Text("Parameters")
-            } footer: {
+            } } footer: { RipulSectionFooter {
                 Text("Parameters are asked for when the tile is tapped, and passed to the script.")
-            }
+            } }
 
             if let saveError {
                 Section {
-                    Text(saveError).foregroundStyle(.red).font(.callout)
+                    Text(saveError).foregroundStyle(.ripul(.danger)).font(.ripul(.callout))
                 }
             }
 
@@ -286,17 +288,17 @@ struct HostScriptEditorView: View {
 
                     if let runOutput {
                         Text(runOutput)
-                            .font(.system(.caption, design: .monospaced))
+                            .font(.ripul(.caption, family: .code))
                             .textSelection(.enabled)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                } footer: {
+                } footer: { RipulSectionFooter {
                     if !draft.parameters.isEmpty {
                         Text("Run this one from its tile, so you can fill in its parameters.")
                     } else if isDirty {
                         Text("Save first — Run uses the copy stored on the host.")
                     }
-                }
+                } }
 
                 Section {
                     Button("Delete Script", role: .destructive) { confirmDelete = true }

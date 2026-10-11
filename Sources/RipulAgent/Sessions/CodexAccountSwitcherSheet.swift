@@ -104,7 +104,7 @@ struct CodexAccountSection: View {
     var body: some View {
         Section {
             if !isOnline {
-                Text("Connect to this Mac to manage accounts.").foregroundStyle(.secondary)
+                Text("Connect to this Mac to manage accounts.").foregroundStyle(.ripul(.textSecondary))
             } else {
                 if state == nil && error == nil { ProgressView("Loading accounts…") }
                 ForEach(state?.accounts ?? []) { account in
@@ -116,14 +116,14 @@ struct CodexAccountSection: View {
                         VStack(alignment: .leading, spacing: 4) {
                             HStack(spacing: 12) {
                                 Image(systemName: account.id == state?.active ? "checkmark.circle.fill" : "person.crop.circle")
-                                    .foregroundStyle(account.id == state?.active ? Color.accentColor : Color.secondary)
+                                    .foregroundStyle(account.id == state?.active ? Color.accentColor : Color.ripul(.textSecondary))
                                 VStack(alignment: .leading, spacing: 3) {
-                                    Text(account.name).foregroundStyle(.primary)
-                                    if account.name != account.email { Text(account.email).font(.caption).foregroundStyle(.secondary) }
-                                    if account.needsLogin { Text("Sign in again").font(.caption).foregroundStyle(.orange) }
+                                    Text(account.name).foregroundStyle(.ripul(.text))
+                                    if account.name != account.email { Text(account.email).font(.ripul(.caption)).foregroundStyle(.ripul(.textSecondary)) }
+                                    if account.needsLogin { Text("Sign in again").font(.ripul(.caption)).foregroundStyle(.ripul(.warning)) }
                                 }
                                 Spacer()
-                                if account.id == state?.active { Text("Active").font(.caption).foregroundStyle(.secondary) }
+                                if account.id == state?.active { Text("Active").font(.ripul(.caption)).foregroundStyle(.ripul(.textSecondary)) }
                                 if state?.operation?.isPending == true && state?.operation?.accountId == account.id { ProgressView() }
                             }
                             CodingAccountUsageView(usage: account.usage, plan: account.plan)
@@ -133,31 +133,31 @@ struct CodexAccountSection: View {
                     .buttonStyle(.plain)
                     .disabled(busy)
                     .uiKitIdentifier("CodexAccounts.account.\(account.id)")
-                    .contextMenu {
+                    .contextMenu { MenuIcons {
                         Button("Rename") { newName = account.name; renaming = account }.disabled(busy)
                         Button("Remove", role: .destructive) { removal = account }.disabled(busy || account.id == state?.active)
-                    }
+                    }}
                 }
                 if let operation = state?.operation, operation.isPending { operationRows(operation) }
                 if let message = error ?? state?.operation?.error {
-                    Text(message).foregroundStyle(.orange).textSelection(.enabled).uiKitIdentifier("CodexAccounts.error")
+                    Text(message).foregroundStyle(.ripul(.warning)).textSelection(.enabled).uiKitIdentifier("CodexAccounts.error")
                 }
                 Button { Task { await perform("login") } } label: { Label("Add account", systemImage: "plus") }
                     .disabled(busy).uiKitIdentifier("CodexAccounts.add")
                 if state == nil && error != nil { Button("Retry") { Task { await refresh() } } }
             }
-        } header: {
+        } header: { RipulSectionHeader {
             HStack {
                 Label(machineName, systemImage: "desktopcomputer")
                 Spacer()
                 if !isOnline { Text("Offline") }
             }
-        } footer: {
+        } } footer: { RipulSectionFooter {
             if isOnline {
                 Text("One account is used by all Codex chats on this Mac, including VS Code. Your conversations stay available when you switch.")
                     .fixedSize(horizontal: false, vertical: true)
             }
-        }
+        } }
         .task(id: refreshToken) {
             guard isOnline else { return }
             while !Task.isCancelled {
@@ -178,15 +178,15 @@ struct CodexAccountSection: View {
     @ViewBuilder private func operationRows(_ operation: CodexAccountOperation) -> some View {
         Group {
             if operation.status == "signingIn", let code = operation.userCode {
-                Text("Sign in on your phone").font(.headline)
-                Text(code).font(.system(.title2, design: .monospaced).weight(.semibold)).textSelection(.enabled)
+                Text("Sign in on your phone").font(.ripul(.headline))
+                Text(code).font(.ripul(.title2, family: .code).weight(.semibold)).textSelection(.enabled)
                     .uiKitIdentifier("CodexAccounts.code")
-                Text("Copy the code, open OpenAI, and sign in to the account you want to add.").font(.subheadline).foregroundStyle(.secondary)
+                Text("Copy the code, open OpenAI, and sign in to the account you want to add.").font(.ripul(.subheadline)).foregroundStyle(.ripul(.textSecondary))
                 Button(copied ? "Code copied — open OpenAI" : "Copy code and open OpenAI") { openSignIn(operation) }
-                    .buttonStyle(.borderedProminent).uiKitIdentifier("CodexAccounts.openSignIn")
+                    .ripulProminentButtonStyle().uiKitIdentifier("CodexAccounts.openSignIn")
                 if let expires = operation.expiresAt {
                     HStack { Text("Code window remaining"); Text(Date(timeIntervalSince1970: expires / 1000), style: .timer) }
-                        .font(.caption).foregroundStyle(.secondary)
+                        .font(.ripul(.caption)).foregroundStyle(.ripul(.textSecondary))
                 }
             } else {
                 HStack { ProgressView(); Text(operation.status == "waiting" ? "Waiting for current replies to finish…" : "Switching account…") }

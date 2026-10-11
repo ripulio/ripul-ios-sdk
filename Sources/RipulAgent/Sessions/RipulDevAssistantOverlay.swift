@@ -39,16 +39,26 @@ public final class RipulChatLauncher {
 
     /// Keep the host's chat mounted; only its presentation changes beneath the
     /// snapshot. Completion reveals the real FAB once the glass reaches it.
-    public func minimize(in window: UIWindow, updateChat: @escaping () -> Void,
-                         completion: @escaping () -> Void) {
+    ///
+    /// `chatFrame`, in `window`'s coordinates, is for a host whose chat is a
+    /// floating panel rather than the whole window. The glass folds from that
+    /// rectangle, with `cornerRadius` at rest, and the rest of the window is
+    /// left as it is.
+    public func minimize(in window: UIWindow, chatFrame: CGRect? = nil, cornerRadius: CGFloat = 0,
+                         updateChat: @escaping () -> Void, completion: @escaping () -> Void) {
         morph.run(expanding: false, in: window,
                   bubbleFrame: Self.restingFrame(cache: cache, in: window),
+                  chatFrame: chatFrame, chatCornerRadius: cornerRadius,
                   updateChat: updateChat, completion: completion)
     }
 
-    public func restore(in window: UIWindow, updateChat: @escaping () -> Void) {
+    /// `chatFrame` and `cornerRadius` as for `minimize`: where the panel will
+    /// be once `updateChat` has shown it.
+    public func restore(in window: UIWindow, chatFrame: CGRect? = nil, cornerRadius: CGFloat = 0,
+                        updateChat: @escaping () -> Void) {
         morph.run(expanding: true, in: window,
                   bubbleFrame: Self.restingFrame(cache: cache, in: window),
+                  chatFrame: chatFrame, chatCornerRadius: cornerRadius,
                   updateChat: { [weak self] in
                       self?.overlay.dismiss()
                       updateChat()
@@ -429,7 +439,7 @@ final class RipulDevOverlayRootVC: UIViewController {
         let size = Self.bubbleDiameter
         let b = UIView(frame: CGRect(x: 0, y: 0, width: size, height: size))
         b.backgroundColor = .clear
-        b.layer.shadowColor = UIColor.black.cgColor
+        b.layer.shadowColor = UIColor.ripul(system: .black).cgColor
         b.layer.shadowOpacity = 0.25
         b.layer.shadowRadius = 8
         b.layer.shadowOffset = CGSize(width: 0, height: 3)
@@ -437,7 +447,7 @@ final class RipulDevOverlayRootVC: UIViewController {
         // droplet, so the bubble must be glass too or the hand-off pops.
         let glassEffect = UIGlassEffect()
         glassEffect.isInteractive = true
-        glassEffect.tintColor = .systemBlue
+        glassEffect.tintColor = .ripul(.info)
         let glass = UIVisualEffectView(effect: glassEffect)
         glass.frame = b.bounds
         glass.autoresizingMask = [.flexibleWidth, .flexibleHeight]
@@ -446,7 +456,7 @@ final class RipulDevOverlayRootVC: UIViewController {
         b.addSubview(glass)
         let isHostedChat = overlay?.restoreHostedChat != nil
         let icon = UIImageView(image: UIImage(systemName: isHostedChat ? "bubble.left.and.bubble.right.fill" : "terminal.fill"))
-        icon.tintColor = .white
+        icon.tintColor = .ripul(.onAccent)
         icon.contentMode = .center
         icon.frame = b.bounds
         icon.autoresizingMask = [.flexibleWidth, .flexibleHeight]
@@ -750,7 +760,7 @@ final class RipulDevOverlayRootVC: UIViewController {
         }
 
         let scrim = UIView(frame: view.bounds)
-        scrim.backgroundColor = UIColor.black.withAlphaComponent(0.3)
+        scrim.backgroundColor = UIColor.ripul(system: .black).withAlphaComponent(0.3)
         scrim.isUserInteractionEnabled = false
         view.insertSubview(scrim, at: 0)
 
@@ -859,8 +869,8 @@ final class RipulDevOverlayRootVC: UIViewController {
             bridge: sharedBridge,
             navigation: navigation
         ))
-        let host = UIHostingController(rootView: console)
-        host.view.backgroundColor = .systemBackground
+        let host = UIHostingController(rootView: AnyView(console.ripulThemeRoot()))
+        host.view.backgroundColor = .ripul(.canvas)
         addChild(host)
         host.view.frame = view.bounds
         host.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
@@ -984,10 +994,10 @@ private struct CompactAgentBarView: View {
                 )
             } else {
                 Image(systemName: "terminal.fill")
-                    .foregroundStyle(.blue)
+                    .foregroundStyle(.ripul(.info))
                     .frame(width: 28, height: 28)
                 Text("Agent")
-                    .font(.subheadline.weight(.semibold))
+                    .font(.ripul(.subheadline, weight: .semibold))
                     .lineLimit(1)
             }
 
@@ -995,8 +1005,8 @@ private struct CompactAgentBarView: View {
 
             Button(action: onMinimize) {
                 Image(systemName: "minus")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(.primary)
+                    .font(.ripulIcon(size: 15, weight: .semibold))
+                    .foregroundStyle(.ripul(.text))
                     .frame(width: 36, height: 36)
                     .modifier(GlassCircleModifier(glassStyle: "regular"))
             }

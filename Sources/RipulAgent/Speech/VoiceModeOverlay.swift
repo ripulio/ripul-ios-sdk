@@ -10,8 +10,8 @@ import AVKit
 private struct AudioRoutePicker: UIViewRepresentable {
     func makeUIView(context: Context) -> AVRoutePickerView {
         let picker = AVRoutePickerView()
-        picker.tintColor = .white
-        picker.activeTintColor = .white
+        picker.tintColor = .ripul(system: .white)
+        picker.activeTintColor = .ripul(system: .white)
         // Audio-only session; ranking video targets first would offer the
         // wrong devices.
         picker.prioritizesVideoDevices = false
@@ -21,6 +21,31 @@ private struct AudioRoutePicker: UIViewRepresentable {
     func updateUIView(_ picker: AVRoutePickerView, context: Context) {}
 }
 #endif
+
+/// How often the voice orb is redrawn.
+///
+/// The orb is a SwiftUI canvas drawn on the main thread, and left alone it is
+/// drawn once for every refresh of the display. It is on screen for as long as
+/// a voice conversation lasts, which since command sessions can be many
+/// minutes. On Peter's iPhone 17 Pro Max on 10 October 2026, with the phone
+/// running hot, the main thread was awake 31-32% of the time with the orb up
+/// and 12-15% in the same turn with it gone, and the drawing was 59-74% of the
+/// main thread's samples in every minute a voice conversation was on.
+///
+/// Each frame is drawn from a shared clock, so a limit changes how often the
+/// motion is sampled and nothing else. The small orb in the panel is 30
+/// points across and needs fewer than the full-screen one.
+///
+/// `-perfOff orbLimit` at launch (debug builds) draws at the display's rate
+/// again, to measure what the limit saves on one build.
+enum VoiceOrbFrames {
+    static let fullScreen: Double = 15
+    static let compact: Double = 10
+
+    static func limit(_ shipped: Double) -> Double? {
+        PerfSwitch.isOff("orbLimit") ? nil : shipped
+    }
+}
 
 /// Maps a voice-loop phase to its thinking-orb animation. `nil` for phases
 /// that keep a non-orb presentation (notice = warning icon, inactive = none).
@@ -75,13 +100,13 @@ struct VoiceModeOverlay: View {
 
     private var orbColor: Color {
         switch controller.phase {
-        case .listening: return controller.captureLive ? .blue : .gray
-        case .sending: return .gray
-        case .thinking: return .orange
+        case .listening: return controller.captureLive ? .ripul(.info) : .ripul(.neutral)
+        case .sending: return .ripul(.neutral)
+        case .thinking: return .ripul(.warning)
         // Grey, like every other not-yet-there state, until audio starts.
-        case .speaking: return controller.playbackLive ? .green : .gray
-        case .paused: return .yellow
-        case .notice: return .red
+        case .speaking: return controller.playbackLive ? .ripul(.success) : .ripul(.neutral)
+        case .paused: return .ripul(system: .systemYellow)
+        case .notice: return .ripul(.danger)
         case .inactive: return .clear
         }
     }
@@ -126,7 +151,7 @@ struct VoiceModeOverlay: View {
         ZStack {
             Rectangle()
                 .fill(.ultraThinMaterial)
-                .overlay(Color.black.opacity(0.45))
+                .overlay(Color.ripul(system: .black).opacity(0.45))
                 .ignoresSafeArea()
                 .contentShape(Rectangle())
                 .onTapGesture {
@@ -150,7 +175,8 @@ struct VoiceModeOverlay: View {
                     ) {
                         // White ink on the dark scrim, tinted to the phase
                         // color so the existing color language carries over.
-                        ThinkingOrbView(state: orb, theme: .dark, renderSize: 180)
+                        ThinkingOrbView(state: orb, theme: .dark, renderSize: 180,
+                                        framesPerSecond: VoiceOrbFrames.limit(VoiceOrbFrames.fullScreen))
                             .colorMultiply(orbColor)
                     } else {
                         // Notice keeps the original glowing warning presentation.
@@ -164,8 +190,8 @@ struct VoiceModeOverlay: View {
                             .scaleEffect(pulsing ? 1.05 : 0.95)
                             .shadow(color: orbColor.opacity(0.6), radius: 30)
                         Image(systemName: orbIcon)
-                            .font(.system(size: 40, weight: .semibold))
-                            .foregroundStyle(.white)
+                            .font(.ripulIcon(size: 40, weight: .semibold))
+                            .foregroundStyle(.ripul(system: .white))
                     }
                 }
                 .frame(width: 190, height: 190)
@@ -177,16 +203,16 @@ struct VoiceModeOverlay: View {
                 .uiKitIdentifier("VoiceModeOverlay.orb")
 
                 Text(statusText)
-                    .font(.headline)
-                    .foregroundStyle(.white.opacity(0.9))
+                    .font(.ripul(.headline))
+                    .foregroundStyle(.ripul(system: .white).opacity(0.9))
                     .uiKitIdentifier("VoiceModeOverlay.status")
 
                 if !controller.committedText.isEmpty || !controller.partialText.isEmpty {
                     (Text(controller.committedText)
                         + Text(controller.committedText.isEmpty ? "" : " ")
-                        + Text(controller.partialText).foregroundStyle(.white.opacity(0.55)))
-                        .font(.body)
-                        .foregroundStyle(.white)
+                        + Text(controller.partialText).foregroundStyle(.ripul(system: .white).opacity(0.55)))
+                        .font(.ripul(.body))
+                        .foregroundStyle(.ripul(system: .white))
                         .multilineTextAlignment(.center)
                         .lineLimit(5)
                         .padding(.horizontal, 32)
@@ -217,11 +243,11 @@ struct VoiceModeOverlay: View {
                             controller.sendNow()
                         } label: {
                             Image(systemName: "arrow.up")
-                                .font(.system(size: 20, weight: .bold))
-                                .foregroundStyle(controller.canSendNow ? Color.black : Color.white.opacity(0.45))
+                                .font(.ripulIcon(size: 20, weight: .bold))
+                                .foregroundStyle(controller.canSendNow ? Color.ripul(system: .black) : Color.ripul(system: .white).opacity(0.45))
                                 .frame(width: 56, height: 56)
                                 .background(
-                                    controller.canSendNow ? Color.white : Color.white.opacity(0.15),
+                                    controller.canSendNow ? Color.ripul(system: .white) : Color.ripul(system: .white).opacity(0.15),
                                     in: Circle()
                                 )
                                 .contentShape(Circle())
@@ -239,7 +265,7 @@ struct VoiceModeOverlay: View {
                     if !typingActive {
                         AudioRoutePicker()
                             .frame(width: 56, height: 56)
-                            .background(.white.opacity(0.15), in: Circle())
+                            .background(.ripul(system: .white).opacity(0.15), in: Circle())
                             .uiKitIdentifier("VoiceModeOverlay.routePicker")
                     }
                     #endif
@@ -255,10 +281,10 @@ struct VoiceModeOverlay: View {
                             }
                         } label: {
                             Image(systemName: "chevron.down")
-                                .font(.system(size: 18, weight: .semibold))
-                                .foregroundStyle(.white)
+                                .font(.ripulIcon(size: 18, weight: .semibold))
+                                .foregroundStyle(.ripul(system: .white))
                                 .frame(width: 56, height: 56)
-                                .background(.white.opacity(0.15), in: Circle())
+                                .background(.ripul(system: .white).opacity(0.15), in: Circle())
                                 .contentShape(Circle())
                         }
                         .uiKitIdentifier("VoiceModeOverlay.minimise")
@@ -267,10 +293,10 @@ struct VoiceModeOverlay: View {
                             showTypedEntry()
                         } label: {
                             Image(systemName: "keyboard")
-                                .font(.system(size: 18, weight: .semibold))
-                                .foregroundStyle(.white)
+                                .font(.ripulIcon(size: 18, weight: .semibold))
+                                .foregroundStyle(.ripul(system: .white))
                                 .frame(width: 56, height: 56)
-                                .background(.white.opacity(0.15), in: Circle())
+                                .background(.ripul(system: .white).opacity(0.15), in: Circle())
                                 .contentShape(Circle())
                         }
                         .uiKitIdentifier("VoiceModeOverlay.typeCommand")
@@ -280,10 +306,10 @@ struct VoiceModeOverlay: View {
                         controller.stop()
                     } label: {
                         Image(systemName: "xmark")
-                            .font(.system(size: 20, weight: .bold))
-                            .foregroundStyle(.white)
+                            .font(.ripulIcon(size: 20, weight: .bold))
+                            .foregroundStyle(.ripul(system: .white))
                             .frame(width: 56, height: 56)
-                            .background(.white.opacity(0.15), in: Circle())
+                            .background(.ripul(system: .white).opacity(0.15), in: Circle())
                             .contentShape(Circle())
                     }
                     .uiKitIdentifier("VoiceModeOverlay.exit")
@@ -416,9 +442,9 @@ struct VoiceModeOverlay: View {
                 .focused($typedFieldFocused)
                 .onSubmit { submitTypedCommand() }
                 .submitLabel(.send)
-                .font(.body)
-                .foregroundStyle(.white)
-                .tint(.white)
+                .font(.ripul(.body))
+                .foregroundStyle(.ripul(system: .white))
+                .tint(Color.ripul(system: .white))
                 .padding(.leading, 14)
                 .padding(.vertical, 10)
                 .uiKitIdentifier("VoiceModeOverlay.typedField")
@@ -426,10 +452,10 @@ struct VoiceModeOverlay: View {
                 submitTypedCommand()
             } label: {
                 Image(systemName: "arrow.up")
-                    .font(.system(size: 15, weight: .bold))
-                    .foregroundStyle(canSubmitTyped ? Color.black : Color.white.opacity(0.45))
+                    .font(.ripulIcon(size: 15, weight: .bold))
+                    .foregroundStyle(canSubmitTyped ? Color.ripul(system: .black) : Color.ripul(system: .white).opacity(0.45))
                     .frame(width: 32, height: 32)
-                    .background(canSubmitTyped ? Color.white : Color.white.opacity(0.2), in: Circle())
+                    .background(canSubmitTyped ? Color.ripul(system: .white) : Color.ripul(system: .white).opacity(0.2), in: Circle())
                     .contentShape(Circle())
             }
             .buttonStyle(.plain)
@@ -440,7 +466,7 @@ struct VoiceModeOverlay: View {
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .strokeBorder(.white.opacity(0.25), lineWidth: 1)
+                .strokeBorder(.ripul(system: .white).opacity(0.25), lineWidth: 1)
         )
         .uiKitIdentifier("VoiceModeOverlay.typedEntry")
     }
@@ -468,12 +494,12 @@ struct VoiceModeCompactPanel: View {
 
     private var accentColor: Color {
         switch controller.phase {
-        case .listening: return controller.captureLive ? .blue : .gray
-        case .sending: return .gray
-        case .thinking: return .orange
-        case .speaking: return controller.playbackLive ? .green : .gray
-        case .paused: return .yellow
-        case .notice: return .red
+        case .listening: return controller.captureLive ? .ripul(.info) : .ripul(.neutral)
+        case .sending: return .ripul(.neutral)
+        case .thinking: return .ripul(.warning)
+        case .speaking: return controller.playbackLive ? .ripul(.success) : .ripul(.neutral)
+        case .paused: return .ripul(system: .systemYellow)
+        case .notice: return .ripul(.danger)
         case .inactive: return .clear
         }
     }
@@ -512,7 +538,8 @@ struct VoiceModeCompactPanel: View {
                 ) {
                     // Forced-dark ink so colorMultiply yields accent-colored
                     // dots on the material regardless of system appearance.
-                    ThinkingOrbView(state: orb, size: .inline, theme: .dark, renderSize: 30)
+                    ThinkingOrbView(state: orb, size: .inline, theme: .dark, renderSize: 30,
+                                    framesPerSecond: VoiceOrbFrames.limit(VoiceOrbFrames.compact))
                         .colorMultiply(accentColor)
                 } else {
                     Circle()
@@ -529,13 +556,13 @@ struct VoiceModeCompactPanel: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(statusText)
-                    .font(.footnote.weight(.semibold))
+                    .font(.ripul(.footnote, weight: .semibold))
                     .lineLimit(2)
                     .uiKitIdentifier("VoiceModeCompactPanel.status")
                 if !transcriptLine.isEmpty {
                     Text(transcriptLine)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .font(.ripul(.caption))
+                        .foregroundStyle(.ripul(.textSecondary))
                         .lineLimit(1)
                         .truncationMode(.head)
                         .uiKitIdentifier("VoiceModeCompactPanel.transcript")
@@ -548,27 +575,31 @@ struct VoiceModeCompactPanel: View {
             }
 
             // Back to the immersive view. Its counterpart is the overlay's
-            // chevron-down; the X below still ends the conversation.
-            Button {
-                withAnimation(.easeInOut(duration: 0.25)) {
-                    controller.presentation = .fullscreen
+            // chevron-down; the X below still ends the conversation. Not in a
+            // command session: that view covers the chat, and the session is
+            // for moving around the app.
+            if !controller.isCommandSession {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.25)) {
+                        controller.presentation = .fullscreen
+                    }
+                } label: {
+                    Image(systemName: "chevron.up")
+                        .font(.ripulIcon(size: 13, weight: .bold))
+                        .foregroundStyle(.ripul(.textSecondary))
+                        .frame(width: 30, height: 30)
+                        .contentShape(Circle())
                 }
-            } label: {
-                Image(systemName: "chevron.up")
-                    .font(.system(size: 13, weight: .bold))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 30, height: 30)
-                    .contentShape(Circle())
+                .buttonStyle(.plain)
+                .uiKitIdentifier("VoiceModeCompactPanel.expand")
             }
-            .buttonStyle(.plain)
-            .uiKitIdentifier("VoiceModeCompactPanel.expand")
 
             Button {
                 controller.stop()
             } label: {
                 Image(systemName: "xmark")
-                    .font(.system(size: 13, weight: .bold))
-                    .foregroundStyle(.secondary)
+                    .font(.ripulIcon(size: 13, weight: .bold))
+                    .foregroundStyle(.ripul(.textSecondary))
                     .frame(width: 30, height: 30)
                     .contentShape(Circle())
             }
@@ -603,16 +634,16 @@ private struct VoiceConversationSettingsButton: View {
             showingSettings = true
         } label: {
             Image(systemName: "gearshape")
-                .font(.system(size: compact ? 15 : 20, weight: .semibold))
-                .foregroundStyle(compact ? Color.secondary : .white)
+                .font(.ripulIcon(size: compact ? 15 : 20, weight: .semibold))
+                .foregroundStyle(compact ? Color.ripul(.textSecondary) : .ripul(system: .white))
                 .frame(width: compact ? 30 : 44, height: compact ? 30 : 44)
-                .background(compact ? Color.clear : .white.opacity(0.15), in: Circle())
+                .background(compact ? Color.clear : .ripul(system: .white).opacity(0.15), in: Circle())
                 .contentShape(Circle())
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Conversation settings")
         .uiKitIdentifier(compact ? "VoiceModeCompactPanel.settings" : "VoiceModeOverlay.settings")
-        .sheet(isPresented: $showingSettings, onDismiss: {
+        .ripulSheet(isPresented: $showingSettings, onDismiss: {
             let shouldResume = pausedForSettings
             pausedForSettings = false
             if shouldResume { controller.resumeConversation() }

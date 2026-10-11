@@ -53,6 +53,49 @@ class FullBleedWebView: WKWebView {
                 "nativeWidth": bounds.width], in: nil, in: .page, completionHandler: nil)
     }
 
+    // A trackpad scroll goes to the innermost scroll view under the pointer and
+    // stays there. UIKit hands a vertical finger drag over a sideways-only
+    // scroller (a wide table, a code block) on to the chat, but not a trackpad
+    // scroll: that moved nothing (measured on Catalyst, 6 October 2026). So
+    // such a scroller takes no trackpad scrolls while a vertical scroller
+    // encloses it, and the page applies the sideways part of the gesture
+    // (trackpadSidewaysScroll.ts, which `trackpadScrollScript` switches on).
+    // Its `appRoutesToChat` repeats the rule below; change them together, or
+    // a scroller both sides claim moves twice. Native content keeps its own
+    // scrolling.
+    private let trackpadScrollTypes = NSMapTable<UIScrollView, NSNumber>.weakToStrongObjects()
+
+    private func routeTrackpadScrolls(from hit: UIView?, event: UIEvent?) {
+        guard event?.type != .touches else { return }
+        var scrollers: [UIScrollView] = []
+        var ancestor = hit
+        while let view = ancestor, view !== self {
+            if view is SlotMountView { scrollers.removeAll() }
+            if let scroll = view as? UIScrollView { scrollers.append(scroll) }
+            ancestor = view.superview
+        }
+        for (index, scroll) in scrollers.enumerated() {
+            let pan = scroll.panGestureRecognizer
+            let sidewaysOnly = !Self.scrolls(scroll, vertically: true) && Self.scrolls(scroll, vertically: false)
+                && scrollers[(index + 1)...].contains { Self.scrolls($0, vertically: true) }
+            if sidewaysOnly {
+                guard trackpadScrollTypes.object(forKey: scroll) == nil else { continue }
+                trackpadScrollTypes.setObject(NSNumber(value: pan.allowedScrollTypesMask.rawValue), forKey: scroll)
+                pan.allowedScrollTypesMask = []
+            } else if let saved = trackpadScrollTypes.object(forKey: scroll) {
+                pan.allowedScrollTypesMask = UIScrollTypeMask(rawValue: saved.intValue)
+                trackpadScrollTypes.removeObject(forKey: scroll)
+            }
+        }
+    }
+
+    private static func scrolls(_ scroll: UIScrollView, vertically: Bool) -> Bool {
+        guard scroll.isScrollEnabled else { return false }
+        return vertically
+            ? scroll.contentSize.height > scroll.bounds.height + 1
+            : scroll.contentSize.width > scroll.bounds.width + 1
+    }
+
     /// Fires on the main queue, outside any SwiftUI update, when the row the
     /// native top bar occupies moves (see `WindowTopChromeLayout`) after the
     /// first measurement. The bridge re-injects the web clearance under it.
@@ -123,6 +166,7 @@ class FullBleedWebView: WKWebView {
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
         let hit = toolStripHitTest?(point, event) ?? super.hitTest(point, with: event)
         observeScrollIntent(from: hit, event: event)
+        routeTrackpadScrolls(from: hit, event: event)
         return hit
     }
     override var safeAreaInsets: UIEdgeInsets {

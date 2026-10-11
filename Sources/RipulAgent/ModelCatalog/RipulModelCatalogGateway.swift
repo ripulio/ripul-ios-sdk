@@ -59,13 +59,13 @@ struct RipulModelDiscoverySheet: View {
         List {
             if let errorMessage {
                 Section {
-                    Text(errorMessage).foregroundStyle(.red).font(.callout)
+                    Text(errorMessage).foregroundStyle(.ripul(.danger)).font(.ripul(.callout))
                 }
             }
             if result.newModels.isEmpty {
                 Section {
                     Text("Nothing new — every gateway model is already in the catalog.")
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(.ripul(.textSecondary))
                 }
             } else {
                 Section {
@@ -81,19 +81,19 @@ struct RipulModelDiscoverySheet: View {
                                 Image(systemName: selected.contains(m.gatewayId)
                                     ? "checkmark.circle.fill" : "circle")
                                     .foregroundStyle(selected.contains(m.gatewayId)
-                                        ? Color.accentColor : Color.secondary)
+                                        ? Color.accentColor : Color.ripul(.textSecondary))
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(m.name)
-                                        .font(.subheadline.weight(.medium))
-                                        .foregroundStyle(.primary)
+                                        .font(.ripul(.subheadline, weight: .medium))
+                                        .foregroundStyle(.ripul(.text))
                                     Text(m.gatewayId)
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
+                                        .font(.ripul(.caption))
+                                        .foregroundStyle(.ripul(.textSecondary))
                                         .lineLimit(1)
                                     if m.perMInput > 0 || m.perMOutput > 0 {
                                         Text("$\(fmt(m.perMInput)) in · $\(fmt(m.perMOutput)) out · per M tokens")
-                                            .font(.caption2)
-                                            .foregroundStyle(.tertiary)
+                                            .font(.ripul(.caption2))
+                                            .foregroundStyle(.ripul(.textTertiary))
                                     }
                                 }
                             }
@@ -101,16 +101,16 @@ struct RipulModelDiscoverySheet: View {
                         }
                         .buttonStyle(.plain)
                     }
-                } header: {
+                } header: { RipulSectionHeader {
                     Text("New on the gateway")
-                } footer: {
+                } } footer: { RipulSectionFooter {
                     Text("Imported models arrive disabled, for review before anyone can pick them.")
-                }
+                } }
             }
             Section {
                 Text("\(result.totalGatewayModels) on the gateway · \(result.existingMatches.count) already in the catalog")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+                    .font(.ripul(.footnote))
+                    .foregroundStyle(.ripul(.textSecondary))
                     .frame(maxWidth: .infinity, alignment: .center)
                     .listRowBackground(Color.clear)
             }
@@ -120,11 +120,11 @@ struct RipulModelDiscoverySheet: View {
     private func failure(_ message: String, retry: @escaping () -> Void) -> some View {
         VStack(spacing: 8) {
             Image(systemName: "antenna.radiowaves.left.and.right.slash")
-                .font(.largeTitle)
-                .foregroundStyle(.secondary)
+                .font(.ripulIcon(.largeTitle))
+                .foregroundStyle(.ripul(.textSecondary))
             Text(message)
-                .font(.callout)
-                .foregroundStyle(.secondary)
+                .font(.ripul(.callout))
+                .foregroundStyle(.ripul(.textSecondary))
                 .multilineTextAlignment(.center)
             Button("Retry", action: retry)
                 .buttonStyle(.bordered)
@@ -182,11 +182,11 @@ struct RipulModelCostVerifySheet: View {
                 } else if let errorMessage, result == nil {
                     VStack(spacing: 8) {
                         Image(systemName: "dollarsign.circle")
-                            .font(.largeTitle)
-                            .foregroundStyle(.secondary)
+                            .font(.ripulIcon(.largeTitle))
+                            .foregroundStyle(.ripul(.textSecondary))
                         Text(errorMessage)
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
+                            .font(.ripul(.callout))
+                            .foregroundStyle(.ripul(.textSecondary))
                             .multilineTextAlignment(.center)
                         Button("Retry") { Task { await run() } }
                             .buttonStyle(.bordered)
@@ -221,7 +221,7 @@ struct RipulModelCostVerifySheet: View {
         List {
             if let errorMessage {
                 Section {
-                    Text(errorMessage).foregroundStyle(.red).font(.callout)
+                    Text(errorMessage).foregroundStyle(.ripul(.danger)).font(.ripul(.callout))
                 }
             }
             if result.discrepancies.isEmpty {
@@ -230,7 +230,7 @@ struct RipulModelCostVerifySheet: View {
                         "All \(result.totalChecked) matched prices agree with the gateway.",
                         systemImage: "checkmark.circle"
                     )
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.ripul(.textSecondary))
                 }
             } else {
                 Section {
@@ -246,25 +246,25 @@ struct RipulModelCostVerifySheet: View {
                                 Image(systemName: selected.contains(d.catalogId)
                                     ? "checkmark.circle.fill" : "circle")
                                     .foregroundStyle(selected.contains(d.catalogId)
-                                        ? Color.accentColor : Color.secondary)
+                                        ? Color.accentColor : Color.ripul(.textSecondary))
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(d.modelName)
-                                        .font(.subheadline.weight(.medium))
-                                        .foregroundStyle(.primary)
+                                        .font(.ripul(.subheadline, weight: .medium))
+                                        .foregroundStyle(.ripul(.text))
                                     Text("In: $\(fmt(d.catalog.perMInput)) → $\(fmt(d.gateway.perMInput)) · Out: $\(fmt(d.catalog.perMOutput)) → $\(fmt(d.gateway.perMOutput))")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
+                                        .font(.ripul(.caption))
+                                        .foregroundStyle(.ripul(.textSecondary))
                                 }
                             }
                             .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
                     }
-                } header: {
+                } header: { RipulSectionHeader {
                     Text("Prices that differ")
-                } footer: {
+                } } footer: { RipulSectionFooter {
                     Text("Applying sets the catalog price to the gateway's current value.")
-                }
+                } }
             }
         }
     }

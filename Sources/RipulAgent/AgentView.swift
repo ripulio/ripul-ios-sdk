@@ -128,7 +128,7 @@ public struct AgentView<TopBar: View>: View {
                     PlanReviewScreen(bridge: bridge.planReviewBridge(), chatId: chatId)
                 } else {
                     ContentUnavailableView(
-                        "No active chat",
+                        themed: "No active chat",
                         systemImage: "bubble.left.and.exclamationmark.bubble.right",
                         description: Text("Plans are read from the working directory of the chat you're in. Open a session first.")
                     )
@@ -239,7 +239,10 @@ public struct AgentView<TopBar: View>: View {
         guard bridge.isConnected, readyConfig != nil else { return }
 
         RipulVoiceModeRequest.pending = false
-        bridge.handleConsoleLog("LOG: [VOICE] siri request honored - entering hands-free mode")
+        let commands = RipulVoiceModeRequest.pendingCommands ? RipulVoiceModeRequest.commandRouter : nil
+        RipulVoiceModeRequest.pendingCommands = false
+        bridge.handleConsoleLog("LOG: [VOICE] siri request honored - entering hands-free mode"
+            + (commands == nil ? "" : " as a command session"))
 
         Task { @MainActor in
             // Siri still holds the audio session at the moment the intent
@@ -252,7 +255,8 @@ public struct AgentView<TopBar: View>: View {
             // talk is a request to converse ALONGSIDE the chat, and the
             // preference resolves through three layers (device override,
             // web-pushed profile, SDK fallback) that this path cannot see.
-            voiceMode.start(bridge: bridge, tokenProvider: tokenProvider, presentation: .compact)
+            voiceMode.start(bridge: bridge, tokenProvider: tokenProvider, presentation: .compact,
+                            commands: commands)
         }
     }
 
@@ -260,7 +264,7 @@ public struct AgentView<TopBar: View>: View {
         let _ = ChatSlideProbe.markBody("AgentView") { Self._printChanges() }
         ZStack(alignment: .top) {
             #if os(iOS)
-            (colorScheme == .dark ? Color(uiColor: .black) : Color(uiColor: .white))
+            (colorScheme == .dark ? Color.ripul(system: .black) : Color.ripul(system: .white))
                 .ignoresSafeArea(edges: .top)
             #else
             Color.clear
@@ -306,6 +310,14 @@ public struct AgentView<TopBar: View>: View {
 
         }
         .animation(.easeInOut(duration: 0.25), value: voiceMode.isActive)
+        // So a panel outside this view can show that the microphone is live.
+        .onChange(of: voiceMode.isActive) { active in
+            if active {
+                VoiceModePresence.shared.began(voiceMode, tokenProvider: tokenProvider)
+            } else {
+                VoiceModePresence.shared.ended(voiceMode)
+            }
+        }
         .modifier(SpeechInputWarningModifier(message: $voiceMode.microphoneWarning))
         .onReceive(NotificationCenter.default.publisher(for: DeviceSpeechCredentials.changed)) { _ in voiceMode.stop() }
         .onRipulVoiceModeRequest(isConnected: bridge.isConnected) { honorVoiceModeRequest() }
@@ -369,12 +381,16 @@ public struct AgentView<TopBar: View>: View {
                 // chooses how a session opens, and the overlay's minimise /
                 // expand controls move it afterwards.
                 if voiceMode.presentation == .compact {
-                    VStack {
-                        Spacer()
-                        VoiceModeCompactPanel(controller: voiceMode, tokenProvider: tokenProvider)
-                            .padding(.bottom, 92)
+                    // A host that floats the panel over every screen draws it
+                    // there; drawn here as well it would be two.
+                    if !VoiceModePresence.shared.floats {
+                        VStack {
+                            Spacer()
+                            VoiceModeCompactPanel(controller: voiceMode, tokenProvider: tokenProvider)
+                                .padding(.bottom, 92)
+                        }
+                        .transition(.opacity)
                     }
-                    .transition(.opacity)
                 } else {
                     VoiceModeOverlay(controller: voiceMode, bridge: bridge, tokenProvider: tokenProvider)
                         .transition(.opacity)
@@ -437,15 +453,15 @@ public struct AgentView<TopBar: View>: View {
                 bridge.wantsShowPlanReview = false
             }
         }
-        .sheet(isPresented: $showingQuickCommands) {
+        .ripulSheet(isPresented: $showingQuickCommands) {
             QuickCommandsSheet(bridge: bridge)
         }
-        .sheet(isPresented: $showingPlanReview) { planReviewSheet }
-        .sheet(isPresented: $showingDebugCommands) {
+        .ripulSheet(isPresented: $showingPlanReview) { planReviewSheet }
+        .ripulSheet(isPresented: $showingDebugCommands) {
             QuickCommandsSheet(bridge: bridge, debugMode: true)
         }
         #if os(iOS)
-        .sheet(isPresented: $showingConsoleLogs) {
+        .ripulSheet(isPresented: $showingConsoleLogs) {
             NavigationStack {
                 ConsoleLogViewer(bridge: bridge)
                     .navigationTitle("Console Logs")
@@ -458,7 +474,7 @@ public struct AgentView<TopBar: View>: View {
             }
         }
         #endif
-        .sheet(item: Binding(get: { bridge.pendingFileView }, set: { bridge.pendingFileView = $0 })) { request in
+        .ripulSheet(item: Binding(get: { bridge.pendingFileView }, set: { bridge.pendingFileView = $0 })) { request in
             FileViewerSheet(request: request)
         }
         .modifier(ToolCallDetailsPresenter(store: bridge.toolCallDetails, onDismiss: { requestId in
@@ -583,7 +599,7 @@ public struct AgentView<TopBar: View>: View {
     /// Opaque backing so the native scroller fully covers the web-rendered chat.
     private var nativeScrollerBackground: some View {
         #if os(iOS)
-        return (colorScheme == .dark ? Color(uiColor: .black) : Color(uiColor: .white))
+        return (colorScheme == .dark ? Color.ripul(system: .black) : Color.ripul(system: .white))
             .ignoresSafeArea()
         #else
         return Color(nsColor: .windowBackgroundColor)
@@ -662,6 +678,11 @@ private struct ChatComposer: View {
     @Environment(\.composerCollapse) private var composerCollapse
     @Environment(\.ripulWindowContext) private var workspace
     @Environment(\.scenePhase) private var scenePhase
+    #if os(iOS)
+    @Environment(\.ripulComposerChrome) private var composerChrome
+    /// The input's height at rest: what a push down has to fold away.
+    @State private var inputHeight: CGFloat = 0
+    #endif
     @State private var draftChatID: String?
     var bridge: AgentBridge
     @ObservedObject var composerActionStore: RipulComposerActionStore
@@ -737,7 +758,7 @@ private struct ChatComposer: View {
                         await bridge.refreshConversationMode(chatId: chatId)
                     }
                 }
-                .sheet(item: $artefactChatTarget) { target in
+                .ripulSheet(item: $artefactChatTarget) { target in
                     ArtefactChatPicker(bridge: bridge, chatID: target.id)
                 }
                 .alert("Message not confirmed", isPresented: Binding(
@@ -930,6 +951,10 @@ private struct ChatComposer: View {
         .onAppear { speechProvider = makeSpeechProvider() }
         .onReceive(NotificationCenter.default.publisher(for: DeviceSpeechCredentials.changed)) { _ in refreshSpeechProvider() }
         .onChange(of: dictationProviderPreference) { _ in refreshSpeechProvider() }
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
+            // At rest only: mid-collapse this is the height being folded away.
+            if composerCollapse == 0, inputHeight != height { inputHeight = height }
+        }
         // The composer is the bottom counterpart to the title bar: pull DOWN
         // from the top or UP from the bottom, both toward the middle, where the
         // grid appears. Same gesture, mirrored — see ScreenSwitcherPullModifier.
@@ -940,7 +965,18 @@ private struct ChatComposer: View {
             enabled: !bridge.nativeChatInputFocused,
             // Horizontal stays with the field, which owns it for cursor
             // placement and selection.
-            allowsHorizontal: false
+            allowsHorizontal: false,
+            // Down, the other way, pushes the composer into its pill beside
+            // the navigation button, as scrolling the chat does; from the
+            // pill, up brings it back before any pull reaches the screens.
+            // Only where a host coordinates the two.
+            onChromeDrag: composerChrome.map { chrome in
+                { drag in
+                    chrome.push?(drag, ComposerChromeLayout.pushTravel(
+                        navigationInset: chrome.contentBottomInset, bodyHeight: inputHeight))
+                }
+            },
+            chromeTakesPull: composerCollapse > 0
         )
     }
     #elseif os(macOS)

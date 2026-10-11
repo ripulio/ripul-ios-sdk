@@ -275,16 +275,16 @@ public struct RipulStyleKindEditorView<Preview: View, Footer: View>: View {
             // Scrolling rows beneath — the shared row set, split so composite parts lead.
             Form {
                 if !slots.isEmpty {
-                    Section("Parts") {
+                    Section(themed: "Parts") {
                         RipulStyleKnobRows(knobs: [], slots: slots, working: working,
                                            onChange: apply)
                     }
                 }
                 Section {
                     RipulStyleKnobRows(knobs: knobs, working: working, onChange: apply)
-                } footer: {
+                } footer: { RipulSectionFooter {
                     Text("Every knob starts on Inherit — set only what this style changes.")
-                }
+                } }
                 footerSections()
             }
         }

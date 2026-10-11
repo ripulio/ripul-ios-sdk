@@ -543,8 +543,8 @@ public struct NativeChatInput: View {
             }
         }
         return Image(systemName: isDictating ? "mic.fill" : "mic")
-            .font(.system(size: size == 40 ? 18 : 16, weight: .bold))
-            .foregroundStyle(isDictating ? Color.red : Color.accentColor)
+            .font(.ripulIcon(size: size == 40 ? 18 : 16, weight: .bold))
+            .foregroundStyle(isDictating ? Color.ripul(.danger) : Color.accentColor)
             .frame(width: size, height: size)
             .contentShape(Circle())
             .modifier(GlassCircleModifier(glassStyle: "clear"))
@@ -648,7 +648,7 @@ public struct NativeChatInput: View {
             }
             .ignoresSafeArea()
         }
-        .sheet(isPresented: $showTodoPicker) {
+        .ripulSheet(isPresented: $showTodoPicker) {
             TodoPickerSheet(
                 onFetch: onFetchTodoItems,
                 onSelect: { todoText in
@@ -929,12 +929,12 @@ public struct NativeChatInput: View {
                     toggleClass(spec.key)
                 } label: {
                     Label(spec.label, systemImage: spec.icon)
-                        .font(.system(size: 11, weight: .medium))
+                        .font(.ripul(size: 11, weight: .medium))
                         .padding(.horizontal, 8)
                         .padding(.vertical, 4)
                         .background(Capsule().fill(hiddenClasses.contains(spec.key) ? Color.clear : Color.accentColor.opacity(0.18)))
-                        .overlay(Capsule().stroke(hiddenClasses.contains(spec.key) ? Color.secondary.opacity(0.35) : Color.accentColor, lineWidth: 1))
-                        .foregroundStyle(hiddenClasses.contains(spec.key) ? Color.secondary : Color.accentColor)
+                        .overlay(Capsule().stroke(hiddenClasses.contains(spec.key) ? Color.ripul(.textSecondary).opacity(0.35) : Color.accentColor, lineWidth: 1))
+                        .foregroundStyle(hiddenClasses.contains(spec.key) ? Color.ripul(.textSecondary) : Color.accentColor)
                 }
                 .buttonStyle(.plain)
             }
@@ -950,25 +950,25 @@ public struct NativeChatInput: View {
         } label: {
             HStack(spacing: 8) {
                 Image(systemName: "arrow.triangle.branch")
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.ripul(.textSecondary))
                     .frame(width: 20)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(suggestion.name)
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(.primary)
+                        .font(.ripul(size: 14, weight: .medium))
+                        .foregroundStyle(.ripul(.text))
                         .lineLimit(1)
                     if let description = suggestion.description, !description.isEmpty {
                         Text(description)
-                            .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
+                            .font(.ripul(size: 11))
+                            .foregroundStyle(.ripul(.textSecondary))
                             .lineLimit(1)
                     }
                 }
                 Spacer()
                 if suggestion.remote {
                     Image(systemName: "cloud")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
+                        .font(.ripulIcon(size: 11))
+                        .foregroundStyle(.ripul(.textSecondary))
                 }
             }
             .padding(.horizontal, 12)
@@ -997,11 +997,11 @@ public struct NativeChatInput: View {
             if !hasResults {
                 HStack(spacing: 8) {
                     Image(systemName: "magnifyingglass")
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(.ripul(.textSecondary))
                         .frame(width: 20)
                     Text(hiddenClasses.contains("people") && hiddenClasses.contains("repo") && hiddenClasses.contains("files") && elementSuggestions.isEmpty ? "All classes hidden — use the toggles above" : (afterAtText.isEmpty ? "Type to search people, branches, files, and UI elements" : "No matches for \u{201C}\(afterAtText)\u{201D}"))
-                        .font(.system(size: 14))
-                        .foregroundStyle(.secondary)
+                        .font(.ripul(size: 14))
+                        .foregroundStyle(.ripul(.textSecondary))
                     Spacer()
                 }
                 .padding(.horizontal, 12)
@@ -1080,15 +1080,15 @@ public struct NativeChatInput: View {
         }
         .background(.ultraThinMaterial)
         .clipShape(RoundedRectangle(cornerRadius: 12))
-        .shadow(color: .black.opacity(0.15), radius: 8, y: -2)
+        .shadow(color: Color.ripul(system: .black).opacity(0.15), radius: 8, y: -2)
         .padding(.horizontal, 16)
     }
 
     private func suggestionSectionHeader(_ title: String) -> some View {
         HStack {
             Text(title.uppercased())
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(.secondary)
+                .font(.ripul(size: 11, weight: .semibold))
+                .foregroundStyle(.ripul(.textSecondary))
             Spacer()
         }
         .padding(.horizontal, 12)
@@ -1102,17 +1102,17 @@ public struct NativeChatInput: View {
         } label: {
             HStack(spacing: 8) {
                 Image(systemName: AutocompleteConstants.category(for: "people")?.sfSymbol ?? "person.fill")
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.ripul(.textSecondary))
                     .frame(width: 20)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(suggestion.name)
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(.primary)
+                        .font(.ripul(size: 14, weight: .medium))
+                        .foregroundStyle(.ripul(.text))
                         .lineLimit(1)
                     if let group = suggestion.group, !group.isEmpty {
                         Text(group)
-                            .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
+                            .font(.ripul(size: 11))
+                            .foregroundStyle(.ripul(.textSecondary))
                             .lineLimit(1)
                     }
                 }
@@ -1131,21 +1131,21 @@ public struct NativeChatInput: View {
         } label: {
             HStack(spacing: 8) {
                 Image(systemName: "scope")
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.ripul(.textSecondary))
                     .frame(width: 20)
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Pick an element")
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(.primary)
+                        .font(.ripul(size: 14, weight: .medium))
+                        .foregroundStyle(.ripul(.text))
                         .lineLimit(1)
                     Text("Choose it on screen with View Explorer")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
+                        .font(.ripul(size: 11))
+                        .foregroundStyle(.ripul(.textSecondary))
                         .lineLimit(1)
                 }
                 Spacer()
                 Text("Pick")
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(.ripul(size: 11, weight: .semibold))
                     .foregroundStyle(.tint)
             }
             .padding(.horizontal, 12)
@@ -1162,21 +1162,21 @@ public struct NativeChatInput: View {
         } label: {
             HStack(spacing: 8) {
                 Image(systemName: "person.badge.plus")
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.ripul(.textSecondary))
                     .frame(width: 20)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(suggestion.name)
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(.primary)
+                        .font(.ripul(size: 14, weight: .medium))
+                        .foregroundStyle(.ripul(.text))
                         .lineLimit(1)
                     Text(suggestion.description ?? "Invite to this chat")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
+                        .font(.ripul(size: 11))
+                        .foregroundStyle(.ripul(.textSecondary))
                         .lineLimit(1)
                 }
                 Spacer()
                 Text("Invite")
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(.ripul(size: 11, weight: .semibold))
                     .foregroundStyle(.tint)
             }
             .padding(.horizontal, 12)
@@ -1192,10 +1192,10 @@ public struct NativeChatInput: View {
     private func atNoticeBanner(_ message: String) -> some View {
         HStack(spacing: 8) {
             Image(systemName: "person.badge.plus")
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.ripul(.textSecondary))
             Text(message)
-                .font(.system(size: 12))
-                .foregroundStyle(.secondary)
+                .font(.ripul(size: 12))
+                .foregroundStyle(.ripul(.textSecondary))
                 .lineLimit(2)
             Spacer()
         }
@@ -1223,17 +1223,17 @@ public struct NativeChatInput: View {
         } label: {
             HStack(spacing: 8) {
                 Image(systemName: suggestion.isDirectory ? "folder.fill" : (AutocompleteConstants.category(for: "files")?.sfSymbol ?? "doc.text.fill"))
-                    .foregroundStyle(suggestion.isDirectory ? .blue : .secondary)
+                    .foregroundStyle(suggestion.isDirectory ? Color.ripul(.info) : Color.ripul(.textSecondary))
                     .frame(width: 20)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(suggestion.fileName)
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(.primary)
+                        .font(.ripul(size: 14, weight: .medium))
+                        .foregroundStyle(.ripul(.text))
                         .lineLimit(1)
                     if suggestion.path != suggestion.fileName {
                         Text(suggestion.path)
-                            .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
+                            .font(.ripul(size: 11))
+                            .foregroundStyle(.ripul(.textSecondary))
                             .lineLimit(1)
                     }
                 }
@@ -1252,17 +1252,17 @@ public struct NativeChatInput: View {
         } label: {
             HStack(spacing: 8) {
                 Image(systemName: AutocompleteConstants.category(for: "ui")?.sfSymbol ?? "tag.fill")
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.ripul(.textSecondary))
                     .frame(width: 20)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(suggestion.componentName)
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(.primary)
+                        .font(.ripul(size: 14, weight: .medium))
+                        .foregroundStyle(.ripul(.text))
                         .lineLimit(1)
                     if suggestion.dataUi != suggestion.componentName {
                         Text(suggestion.dataUi)
-                            .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
+                            .font(.ripul(size: 11))
+                            .foregroundStyle(.ripul(.textSecondary))
                             .lineLimit(1)
                     }
                 }
@@ -1353,13 +1353,13 @@ public struct NativeChatInput: View {
             } else if filteredSlashCommands.isEmpty {
                 HStack(spacing: 8) {
                     Image(systemName: "slash.square")
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(.ripul(.textSecondary))
                         .frame(width: 20)
                     Text(slashCommandsLoaded
                          ? (slashFilter.isEmpty ? "No commands available" : "No commands matching \u{201C}\(slashFilter)\u{201D}")
                          : "Loading commands…")
-                        .font(.system(size: 14))
-                        .foregroundStyle(.secondary)
+                        .font(.ripul(size: 14))
+                        .foregroundStyle(.ripul(.textSecondary))
                     Spacer()
                 }
                 .padding(.horizontal, 12)
@@ -1381,7 +1381,7 @@ public struct NativeChatInput: View {
         }
         .background(.ultraThinMaterial)
         .clipShape(RoundedRectangle(cornerRadius: 12))
-        .shadow(color: .black.opacity(0.15), radius: 8, y: -2)
+        .shadow(color: Color.ripul(system: .black).opacity(0.15), radius: 8, y: -2)
         .padding(.horizontal, 16)
     }
 
@@ -1393,12 +1393,12 @@ public struct NativeChatInput: View {
                 } label: {
                     HStack(spacing: 8) {
                         Image(systemName: "chevron.left")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(.secondary)
+                            .font(.ripulIcon(size: 12, weight: .semibold))
+                            .foregroundStyle(.ripul(.textSecondary))
                             .frame(width: 20)
                         Text("/\(command.command)")
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(.primary)
+                            .font(.ripul(size: 14, weight: .semibold))
+                            .foregroundStyle(.ripul(.text))
                         Spacer()
                     }
                     .padding(.horizontal, 12)
@@ -1414,18 +1414,18 @@ public struct NativeChatInput: View {
                     } label: {
                         HStack(spacing: 8) {
                             Image(systemName: "chevron.right")
-                                .font(.system(size: 12))
-                                .foregroundStyle(.secondary)
+                                .font(.ripulIcon(size: 12))
+                                .foregroundStyle(.ripul(.textSecondary))
                                 .frame(width: 20)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(option.label)
-                                    .font(.system(size: 14, weight: .medium))
-                                    .foregroundStyle(.primary)
+                                    .font(.ripul(size: 14, weight: .medium))
+                                    .foregroundStyle(.ripul(.text))
                                     .lineLimit(1)
                                 if let desc = option.description, !desc.isEmpty {
                                     Text(desc)
-                                        .font(.system(size: 11))
-                                        .foregroundStyle(.secondary)
+                                        .font(.ripul(size: 11))
+                                        .foregroundStyle(.ripul(.textSecondary))
                                         .lineLimit(1)
                                 }
                             }
@@ -1448,23 +1448,23 @@ public struct NativeChatInput: View {
         } label: {
             HStack(spacing: 8) {
                 Image(systemName: command.sfSymbol)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.ripul(.textSecondary))
                     .frame(width: 20)
                 VStack(alignment: .leading, spacing: 2) {
                     Text("/\(command.command)")
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(.primary)
+                        .font(.ripul(size: 14, weight: .medium))
+                        .foregroundStyle(.ripul(.text))
                         .lineLimit(1)
                     Text(command.description)
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
+                        .font(.ripul(size: 11))
+                        .foregroundStyle(.ripul(.textSecondary))
                         .lineLimit(1)
                 }
                 Spacer()
                 if !command.options.isEmpty {
                     Image(systemName: "chevron.right")
-                        .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
+                        .font(.ripulIcon(size: 12))
+                        .foregroundStyle(.ripul(.textSecondary))
                 }
             }
             .padding(.horizontal, 12)
@@ -1552,7 +1552,7 @@ public struct NativeChatInput: View {
     // MARK: - Shared Subviews
 
     private var plusMenuButton: some View {
-        Menu {
+        Menu { MenuIcons {
             #if targetEnvironment(macCatalyst)
             Button {
                 dismissKeyboard()
@@ -1604,10 +1604,10 @@ public struct NativeChatInput: View {
             } label: {
                 Label("New Chat", systemImage: "plus.bubble")
             }
-        } label: {
+        }} label: {
             Image(systemName: "plus")
-                .font(.system(size: 20, weight: .medium))
-                .foregroundStyle(.primary)
+                .font(.ripulIcon(size: 20, weight: .medium))
+                .foregroundStyle(.ripul(.text))
                 .frame(width: 40, height: 40)
                 .contentShape(Circle())
                 .modifier(GlassCircleModifier(glassStyle: isTwoRow ? nil : resolvedChatInputGlassStyle))
@@ -1632,7 +1632,7 @@ public struct NativeChatInput: View {
     // Matches ChatTextView's font so the shimmer overlay sits exactly where
     // the UIKit placeholder label would.
     private var placeholderFont: Font {
-        .system(size: UIFont.preferredFont(forTextStyle: .body).pointSize + 1, weight: .semibold)
+        .ripul(size: UIFont.ripul(.body).pointSize + 1, weight: .semibold)
     }
 
     /// Up recalls history only at the start of a message: a single line, or a
@@ -1699,7 +1699,7 @@ public struct NativeChatInput: View {
             if agentWaiting && text.isEmpty {
                 Text("Waiting on agent…")
                     .font(placeholderFont)
-                    .ripulShimmer(base: Color(uiColor: .placeholderText))
+                    .ripulShimmer(base: Color.ripul(system: .placeholderText))
                     .padding(.leading, 12)
                     .padding(.top, 8)
                     .allowsHitTesting(false)
@@ -1726,8 +1726,8 @@ public struct NativeChatInput: View {
                     onPause?()
                 } label: {
                     Image(systemName: "pause.fill")
-                        .font(.system(size: 16, weight: .bold))
-                        .foregroundStyle(.orange)
+                        .font(.ripulIcon(size: 16, weight: .bold))
+                        .foregroundStyle(.ripul(.warning))
                         .frame(width: 36, height: 36)
                         .contentShape(Circle())
                         .modifier(GlassCircleModifier(glassStyle: "clear"))
@@ -1744,8 +1744,8 @@ public struct NativeChatInput: View {
                     submitMessage()
                 } label: {
                     Image(systemName: "play.fill")
-                        .font(.system(size: 16, weight: .bold))
-                        .foregroundStyle(.green)
+                        .font(.ripulIcon(size: 16, weight: .bold))
+                        .foregroundStyle(.ripul(.success))
                         .frame(width: 36, height: 36)
                         .contentShape(Circle())
                         .modifier(GlassCircleModifier(glassStyle: "clear"))
@@ -1763,7 +1763,7 @@ public struct NativeChatInput: View {
                 } label: {
                     Image(systemName: "arrow.up")
                         .accessibilityLabel("Send message")
-                        .font(.system(size: 16, weight: .bold))
+                        .font(.ripulIcon(size: 16, weight: .bold))
                         .foregroundStyle(Color.accentColor)
                         .frame(width: 36, height: 36)
                         .contentShape(Circle())
@@ -1780,8 +1780,8 @@ public struct NativeChatInput: View {
             onTap()
         } label: {
             Image(systemName: "bubble.left.fill")
-                .font(.system(size: size == 40 ? 18 : 16, weight: .bold))
-                .foregroundStyle(.purple)
+                .font(.ripulIcon(size: size == 40 ? 18 : 16, weight: .bold))
+                .foregroundStyle(.ripul(system: .systemPurple))
                 .frame(width: size, height: size)
                 .contentShape(Circle())
                 .modifier(GlassCircleModifier(glassStyle: glassStyle))
@@ -1799,7 +1799,7 @@ public struct NativeChatInput: View {
         } label: {
             Image(systemName: "arrow.up")
                         .accessibilityLabel(runningSendLabel)
-                .font(.system(size: size == 40 ? 18 : 16, weight: .bold))
+                .font(.ripulIcon(size: size == 40 ? 18 : 16, weight: .bold))
                 .foregroundStyle(Color.accentColor)
                 .frame(width: size, height: size)
                 .contentShape(Circle())
@@ -1830,8 +1830,8 @@ public struct NativeChatInput: View {
                     onPause?()
                 } label: {
                     Image(systemName: "pause.fill")
-                        .font(.system(size: 18, weight: .bold))
-                        .foregroundStyle(.orange)
+                        .font(.ripulIcon(size: 18, weight: .bold))
+                        .foregroundStyle(.ripul(.warning))
                         .frame(width: 40, height: 40)
                         .contentShape(Circle())
                         .modifier(GlassCircleModifier(glassStyle: nil))
@@ -1849,8 +1849,8 @@ public struct NativeChatInput: View {
                     submitMessage()
                 } label: {
                     Image(systemName: "play.fill")
-                        .font(.system(size: 18, weight: .bold))
-                        .foregroundStyle(.green)
+                        .font(.ripulIcon(size: 18, weight: .bold))
+                        .foregroundStyle(.ripul(.success))
                         .frame(width: 40, height: 40)
                         .contentShape(Circle())
                         .modifier(GlassCircleModifier(glassStyle: nil))
@@ -1869,7 +1869,7 @@ public struct NativeChatInput: View {
                 } label: {
                     Image(systemName: "arrow.up")
                         .accessibilityLabel("Send message")
-                        .font(.system(size: 18, weight: .bold))
+                        .font(.ripulIcon(size: 18, weight: .bold))
                         .foregroundStyle(Color.accentColor)
                         .frame(width: 40, height: 40)
                         .contentShape(Circle())
@@ -1887,13 +1887,13 @@ public struct NativeChatInput: View {
                 showHistorySheet = true
             } label: {
                 Image(systemName: "clock.arrow.circlepath")
-                    .font(.system(size: 18, weight: .medium))
-                    .foregroundStyle(.primary)
+                    .font(.ripulIcon(size: 18, weight: .medium))
+                    .foregroundStyle(.ripul(.text))
                     .frame(width: 40, height: 40)
                     .contentShape(Circle())
                     .modifier(GlassCircleModifier(glassStyle: isTwoRow ? nil : resolvedChatInputGlassStyle))
             }
-            .sheet(isPresented: $showHistorySheet) {
+            .ripulSheet(isPresented: $showHistorySheet) {
                 HistorySheet(history: history) { msg in
                     text = msg
                     showHistorySheet = false
@@ -1918,9 +1918,9 @@ public struct NativeChatInput: View {
                             selectedPhotos = []
                         } label: {
                             Image(systemName: "xmark.circle.fill")
-                                .font(.system(size: 18))
+                                .font(.ripulIcon(size: 18))
                                 .symbolRenderingMode(.palette)
-                                .foregroundStyle(.white, .gray)
+                                .foregroundStyle(.ripul(system: .white), .ripul(.neutral))
                         }
                         .offset(x: 6, y: -6)
                     }
@@ -2348,12 +2348,12 @@ public struct NativeChatInput: View {
                     toggleClass(spec.key)
                 } label: {
                     Label(spec.label, systemImage: spec.icon)
-                        .font(.system(size: 11, weight: .medium))
+                        .font(.ripul(size: 11, weight: .medium))
                         .padding(.horizontal, 8)
                         .padding(.vertical, 4)
                         .background(Capsule().fill(hiddenClasses.contains(spec.key) ? Color.clear : Color.accentColor.opacity(0.18)))
-                        .overlay(Capsule().stroke(hiddenClasses.contains(spec.key) ? Color.secondary.opacity(0.35) : Color.accentColor, lineWidth: 1))
-                        .foregroundStyle(hiddenClasses.contains(spec.key) ? Color.secondary : Color.accentColor)
+                        .overlay(Capsule().stroke(hiddenClasses.contains(spec.key) ? Color.ripul(.textSecondary).opacity(0.35) : Color.accentColor, lineWidth: 1))
+                        .foregroundStyle(hiddenClasses.contains(spec.key) ? Color.ripul(.textSecondary) : Color.accentColor)
                 }
                 .buttonStyle(.plain)
             }
@@ -2369,25 +2369,25 @@ public struct NativeChatInput: View {
         } label: {
             HStack(spacing: 8) {
                 Image(systemName: "arrow.triangle.branch")
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.ripul(.textSecondary))
                     .frame(width: 20)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(suggestion.name)
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(.primary)
+                        .font(.ripul(size: 14, weight: .medium))
+                        .foregroundStyle(.ripul(.text))
                         .lineLimit(1)
                     if let description = suggestion.description, !description.isEmpty {
                         Text(description)
-                            .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
+                            .font(.ripul(size: 11))
+                            .foregroundStyle(.ripul(.textSecondary))
                             .lineLimit(1)
                     }
                 }
                 Spacer()
                 if suggestion.remote {
                     Image(systemName: "cloud")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
+                        .font(.ripulIcon(size: 11))
+                        .foregroundStyle(.ripul(.textSecondary))
                 }
             }
             .padding(.horizontal, 12)
@@ -2416,11 +2416,11 @@ public struct NativeChatInput: View {
             if !hasResults {
                 HStack(spacing: 8) {
                     Image(systemName: "magnifyingglass")
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(.ripul(.textSecondary))
                         .frame(width: 20)
                     Text(hiddenClasses.contains("people") && hiddenClasses.contains("repo") && hiddenClasses.contains("files") && elementSuggestions.isEmpty ? "All classes hidden — use the toggles above" : (afterAtText.isEmpty ? "Type to search people, branches, files, and UI elements" : "No matches for \u{201C}\(afterAtText)\u{201D}"))
-                        .font(.system(size: 14))
-                        .foregroundStyle(.secondary)
+                        .font(.ripul(size: 14))
+                        .foregroundStyle(.ripul(.textSecondary))
                     Spacer()
                 }
                 .padding(.horizontal, 12)
@@ -2492,15 +2492,15 @@ public struct NativeChatInput: View {
         }
         .background(.ultraThinMaterial)
         .clipShape(RoundedRectangle(cornerRadius: 12))
-        .shadow(color: .black.opacity(0.15), radius: 8, y: -2)
+        .shadow(color: Color.ripul(system: .black).opacity(0.15), radius: 8, y: -2)
         .padding(.horizontal, 16)
     }
 
     private func suggestionSectionHeader(_ title: String) -> some View {
         HStack {
             Text(title.uppercased())
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(.secondary)
+                .font(.ripul(size: 11, weight: .semibold))
+                .foregroundStyle(.ripul(.textSecondary))
             Spacer()
         }
         .padding(.horizontal, 12)
@@ -2514,17 +2514,17 @@ public struct NativeChatInput: View {
         } label: {
             HStack(spacing: 8) {
                 Image(systemName: AutocompleteConstants.category(for: "people")?.sfSymbol ?? "person.fill")
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.ripul(.textSecondary))
                     .frame(width: 20)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(suggestion.name)
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(.primary)
+                        .font(.ripul(size: 14, weight: .medium))
+                        .foregroundStyle(.ripul(.text))
                         .lineLimit(1)
                     if let group = suggestion.group, !group.isEmpty {
                         Text(group)
-                            .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
+                            .font(.ripul(size: 11))
+                            .foregroundStyle(.ripul(.textSecondary))
                             .lineLimit(1)
                     }
                 }
@@ -2543,21 +2543,21 @@ public struct NativeChatInput: View {
         } label: {
             HStack(spacing: 8) {
                 Image(systemName: "person.badge.plus")
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.ripul(.textSecondary))
                     .frame(width: 20)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(suggestion.name)
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(.primary)
+                        .font(.ripul(size: 14, weight: .medium))
+                        .foregroundStyle(.ripul(.text))
                         .lineLimit(1)
                     Text(suggestion.description ?? "Invite to this chat")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
+                        .font(.ripul(size: 11))
+                        .foregroundStyle(.ripul(.textSecondary))
                         .lineLimit(1)
                 }
                 Spacer()
                 Text("Invite")
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(.ripul(size: 11, weight: .semibold))
                     .foregroundStyle(.tint)
             }
             .padding(.horizontal, 12)
@@ -2573,10 +2573,10 @@ public struct NativeChatInput: View {
     private func atNoticeBanner(_ message: String) -> some View {
         HStack(spacing: 8) {
             Image(systemName: "person.badge.plus")
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.ripul(.textSecondary))
             Text(message)
-                .font(.system(size: 12))
-                .foregroundStyle(.secondary)
+                .font(.ripul(size: 12))
+                .foregroundStyle(.ripul(.textSecondary))
                 .lineLimit(2)
             Spacer()
         }
@@ -2604,17 +2604,17 @@ public struct NativeChatInput: View {
         } label: {
             HStack(spacing: 8) {
                 Image(systemName: suggestion.isDirectory ? "folder.fill" : (AutocompleteConstants.category(for: "files")?.sfSymbol ?? "doc.text.fill"))
-                    .foregroundStyle(suggestion.isDirectory ? .blue : .secondary)
+                    .foregroundStyle(suggestion.isDirectory ? Color.ripul(.info) : Color.ripul(.textSecondary))
                     .frame(width: 20)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(suggestion.fileName)
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(.primary)
+                        .font(.ripul(size: 14, weight: .medium))
+                        .foregroundStyle(.ripul(.text))
                         .lineLimit(1)
                     if suggestion.path != suggestion.fileName {
                         Text(suggestion.path)
-                            .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
+                            .font(.ripul(size: 11))
+                            .foregroundStyle(.ripul(.textSecondary))
                             .lineLimit(1)
                     }
                 }
@@ -2633,17 +2633,17 @@ public struct NativeChatInput: View {
         } label: {
             HStack(spacing: 8) {
                 Image(systemName: AutocompleteConstants.category(for: "ui")?.sfSymbol ?? "tag.fill")
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.ripul(.textSecondary))
                     .frame(width: 20)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(suggestion.componentName)
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(.primary)
+                        .font(.ripul(size: 14, weight: .medium))
+                        .foregroundStyle(.ripul(.text))
                         .lineLimit(1)
                     if suggestion.dataUi != suggestion.componentName {
                         Text(suggestion.dataUi)
-                            .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
+                            .font(.ripul(size: 11))
+                            .foregroundStyle(.ripul(.textSecondary))
                             .lineLimit(1)
                     }
                 }
@@ -2687,7 +2687,7 @@ public struct NativeChatInput: View {
         .animation(.easeInOut(duration: 0.2), value: showAtSuggestions)
         .modifier(SpeechInputWarningModifier(message: $microphoneWarning))
         .photosPicker(isPresented: $showPhotoPicker, selection: $selectedPhotos, maxSelectionCount: 4, matching: .images)
-        .sheet(isPresented: $showTodoPicker) {
+        .ripulSheet(isPresented: $showTodoPicker) {
             TodoPickerSheet(
                 onFetch: onFetchTodoItems,
                 onSelect: { todoText in
@@ -2813,8 +2813,8 @@ public struct NativeChatInput: View {
             }
         }
         return Image(systemName: isDictating ? "mic.fill" : "mic")
-            .font(.system(size: size == 40 ? 18 : 16, weight: .bold))
-            .foregroundStyle(isDictating ? Color.red : Color.accentColor)
+            .font(.ripulIcon(size: size == 40 ? 18 : 16, weight: .bold))
+            .foregroundStyle(isDictating ? Color.ripul(.danger) : Color.accentColor)
             .frame(width: size, height: size)
             .contentShape(Circle())
             .modifier(GlassCircleModifier(glassStyle: "clear"))
@@ -2897,7 +2897,7 @@ public struct NativeChatInput: View {
     // MARK: - Shared Subviews
 
     private var plusMenuButton: some View {
-        Menu {
+        Menu { MenuIcons {
             Button {
                 showPhotoPicker = true
             } label: {
@@ -2932,10 +2932,10 @@ public struct NativeChatInput: View {
             } label: {
                 Label("New Chat", systemImage: "plus.bubble")
             }
-        } label: {
+        }} label: {
             Image(systemName: "plus")
-                .font(.system(size: 20, weight: .medium))
-                .foregroundStyle(.secondary)
+                .font(.ripulIcon(size: 20, weight: .medium))
+                .foregroundStyle(.ripul(.textSecondary))
                 .frame(width: 40, height: 40)
                 .contentShape(Rectangle())
         }
@@ -2979,10 +2979,10 @@ public struct NativeChatInput: View {
             onTap()
         } label: {
             Image(systemName: "bubble.left.fill")
-                .font(.system(size: 14, weight: .bold))
-                .foregroundStyle(.white)
+                .font(.ripulIcon(size: 14, weight: .bold))
+                .foregroundStyle(.ripul(.onAccent))
                 .frame(width: 34, height: 28)
-                .background(Color.purple, in: Capsule())
+                .background(Color.ripul(system: .systemPurple), in: Capsule())
         }
         .buttonStyle(.plain)
         .help("Send note (not sent to agent)")
@@ -3005,8 +3005,8 @@ public struct NativeChatInput: View {
                     } label: {
                         Image(systemName: "arrow.up")
                         .accessibilityLabel(runningSendLabel)
-                            .font(.system(size: 14, weight: .bold))
-                            .foregroundStyle(.white)
+                            .font(.ripulIcon(size: 14, weight: .bold))
+                            .foregroundStyle(.ripul(.onAccent))
                             .frame(width: 34, height: 28)
                             .background(Color.accentColor, in: Capsule())
                     }
@@ -3016,10 +3016,10 @@ public struct NativeChatInput: View {
                     onPause?()
                 } label: {
                     Image(systemName: "pause.fill")
-                        .font(.system(size: 14, weight: .bold))
-                        .foregroundStyle(.white)
+                        .font(.ripulIcon(size: 14, weight: .bold))
+                        .foregroundStyle(.ripul(.onAccent))
                         .frame(width: 34, height: 28)
-                        .background(Color.orange, in: Capsule())
+                        .background(Color.ripul(.warning), in: Capsule())
                 }
                 .buttonStyle(.plain)
             }
@@ -3034,10 +3034,10 @@ public struct NativeChatInput: View {
                     submitMessage()
                 } label: {
                     Image(systemName: "play.fill")
-                        .font(.system(size: 14, weight: .bold))
-                        .foregroundStyle(.white)
+                        .font(.ripulIcon(size: 14, weight: .bold))
+                        .foregroundStyle(.ripul(.onAccent))
                         .frame(width: 34, height: 28)
-                        .background(Color.green, in: Capsule())
+                        .background(Color.ripul(.success), in: Capsule())
                 }
                 .buttonStyle(.plain)
             }
@@ -3053,8 +3053,8 @@ public struct NativeChatInput: View {
                 } label: {
                     Image(systemName: "arrow.up")
                         .accessibilityLabel("Send message")
-                        .font(.system(size: 14, weight: .bold))
-                        .foregroundStyle(.white)
+                        .font(.ripulIcon(size: 14, weight: .bold))
+                        .foregroundStyle(.ripul(.onAccent))
                         .frame(width: 34, height: 28)
                         .background(Color.accentColor, in: Capsule())
                 }
@@ -3076,8 +3076,8 @@ public struct NativeChatInput: View {
                 if hasContent, let onSubmitNote {
                     Button { onSubmitNote() } label: {
                         Image(systemName: "bubble.left.fill")
-                            .font(.system(size: 18, weight: .bold))
-                            .foregroundStyle(.purple)
+                            .font(.ripulIcon(size: 18, weight: .bold))
+                            .foregroundStyle(.ripul(system: .systemPurple))
                             .frame(width: 40, height: 40)
                             .contentShape(Circle())
                             .modifier(GlassCircleModifier(glassStyle: nil))
@@ -3089,7 +3089,7 @@ public struct NativeChatInput: View {
                     Button { submitMessage() } label: {
                         Image(systemName: "arrow.up")
                         .accessibilityLabel(runningSendLabel)
-                            .font(.system(size: 18, weight: .bold))
+                            .font(.ripulIcon(size: 18, weight: .bold))
                             .foregroundStyle(Color.accentColor)
                             .frame(width: 40, height: 40)
                             .contentShape(Circle())
@@ -3102,8 +3102,8 @@ public struct NativeChatInput: View {
                     onPause?()
                 } label: {
                     Image(systemName: "pause.fill")
-                        .font(.system(size: 18, weight: .bold))
-                        .foregroundStyle(.orange)
+                        .font(.ripulIcon(size: 18, weight: .bold))
+                        .foregroundStyle(.ripul(.warning))
                         .frame(width: 40, height: 40)
                         .contentShape(Circle())
                         .modifier(GlassCircleModifier(glassStyle: nil))
@@ -3116,8 +3116,8 @@ public struct NativeChatInput: View {
                 if hasContent, let onSubmitNote {
                     Button { onSubmitNote() } label: {
                         Image(systemName: "bubble.left.fill")
-                            .font(.system(size: 18, weight: .bold))
-                            .foregroundStyle(.purple)
+                            .font(.ripulIcon(size: 18, weight: .bold))
+                            .foregroundStyle(.ripul(system: .systemPurple))
                             .frame(width: 40, height: 40)
                             .contentShape(Circle())
                             .modifier(GlassCircleModifier(glassStyle: nil))
@@ -3129,8 +3129,8 @@ public struct NativeChatInput: View {
                     submitMessage()
                 } label: {
                     Image(systemName: "play.fill")
-                        .font(.system(size: 18, weight: .bold))
-                        .foregroundStyle(.green)
+                        .font(.ripulIcon(size: 18, weight: .bold))
+                        .foregroundStyle(.ripul(.success))
                         .frame(width: 40, height: 40)
                         .contentShape(Circle())
                         .modifier(GlassCircleModifier(glassStyle: nil))
@@ -3143,8 +3143,8 @@ public struct NativeChatInput: View {
                 if let onSubmitNote {
                     Button { onSubmitNote() } label: {
                         Image(systemName: "bubble.left.fill")
-                            .font(.system(size: 18, weight: .bold))
-                            .foregroundStyle(.purple)
+                            .font(.ripulIcon(size: 18, weight: .bold))
+                            .foregroundStyle(.ripul(system: .systemPurple))
                             .frame(width: 40, height: 40)
                             .contentShape(Circle())
                             .modifier(GlassCircleModifier(glassStyle: nil))
@@ -3157,7 +3157,7 @@ public struct NativeChatInput: View {
                 } label: {
                     Image(systemName: "arrow.up")
                         .accessibilityLabel("Send message")
-                        .font(.system(size: 18, weight: .bold))
+                        .font(.ripulIcon(size: 18, weight: .bold))
                         .foregroundStyle(Color.accentColor)
                         .frame(width: 40, height: 40)
                         .contentShape(Circle())
@@ -3176,15 +3176,15 @@ public struct NativeChatInput: View {
                 showHistorySheet = true
             } label: {
                 Image(systemName: "clock.arrow.circlepath")
-                    .font(.system(size: 18, weight: .medium))
-                    .foregroundStyle(.secondary)
+                    .font(.ripulIcon(size: 18, weight: .medium))
+                    .foregroundStyle(.ripul(.textSecondary))
                     .frame(width: 40, height: 40)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.borderless)
             .frame(width: 40, height: 40)
             .modifier(GlassCircleModifier(glassStyle: isTwoRow ? nil : resolvedChatInputGlassStyle))
-            .sheet(isPresented: $showHistorySheet) {
+            .ripulSheet(isPresented: $showHistorySheet) {
                 HistorySheet(history: history) { msg in
                     text = msg
                     showHistorySheet = false
@@ -3209,9 +3209,9 @@ public struct NativeChatInput: View {
                             selectedPhotos = []
                         } label: {
                             Image(systemName: "xmark.circle.fill")
-                                .font(.system(size: 18))
+                                .font(.ripulIcon(size: 18))
                                 .symbolRenderingMode(.palette)
-                                .foregroundStyle(.white, .gray)
+                                .foregroundStyle(.ripul(system: .white), .ripul(.neutral))
                         }
                         .buttonStyle(.plain)
                         .offset(x: 6, y: -6)
@@ -3241,14 +3241,14 @@ struct HistorySheet: View {
                 let favs = history.favoriteMessages
                 let recent = history.nonFavoriteRecentMessages
                 if !favs.isEmpty {
-                    Section("Favorites") {
+                    Section(themed: "Favorites") {
                         ForEach(favs.prefix(15), id: \.self) { msg in
                             historyRow(msg)
                         }
                     }
                 }
                 if !recent.isEmpty {
-                    Section("Recent") {
+                    Section(themed: "Recent") {
                         ForEach(recent.prefix(15), id: \.self) { msg in
                             historyRow(msg)
                         }
@@ -3279,12 +3279,12 @@ struct HistorySheet: View {
             HStack {
                 if history.isFavorite(msg) {
                     Image(systemName: "star.fill")
-                        .foregroundStyle(.yellow)
-                        .font(.caption2)
+                        .foregroundStyle(.ripul(system: .systemYellow))
+                        .font(.ripulIcon(.caption2))
                 }
                 Text(msg)
                     .lineLimit(2)
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(.ripul(.text))
                 Spacer()
             }
             .contentShape(Rectangle())
@@ -3306,7 +3306,7 @@ struct HistorySheet: View {
                     systemImage: history.isFavorite(msg) ? "star.slash.fill" : "star.fill"
                 )
             }
-            .tint(.yellow)
+            .tint(Color.ripul(system: .systemYellow))
         }
     }
 }
@@ -3344,13 +3344,13 @@ struct TodoPickerSheet: View {
                 } else if thisChatItems.isEmpty && otherChatItems.isEmpty {
                     VStack(spacing: 8) {
                         Image(systemName: "list.bullet.clipboard")
-                            .font(.largeTitle)
-                            .foregroundStyle(.secondary)
+                            .font(.ripulIcon(.largeTitle))
+                            .foregroundStyle(.ripul(.textSecondary))
                         Text("No to do items")
-                            .font(.headline)
+                            .font(.ripul(.headline))
                         Text("Create one from the + menu to pick it later.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .font(.ripul(.caption))
+                            .foregroundStyle(.ripul(.textSecondary))
                             .multilineTextAlignment(.center)
                     }
                     .padding()
@@ -3358,14 +3358,14 @@ struct TodoPickerSheet: View {
                 } else {
                     List {
                         if !thisChatItems.isEmpty {
-                            Section("This chat") {
+                            Section(themed: "This chat") {
                                 ForEach(thisChatItems) { item in
                                     todoRow(item, showChatName: false)
                                 }
                             }
                         }
                         if !otherChatItems.isEmpty {
-                            Section("Other chats") {
+                            Section(themed: "Other chats") {
                                 ForEach(otherChatItems) { item in
                                     todoRow(item, showChatName: true)
                                 }
@@ -3405,11 +3405,11 @@ struct TodoPickerSheet: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(item.text)
                     .lineLimit(3)
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(.ripul(.text))
                 if showChatName, let chatName = item.chatName, !chatName.isEmpty {
                     Text(chatName)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .font(.ripul(.caption))
+                        .foregroundStyle(.ripul(.textSecondary))
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -3434,7 +3434,7 @@ private struct WaitingGlowModifier: ViewModifier {
         content
             .overlay {
                 if isActive && !PerfSwitch.isOff("glow") {
-                    RenderServerPulseStroke(cornerRadius: 22, lineWidth: 1.25, color: .orange,
+                    RenderServerPulseStroke(cornerRadius: 22, lineWidth: 1.25, color: .ripul(.warning),
                                             low: 0.12, high: 0.35, duration: 6)
                 }
             }
@@ -3668,8 +3668,8 @@ struct NoAutofillTextView: UIViewRepresentable {
         let textView = ChatTextView()
         textView.accessibilityIdentifier = "NativeChatInput.editor"
         textView.delegate = context.coordinator
-        let bodySize = UIFont.preferredFont(forTextStyle: .body).pointSize
-        textView.font = .systemFont(ofSize: bodySize + 1, weight: .semibold)
+        let bodySize = UIFont.ripul(.body).pointSize
+        textView.font = .ripul(size: bodySize + 1, weight: .semibold)
         textView.backgroundColor = .clear
         textView.textContainerInset = UIEdgeInsets(top: 8, left: 12, bottom: 8, right: 4)
         textView.textContainer.lineFragmentPadding = 0
@@ -3680,7 +3680,7 @@ struct NoAutofillTextView: UIViewRepresentable {
         textView.enablesReturnKeyAutomatically = false
 
         // Let Apple's vibrancy handle text color adaptation
-        textView.textColor = .label
+        textView.textColor = .ripul(.text)
 
         textView.autocorrectionType = .yes
         textView.autocapitalizationType = .sentences
@@ -3692,7 +3692,7 @@ struct NoAutofillTextView: UIViewRepresentable {
         let label = UILabel()
         label.text = placeholder
         label.font = textView.font
-        label.textColor = .placeholderText
+        label.textColor = .ripul(system: .placeholderText)
         label.translatesAutoresizingMaskIntoConstraints = false
         textView.addSubview(label)
         NSLayoutConstraint.activate([
@@ -3700,6 +3700,7 @@ struct NoAutofillTextView: UIViewRepresentable {
             label.topAnchor.constraint(equalTo: textView.topAnchor, constant: 8)
         ])
         context.coordinator.placeholderLabel = label
+        context.coordinator.followTheme(textView)
 
         // A remade view can start with multi-line text already in it (draft
         // restored, session switch) — the first real layout is when the wrap
@@ -3741,8 +3742,28 @@ struct NoAutofillTextView: UIViewRepresentable {
         var parent: NoAutofillTextView
         var placeholderLabel: UILabel?
 
+        private weak var themedTextView: UITextView?
+
         init(_ parent: NoAutofillTextView) {
             self.parent = parent
+        }
+
+        /// The fonts are read once when the view is made, so a new theme document would
+        /// reach the text and its placeholder only at the next launch. Read them again
+        /// when the theme changes.
+        func followTheme(_ textView: UITextView) {
+            themedTextView = textView
+            NotificationCenter.default.addObserver(self, selector: #selector(themeDidChange),
+                                                   name: .ripulThemeDidChange, object: nil)
+        }
+
+        @objc private func themeDidChange() {
+            guard let textView = themedTextView else { return }
+            let font = UIFont.ripul(size: UIFont.ripul(.body).pointSize + 1, weight: .semibold) // theme-mapping: the font makeUIView gives it, read again
+            textView.font = font
+            placeholderLabel?.font = font
+            textView.invalidateIntrinsicContentSize()
+            recalcHeight(textView)
         }
 
         func recalcHeight(_ textView: UITextView) {

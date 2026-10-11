@@ -87,7 +87,7 @@ public struct RipulUsersScreen: View {
     public var body: some View {
         List {
             ForEach(groups) { group in
-                Section("\(group.name) (\(group.users.count))") {
+                Section(themed: "\(group.name) (\(group.users.count))") {
                     ForEach(group.users) { user in
                         NavigationLink {
                             RipulUserDetailView(user: user, client: model.client) {
@@ -103,8 +103,8 @@ public struct RipulUsersScreen: View {
             if !model.users.isEmpty {
                 Section {
                     Text("\(model.users.count) accounts · \(model.adminCount) admin\(model.adminCount == 1 ? "" : "s")")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
+                        .font(.ripul(.footnote))
+                        .foregroundStyle(.ripul(.textSecondary))
                         .frame(maxWidth: .infinity, alignment: .center)
                         .listRowBackground(Color.clear)
                 }
@@ -135,11 +135,11 @@ public struct RipulUsersScreen: View {
         } else if !model.loading && model.users.isEmpty {
             VStack(spacing: 8) {
                 Image(systemName: "person.2")
-                    .font(.largeTitle)
-                    .foregroundStyle(.secondary)
+                    .font(.ripulIcon(.largeTitle))
+                    .foregroundStyle(.ripul(.textSecondary))
                 Text(model.errorMessage ?? "No Ripul accounts found")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
+                    .font(.ripul(.callout))
+                    .foregroundStyle(.ripul(.textSecondary))
                     .multilineTextAlignment(.center)
                 Button("Retry") { Task { await model.load() } }
                     .buttonStyle(.bordered)
@@ -154,17 +154,17 @@ public struct RipulUsersScreen: View {
             RipulUserAvatar(user: user)
             VStack(alignment: .leading, spacing: 1) {
                 Text(user.displayName)
-                    .font(.subheadline.weight(.medium))
+                    .font(.ripul(.subheadline, weight: .medium))
                     .lineLimit(1)
                 Text(user.email)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(.ripul(.caption))
+                    .foregroundStyle(.ripul(.textSecondary))
                     .lineLimit(1)
             }
             Spacer(minLength: 8)
             if user.isAdmin {
                 Image(systemName: "checkmark.shield.fill")
-                    .font(.caption)
+                    .font(.ripulIcon(.caption))
                     .foregroundStyle(.tint)
                     .accessibilityLabel("Admin")
             }
@@ -196,7 +196,7 @@ struct RipulUserAvatar: View {
 
     private var initials: some View {
         Text(user.initials)
-            .font(.caption.weight(.semibold))
+            .font(.ripul(.caption, weight: .semibold))
             .foregroundStyle(.tint)
     }
 }
@@ -246,8 +246,8 @@ struct RipulUserDetailView: View {
                 HStack(spacing: 12) {
                     RipulUserAvatar(user: user)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(user.displayName).font(.headline)
-                        Text(user.email).font(.caption).foregroundStyle(.secondary)
+                        Text(user.displayName).font(.ripul(.headline))
+                        Text(user.email).font(.ripul(.caption)).foregroundStyle(.ripul(.textSecondary))
                     }
                 }
                 .padding(.vertical, 4)
@@ -262,15 +262,15 @@ struct RipulUserDetailView: View {
                 field("Resolved role", user.resolvedRoleId)
                 field("Clerk role", user.role ?? "—")
                 field("Tier", Self.tierLabel(user.tier))
-            } header: {
+            } header: { RipulSectionHeader {
                 Text("Platform role")
-            } footer: {
+            } } footer: { RipulSectionFooter {
                 Text(user.isAdmin
                      ? "Admin is granted by Clerk public_metadata.role and outranks the tier."
                      : "No admin claim, so the API resolves this account from its subscription tier.")
-            }
+            } }
 
-            Section("Usage") {
+            Section(themed: "Usage") {
                 field("Quota used", user.quotaLimit > 0
                       ? "\(user.quotaUsed) / \(user.quotaLimit) (\(user.percentUsed)%)"
                       : "\(user.quotaUsed)")
@@ -278,7 +278,7 @@ struct RipulUserDetailView: View {
                 field("Created", user.createdAt.map { Self.stamp.string(from: $0) } ?? "—")
             }
 
-            Section("Identity") {
+            Section(themed: "Identity") {
                 if let username = user.username { field("Username", username) }
                 copyableField("User ID", user.id)
                 copyableField("Email", user.email)
@@ -348,11 +348,11 @@ struct RipulUserDetailView: View {
                 set: { on in if on != user.isAdmin { pendingRole = on ? "admin" : "user" } }
             ))
             .uiKitIdentifier("UserDetail.plan.admin")
-        } header: {
+        } header: { RipulSectionHeader {
             Text("Plan")
-        } footer: {
+        } } footer: { RipulSectionFooter {
             Text(planFootnote)
-        }
+        } }
     }
 
     private var planFootnote: String {
@@ -381,10 +381,10 @@ struct RipulUserDetailView: View {
     @ViewBuilder
     private func field(_ label: String, _ value: String) -> some View {
         HStack(alignment: .firstTextBaseline) {
-            Text(label).font(.subheadline).foregroundStyle(.secondary)
+            Text(label).font(.ripul(.subheadline)).foregroundStyle(.ripul(.textSecondary))
             Spacer(minLength: 12)
             Text(value)
-                .font(.subheadline)
+                .font(.ripul(.subheadline))
                 .multilineTextAlignment(.trailing)
                 .textSelection(.enabled)
         }
@@ -396,14 +396,14 @@ struct RipulUserDetailView: View {
             UIPasteboard.general.string = value
         } label: {
             HStack(alignment: .firstTextBaseline) {
-                Text(label).font(.subheadline).foregroundStyle(.secondary)
+                Text(label).font(.ripul(.subheadline)).foregroundStyle(.ripul(.textSecondary))
                 Spacer(minLength: 12)
                 Text(value)
-                    .font(.subheadline)
+                    .font(.ripul(.subheadline))
                     .multilineTextAlignment(.trailing)
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(.ripul(.text))
                 Image(systemName: "doc.on.doc")
-                    .font(.caption2)
+                    .font(.ripulIcon(.caption2))
                     .foregroundStyle(.tint)
             }
         }

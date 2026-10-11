@@ -43,9 +43,9 @@ public enum RipulLogConsole {
         // mounted inside it. See RipulChromeWindow.swift.
         let win = RipulChromeWindow(windowScene: scene)
         win.windowLevel = UIWindow.Level(rawValue: UIWindow.Level.alert.rawValue + 1)
-        win.backgroundColor = .systemBackground
+        win.backgroundColor = .ripul(.canvas)
 
-        let host = UIHostingController(rootView: RipulLogConsoleRoot())
+        let host = UIHostingController(rootView: RipulLogConsoleRoot().ripulThemeRoot())
         win.installRoot(host)
         win.isHidden = false
 

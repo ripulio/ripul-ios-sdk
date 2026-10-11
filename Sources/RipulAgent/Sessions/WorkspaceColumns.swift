@@ -79,6 +79,9 @@ struct SessionChatColumns<List: View, Chat: View>: View {
     var body: some View {
         ZStack(alignment: .leading) {
             list
+                // The chat shares this ZStack and must not be stretched by a
+                // list that cannot fit.
+                .keepsOfferedHeight()
                 .frame(width: showsBoth ? listWidth : width)
                 .allowsHitTesting(showsBoth || showingList)
                 .accessibilityHidden(!showsBoth && !showingList)
@@ -98,7 +101,7 @@ struct SessionChatColumns<List: View, Chat: View>: View {
                                 Color.clear
                                 #if !targetEnvironment(macCatalyst)
                                 Capsule()
-                                    .fill(Color.secondary.opacity(resizeStart == nil ? 0.4 : 0.8))
+                                    .fill(Color.ripul(.textSecondary).opacity(resizeStart == nil ? 0.4 : 0.8))
                                     .frame(width: 4, height: 36)
                                 #endif
                             }

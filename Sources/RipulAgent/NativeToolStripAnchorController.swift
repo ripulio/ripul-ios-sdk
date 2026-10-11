@@ -28,6 +28,8 @@ final class NativeToolStripAnchorController {
     private var attachment: NativeSlotAttachment?
     private var geometry: NativeToolAnchorGeometry?
     private var retry: Task<Void, Never>?
+    /// Climbs a scroller-parented strip onto its row's layer after placement.
+    private var upgrade: Task<Void, Never>?
     private var enabled = false
     private(set) var placementCount = 0
     #if DEBUG
@@ -136,7 +138,9 @@ final class NativeToolStripAnchorController {
         retry?.cancel()
         guard enabled, geometry?.anchor != nil else { return }
         // A DOM layout message can beat WebKit's native layer-tree commit.
-        // Allow eight idle retries for this layout event; pause while scrolling.
+        // Allow idle retries for this layout event (enough to outlast the
+        // attachment's wait for a layered slot's view, which declines the
+        // placement meanwhile); pause while scrolling.
         retry = Task { [weak self] in
             var attempts = 0
             while true {
@@ -144,7 +148,7 @@ final class NativeToolStripAnchorController {
                 MainThreadSampler.count("strip.retry")
                 let idle = self.canChangeLayout()
                 if idle {
-                    guard attempts < 8 else { self.detach(); return }
+                    guard attempts < 24 else { self.detach(); return }
                     if self.place() { return }
                     attempts += 1
                 }
@@ -181,10 +185,12 @@ final class NativeToolStripAnchorController {
         else { return false }
         host.view.isHidden = false
         host.view.layoutIfNeeded()
-        if isAppearing && !UIAccessibility.isReduceMotionEnabled {
+        if isAppearing && !UIAccessibility.isReduceMotionEnabled && store.display?.warm != true {
             // Animate only the rendered opacity. The model view stays fully
             // interactive, and UIKit keeps ownership of scrolling and layout.
             // Existing strips do not fade again when their anchor moves.
+            // A warm strip (its web copy never came back after a re-entry)
+            // appears at once: a fade there is a blank slot, not a crossfade.
             let fade = CABasicAnimation(keyPath: "opacity")
             fade.fromValue = 0
             fade.toValue = 1
@@ -195,7 +201,27 @@ final class NativeToolStripAnchorController {
         }
         placementCount += 1
         store.setAnchored(true)
+        if g.layered, !attachment.ridesSlotView { scheduleUpgrade() } else { upgrade?.cancel(); upgrade = nil }
         return true
+    }
+
+    /// A strip placed on the scroller (its row's layer view was not there in
+    /// time) keeps looking for that view on its own for a couple of seconds.
+    /// Left to reports alone, a chat that goes quiet after entry kept every
+    /// strip on the scroller, where an unreported shift of the rows left them
+    /// all off by the same amount (Catalyst, 2026-10-09).
+    private func scheduleUpgrade() {
+        upgrade?.cancel()
+        upgrade = Task { [weak self] in
+            for _ in 0..<20 {
+                do { try await Task.sleep(nanoseconds: 100_000_000) } catch { return }
+                guard !Task.isCancelled, let self, self.enabled, let attachment = self.attachment,
+                      attachment.isMounted, let g = self.slotGeometry else { return }
+                guard self.canChangeLayout() else { continue }
+                MainThreadSampler.count("strip.upgrade")
+                if attachment.upgradeToSlotView(geometry: g, frame: Self.stripFrame) { return }
+            }
+        }
     }
 
     /// WebKit's compositing hierarchy normally routes taps back to web content.
@@ -214,6 +240,8 @@ final class NativeToolStripAnchorController {
         }
         retry?.cancel()
         retry = nil
+        upgrade?.cancel()
+        upgrade = nil
         host?.view.layer.removeAnimation(forKey: Self.appearanceAnimationKey)
         attachment?.unmount()
         accessibleButtons = [:]

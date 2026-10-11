@@ -66,11 +66,21 @@ public struct RipulAgentScreenSlots {
     /// bar always on.
     public var hidesListModeBar: Bool
     public var sessionColumnVisibility: Binding<NavigationSplitViewVisibility>?
-    /// First three rows in the displayed session list, after filtering/sorting.
+    /// The first rows of the displayed session list, after filtering and
+    /// sorting, up to `RipulListedSession.limit`.
     public var onListedSessionsChanged: (([RipulListedSession]) -> Void)?
     /// "Minimise Chat" in the chat's ellipsis menu: the host folds the chat
     /// into its floating launcher bubble. nil while the host cannot fold it.
     public var onMinimizeChat: (() -> Void)?
+    /// Set while the host shows this screen as a small floating panel holding
+    /// one chat. The session list is out of reach there: the chat's leading
+    /// button becomes this action (the host opens the screen at full size)
+    /// and the edge swipe back to the list stands down.
+    public var onExpandFromPanel: (() -> Void)?
+    /// Set with `onExpandFromPanel` when the host can give the panel's chat a
+    /// window of its own. The chat's menu offers "Move to New Window" in
+    /// place of "Open in New Window", and passes the session to open.
+    public var onMoveToWindow: ((String) -> Void)?
 
     public init(
         showingSidebar: Binding<Bool>? = nil,
@@ -85,7 +95,9 @@ public struct RipulAgentScreenSlots {
         hidesListModeBar: Bool = false,
         sessionColumnVisibility: Binding<NavigationSplitViewVisibility>? = nil,
         onNewChat: ((String?) -> Void)? = nil,
-        onMinimizeChat: (() -> Void)? = nil
+        onMinimizeChat: (() -> Void)? = nil,
+        onExpandFromPanel: (() -> Void)? = nil,
+        onMoveToWindow: ((String) -> Void)? = nil
     ) {
         self.showingSidebar = showingSidebar
         self.onNavigateToFiles = onNavigateToFiles
@@ -100,6 +112,8 @@ public struct RipulAgentScreenSlots {
         self.onListedSessionsChanged = onListedSessionsChanged
         self.onNewChat = onNewChat
         self.onMinimizeChat = onMinimizeChat
+        self.onExpandFromPanel = onExpandFromPanel
+        self.onMoveToWindow = onMoveToWindow
     }
 }
 
@@ -485,7 +499,7 @@ public struct RipulAgentScreen: View {
             onResizeList: resizeSessionPane,
             showingSessionList: showingSessionList,
             showingMetadata: showingMetadata,
-            suppressEdgeSwipe: mirrorOwnsWebview,
+            suppressEdgeSwipe: mirrorOwnsWebview || slots.onExpandFromPanel != nil,
             bridge: bridge,
             backGestureClosesOverlay: bridge.fileViewerTitle != nil || bridge.artefactPageTitle != nil,
             hasCommitView: commitViewInfo != nil,
@@ -662,7 +676,7 @@ public struct RipulAgentScreen: View {
         } message: {
             Text(forkError)
         }
-        .sheet(item: $modelPickerTarget) { target in
+        .ripulSheet(item: $modelPickerTarget) { target in
             modelPickerSheet(for: target).ripulSheet(.page)
         }
         .modifier(workingDirectoryPickerSheet)
@@ -933,6 +947,9 @@ public struct RipulAgentScreen: View {
             // open is fresh even if every earlier trigger raced the relay boot.
             onMenuOpen: { Task { await refreshFavoriteDirectories() } },
             centerInset: centerLozengeInset,
+            // A floating panel is dragged by this bar: the host moves it, so
+            // the same drag must not also open the screen overview.
+            switcherEnabled: slots.onExpandFromPanel == nil,
             onDoubleTapTitle: toggleTitleInspector,
             // No tap here in chat: the morphing pill is `chatTitleMorphOverlay`,
             // stacked over this slot, and it owns the single/double taps.
@@ -1065,6 +1082,22 @@ public struct RipulAgentScreen: View {
     /// A regular size class alone does not guarantee that. Also hidden in list
     /// mode when the host has no sidebar to open.
     private func agentLeading(session: ChatSession?) -> (() -> AnyView)? {
+        // A floating panel holds the one chat, so there is no list to go back
+        // to: the seat opens the screen at full size instead. Metadata and a
+        // commit view keep their own back button below.
+        if let expand = slots.onExpandFromPanel, !isListMode, !showingMetadata, commitViewInfo == nil {
+            return {
+                AnyView(Button(action: expand) {
+                    Image(systemName: "arrow.up.left.and.arrow.down.right")
+                        .font(.ripulIcon(size: 16, weight: .semibold))
+                        .foregroundStyle(.ripul(.text))
+                        .frame(width: 44, height: 44)
+                        .modifier(GlassCircleModifier(glassStyle: "regular"))
+                }
+                .accessibilityLabel("Open chat at full size")
+                .uiKitIdentifier("AgentScreen.topBar.expandFromPanel"))
+            }
+        }
         #if targetEnvironment(macCatalyst)
         if canShowSessionSplit {
             return {
@@ -1100,8 +1133,8 @@ public struct RipulAgentScreen: View {
                         Image(systemName: "line.3.horizontal").opacity(inList ? 1 : 0)
                         Image(systemName: "chevron.left").opacity(inList ? 0 : 1)
                     }
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(.primary)
+                    .font(.ripulIcon(size: 18, weight: .semibold))
+                    .foregroundStyle(.ripul(.text))
                     .frame(width: 44, height: 44)
                     .modifier(GlassCircleModifier(glassStyle: "regular"))
                 }
@@ -1122,7 +1155,13 @@ public struct RipulAgentScreen: View {
     /// checker gives up ("unable to type-check in reasonable time") on iOS.
     @ViewBuilder
     private func agentMenuContent(session: ChatSession?) -> some View {
-        if !isListMode, let session, supportsMultipleWindows, let open = workspace?.openWindow {
+        if !isListMode, let session, let move = slots.onMoveToWindow {
+            Button("Move to New Window", systemImage: "macwindow.badge.plus") {
+                let row = model.unifiedSessions.first { $0.matchKeys.contains(session.sourceChatId) || $0.matchKeys.contains(session.id) }
+                move(row?.id ?? session.sourceChatId)
+            }
+            .accessibilityIdentifier("Workspace.moveSessionToWindow")
+        } else if !isListMode, let session, supportsMultipleWindows, let open = workspace?.openWindow {
             Button("Open in New Window", systemImage: "rectangle.on.rectangle") {
                 let row = model.unifiedSessions.first { $0.matchKeys.contains(session.sourceChatId) || $0.matchKeys.contains(session.id) }
                 open(row?.id ?? session.sourceChatId)
@@ -1328,9 +1367,9 @@ public struct RipulAgentScreen: View {
             VStack(spacing: 1) {
                 HStack(spacing: 4) {
                     Text(unifiedTitle(session: session))
-                        .font(.caption)
+                        .font(.ripul(.caption))
                         .fontWeight(.semibold)
-                        .foregroundColor(.primary)
+                        .foregroundColor(.ripul(.text))
                         .lineLimit(1)
                         .contentTransition(.interpolate)
                     if isListMode, let screenTip = slots.screenTip {
@@ -1339,8 +1378,8 @@ public struct RipulAgentScreen: View {
                 }
                 if let sub = unifiedSubtitle(session: session) {
                     Text(sub)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
+                        .font(.ripul(.caption2))
+                        .foregroundStyle(.ripul(.textSecondary))
                         .contentTransition(.interpolate)
                 }
             }
@@ -1540,6 +1579,7 @@ public struct RipulAgentScreen: View {
             hostWorkingDirectory ?? "-",
             slots.onInviteByEmail != nil ? "invite" : "-",
             slots.onMinimizeChat != nil ? "minimize" : "-",
+            slots.onMoveToWindow != nil ? "moveToWindow" : "-",
             cache.bool(forKey: "showElementDebuggerMenu") ? (elementDebuggerActive ? "dbg1" : "dbg0") : "-",
             cache.bool(forKey: "enableNoteInjection") ? "notes" : "-",
             bridge.selectedEffort ?? "-",
@@ -1628,7 +1668,7 @@ public struct RipulAgentScreen: View {
         // Reasoning effort (orthogonal to the model) — CLI sessions.
         if let session, session.isSharedGuest != true,
            rawModeSessions.contains(session.id) || ProviderConstants.isCliProvider(session.provider) {
-            Menu {
+            Menu { MenuIcons {
                 Button { Task { await bridge.setEffort(nil) } } label: {
                     HStack {
                         Text("Default")
@@ -1643,7 +1683,7 @@ public struct RipulAgentScreen: View {
                             }
                     }
                 }
-            } label: {
+            }} label: {
                 Label(
                     bridge.selectedEffort.map { "Effort · \(ModelPickerEffort.label($0))" } ?? "Effort",
                     systemImage: "gauge.with.dots.needle.33percent"
@@ -2365,7 +2405,10 @@ private struct AgentChatDragContainer<SessionList: View, Chat: View>: View {
     var body: some View {
         SessionChatColumns(width: screenWidth, showsBoth: split,
             showingList: showingSessionList, chatOffset: effectiveOffset,
-            canInteractWithChat: !showingMetadata, list: sessionList,
+            // Not while a swipe is revealing it: the flip would re-evaluate the
+            // indicators as the drag starts. They pulse again once it has landed.
+            canInteractWithChat: !showingMetadata,
+            list: sessionList.environment(\.ripulSessionListCanBeSeen, split || showingSessionList),
             chat: chat.overlay(alignment: .leading) {
                 if !split && !showingSessionList && !landingOnList && !showingMetadata && !suppressEdgeSwipe {
                     InteractiveEdgeSwipeView(
@@ -2515,27 +2558,27 @@ private struct CommitViewBanner: View {
     var body: some View {
         HStack(spacing: 12) {
             Image(systemName: "eye")
-                .font(.system(size: 14, weight: .medium))
-                .foregroundStyle(.secondary)
+                .font(.ripulIcon(size: 14, weight: .medium))
+                .foregroundStyle(.ripul(.textSecondary))
 
             VStack(alignment: .leading, spacing: 1) {
                 Text("Read Only")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.primary)
+                    .font(.ripul(.subheadline, weight: .semibold))
+                    .foregroundStyle(.ripul(.text))
                 Text("Viewing commit \(shortSha)")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+                    .font(.ripul(.caption2))
+                    .foregroundStyle(.ripul(.textSecondary))
             }
 
             Spacer()
 
             Button(action: onResume) {
                 Label("Resume", systemImage: "play.fill")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.white)
+                    .font(.ripul(.subheadline, weight: .semibold))
+                    .foregroundStyle(.ripul(.onAccent))
                     .padding(.horizontal, 16)
                     .padding(.vertical, 8)
-                    .background(.blue, in: Capsule())
+                    .background(.ripul(.info), in: Capsule())
             }
         }
         .padding(.horizontal, 16)
@@ -2543,7 +2586,7 @@ private struct CommitViewBanner: View {
         .background {
             RoundedRectangle(cornerRadius: 22)
                 .fill(.ultraThinMaterial)
-                .shadow(color: .black.opacity(0.1), radius: 8, y: -2)
+                .shadow(color: Color.ripul(system: .black).opacity(0.1), radius: 8, y: -2)
         }
         .padding(.horizontal, 10)
         .padding(.bottom, 10)

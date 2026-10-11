@@ -18,6 +18,12 @@ public final class RipulComposerChrome: ObservableObject {
     /// display-frame progress so chat padding cannot retain a pre-navigation value.
     @Published public var contentBottomInset: CGFloat = 0
     public var requestExpand: (() -> Void)?
+    #if canImport(UIKit)
+    /// A thumb on the composer itself, for the host that owns the collapse:
+    /// the drag, and how far the composer's centre descends from full to
+    /// compact (`ComposerChromeLayout.pushTravel`).
+    public var push: ((ScreenSwitcherPullModifier.ChromeDrag, CGFloat) -> Void)?
+    #endif
     private var interactions = Set<String>()
     public var isInteracting: Bool { !interactions.isEmpty }
     public init() {}

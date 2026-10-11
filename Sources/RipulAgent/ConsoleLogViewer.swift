@@ -88,16 +88,16 @@ private struct ConsoleFilterChipButton: View {
     var body: some View {
         Button(action: action) {
             Text(label)
-                .font(.system(.caption, design: isTag ? .monospaced : .default))
+                .font(isTag ? .ripul(.caption, family: .code) : .ripul(.caption))  // theme-mapping: design chosen by a ternary
                 .fontWeight(.medium)
-                .foregroundStyle(isSelected ? Color.accentColor : .primary)
+                .foregroundStyle(isSelected ? Color.accentColor : Color.ripul(.text))
                 .padding(.horizontal, 10)
                 .padding(.vertical, 5)
                 .background(
                     Capsule().fill(
                         isSelected
                             ? Color.accentColor.opacity(0.18)
-                            : Color.secondary.opacity(0.12)
+                            : Color.ripul(.textSecondary).opacity(0.12)
                     )
                 )
                 .overlay(
@@ -202,11 +202,11 @@ private struct ConsoleTabView: View {
 
                 if selectedIDs.isEmpty {
                     Text("\(filteredLogs.count) entries")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .font(.ripul(.caption))
+                        .foregroundStyle(.ripul(.textSecondary))
                 } else {
                     Text("\(selectedIDs.count) selected")
-                        .font(.caption)
+                        .font(.ripul(.caption))
                         .foregroundStyle(Color.accentColor)
                 }
 
@@ -269,7 +269,7 @@ private struct ConsoleTabView: View {
                     .id(entry.id)
                 }
                 .listStyle(.plain)
-                .font(.system(.caption, design: .monospaced))
+                .font(.ripul(.caption, family: .code))
                 .onChange(of: logVersion) { _ in
                     if selectedIDs.isEmpty, let last = filteredLogs.last {
                         proxy.scrollTo(last.id, anchor: .bottom)
@@ -380,8 +380,8 @@ private struct NetworkTabView: View {
                 Spacer()
 
                 Text("\(filteredLogs.count) requests")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(.ripul(.caption))
+                    .foregroundStyle(.ripul(.textSecondary))
 
                 Button {
                     copyNetworkLogs()
@@ -407,14 +407,14 @@ private struct NetworkTabView: View {
                 VStack(spacing: 8) {
                     Spacer()
                     Image(systemName: "network")
-                        .font(.largeTitle)
-                        .foregroundStyle(.secondary)
+                        .font(.ripulIcon(.largeTitle))
+                        .foregroundStyle(.ripul(.textSecondary))
                     Text("Network capture is off")
-                        .font(.headline)
-                        .foregroundStyle(.secondary)
+                        .font(.ripul(.headline))
+                        .foregroundStyle(.ripul(.textSecondary))
                     Text("Toggle Capture to start recording requests")
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
+                        .font(.ripul(.caption))
+                        .foregroundStyle(.ripul(.textTertiary))
                     Spacer()
                 }
                 .frame(maxWidth: .infinity)
@@ -447,7 +447,7 @@ private struct NetworkTabView: View {
                         }
                         .frame(minWidth: 620, maxHeight: .infinity, alignment: .top)
                     }
-                    .font(.system(.caption, design: .monospaced))
+                    .font(.ripul(.caption, family: .code))
                     .onChange(of: logVersion) { _ in
                         if expandedIDs.isEmpty, let last = filteredLogs.last {
                             proxy.scrollTo(last.id, anchor: .bottom)
@@ -478,9 +478,9 @@ private struct NetworkTabView: View {
             Text("URL")
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .font(.system(.caption2, design: .monospaced))
+        .font(.ripul(.caption2, family: .code))
         .fontWeight(.semibold)
-        .foregroundStyle(.secondary)
+        .foregroundStyle(.ripul(.textSecondary))
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
         .background(.bar)
@@ -537,9 +537,9 @@ private struct ToolsTabView: View {
                 } label: {
                     Label("Inspector", systemImage: "viewfinder")
                 }
-            } footer: {
+            } footer: { RipulSectionFooter {
                 Text("Inspect elements, explore their hierarchy and attach a selection to chat.")
-            }
+            } }
 
             // Solution management (collections, contexts, testing mode) moved to
             // the host's own "Solutions" screen (RipulSolutionsScreen).
@@ -564,11 +564,11 @@ private struct ToolsTabView: View {
                 )) {
                     Label("Chat Rebuild Menu", systemImage: "arrow.triangle.2.circlepath")
                 }
-            } header: {
+            } header: { RipulSectionHeader {
                 Text("Web HUDs")
-            } footer: {
+            } } footer: { RipulSectionFooter {
                 Text("Toggles the floating debug overlays in the web app. Changes take effect immediately.")
-            }
+            } }
         }
         .task {
             do {
@@ -627,7 +627,7 @@ private struct ConsoleLogEntryRow: View {
             // Master row — compact summary, never wraps the message column.
             HStack(alignment: .top, spacing: 8) {
                 Text(Self.timestampFormatter.string(from: entry.timestamp))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.ripul(.textSecondary))
                     .frame(width: 85, alignment: .leading)
 
                 Text(entry.level)
@@ -640,8 +640,8 @@ private struct ConsoleLogEntryRow: View {
 
                 if canFoldOut {
                     Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
+                        .font(.ripulIcon(.caption2))
+                        .foregroundStyle(.ripul(.textSecondary))
                         .frame(width: 14)
                 }
             }
@@ -668,13 +668,13 @@ private struct ConsoleLogEntryRow: View {
                     if let stack = entry.stack {
                         RendererDetailPanel {
                             Text("Stack")
-                                .font(.system(.caption2, design: .monospaced))
+                                .font(.ripul(.caption2, family: .code))
                                 .fontWeight(.semibold)
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(.ripul(.textSecondary))
                                 .textCase(.uppercase)
                             Text(stack)
-                                .font(.system(.caption2, design: .monospaced))
-                                .foregroundStyle(.primary)
+                                .font(.ripul(.caption2, family: .code))
+                                .foregroundStyle(.ripul(.text))
                                 .textSelection(.enabled)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .fixedSize(horizontal: false, vertical: true)
@@ -696,7 +696,7 @@ private struct ConsoleLogEntryRow: View {
                     .frame(width: 2)
             }
         }
-        .contextMenu { copyMenuItems(parsed: parsed) }
+        .contextMenu { MenuIcons { copyMenuItems(parsed: parsed) }}
     }
 
     @ViewBuilder
@@ -708,7 +708,7 @@ private struct ConsoleLogEntryRow: View {
             descriptor.renderSummary(parsed, entry.level)
         } else {
             Text(firstLine(of: entry.message))
-                .foregroundStyle(entry.level == "ERROR" ? .red : .primary)
+                .foregroundStyle(entry.level == "ERROR" ? Color.ripul(.danger) : Color.ripul(.text))
                 .lineLimit(1)
                 .truncationMode(.tail)
                 .textSelection(.enabled)
@@ -766,9 +766,9 @@ private struct ConsoleLogEntryRow: View {
 
     private var levelColor: Color {
         switch entry.level {
-        case "ERROR": return .red
-        case "WARN": return .orange
-        default: return .secondary
+        case "ERROR": return .ripul(.danger)
+        case "WARN": return .ripul(.warning)
+        default: return .ripul(.textSecondary)
         }
     }
 }
@@ -791,17 +791,17 @@ private struct NetworkLogEntryRow: View {
             // Summary row
             HStack(alignment: .top, spacing: 8) {
                 Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+                    .font(.ripulIcon(.caption2))
+                    .foregroundStyle(.ripul(.textSecondary))
                     .frame(width: 10)
 
                 Text(Self.timestampFormatter.string(from: entry.timestamp))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.ripul(.textSecondary))
                     .frame(width: 85, alignment: .leading)
 
                 Text(entry.method)
                     .fontWeight(.medium)
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(.ripul(.text))
                     .frame(width: 36, alignment: .leading)
 
                 Text(statusText)
@@ -815,32 +815,32 @@ private struct NetworkLogEntryRow: View {
                         .frame(width: 52, alignment: .trailing)
                 } else {
                     Text("?")
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(.ripul(.textSecondary))
                         .frame(width: 52, alignment: .trailing)
                 }
 
                 if entry.requestSize >= 0 {
                     Text(formatBytes(entry.requestSize))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(.ripul(.textSecondary))
                         .frame(width: 52, alignment: .trailing)
                 } else {
                     Text("-")
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(.ripul(.textTertiary))
                         .frame(width: 52, alignment: .trailing)
                 }
 
                 if entry.responseSize >= 0 {
                     Text(formatBytes(entry.responseSize))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(.ripul(.textSecondary))
                         .frame(width: 52, alignment: .trailing)
                 } else {
                     Text("-")
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(.ripul(.textTertiary))
                         .frame(width: 52, alignment: .trailing)
                 }
 
                 Text(shortURL)
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(.ripul(.text))
                     .lineLimit(1)
                     .truncationMode(.middle)
                     .textSelection(.enabled)
@@ -865,7 +865,7 @@ private struct NetworkLogEntryRow: View {
                             DetailRow(label: "Response Size", value: formatBytes(entry.responseSize))
                         }
                         if let error = entry.error {
-                            DetailRow(label: "Error", value: error, valueColor: .red)
+                            DetailRow(label: "Error", value: error, valueColor: .ripul(.danger))
                         }
                     }
 
@@ -901,16 +901,16 @@ private struct NetworkLogEntryRow: View {
     }
 
     private var statusColor: Color {
-        if entry.status == 0 || entry.error != nil { return .red }
-        if entry.status >= 400 { return .red }
-        if entry.status >= 300 { return .orange }
-        return .green
+        if entry.status == 0 || entry.error != nil { return .ripul(.danger) }
+        if entry.status >= 400 { return .ripul(.danger) }
+        if entry.status >= 300 { return .ripul(.warning) }
+        return .ripul(.success)
     }
 
     private var durationColor: Color {
-        if entry.durationMs > 2000 { return .red }
-        if entry.durationMs > 500 { return .orange }
-        return .secondary
+        if entry.durationMs > 2000 { return .ripul(.danger) }
+        if entry.durationMs > 500 { return .ripul(.warning) }
+        return .ripul(.textSecondary)
     }
 
     private var shortURL: String {
@@ -933,9 +933,9 @@ private struct DetailSection<Content: View>: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(title)
-                .font(.system(.caption2, design: .monospaced))
+                .font(.ripul(.caption2, family: .code))
                 .fontWeight(.semibold)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.ripul(.textSecondary))
                 .textCase(.uppercase)
             content
         }
@@ -946,18 +946,18 @@ private struct DetailSection<Content: View>: View {
 private struct DetailRow: View {
     let label: String
     let value: String
-    var valueColor: Color = .primary
+    var valueColor: Color = .ripul(.text)
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
             Text(label)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.ripul(.textSecondary))
                 .frame(width: 110, alignment: .trailing)
             Text(value)
                 .foregroundStyle(valueColor)
                 .textSelection(.enabled)
         }
-        .font(.system(.caption2, design: .monospaced))
+        .font(.ripul(.caption2, family: .code))
     }
 }
 

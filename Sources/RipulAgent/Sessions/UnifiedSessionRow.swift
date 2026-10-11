@@ -52,22 +52,22 @@ struct SessionTitleLozenge: View {
         HStack(spacing: 3) {
             if content.showsIcon {
                 Image(systemName: iconName)
-                    .font(.caption2)
+                    .font(.ripulIcon(.caption2))
                     .contentTransition(.symbolEffect(.replace))
                     .uiKitIdentifier("SessionTitleLozenge.icon")
             }
             Text(label)
-                .font(.caption2.monospacedDigit())
+                .font(.ripul(.caption2).monospacedDigit())
                 .lineLimit(1)
                 .contentTransition(.opacity)
                 .uiKitIdentifier("SessionTitleLozenge.label")
         }
-        .foregroundStyle(.secondary)
+        .foregroundStyle(.ripul(.textSecondary))
         .padding(.horizontal, 6)
         .padding(.vertical, 2)
         .background(
             Capsule()
-                .fill(Color.secondary.opacity(0.12))
+                .fill(Color.ripul(.textSecondary).opacity(0.12))
         )
         .uiKitIdentifier("SessionTitleLozenge.container")
         .animation(.easeInOut(duration: 0.175), value: iconName)
@@ -87,7 +87,7 @@ struct TagLozenge: View {
     let text: String
     public var body: some View {
         Text(text)
-            .font(.caption2.weight(.semibold))
+            .font(.ripul(.caption2, weight: .semibold))
             .lineLimit(1)
             .foregroundStyle(Color.accentColor)
             .padding(.horizontal, 6)
@@ -137,6 +137,9 @@ public struct UnifiedSessionRow: View {
     /// the list is already filtered to a single project so repeating the label
     /// on every row would be redundant.
     var hideProjectName: Bool = false
+    /// When true, the branch is omitted from the detail row — used for a
+    /// started chat on the same branch as the chat it sits under.
+    var hideBranch: Bool = false
     var isSelectMode: Bool = false
     var isSelected: Bool = false
     /// Another person is in this chat. Shown as a group icon under the time.
@@ -149,6 +152,16 @@ public struct UnifiedSessionRow: View {
     /// swapping in a different title view) is what keeps the expansion a
     /// height animation on one view instead of a snap between two.
     var titleLineLimit: Int = 1
+    /// How far under the chat that started it this row sits: 0 for a row by
+    /// itself or at the head of a family. The list decides; see `SessionFamilies`.
+    var familyDepth: Int = 0
+    /// For a chat that has started others: how many, whether the person has
+    /// put them away, and whether one of those put away is working or asking.
+    var startedChats: Int = 0
+    var startedChatsClosed: Bool = false
+    var startedChatsNeedLooking: Bool = false
+    /// Tapping the row's icon puts the started chats away, or brings them back.
+    var onToggleStartedChats: (() -> Void)? = nil
     var onSessionAction: ((SessionRowAction) -> Void)? = nil
 
     public init(
@@ -163,11 +176,17 @@ public struct UnifiedSessionRow: View {
         isDeletingFromHost: Bool = false,
         machineIcon: String? = nil,
         hideProjectName: Bool = false,
+        hideBranch: Bool = false,
         isSelectMode: Bool = false,
         isSelected: Bool = false,
         isGroupChat: Bool = false,
         isTeamShared: Bool = false,
         titleLineLimit: Int = 1,
+        familyDepth: Int = 0,
+        startedChats: Int = 0,
+        startedChatsClosed: Bool = false,
+        startedChatsNeedLooking: Bool = false,
+        onToggleStartedChats: (() -> Void)? = nil,
         onSessionAction: ((SessionRowAction) -> Void)? = nil
     ) {
         self.sessionStore = sessionStore
@@ -181,11 +200,17 @@ public struct UnifiedSessionRow: View {
         self.isDeletingFromHost = isDeletingFromHost
         self.machineIcon = machineIcon
         self.hideProjectName = hideProjectName
+        self.hideBranch = hideBranch
         self.isSelectMode = isSelectMode
         self.isSelected = isSelected
         self.isGroupChat = isGroupChat
         self.isTeamShared = isTeamShared
         self.titleLineLimit = titleLineLimit
+        self.familyDepth = familyDepth
+        self.startedChats = startedChats
+        self.startedChatsClosed = startedChatsClosed
+        self.startedChatsNeedLooking = startedChatsNeedLooking
+        self.onToggleStartedChats = onToggleStartedChats
         self.onSessionAction = onSessionAction
     }
 
@@ -296,9 +321,9 @@ public struct UnifiedSessionRow: View {
     private var iconSize: CGFloat { presentation.isLozenge ? 13 : 16 }
     private var iconWidth: CGFloat { presentation.isLozenge ? 20 : 28 }
     private var titleFont: Font {
-        presentation.isLozenge ? .caption.weight(.semibold) : .body.weight(isUnread ? .bold : .regular)
+        presentation.isLozenge ? .ripul(.caption, weight: .semibold) : .ripul(.body, weight: isUnread ? .bold : .regular)
     }
-    private var detailFont: Font { presentation.isLozenge ? .caption2 : .caption }
+    private var detailFont: Font { presentation.isLozenge ? .ripul(.caption2) : .ripul(.caption) }
 
     /// Text for the leading slot of the idle detail row: the model in use
     /// (e.g. "Opus 4.6", "Kimi K3") when one resolved, else the harness
@@ -314,10 +339,21 @@ public struct UnifiedSessionRow: View {
             // Selection checkmark
             if isSelectMode {
                 Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                    .font(.title3)
-                    .foregroundStyle(isSelected ? Color.accentColor : .secondary)
+                    .font(.ripulIcon(.title3))
+                    .foregroundStyle(isSelected ? Color.accentColor : Color.ripul(.textSecondary))
                     .animation(.easeInOut(duration: 0.15), value: isSelected)
                     .uiKitIdentifier("UnifiedSessionRow.selectionCheckmark")
+            }
+
+            // A chat another agent started hangs under the chat that started
+            // it. The turn of the arrow says so, where the title used to.
+            if familyDepth > 0, !presentation.isLozenge {
+                Image(systemName: "arrow.turn.down.right")
+                    .font(.ripulIcon(.caption, weight: .medium))
+                    .foregroundStyle(.ripul(.textTertiary))
+                    .frame(width: CGFloat(familyDepth) * 14, alignment: .trailing)
+                    .accessibilityLabel("Started by the chat above")
+                    .uiKitIdentifier("UnifiedSessionRow.familyConnector")
             }
 
             // Leading icon — tool icon while a tool activity event is
@@ -338,8 +374,8 @@ public struct UnifiedSessionRow: View {
                 ZStack(alignment: .bottomTrailing) {
                     if let toolIcon {
                         Image(systemName: toolIcon)
-                            .font(.system(size: iconSize))
-                            .foregroundStyle(.secondary)
+                            .font(.ripulIcon(size: iconSize))
+                            .foregroundStyle(.ripul(.textSecondary))
                             .frame(width: iconWidth)
                             .contentTransition(.symbolEffect(.replace))
                             .uiKitIdentifier("UnifiedSessionRow.leadingIcon")
@@ -349,13 +385,13 @@ public struct UnifiedSessionRow: View {
                         // modelIdentity.ts) — keyed off the model, not the
                         // CLI harness that carried it.
                         Text(identity.glyph)
-                            .font(.system(size: iconSize))
+                            .font(.ripul(size: iconSize))
                             .foregroundStyle(identity.color)
                             .frame(width: iconWidth)
                             .uiKitIdentifier("UnifiedSessionRow.leadingIcon")
                     } else {
                         Image(systemName: providerIcon)
-                            .font(.system(size: iconSize))
+                            .font(.ripulIcon(size: iconSize))
                             .foregroundStyle(providerColor)
                             .frame(width: iconWidth)
                             .contentTransition(.symbolEffect(.replace))
@@ -369,18 +405,18 @@ public struct UnifiedSessionRow: View {
                     if !presentation.isLozenge {
                         if isUnread {
                             Image(systemName: "envelope")
-                                .font(.system(size: 11, weight: .medium))
+                                .font(.ripulIcon(size: 11, weight: .medium))
                                 // .primary, not .white: the backing is
                                 // .background, which is white in light mode.
-                                .foregroundStyle(.primary)
+                                .foregroundStyle(.ripul(.text))
                                 .background(.background, in: RoundedRectangle(cornerRadius: 2))
                                 .offset(x: 4, y: 4)
                                 .accessibilityLabel("Unread reply")
                                 .uiKitIdentifier("UnifiedSessionRow.unreadIndicatorEnvelope")
                         } else if isPinned {
                             Image(systemName: "pin.fill")
-                                .font(.system(size: 10, weight: .medium))
-                                .foregroundStyle(.primary)
+                                .font(.ripulIcon(size: 10, weight: .medium))
+                                .foregroundStyle(.ripul(.text))
                                 .background(.background, in: RoundedRectangle(cornerRadius: 2))
                                 .offset(x: 4, y: 4)
                                 .accessibilityLabel("Pinned")
@@ -394,8 +430,8 @@ public struct UnifiedSessionRow: View {
                 // pill doesn't have; there the tool name stays in the subtitle.
                 if let toolLabel, !presentation.isLozenge {
                     Text(toolLabel)
-                        .font(.system(size: 8, weight: .medium))
-                        .foregroundStyle(.secondary)
+                        .font(.ripul(size: 8, weight: .medium))
+                        .foregroundStyle(.ripul(.textSecondary))
                         .lineLimit(1)
                         .frame(width: 32)
                         .uiKitIdentifier("UnifiedSessionRow.toolLabel")
@@ -403,6 +439,10 @@ public struct UnifiedSessionRow: View {
             }
             .frame(width: iconWidth)
             .animation(.easeInOut(duration: 0.175), value: latestToolActivity != nil)
+            .modifier(StartedChatsToggle(
+                count: startedChats, isClosed: startedChatsClosed,
+                // Selecting rows owns the tap; the top-bar pill has no family to show.
+                action: startedChats > 0 && !isSelectMode && !presentation.isLozenge ? onToggleStartedChats : nil))
 
             VStack(alignment: .leading, spacing: 3) {
                 // Shared priority chain: in-progress plan > live tool call > completed plan > idle.
@@ -444,11 +484,28 @@ public struct UnifiedSessionRow: View {
                 let subtitleKey = subtitleState.subtitleKey(inlineToolActivity: inlineToolActivity)
 
                 // Unread replies use a bold title alongside the envelope.
-                Text(session.title)
-                    .font(titleFont)
-                    .lineLimit(titleLineLimit)
-                    .truncationMode(.tail)
-                    .uiKitIdentifier("UnifiedSessionRow.title")
+                HStack(spacing: 6) {
+                    Text(session.title)
+                        .font(titleFont)
+                        .lineLimit(titleLineLimit)
+                        .truncationMode(.tail)
+                        .uiKitIdentifier("UnifiedSessionRow.title")
+                    // Started chats that are put away: how many, so the row
+                    // does not look like a chat by itself. Tinted when one of
+                    // them is working or asking.
+                    if startedChatsClosed, startedChats > 0, !presentation.isLozenge {
+                        let tint: Color = startedChatsNeedLooking ? .accentColor : Color.ripul(.textSecondary)
+                        Text("+\(startedChats)")
+                            .font(.ripul(.caption2, weight: .semibold).monospacedDigit())
+                            .foregroundStyle(tint)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Capsule().fill(tint.opacity(0.14)))
+                            .fixedSize()
+                            .accessibilityLabel("\(startedChats) started \(startedChats == 1 ? "chat" : "chats") put away")
+                            .uiKitIdentifier("UnifiedSessionRow.startedChatsCount")
+                    }
+                }
 
                 // Subtitle row: lozenge (if any) at the start, then the
                 // detail text for the current state, or provider/project/
@@ -462,7 +519,7 @@ public struct UnifiedSessionRow: View {
                             if let subtitleDetail {
                                 Text(subtitleDetail)
                                     .font(detailFont)
-                                    .foregroundStyle(.secondary)
+                                    .foregroundStyle(.ripul(.textSecondary))
                                     .lineLimit(1)
                                     .truncationMode(.middle)
                                     .contentTransition(.opacity)
@@ -471,11 +528,27 @@ public struct UnifiedSessionRow: View {
                         }
                     } else {
                         HStack(spacing: 4) {
+                            // Started by a chat that is not in the list (archived, filtered
+                            // out, or on another Mac): with no row to sit under, say whose it is.
+                            if familyDepth == 0, !presentation.isLozenge, let starter = session.startedBy?.title {
+                                Image(systemName: "arrow.turn.down.right")
+                                    .font(.ripulIcon(.caption2))
+                                    .foregroundStyle(.ripul(.textSecondary))
+                                    .accessibilityLabel("Started by")
+                                Text(starter)
+                                    .font(detailFont)
+                                    .foregroundStyle(.ripul(.textSecondary))
+                                    .lineLimit(1)
+                                    // Whose chat it is outranks its folder and branch for the room there is.
+                                    .layoutPriority(0.5)
+                                    .uiKitIdentifier("UnifiedSessionRow.subtitle.startedBy")
+                                Text("·").foregroundStyle(.ripul(.textSecondary))
+                            }
                             // Machine icon at the start of the detail row, before the CLI name.
                             if let machineIcon {
                                 Image(systemName: machineIcon)
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary)
+                                    .font(.ripulIcon(.caption2))
+                                    .foregroundStyle(.ripul(.textSecondary))
                                     .uiKitIdentifier("UnifiedSessionRow.subtitle.machineIcon")
                             }
                             Text(modelOrProviderName)
@@ -488,26 +561,28 @@ public struct UnifiedSessionRow: View {
                                 .layoutPriority(1)
                                 .uiKitIdentifier("UnifiedSessionRow.subtitle.providerName")
 
-                            if let project = session.projectName, !hideProjectName {
-                                Text("·").foregroundStyle(.secondary)
+                            // The starter's name takes the folder's place: the line has room for one of them.
+                            if let project = session.projectName, !hideProjectName,
+                               !(familyDepth == 0 && !presentation.isLozenge && session.startedBy?.title != nil) {
+                                Text("·").foregroundStyle(.ripul(.textSecondary))
                                     .uiKitIdentifier("UnifiedSessionRow.subtitle.projectSeparator")
                                 Text(project)
                                     .font(detailFont)
-                                    .foregroundStyle(.secondary)
+                                    .foregroundStyle(.ripul(.textSecondary))
                                     .lineLimit(1)
                                     .uiKitIdentifier("UnifiedSessionRow.subtitle.projectName")
                             }
 
-                            if let branch = session.gitBranch {
-                                Text("·").foregroundStyle(.secondary)
+                            if let branch = session.gitBranch, !hideBranch {
+                                Text("·").foregroundStyle(.ripul(.textSecondary))
                                     .uiKitIdentifier("UnifiedSessionRow.subtitle.branchSeparator")
                                 Image(systemName: "arrow.triangle.branch")
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary)
+                                    .font(.ripulIcon(.caption2))
+                                    .foregroundStyle(.ripul(.textSecondary))
                                     .uiKitIdentifier("UnifiedSessionRow.subtitle.branchIcon")
                                 Text(branch)
                                     .font(detailFont)
-                                    .foregroundStyle(.secondary)
+                                    .foregroundStyle(.ripul(.textSecondary))
                                     .lineLimit(1)
                                     .uiKitIdentifier("UnifiedSessionRow.subtitle.branchName")
                             }
@@ -541,8 +616,8 @@ public struct UnifiedSessionRow: View {
                         }
                         if let toolDetail = inlineToolActivity.detail, !toolDetail.isEmpty {
                             Text(toolDetail)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                                .font(.ripul(.caption))
+                                .foregroundStyle(.ripul(.textSecondary))
                                 .lineLimit(1)
                                 .truncationMode(.middle)
                                 .contentTransition(.opacity)
@@ -567,13 +642,28 @@ public struct UnifiedSessionRow: View {
         .uiKitIdentifier("UnifiedSessionRow.container")
     }
 
+    /// SF Symbol for the busy indicator: the icon of the machine the chat is
+    /// running on. `machineIcon` is only the user's own pick, so a host
+    /// without one gets the default host icon, and a chat with no host is
+    /// running on this device.
+    private var runningIndicatorIcon: String {
+        if let machineIcon { return machineIcon }
+        if session.machineName != nil { return RemoteMachine.defaultHostIconName }
+        #if os(iOS)
+        if ProcessInfo.processInfo.isMacCatalystApp { return RemoteMachine.defaultHostIconName }
+        return UIDevice.current.userInterfaceIdiom == .pad ? "ipad" : "iphone"
+        #else
+        return RemoteMachine.defaultHostIconName
+        #endif
+    }
+
     /// The busy indicator, parked UNDER the timestamp instead of beside it.
     ///
     /// Stacked because it is the trailing column's *second* fact, not a
     /// competitor for the row's horizontal run — every point it took there was
     /// taken from the title and the tool lozenges, which are what you actually
     /// read the row for. The timestamp is already the narrowest thing on the
-    /// right, so the dots fit under it for free.
+    /// right, so the icon fits under it for free.
     ///
     /// The slot keeps its height whether or not the glyph is in it: a turn
     /// starting or ending must not resize the row, or a list of live sessions
@@ -583,14 +673,15 @@ public struct UnifiedSessionRow: View {
     /// awaiting input may already have been read.
     ///
     /// A group chat's icon shares the slot at its trailing edge, so it sits
-    /// under the time and holds still while the dots come and go beside it.
+    /// under the time and holds still while the busy icon comes and goes
+    /// beside it.
     @ViewBuilder
     private var runningIndicatorSlot: some View {
         HStack(spacing: 4) {
             if phase == .running {
                 // Core Animation, not a SwiftUI symbol effect: see
-                // RenderServerEllipsis for the per-frame cost this removed.
-                RenderServerEllipsis(color: .accentColor)
+                // RenderServerPulsingSymbol for the per-frame cost that has.
+                RunningIndicatorSymbol(systemName: runningIndicatorIcon)
                     .accessibilityElement()
                     .accessibilityLabel("Running")
                     .transition(.opacity)
@@ -598,15 +689,15 @@ public struct UnifiedSessionRow: View {
             }
             if isGroupChat {
                 Image(systemName: "person.2.fill")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
+                    .font(.ripulIcon(.caption2))
+                    .foregroundStyle(.ripul(.textTertiary))
                     .accessibilityLabel("Group chat")
                     .uiKitIdentifier("UnifiedSessionRow.groupChatIcon")
             }
             if isTeamShared {
                 Image(systemName: "person.3.fill")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
+                    .font(.ripulIcon(.caption2))
+                    .foregroundStyle(.ripul(.textTertiary))
                     .accessibilityLabel("Shared with team")
                     .uiKitIdentifier("UnifiedSessionRow.teamSharedIcon")
             }
@@ -627,14 +718,14 @@ public struct UnifiedSessionRow: View {
                         HStack(spacing: 4) {
                             if let icon = action.icon {
                                 Image(systemName: icon)
-                                    .font(.caption2.weight(.semibold))
+                                    .font(.ripulIcon(.caption2, weight: .semibold))
                                     .uiKitIdentifier("UnifiedSessionRow.actionButton.icon")
                             }
                             Text(action.label)
-                                .font(.caption2.weight(.semibold))
+                                .font(.ripul(.caption2, weight: .semibold))
                                 .uiKitIdentifier("UnifiedSessionRow.actionButton.label")
                         }
-                        .foregroundStyle(action.style == .primary ? Color.accentColor : action.style == .destructive ? Color.red : Color.secondary)
+                        .foregroundStyle(action.style == .primary ? Color.accentColor : action.style == .destructive ? Color.ripul(.danger) : Color.ripul(.textSecondary))
                         .padding(.horizontal, 8)
                         .padding(.vertical, 4)
                         .modifier(GlassCapsuleBackground())
@@ -647,8 +738,8 @@ public struct UnifiedSessionRow: View {
                 if isArchiving {
                     HStack(spacing: 6) {
                         Text("Archiving")
-                            .font(.caption)
-                            .foregroundStyle(.orange)
+                            .font(.ripul(.caption))
+                            .foregroundStyle(.ripul(.warning))
                             .uiKitIdentifier("UnifiedSessionRow.archivingLabel")
                         ProgressView().controlSize(.small)
                             .uiKitIdentifier("UnifiedSessionRow.archivingSpinner")
@@ -657,8 +748,8 @@ public struct UnifiedSessionRow: View {
                 } else if isDeleting {
                     HStack(spacing: 6) {
                         Text(isDeletingFromHost ? "Removing from host" : "Removing")
-                            .font(.caption)
-                            .foregroundStyle(.red)
+                            .font(.ripul(.caption))
+                            .foregroundStyle(.ripul(.danger))
                             .uiKitIdentifier("UnifiedSessionRow.deletingLabel")
                         ProgressView().controlSize(.small)
                             .uiKitIdentifier("UnifiedSessionRow.deletingSpinner")
@@ -671,8 +762,8 @@ public struct UnifiedSessionRow: View {
                     // narrower spinner as it appears.
                     ZStack {
                         RelativeTimeText(date: effectiveLastActive)
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
+                            .font(.ripul(.caption2))
+                            .foregroundStyle(.ripul(.textTertiary))
                             .opacity(isOpening ? 0 : 1)
                             .accessibilityHidden(isOpening)
                             .uiKitIdentifier("UnifiedSessionRow.timeText")
@@ -686,5 +777,68 @@ public struct UnifiedSessionRow: View {
 
             runningIndicatorSlot
         }
+    }
+}
+
+/// Makes the icon of a chat that has started others the switch for them: a tap
+/// puts them away, another brings them back. A small chevron at the icon's
+/// corner says which way it stands.
+private struct StartedChatsToggle: ViewModifier {
+    let count: Int
+    let isClosed: Bool
+    let action: (() -> Void)?
+
+    func body(content: Content) -> some View {
+        if let action {
+            Button(action: action) {
+                content
+                    // Where a disclosure chevron sits: before the icon, level with it.
+                    .overlay(alignment: .leading) {
+                        Image(systemName: "chevron.right")
+                            .font(.ripulIcon(size: 8, weight: .bold))
+                            .foregroundStyle(.ripul(.textSecondary))
+                            .rotationEffect(.degrees(isClosed ? 0 : 90))
+                            .offset(x: -8)
+                            .animation(.easeInOut(duration: 0.2), value: isClosed)
+                            .accessibilityHidden(true)
+                    }
+                    // The icon is 28 points wide: reach a finger's width around it.
+                    .contentShape(Rectangle().inset(by: -10))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("\(isClosed ? "Show" : "Hide") \(count) started \(count == 1 ? "chat" : "chats")")
+            .uiKitIdentifier("UnifiedSessionRow.startedChatsToggle")
+        } else {
+            content
+        }
+    }
+}
+
+/// The running indicator, pulsing only while the session list can be seen.
+///
+/// On an iPhone the list stays in place behind an open chat. Its indicators
+/// pulsed there unseen, and one moving layer makes the render server compose
+/// the whole screen every refresh: 32% of a core on a simulator, measured
+/// 8 October 2026, with nothing else animating. A view of its own, so a change
+/// re-evaluates the indicators and not the rows.
+private struct RunningIndicatorSymbol: View {
+    let systemName: String
+    @Environment(\.ripulSessionListCanBeSeen) private var listCanBeSeen
+
+    var body: some View {
+        RenderServerPulsingSymbol(systemName: systemName, color: .accentColor, animates: listCanBeSeen)
+    }
+}
+
+private struct SessionListCanBeSeenKey: EnvironmentKey {
+    static let defaultValue = true
+}
+
+extension EnvironmentValues {
+    /// False while something covers the whole session list (a chat, on a
+    /// narrow screen). Looping decorations in the list stop for that long.
+    var ripulSessionListCanBeSeen: Bool {
+        get { self[SessionListCanBeSeenKey.self] }
+        set { self[SessionListCanBeSeenKey.self] = newValue }
     }
 }

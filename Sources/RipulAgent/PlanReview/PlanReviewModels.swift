@@ -57,10 +57,10 @@ public enum PlanSeverity: String, Codable, Sendable {
 
     var tint: Color {
         switch self {
-        case .blocking: return .red
-        case .shouldFix: return .orange
-        case .nit: return .secondary
-        case .unknown: return .secondary
+        case .blocking: return .ripul(.danger)
+        case .shouldFix: return .ripul(.warning)
+        case .nit: return .ripul(.textSecondary)
+        case .unknown: return .ripul(.textSecondary)
         }
     }
 }

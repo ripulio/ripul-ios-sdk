@@ -80,7 +80,7 @@
       delegate.owner = self
       let root = viewController.view!
       root.accessibilityIdentifier = "NativeMap.root"
-      root.backgroundColor = .systemBackground
+      root.backgroundColor = .ripul(.canvas)
       map.delegate = delegate
       map.accessibilityIdentifier = "NativeMap.map"
       map.showsUserLocation = false
@@ -91,14 +91,14 @@
       map.pointOfInterestFilter = .excludingAll
       let heading = UILabel()
       heading.text = "Places"
-      heading.font = .preferredFont(forTextStyle: .headline)
+      heading.font = .ripul(.headline)
       explore.setTitle("Explore", for: .normal)
       explore.accessibilityIdentifier = "NativeMap.explore"
       explore.addAction(UIAction { [weak self] _ in self?.toggleExplore() }, for: .touchUpInside)
       let top = UIStackView(arrangedSubviews: [heading, explore])
       top.distribution = .equalSpacing
       label.text = "Choose a pin"
-      label.font = .preferredFont(forTextStyle: .subheadline)
+      label.font = .ripul(.subheadline)
       label.adjustsFontForContentSizeCategory = true
       label.numberOfLines = 2
       label.accessibilityIdentifier = "NativeMap.selection"

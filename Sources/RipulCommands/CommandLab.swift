@@ -15,6 +15,9 @@ public struct CommandLabRun: Codable, Equatable, Sendable, Identifiable {
         public var fellBack: Bool
         public var notes: [String]
         public var averageMilliseconds: Double
+        /// Actions run after the first, readable: "send_to_agent text=\"…\"".
+        /// Only the orchestrator produces any.
+        public var thenRuns: [String]? = nil
     }
 
     public var id: UUID
@@ -62,6 +65,9 @@ public final class CommandLab {
     /// is reproducible regardless of what the device holds right now.
     public var useDemoEntities = false
     public let demoEntities: [String: [CommandEntity]]
+    /// Where the person is said to be for a demo run, so the same sentence
+    /// can be tried in a chat and on the list. Nil says nothing.
+    public var demoSituation: String?
 
     public private(set) var isRunning = false
     public private(set) var run: CommandLabRun?
@@ -103,8 +109,9 @@ public final class CommandLab {
     public init(registry: CommandRegistry, defaultMap: CommandMap, store: CommandMapStore?,
                 demoEntities: [String: [CommandEntity]] = [:],
                 liveDescription: String? = nil,
+                orchestrator: CommandOrchestrator? = nil,
                 log: @escaping @MainActor (String) -> Void = { print("[INTENT-LAB] \($0)") }) {
-        self.resolver = CommandResolver(registry: registry)
+        self.resolver = CommandResolver(registry: registry, orchestrator: orchestrator)
         self.store = store
         self.defaultMap = defaultMap
         self.demoEntities = demoEntities
@@ -278,8 +285,16 @@ public final class CommandLab {
     /// confidence, rather than landing on the fallback. A live entry point
     /// should act on these and keep its usual behaviour for everything else.
     public func isAppAction(_ resolution: CommandResolution) -> Bool {
-        guard let commandId = resolution.commandId else { return false }
-        return !resolution.fellBack && commandId != map.fallbackCommandId
+        guard let commandId = resolution.commandId, !resolution.fellBack else { return false }
+        // An orchestrated plan that does more than the fallback would — more
+        // than one step, or a message aimed at a chat or machine it chose — is
+        // the app's to run even when it starts at the fallback's action.
+        // Passing it on would deliver the sentence and lose the aim.
+        if resolution.engine == .orchestrator,
+           !resolution.laterSteps.isEmpty || !resolution.values.entities.isEmpty {
+            return true
+        }
+        return commandId != map.fallbackCommandId
     }
 
     /// Perform a live resolution. Returns whether the action ran.
@@ -309,11 +324,13 @@ public final class CommandLab {
         defer { isRunning = false }
 
         let snapshot = useDemoEntities
-            ? CommandSnapshot(entities: demoEntities)
+            ? CommandSnapshot(entities: demoEntities, situation: demoSituation)
             : await resolver.snapshot(for: map)
         var resolutions: [CommandResolution] = []
         for _ in 0..<max(1, tries) {
-            resolutions.append(await resolver.resolve(sentence, map: map, mode: mode, snapshot: snapshot))
+            // Fresh: several tries exist to see whether the answer varies, and
+            // a cached answer cannot.
+            resolutions.append(await resolver.resolve(sentence, map: map, mode: mode, snapshot: snapshot, fresh: true))
         }
         let ruled = resolver.resolveWithRules(sentence, map: map, snapshot: snapshot)
 
@@ -354,6 +371,38 @@ public final class CommandLab {
         record(run)
     }
 
+    // MARK: Running a set
+
+    /// Every run of the last set, in order, with whether the set has finished.
+    /// Written after each sentence, so a rig watching the file sees progress.
+    public struct SuiteRecord: Codable, Equatable, Sendable {
+        public var id: UUID
+        public var finished: Bool
+        public var runs: [CommandLabRun]
+    }
+
+    public var lastSuiteFile: URL? { store?.directory.appendingPathComponent("lab-last-suite.json") }
+
+    /// Run several sentences one after another, each exactly as `runSentence`
+    /// runs it, and record them together. For measuring a resolver against a
+    /// fixed set in one go: one URL in, one file out.
+    public func runSuite(_ sentences: [String]) async {
+        var record = SuiteRecord(id: UUID(), finished: false, runs: [])
+        func write() {
+            guard let file = lastSuiteFile, let data = try? Self.encoder.encode(record) else { return }
+            try? data.write(to: file, options: .atomic)
+        }
+        write()
+        for sentence in sentences {
+            self.sentence = sentence
+            await runSentence()
+            if let run, run.sentence == sentence.trimmingCharacters(in: .whitespacesAndNewlines) { record.runs.append(run) }
+            write()
+        }
+        record.finished = true
+        write()
+    }
+
     /// Run an outcome's action for real.
     public func perform(_ outcome: CommandLabRun.Outcome) async {
         guard let resolution = resolutionsByOutcome[outcome.id] else { return }
@@ -374,7 +423,10 @@ public final class CommandLab {
         if let file, let data = try? Self.encoder.encode(run) {
             try? data.write(to: file, options: .atomic)
         }
-        let summary = run.outcomes.map { "\($0.commandId ?? "nothing") x\($0.count)/\(run.tries)" }.joined(separator: ", ")
+        let summary = run.outcomes.map { outcome in
+            let later = (outcome.thenRuns ?? []).map { " then \($0)" }.joined()
+            return "\(outcome.commandId ?? "nothing")\(later) x\(outcome.count)/\(run.tries)"
+        }.joined(separator: ", ")
         log("\(prefix)\"\(run.sentence)\" [\(run.mode.rawValue)] -> \(summary); rules: \(run.rules.commandId ?? "nothing")"
             + (run.performed.map { "; \($0)" } ?? ""))
     }
@@ -393,15 +445,22 @@ public final class CommandLab {
     ///
     ///   say=<sentence>        sentence to run (runs immediately)
     ///   tries=<1-10>          tries per run
-    ///   mode=model|rules|rulesThenModel
+    ///   mode=model|rules|rulesThenModel|orchestrator
     ///   demo=1|0              demo entities instead of the live sources
+    ///   situation=<text>      where the person is said to be for demo runs;
+    ///                         empty clears it
     ///   perform=1             run the top outcome for real afterwards
+    ///   suite=<base64url JSON> an array of sentences, each run in turn with the
+    ///                         same tries, mode and demo; nothing is performed.
+    ///                         Every run is in `lastSuiteFile`
     ///   instructions=<text>   replace the instructions template
     ///   map=<base64url JSON>  import a map (as a new map) and make it active
     ///   activate=<map id>     make a saved map active
     ///   reset=1               reset the active map to the default commands
     ///   screen=root|maps|commands|command:<name>|templates|words
     ///                         show that screen of the Lab
+    ///   live=<mode>|on|off    the resolver live requests use, or whether they
+    ///                         are routed at all. Saved, like the screen's own
     ///
     /// Returns once any requested run has finished, so a caller can read
     /// `lastRunFile` straight after.
@@ -418,12 +477,25 @@ public final class CommandLab {
             saveMap()
         }
         if let raw = value("mode"), let mode = CommandResolver.Mode(rawValue: raw) { self.mode = mode }
+        if let raw = value("live") {
+            if let mode = CommandResolver.Mode(rawValue: raw) {
+                live.mode = mode
+            } else if raw == "on" || raw == "off" {
+                live.isEnabled = raw == "on"
+            }
+            saveLive()
+        }
         if let raw = value("tries"), let tries = Int(raw) { self.tries = min(10, max(1, tries)) }
         if let demo = value("demo") { useDemoEntities = demo == "1" }
+        if let situation = value("situation") { demoSituation = situation.isEmpty ? nil : situation }
         if let say = value("say"), !say.isEmpty {
             sentence = say
             await runSentence()
             if value("perform") == "1", let top = run?.outcomes.first { await perform(top) }
+        }
+        if let encoded = value("suite"), let data = Self.base64URLDecode(encoded),
+           let sentences = try? JSONDecoder().decode([String].self, from: data) {
+            await runSuite(sentences)
         }
     }
 
@@ -450,20 +522,43 @@ public final class CommandLab {
     static func key(_ resolution: CommandResolution) -> String {
         let entities = resolution.values.entities.map { "\($0.key)=\($0.value.id)" }.sorted()
         let texts = resolution.values.texts.map { "\($0.key)=\($0.value)" }.sorted()
-        return ([resolution.commandId ?? "nothing"] + entities + texts).joined(separator: "|")
+        // Later steps are part of the outcome: two plans that start alike and
+        // end differently are different answers.
+        let later = resolution.laterSteps.map { step in
+            let entities = step.values.entities.map { "\($0.key)=\($0.value.id)" }.sorted()
+            let texts = step.values.texts.map { "\($0.key)=\($0.value)" }.sorted()
+            return ([step.actionId] + entities + texts).joined(separator: "|")
+        }
+        return ([resolution.commandId ?? "nothing"] + entities + texts + later).joined(separator: "|")
     }
 
     static func outcome(_ resolution: CommandResolution, key: String, registry: CommandRegistry) -> CommandLabRun.Outcome {
         var inputs: [String: String] = [:]
         for (name, entity) in resolution.values.entities { inputs[name] = "\(entity.title) (\(entity.id))" }
         for (name, text) in resolution.values.texts { inputs[name] = "\"\(text)\"" }
+        let thenRuns = resolution.laterSteps.map { step in
+            let entities = step.values.entities.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value.title) (\($0.value.id))" }
+            let texts = step.values.texts.sorted { $0.key < $1.key }.map { "\($0.key)=\"\($0.value)\"" }
+            return ([step.actionId] + entities + texts).joined(separator: " ")
+        }
         return CommandLabRun.Outcome(
             id: key, commandId: resolution.commandId, actionId: resolution.actionId, inputs: inputs,
             count: 1, fellBack: resolution.fellBack, notes: resolution.notes,
-            averageMilliseconds: milliseconds(resolution.duration))
+            averageMilliseconds: milliseconds(resolution.duration),
+            thenRuns: thenRuns.isEmpty ? nil : thenRuns)
     }
 
     static func describe(_ resolution: CommandResolution) -> String {
+        if let reply = resolution.reply {
+            let calls = reply.calls.map { call in
+                let numbers = call.numbers.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }
+                let texts = call.texts.sorted { $0.key < $1.key }.map { "\($0.key)=\"\($0.value)\"" }
+                return ([call.name] + numbers + texts).joined(separator: " ")
+            }
+            let source = [reply.model, reply.milliseconds.map { "\($0) ms there" }].compactMap { $0 }.joined(separator: ", ")
+            return "orchestrator: " + (calls.isEmpty ? "no action" : calls.joined(separator: "; "))
+                + (source.isEmpty ? "" : " [\(source)]")
+        }
         guard let decision = resolution.decision else { return "\(resolution.engine.rawValue): no decision" }
         var parts = ["\(resolution.engine.rawValue): \(decision.commandId)"]
         parts += decision.picks.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }

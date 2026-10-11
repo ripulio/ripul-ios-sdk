@@ -30,7 +30,12 @@ struct InspectorWebElement: Decodable, Identifiable {
         let content: Size
     }
     struct Node: Decodable, Identifiable { let id, label: String }
+    struct Page: Decodable { let url, title: String }
     let id, label, tag, text, identifier, role, correlationId: String
+    /// How to find the element again from outside the page, and the page it is
+    /// on. Nil from an engine an older build left in a page not yet reloaded.
+    let selector: String?
+    let page: Page?
     let rect: Box
     let viewport: Viewport
     let box: BoxModel
@@ -39,10 +44,16 @@ struct InspectorWebElement: Decodable, Identifiable {
     let `private`: Bool
     let privateRects: [Box]
     var reference: String {
-        ["Web element: \(label)", "Tag: \(tag)", "Identifier: \(identifier)", "Role: \(role)",
-         "Path: " + (ancestors.map(\.label) + [label]).joined(separator: " > "),
-         "Text: \(text)", "Correlation: \(correlationId)",
-         "Bounds (CSS pixels): \(rect.x), \(rect.y), \(rect.width) × \(rect.height)"].joined(separator: "\n")
+        var lines = ["Web element: \(label)", "Tag: \(tag)", "Identifier: \(identifier)", "Role: \(role)",
+                     "Path: " + (ancestors.map(\.label) + [label]).joined(separator: " > ")]
+        if let selector, !selector.isEmpty { lines.append("Selector: \(selector)") }
+        lines += ["Text: \(text)", "Correlation: \(correlationId)",
+                  "Bounds (CSS pixels): \(rect.x), \(rect.y), \(rect.width) × \(rect.height)"]
+        if let page {
+            if !page.title.isEmpty { lines.append("Page: \(page.title)") }
+            lines.append("URL: \(page.url)")
+        }
+        return lines.joined(separator: "\n")
     }
     var details: String {
         ["Tag: \(tag)", "Role: \(role)",
@@ -439,7 +450,7 @@ final class InspectorSession: ObservableObject {
                 }
                 let masked = UIGraphicsImageRenderer(size: image.size).image { context in
                     image.draw(at: .zero)
-                    UIColor.black.setFill()
+                    UIColor.ripul(system: .black).setFill()
                     for r in info.privateRects + after.privateRects {
                         let rect = CGRect(x: ((r.x - info.viewport.offsetLeft) * sx - frame.minX) * image.size.width / frame.width,
                             y: ((r.y - info.viewport.offsetTop) * sy - frame.minY) * image.size.height / frame.height,
@@ -454,8 +465,11 @@ final class InspectorSession: ObservableObject {
             _ = try? await Self.call(view, "select", [id])
         }
         let app = Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String ?? "App"
+        // The host that owns this web view says how an agent reaches it again.
+        let source = RipulViewExplorer.webElementSource?(view) ?? []
         var result = RipulScreenContextSnapshot(appDescription: "Host app: \(app)\nSelected Inspector web element",
-            instrumentedText: info.reference, screenshotJPEG: jpeg, accessibleFallback: info.text, configuration: configuration)
+            instrumentedText: ([info.reference] + source).joined(separator: "\n"), screenshotJPEG: jpeg,
+            accessibleFallback: info.text, configuration: configuration)
         result.attachmentTitle = "Element — " + String(info.label.prefix(80))
         return result
     }

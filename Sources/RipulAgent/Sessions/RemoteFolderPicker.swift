@@ -33,22 +33,22 @@ public struct RemoteFolderRootsView: View {
                     rootRow(icon: "externaldrive.fill", title: "Root", subtitle: "/")
                 }
                 .accessibilityIdentifier("RemoteFolder.root")
-            } header: {
+            } header: { RipulSectionHeader {
                 Text("Start browsing from")
-            } footer: {
+            } } footer: { RipulSectionFooter {
                 Text("Navigate into a folder, then tap \(actionTitle) at the top.")
-            }
+            } }
         }
     }
 
     private func rootRow(icon: String, title: String, subtitle: String) -> some View {
         HStack(spacing: 12) {
             Image(systemName: icon)
-                .foregroundStyle(.blue)
+                .foregroundStyle(.ripul(.info))
                 .frame(width: 28)
             VStack(alignment: .leading, spacing: 2) {
-                Text(title).font(.body).fontWeight(.medium)
-                Text(subtitle).font(.caption2.monospaced()).foregroundStyle(.secondary)
+                Text(title).font(.ripul(.body)).fontWeight(.medium)
+                Text(subtitle).font(.ripul(.caption2, family: .code)).foregroundStyle(.ripul(.textSecondary))
             }
         }
     }
@@ -79,14 +79,14 @@ public struct RemoteFolderBrowserView: View {
                 if isLoading {
                     HStack(spacing: 8) {
                         ProgressView().controlSize(.small)
-                        Text("Loading…").font(.subheadline).foregroundStyle(.secondary)
+                        Text("Loading…").font(.ripul(.subheadline)).foregroundStyle(.ripul(.textSecondary))
                     }
                 } else if let errorMessage, entries.isEmpty {
                     VStack(spacing: 6) {
-                        Image(systemName: "exclamationmark.triangle").foregroundStyle(.tertiary)
+                        Image(systemName: "exclamationmark.triangle").foregroundStyle(.ripul(.textTertiary))
                         Text(errorMessage)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .font(.ripul(.caption))
+                            .foregroundStyle(.ripul(.textSecondary))
                             .multilineTextAlignment(.center)
                     }
                     .frame(maxWidth: .infinity)
@@ -94,11 +94,11 @@ public struct RemoteFolderBrowserView: View {
                 } else if entries.isEmpty {
                     VStack(spacing: 6) {
                         Image(systemName: "folder")
-                            .font(.system(size: 24))
-                            .foregroundStyle(.tertiary)
+                            .font(.ripulIcon(size: 24))
+                            .foregroundStyle(.ripul(.textTertiary))
                         Text("No sub-folders")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .font(.ripul(.caption))
+                            .foregroundStyle(.ripul(.textSecondary))
                     }
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 12)
@@ -109,10 +109,10 @@ public struct RemoteFolderBrowserView: View {
                         } label: {
                             HStack(spacing: 10) {
                                 Image(systemName: "folder.fill")
-                                    .foregroundStyle(.blue)
+                                    .foregroundStyle(.ripul(.info))
                                     .frame(width: 24)
                                 Text((folder.path as NSString).lastPathComponent)
-                                    .font(.body)
+                                    .font(.ripul(.body))
                                     .lineLimit(1)
                             }
                         }
@@ -128,11 +128,11 @@ public struct RemoteFolderBrowserView: View {
                         }
                     }
                 }
-            } header: {
+            } header: { RipulSectionHeader {
                 Text(resolvedPath.isEmpty ? path : resolvedPath)
-                    .font(.caption2.monospaced())
+                    .font(.ripul(.caption2, family: .code))
                     .textCase(nil)
-            }
+            } }
         }
         .navigationTitle(displayTitle)
         #if os(iOS)

@@ -139,7 +139,7 @@ private struct NativeInteractionPanel: View {
       if let snapshot = state.snapshot {
         if snapshot.severity == "warning" || snapshot.severity == "error" || snapshot.severity == "success" {
           Label(snapshot.severity.capitalized, systemImage: snapshot.severity == "success" ? "checkmark.circle" : "exclamationmark.triangle")
-            .font(.caption).foregroundStyle(snapshot.severity == "error" ? Color.red : Color.secondary)
+            .font(.ripul(.caption)).foregroundStyle(snapshot.severity == "error" ? Color.ripul(.danger) : Color.ripul(.textSecondary))
         }
         Markdown(snapshot.question).textSelection(.enabled)
           .accessibilityIdentifier("NativeInteraction.question")
@@ -155,7 +155,7 @@ private struct NativeInteractionPanel: View {
                     : (snapshot.multiSelect ? "square" : "circle"))
                   VStack(alignment: .leading, spacing: 4) {
                     Text(option.label).fontWeight(.medium)
-                    if !option.description.isEmpty { Text(option.description).font(.caption).foregroundStyle(.secondary) }
+                    if !option.description.isEmpty { Text(option.description).font(.ripul(.caption)).foregroundStyle(.ripul(.textSecondary)) }
                   }
                   Spacer(minLength: 0)
                 }.frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 5)
@@ -205,21 +205,21 @@ private struct NativeInteractionPanel: View {
             .accessibilityIdentifier("NativeInteraction.submitText")
         }
         if snapshot.busy || state.awaitingSubmission {
-          ProgressView("Sending answer…").font(.caption)
+          ProgressView("Sending answer…").font(.ripul(.caption))
         } else if snapshot.completed && snapshot.expectsResponse {
-          Label("Answered", systemImage: "checkmark.circle").font(.caption).foregroundStyle(.secondary)
+          Label("Answered", systemImage: "checkmark.circle").font(.ripul(.caption)).foregroundStyle(.ripul(.textSecondary))
         }
         if !snapshot.answer.isEmpty {
           Label { Text(snapshot.answer).textSelection(.enabled) } icon: { Image(systemName: "arrowshape.turn.up.left") }
             .accessibilityIdentifier("NativeInteraction.answer")
         }
         if !snapshot.error.isEmpty {
-          Text(snapshot.error).foregroundStyle(.red).font(.callout)
+          Text(snapshot.error).foregroundStyle(.ripul(.danger)).font(.ripul(.callout))
             .accessibilityIdentifier("NativeInteraction.error")
         }
       }
     }
-    .font(.callout).frame(maxWidth: .infinity, alignment: .leading)
+    .font(.ripul(.callout)).frame(maxWidth: .infinity, alignment: .leading)
     .fixedSize(horizontal: false, vertical: true)
     .animation(reduceMotion ? nil : .timingCurve(1.0 / 3, 0, 2.0 / 3, 1,
       duration: NativeInteractionHeightTransition.duration), value: state.responsePresentation)
@@ -250,7 +250,7 @@ private struct NativeInteractionPanel: View {
           VStack(alignment: .leading, spacing: 6) {
             ForEach(snapshot.headers.indices, id: \.self) { column in
               VStack(alignment: .leading, spacing: 2) {
-                Text(snapshot.headers[column]).font(.caption).foregroundStyle(.secondary)
+                Text(snapshot.headers[column]).font(.ripul(.caption)).foregroundStyle(.ripul(.textSecondary))
                 Markdown(row.cells[column])
               }
             }
@@ -263,7 +263,7 @@ private struct NativeInteractionPanel: View {
               Link("Open link", destination: url)
             }
           }.padding(10).frame(maxWidth: .infinity, alignment: .leading)
-            .background(.quaternary, in: RoundedRectangle(cornerRadius: 10))
+            .background(.ripul(.textQuaternary), in: RoundedRectangle(cornerRadius: 10))
         }
       }
     }
@@ -279,13 +279,13 @@ private struct NativeInteractionButtonStyle: ViewModifier {
     Group {
       if #available(iOS 26.0, *) {
         if prominent {
-          content.buttonStyle(.glassProminent)
+          content.ripulGlassProminentButtonStyle()
         } else {
           content.buttonStyle(.glass)
         }
       } else {
         if prominent {
-          content.buttonStyle(.borderedProminent)
+          content.ripulProminentButtonStyle()
         } else {
           content.buttonStyle(.bordered)
         }

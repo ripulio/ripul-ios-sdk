@@ -46,8 +46,8 @@ public struct VoiceSettingsScreen: View {
                         VStack(alignment: .leading, spacing: 2) {
                             Text("Managed by \(SpeechPreferences.managingProfileName ?? "this site key")")
                             Text("Voice and recognition settings are managed here. You can still choose when to send your messages.")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                                .font(.ripul(.caption))
+                                .foregroundStyle(.ripul(.textSecondary))
                         }
                     } icon: {
                         Image(systemName: "lock.fill")
@@ -62,12 +62,12 @@ public struct VoiceSettingsScreen: View {
                     ForEach(SpeechRole.allCases, id: \.self) { role in
                         ElevenLabsModelPicker(role: role, defaultLabel: defaultModelLabel)
                     }
-                } header: {
+                } header: { RipulSectionHeader {
                     Text("ElevenLabs models")
-                } footer: {
+                } } footer: { RipulSectionFooter {
                     Text("Replies are what conversation mode says back, acknowledgements are the short lines while the agent works, and read aloud is the speaker button on a message. "
                          + ElevenLabsModelOption.all.map { "\($0.label): \($0.summary)" }.joined(separator: " "))
-                }
+                } }
                 .disabled(isManaged)
             }
 
@@ -80,11 +80,11 @@ public struct VoiceSettingsScreen: View {
                     Label("Dictation provider", systemImage: "mic.badge.plus")
                 }
                 .uiKitIdentifier("VoiceSettingsScreen.dictationProvider")
-            } header: {
+            } header: { RipulSectionHeader {
                 Text("Recognition")
-            } footer: {
+            } } footer: { RipulSectionFooter {
                 Text("Apple runs on-device and works offline; ElevenLabs uses cloud transcription. Your choice is saved in this app and is not synced to other apps or devices.")
-            }
+            } }
             .disabled(isManaged)
 
             Section {
@@ -92,11 +92,11 @@ public struct VoiceSettingsScreen: View {
                     .lineLimit(1...3)
                     .autocorrectionDisabled()
                     .uiKitIdentifier("VoiceSettingsScreen.keyterms")
-            } header: {
+            } header: { RipulSectionHeader {
                 Text("Key terms")
-            } footer: {
+            } } footer: { RipulSectionFooter {
                 Text("Comma-separated names and jargon the recognizer should prefer — product names, technical terms. Applies to ElevenLabs recognition.")
-            }
+            } }
             .disabled(isManaged)
 
             Section {
@@ -107,11 +107,11 @@ public struct VoiceSettingsScreen: View {
                     Label("Voice mode style", systemImage: "rectangle.bottomthird.inset.filled")
                 }
                 .uiKitIdentifier("VoiceSettingsScreen.voiceModeStyle")
-            } header: {
+            } header: { RipulSectionHeader {
                 Text("Conversation mode")
-            } footer: {
+            } } footer: { RipulSectionFooter {
                 Text("Tap the mic in chat to start a hands-free conversation; double-tap for dictation into the text box.")
-            }
+            } }
             .disabled(isManaged)
 
             Section {
@@ -120,13 +120,13 @@ public struct VoiceSettingsScreen: View {
                     Text("Say \"Send command\"").tag(VoiceSendMode.sendCommand.rawValue)
                 }
                 .uiKitIdentifier("VoiceSettingsScreen.voiceSendMode")
-            } header: {
+            } header: { RipulSectionHeader {
                 Text("Sending in conversation mode")
-            } footer: {
+            } } footer: { RipulSectionFooter {
                 Text(voiceSendMode == VoiceSendMode.sendCommand.rawValue
                      ? "Finish with \"Send command\" and pause briefly. The closing phrase is removed before sending. Other pauses let you keep thinking; you can also tap Send. Saved in this app on this device."
                      : "Messages send automatically when you pause speaking. You can also tap Send. Saved in this app on this device.")
-            }
+            } }
 
             Section {
                 Toggle("Say \"Stop\" to interrupt", isOn: $sayStopToInterrupt)
@@ -137,11 +137,11 @@ public struct VoiceSettingsScreen: View {
                         // Ask here rather than mid-readout.
                         if on { SFSpeechRecognizer.requestAuthorization { _ in } }
                     }
-            } header: {
+            } header: { RipulSectionHeader {
                 Text("Interrupting")
-            } footer: {
+            } } footer: { RipulSectionFooter {
                 Text("Experimental. While Ripul is talking, the microphone stays on and listens only for \"stop\", \"pause\" or \"wait\", using speech recognition on this device. Tapping always works. Saved in this app on this device.")
-            }
+            } }
 
             Section {
                 VStack(alignment: .leading, spacing: 2) {
@@ -149,7 +149,7 @@ public struct VoiceSettingsScreen: View {
                         Label("Pace", systemImage: "hare")
                         Spacer()
                         Text(String(format: "%.2f×", speechPace))
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(.ripul(.textSecondary))
                             .monospacedDigit()
                     }
                     Slider(value: $speechPace, in: 0.7...1.2, step: 0.05)
@@ -160,20 +160,20 @@ public struct VoiceSettingsScreen: View {
                         Label("Expressiveness", systemImage: "theatermasks")
                         Spacer()
                         Text(String(format: "%.0f%%", speechExpressiveness * 100))
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(.ripul(.textSecondary))
                             .monospacedDigit()
                     }
                     Slider(value: $speechExpressiveness, in: 0...1, step: 0.05)
                         .uiKitIdentifier("VoiceSettingsScreen.expressiveness")
                 }
-            } header: {
+            } header: { RipulSectionHeader {
                 Text("Delivery")
-            } footer: {
+            } } footer: { RipulSectionFooter {
                 Text("Applies to ElevenLabs speech — replies, acknowledgments, and read-aloud. Higher expressiveness is livelier but slightly less steady. Eleven v4 ignores Pace.")
-            }
+            } }
             .disabled(isManaged)
 
-            Section("Language") {
+            Section(themed: "Language") {
                 Picker(selection: $speechLanguage) {
                     Text("English").tag("en")
                     Text("German").tag("de")
@@ -190,7 +190,7 @@ public struct VoiceSettingsScreen: View {
             }
             .disabled(isManaged)
 
-            Section("Testing") {
+            Section(themed: "Testing") {
                 NavigationLink {
                     SpeechSandboxScreen(tokenProvider: tokenProvider)
                 } label: {

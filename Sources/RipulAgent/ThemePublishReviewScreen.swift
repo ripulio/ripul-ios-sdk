@@ -100,12 +100,12 @@ struct ThemePublishReviewScreen: View {
                                 }
                             }.padding(.vertical, 2)
                         }
-                        Menu {
+                        Menu { MenuIcons {
                             Picker("Change type", selection: $kind) {
                                 Text("All changes").tag(Optional<ThemeDocumentChanges.Kind>.none)
                                 ForEach(ThemeDocumentChanges.Kind.allCases, id: \.self) { Text($0.rawValue).tag(Optional($0)) }
                             }
-                        } label: {
+                        }} label: {
                             Image(systemName: kind == nil ? "line.3.horizontal.decrease.circle" : "line.3.horizontal.decrease.circle.fill")
                                 .font(.title3).frame(minWidth: 44, minHeight: 44)
                         }
@@ -127,7 +127,7 @@ struct ThemePublishReviewScreen: View {
                                 .disabled(model.busy)
                                 .accessibilityIdentifier("ThemeReview.change." + entry.id)
                             }
-                        } header: { Text("\(group.rawValue) · \(items.count)") }
+                        } header: { RipulSectionHeader { Text("\(group.rawValue) · \(items.count)") } }
                     }
                 }
             }
@@ -315,7 +315,7 @@ private struct ThemeReviewChangeScreen: View {
                 if !entry.context.isEmpty { Text(entry.context).foregroundStyle(.secondary) }
                 ThemeChangeBadge(kind: entry.change.kind)
             }
-            Section(entry.property) {
+            Section(themed: entry.property) {
                 ThemeReviewComparison(entry: entry, baseline: model.baseline, draft: model.data)
                     .textSelection(.enabled).listRowInsets(EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12))
                 if entry.unset != "Not set", entry.change.old == nil || entry.change.new == nil {
@@ -333,7 +333,7 @@ private struct ThemeReviewChangeScreen: View {
                 Button("Discard this change", role: .destructive) {
                     if model.discard(entry.change, title: entry.title) { dismiss() }
                 }.disabled(model.busy).accessibilityIdentifier("ThemeReview.discard")
-            } footer: { Text("Restores this value from the current theme. Other draft changes stay in place. You can undo from the review.") }
+            } footer: { RipulSectionFooter { Text("Restores this value from the current theme. Other draft changes stay in place. You can undo from the review.") } }
             if let error = model.error { Section { Text(error).foregroundStyle(.red) } }
         }
         .navigationTitle("Change details").navigationBarTitleDisplayMode(.inline)

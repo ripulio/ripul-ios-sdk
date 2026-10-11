@@ -100,6 +100,10 @@ public struct ConnectionDiagnosis {
             return d("This chat is no longer on its host",
                      "It may have been deleted or archived. Refresh the list to see the available chats.")
         }
+        if code("invited-chat-closed") {
+            return d("This invited chat isn't open on this device any more",
+                     "Open it again from Invites.")
+        }
         if code("machine-unavailable") {
             return d("This chat's machine isn't connected",
                      "Make sure Ripul is open and awake on that machine, then try again.")
@@ -236,16 +240,16 @@ public struct ConnectionDiagnosisSheet: View {
                 VStack(alignment: .leading, spacing: 16) {
                     HStack(spacing: 10) {
                         Image(systemName: headlineSymbol)
-                            .font(.title2)
-                            .foregroundStyle(.orange)
+                            .font(.ripulIcon(.title2))
+                            .foregroundStyle(.ripul(.warning))
                         Text(diag.summary)
-                            .font(.headline)
+                            .font(.ripul(.headline))
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     if let hint = diag.hint {
                         Text(hint)
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
+                            .font(.ripul(.subheadline))
+                            .foregroundStyle(.ripul(.textSecondary))
                             .fixedSize(horizontal: false, vertical: true)
                     }
 
@@ -255,8 +259,8 @@ public struct ConnectionDiagnosisSheet: View {
                         HStack(spacing: 8) {
                             ProgressView().controlSize(.small)
                             Text("Collecting diagnostics…")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                                .font(.ripul(.caption))
+                                .foregroundStyle(.ripul(.textSecondary))
                         }
                     }
 
@@ -272,7 +276,7 @@ public struct ConnectionDiagnosisSheet: View {
                     Button { copy(fullDetails, as: .report) } label: {
                         Label(copied == .report ? "Copied" : "Copy report",
                               systemImage: copied == .report ? "checkmark" : "doc.on.doc")
-                            .font(.caption)
+                            .font(.ripul(.caption))
                             .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.bordered)
@@ -280,7 +284,7 @@ public struct ConnectionDiagnosisSheet: View {
                         Button { copy(diagnosticsJSON, as: .json) } label: {
                             Label(copied == .json ? "Copied" : "Copy JSON",
                                   systemImage: copied == .json ? "checkmark" : "curlybraces")
-                                .font(.caption)
+                                .font(.ripul(.caption))
                                 .frame(maxWidth: .infinity)
                         }
                         .buttonStyle(.bordered)
@@ -289,7 +293,7 @@ public struct ConnectionDiagnosisSheet: View {
                 Button { onClose() } label: {
                     Text("Close").frame(maxWidth: .infinity)
                 }
-                .buttonStyle(.borderedProminent)
+                .ripulProminentButtonStyle()
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 12)
@@ -327,12 +331,12 @@ public struct ConnectionDiagnosisSheet: View {
     private var rawDetailsDisclosure: some View {
         DisclosureGroup(isExpanded: $showDetails) {
             Text(fullDetails)
-                .font(.system(.caption2, design: .monospaced))
+                .font(.ripul(.caption2, family: .code))
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.top, 6)
         } label: {
-            Text("Raw details").font(.subheadline.weight(.medium))
+            Text("Raw details").font(.ripul(.subheadline, weight: .medium))
         }
     }
 
@@ -371,7 +375,7 @@ public extension View {
     /// the sheet, dismiss clears it.
     /// `subject` names the action and chat the error belongs to, when known.
     func connectionDiagnosis(_ error: Binding<String?>, subject: ConnectionDiagnosisSubject? = nil, bridge: AgentBridge? = nil) -> some View {
-        sheet(isPresented: Binding(
+        ripulSheet(isPresented: Binding(
             get: { error.wrappedValue != nil },
             set: { if !$0 { error.wrappedValue = nil } }
         )) {

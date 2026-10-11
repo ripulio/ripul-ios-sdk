@@ -30,10 +30,13 @@ public struct RipulTokenBinding: Identifiable, Equatable {
     public let swatchHex: String
     /// The choices this token can be remapped to.
     public let options: [RipulTokenOption]
+    /// Shown, and not opened: the provider can say what the token is and cannot change it.
+    public let isReadOnly: Bool
 
     public init(id: String, property: String, tokenName: String,
                 resolvesTo: String?, swatchHex: String, options: [RipulTokenOption],
-                kind: Kind = .colourToken, assignment: RipulColourAssignment? = nil) {
+                kind: Kind = .colourToken, assignment: RipulColourAssignment? = nil, isReadOnly: Bool = false) {
+        self.isReadOnly = isReadOnly
         self.assignment = assignment
         self.kind = kind
         self.id = id
@@ -119,14 +122,16 @@ public extension RipulTokenProvider {
     }
 }
 
-/// Registration point. The host sets `provider` once at launch; a nil provider hides the feature.
+/// Registration point. The host sets `provider` once at launch. With none, the base
+/// vocabulary's own provider answers (`RipulBaseTokenProvider`), which needs no registration;
+/// with one, it answers only where the host's has nothing to say. See `readout(for:)`.
 @MainActor
 public enum RipulTokenInspector {
     public static weak var provider: RipulTokenProvider?
 
-    /// Bindings for a view, or `[]` when no provider is registered. Convenience for the overlay.
+    /// Bindings for a view from whichever provider answers for it. Convenience for the overlay.
     static func bindings(for view: UIView) -> [RipulTokenBinding] {
-        provider?.tokenBindings(for: view) ?? []
+        readout(for: view).bindings
     }
 }
 

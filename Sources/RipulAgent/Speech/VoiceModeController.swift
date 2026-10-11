@@ -96,8 +96,21 @@ public final class VoiceModeController: ObservableObject {
     public var sendMode: VoiceSendMode { SpeechPreferences.voiceSendMode }
 
     public var listeningHint: String {
-        sendMode == .sendCommand ? "Listening — say \"Send command\"" : "Listening — pause to send"
+        if isCommandSession { return "Listening — pause to run" }
+        return sendMode == .sendCommand ? "Listening — say \"Send command\"" : "Listening — pause to send"
     }
+
+    /// The host's router while this is a command session; nil in ordinary
+    /// voice mode. See `RipulVoiceModeRequest.CommandOutcome`.
+    private var commandRouter: ((String) async -> RipulVoiceModeRequest.CommandOutcome)?
+    public var isCommandSession: Bool { commandRouter != nil }
+    /// Reports from the recogniser since the words last changed. Command
+    /// sessions only; see `VoiceSendPolicy.commandToRun`.
+    private var unchangedRepeats = 0
+    private var lastPartialWords = ""
+    /// The loudest microphone level since listening began, for the log line
+    /// that says whether the level check can hear the speaker at all.
+    private var loudestSinceListening: Float = 0
 
     public var listeningStatus: String {
         if let transcriptionRecovery {
@@ -271,11 +284,13 @@ public final class VoiceModeController: ObservableObject {
         bridge: AgentBridge,
         tokenProvider: (() -> String?)?,
         initialUtterance: String? = nil,
-        presentation forced: Presentation? = nil
+        presentation forced: Presentation? = nil,
+        commands: ((String) async -> RipulVoiceModeRequest.CommandOutcome)? = nil
     ) {
         guard phase == .inactive else { return }
         guard #available(iOS 26.0, macOS 26.0, *) else { return }
         self.bridge = bridge
+        commandRouter = commands
         microphoneWarning = nil
         do {
             // Check before activating the shared recording session as well as
@@ -390,6 +405,7 @@ public final class VoiceModeController: ObservableObject {
         if !partialText.isEmpty { partialText = "" }
         if !committedText.isEmpty { committedText = "" }
         if thinkingSeconds != 0 { thinkingSeconds = 0 }
+        commandRouter = nil
         phase = .inactive
     }
 
@@ -660,6 +676,9 @@ public final class VoiceModeController: ObservableObject {
         }
         isFinalizingTranscription = false
         transcriptionRecovery = nil
+        unchangedRepeats = 0
+        lastPartialWords = ""
+        loudestSinceListening = 0
         phase = .listening
         let attemptID = UUID()
         listeningID = attemptID
@@ -711,9 +730,33 @@ public final class VoiceModeController: ObservableObject {
             if sttProviderID == "elevenlabs", !text.isEmpty { cloudConnectedThisConversation = true }
             micFailureCount = 0
             if !isFinalizingTranscription { setCaptureLive(true) }
-            // Recognisers re-send identical partials.
-            if partialText != text { partialText = text }
-            noteTranscript()
+            // Recognisers re-send identical partials. Scribe repeats the open
+            // segment's about once a second for as long as audio arrives,
+            // silence included.
+            let changed = partialText != text
+            if changed { partialText = text }
+            // In a command session a repeat is not the person speaking: it is
+            // the recogniser saying a further second held nothing new, and it
+            // is what ends the sentence (VoiceSendPolicy.commandToRun). So it
+            // is counted, and must not restart the clock. Ordinary voice mode
+            // keeps counting every report as activity: its closing phrase
+            // needs only 0.7 seconds, which fits between repeats, and its
+            // timings are tuned around that.
+            if isCommandSession {
+                // New WORDS, not new punctuation: the recogniser re-punctuates
+                // and re-capitalises what it already had, and that is not the
+                // person saying more.
+                let words = VoiceSendPolicy.words(text)
+                if words != lastPartialWords {
+                    lastPartialWords = words
+                    unchangedRepeats = 0
+                    noteTranscript()
+                } else if !words.isEmpty {
+                    unchangedRepeats += 1
+                }
+            } else {
+                noteTranscript()
+            }
         case .committed(let text):
             if sttProviderID == "elevenlabs" { cloudConnectedThisConversation = true }
             micFailureCount = 0
@@ -722,10 +765,13 @@ public final class VoiceModeController: ObservableObject {
                 committedText = committedText.isEmpty ? text : committedText + " " + text
             }
             if !partialText.isEmpty { partialText = "" }
+            unchangedRepeats = 0
+            lastPartialWords = ""
             noteTranscript()
         case .audioLevel(let rms):
             guard !isFinalizingTranscription else { return }
             lastAudioFrameAt = Self.now
+            if rms > loudestSinceListening { loudestSinceListening = rms }
             // Audio is flowing, so the engine is genuinely up — this is the
             // most reliable proof of that we get.
             setCaptureLive(true)
@@ -907,12 +953,32 @@ public final class VoiceModeController: ObservableObject {
         let text = (committedText + " " + partialText).trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         let stamp = Self.now
-        guard let message = VoiceSendPolicy.messageToSend(
-            mode: sendMode, text: text,
-            quietFor: stamp - lastVoiceActivityAt,
-            transcriptIdleFor: stamp - lastTranscriptAt,
-            audioIsFresh: stamp - lastAudioFrameAt < 0.5
-        ) else { return }
+        // A command session ends a sentence on a pause alone, whatever the
+        // voice chat preference says: nobody should have to say a closing
+        // phrase after "go back to my chats".
+        let message = isCommandSession
+            ? VoiceSendPolicy.commandToRun(
+                text: text,
+                quietFor: stamp - lastVoiceActivityAt,
+                wordsUnchangedFor: stamp - lastTranscriptAt,
+                unchangedRepeats: unchangedRepeats,
+                audioIsFresh: stamp - lastAudioFrameAt < 0.5)
+            : VoiceSendPolicy.messageToSend(
+                mode: sendMode, text: text,
+                quietFor: stamp - lastVoiceActivityAt,
+                transcriptIdleFor: stamp - lastTranscriptAt,
+                audioIsFresh: stamp - lastAudioFrameAt < 0.5)
+        guard let message else { return }
+        if isCommandSession {
+            // The numbers behind every ending, because "it cut me off" and "it
+            // never sends" are both settled by reading them, and neither can
+            // be reproduced without a voice.
+            voiceDiagnostic("[VOICE] command ended repeats=\(unchangedRepeats) "
+                + "unchangedMs=\(Int((stamp - lastTranscriptAt) * 1000)) "
+                + "quietMs=\(Int((stamp - lastVoiceActivityAt) * 1000)) "
+                + "floor=\(String(format: "%.4f", noiseFloor)) peak=\(String(format: "%.4f", loudestSinceListening)) "
+                + "unfinished=\(VoiceSendPolicy.looksUnfinished(message)) chars=\(message.count)")
+        }
         sendUtterance(message: message)
     }
 
@@ -929,7 +995,7 @@ public final class VoiceModeController: ObservableObject {
         if flushSpeech, #available(iOS 26.0, macOS 26.0, *),
            let provider = sttProvider as? any BufferedConversationSpeechProviding {
             let attempt = listeningID
-            let stripCommand = message != nil && sendMode == .sendCommand
+            let stripCommand = message != nil && sendMode == .sendCommand && !isCommandSession
             isFinalizingTranscription = true
             setCaptureLive(false, reason: "send-drain")
             Task { @MainActor [weak self] in
@@ -986,6 +1052,35 @@ public final class VoiceModeController: ObservableObject {
         baselineIds = Set(bridge?.nativeChat.messages.map(\.id) ?? [])
         Task { @MainActor [weak self] in
             guard let self, self.phase == .sending else { return }
+            var text = text
+            if let router = self.commandRouter {
+                // The closing phrase, said out of habit, is not part of the
+                // command.
+                text = VoiceSendPolicy.messageBeforeCommand(text) ?? text
+                let outcome = await router(text)
+                guard self.phase == .sending else { return }
+                switch outcome {
+                case .ran(let notice):
+                    // The app doing the thing is the confirmation; the cue is
+                    // for when nobody is looking.
+                    self.playSendAccepted()
+                    self.committedText = ""
+                    self.partialText = ""
+                    if let notice { self.showNotice(notice) } else { self.beginListening(keepText: false) }
+                    return
+                case .sent:
+                    // The host may have opened another chat to send it. What
+                    // is there now is not the reply; only what comes after is.
+                    self.baselineIds = Set(self.bridge?.nativeChat.messages.map(\.id) ?? [])
+                    self.enterThinking()
+                    return
+                case .finished:
+                    self.stop()
+                    return
+                case .forAgent:
+                    break
+                }
+            }
             let ok: Bool
             if let submit = self.submitVoiceMessage { ok = await submit(text) }
             else { ok = await self.bridge?.submitMessage(text, modality: "voice") ?? false }

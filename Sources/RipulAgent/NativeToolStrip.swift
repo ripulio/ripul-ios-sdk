@@ -17,6 +17,9 @@ struct NativeToolStripSnapshot: Decodable, Equatable {
     let groupId: String
     let updatedAt: Double
     let tools: [NativeToolStripItem]
+    /// The web still hides this row's copy from before a chat re-entry: the
+    /// strip goes straight in, with no crossfade to run against.
+    var warm: Bool? = nil
 
     var scope: String { ownerId + ":" + groupId }
 }
@@ -192,14 +195,14 @@ struct NativeToolStripContent: View {
                                         HStack(spacing: 6) {
                                             if let status = tool.status { ToolTaskStatus(status: status) }
                                             Image(systemName: tool.symbol ?? ToolIconMap.symbol(for: tool.rendererName ?? "tool"))
-                                                .foregroundStyle(.secondary)
+                                                .foregroundStyle(.ripul(.textSecondary))
                                             Text(tool.label).lineLimit(1).frame(maxWidth: tool.status == nil ? nil : 240)
                                             if tool.count > 1 {
                                                 Text("\(tool.count)")
-                                                    .font(.caption2.weight(.semibold))
+                                                    .font(.ripul(.caption2, weight: .semibold))
                                                     .monospacedDigit()
                                                     .padding(.horizontal, 5).padding(.vertical, 2)
-                                                    .background(.quaternary, in: Capsule())
+                                                    .background(.ripul(.textQuaternary), in: Capsule())
                                             }
                                         }
                                     }
@@ -367,10 +370,10 @@ private struct ToolStripButtonStyle: ViewModifier {
         if #available(iOS 26.0, macOS 26.0, *) {
             // Glass defaults to a rounded rectangle with Catalyst's Mac idiom.
             // Request the same capsule on every platform, retaining native sizing.
-            content.font(.caption.weight(.medium)).buttonStyle(.glass)
+            content.font(.ripul(.caption, weight: .medium)).buttonStyle(.glass)
                 .buttonBorderShape(.capsule).controlSize(.regular)
         } else {
-            content.font(.caption.weight(.medium)).buttonStyle(.bordered).buttonBorderShape(.capsule)
+            content.font(.ripul(.caption, weight: .medium)).buttonStyle(.bordered).buttonBorderShape(.capsule)
         }
     }
 }

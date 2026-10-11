@@ -25,7 +25,12 @@ final class HostedChatMorph: NSObject {
 
     deinit { NotificationCenter.default.removeObserver(self) }
 
+    /// `chatFrame`, in `host`'s coordinates, is for a chat that is a panel
+    /// rather than the whole window. The glass then travels between that
+    /// rectangle and the bubble, keeps the panel's corners at rest, and does
+    /// not dim the rest of the window, which stays in use around the panel.
     func run(expanding: Bool, in host: UIWindow, bubbleFrame: CGRect,
+             chatFrame: CGRect? = nil, chatCornerRadius: CGFloat = 0,
              updateChat: @escaping () -> Void, completion: @escaping () -> Void) {
         guard !isAnimating else { return }
         guard !reduceMotionEnabled(), let scene = host.windowScene,
@@ -35,10 +40,15 @@ final class HostedChatMorph: NSObject {
             return
         }
 
+        let panel = chatFrame.map { $0.intersection(host.bounds) }.flatMap { $0.isEmpty ? nil : $0 }
+        let chatRect = panel ?? host.bounds
+        let restingRadius = panel == nil ? 0 : chatCornerRadius
+        let restingScrim: CGFloat = panel == nil ? 0.18 : 0
+
         // The restore backdrop must be immutable and opaque, including any
         // transparent areas of the host. A render-server snapshot is useful
         // for the moving chat, but must not expose the newly revealed host.
-        let before = expanding ? frozenBackdrop(host) : snapshot(host, afterUpdates: false)
+        let before = expanding ? frozenBackdrop(host) : snapshot(host, of: chatRect, afterUpdates: false)
         let overlay = RipulChromeWindow(windowScene: scene)
         overlay.accessibilityIdentifier = "RipulChatLauncher.morph"
         overlay.windowLevel = .init(rawValue: RipulExplorerOverlayWindow.overlayLevel.rawValue + 2)
@@ -59,16 +69,16 @@ final class HostedChatMorph: NSObject {
             root.view.addSubview(before)
         }
         let scrim = UIView(frame: root.view.bounds)
-        scrim.backgroundColor = .black
-        scrim.alpha = expanding ? 0 : 0.18
+        scrim.backgroundColor = .ripul(system: .black)
+        scrim.alpha = expanding ? 0 : restingScrim
         scrim.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         root.view.addSubview(scrim)
 
-        let fullFrame = host.convert(host.bounds, to: overlay)
+        let fullFrame = host.convert(chatRect, to: overlay)
         let smallFrame = host.convert(bubbleFrame, to: overlay)
         let surface = MorphSurface(fullSize: fullFrame.size)
         surface.frame = expanding ? smallFrame : fullFrame
-        surface.layer.cornerRadius = expanding ? smallFrame.width / 2 : 0
+        surface.layer.cornerRadius = expanding ? smallFrame.width / 2 : restingRadius
         surface.icon.alpha = expanding ? 1 : 0
         root.view.addSubview(surface)
         if !expanding { surface.installSnapshot(before, scale: 1, alpha: 1) }
@@ -82,16 +92,16 @@ final class HostedChatMorph: NSObject {
                 guard let self, let host, let overlay, self.window === overlay else { return }
                 host.layoutIfNeeded()
                 if expanding {
-                    surface.installSnapshot(self.snapshot(host, afterUpdates: true),
+                    surface.installSnapshot(self.snapshot(host, of: chatRect, afterUpdates: true),
                         scale: smallFrame.width / fullFrame.width, alpha: 0)
                 }
                 let animation = UIViewPropertyAnimator(duration: 0.48, dampingRatio: 0.88)
                 self.animator = animation
                 animation.addAnimations {
                     surface.frame = expanding ? fullFrame : smallFrame
-                    surface.layer.cornerRadius = expanding ? 0 : smallFrame.width / 2
+                    surface.layer.cornerRadius = expanding ? restingRadius : smallFrame.width / 2
                     surface.positionSnapshot(scale: expanding ? 1 : smallFrame.width / fullFrame.width)
-                    scrim.alpha = expanding ? 0.18 : 0
+                    scrim.alpha = expanding ? restingScrim : 0
                 }
                 animation.addAnimations({
                     surface.chatSnapshot?.alpha = expanding ? 1 : 0
@@ -164,7 +174,7 @@ final class HostedChatMorph: NSObject {
         let format = UIGraphicsImageRendererFormat()
         format.opaque = true
         let image = UIGraphicsImageRenderer(bounds: host.bounds, format: format).image { context in
-            UIColor.systemBackground.resolvedColor(with: host.traitCollection).setFill()
+            UIColor.ripul(.canvas).resolvedColor(with: host.traitCollection).setFill()
             context.fill(host.bounds)
             host.drawHierarchy(in: host.bounds, afterScreenUpdates: false)
         }
@@ -174,9 +184,13 @@ final class HostedChatMorph: NSObject {
         return view
     }
 
-    private func snapshot(_ host: UIWindow, afterUpdates: Bool) -> UIView {
-        if let view = host.snapshotView(afterScreenUpdates: afterUpdates) { return view }
-        let image = UIGraphicsImageRenderer(bounds: host.bounds).image { _ in
+    /// The part of `host` the chat occupies: the whole window, or its panel.
+    private func snapshot(_ host: UIWindow, of rect: CGRect, afterUpdates: Bool) -> UIView {
+        let view = rect == host.bounds
+            ? host.snapshotView(afterScreenUpdates: afterUpdates)
+            : host.resizableSnapshotView(from: rect, afterScreenUpdates: afterUpdates, withCapInsets: .zero)
+        if let view { return view }
+        let image = UIGraphicsImageRenderer(bounds: rect).image { _ in
             host.drawHierarchy(in: host.bounds, afterScreenUpdates: afterUpdates)
         }
         return UIImageView(image: image)
@@ -219,12 +233,12 @@ private final class MorphSurface: UIView {
         layer.masksToBounds = true
         let effect = UIGlassEffect()
         effect.isInteractive = true
-        effect.tintColor = .systemBlue
+        effect.tintColor = .ripul(accentOr: .info) // the chat launcher is in the app's colour
         let glass = UIVisualEffectView(effect: effect)
         glass.frame = bounds
         glass.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         addSubview(glass)
-        icon.tintColor = .white
+        icon.tintColor = .ripul(.onAccent)
         icon.contentMode = .center
         icon.frame = bounds
         icon.autoresizingMask = [.flexibleWidth, .flexibleHeight]

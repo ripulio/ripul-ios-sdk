@@ -1,0 +1,452 @@
+import XCTest
+import SwiftUI
+@testable import RipulAgent
+
+/// The base theme: the proof that the default theme is today's look exactly (each
+/// accessor IS the system value it replaces), and that a document changes it.
+final class RipulThemeCoreTests: XCTestCase {
+    override func setUp() { RipulTheme.resetToDefaults() }
+    override func tearDown() { RipulTheme.resetToDefaults() }
+
+    private func adopt(_ json: String) throws { try RipulTheme.adopt(documentData: Data(json.utf8)) }
+
+    // MARK: decision 1: with no theme, every accessor is the system value
+
+    func testEveryTextStyleRoleIsTheSystemTextStyle() {
+        let pairs: [(RipulTextRole, Font)] = [
+            (.largeTitle, .largeTitle), (.title, .title), (.title2, .title2), (.title3, .title3),
+            (.headline, .headline), (.body, .body), (.callout, .callout), (.subheadline, .subheadline),
+            (.footnote, .footnote), (.caption, .caption), (.caption2, .caption2),
+        ]
+        for (role, system) in pairs {
+            XCTAssertEqual(Font.ripul(role), system, "\(role)")
+            XCTAssertEqual(Font.ripul(role, weight: .semibold), system.weight(.semibold), "\(role) semibold")
+            XCTAssertEqual(Font.ripul(role).monospacedDigit(), system.monospacedDigit(), "\(role) chained")
+            XCTAssertEqual(Font.ripul(role).bold(), system.bold(), "\(role) bold")
+            XCTAssertEqual(Font.ripulIcon(role.textStyle), system, "\(role) icon")
+        }
+    }
+
+    func testTheThreeNamedRolesAreTheirSystemEquivalents() {
+        XCTAssertEqual(Font.ripul(.display), Font.title)
+        XCTAssertEqual(Font.ripul(.eyebrow), Font.subheadline.weight(.semibold))
+        XCTAssertEqual(Font.ripul(.code), Font.system(.body, design: .monospaced))
+    }
+
+    func testCodeFamilyIsTheSystemMonospacedDesign() {
+        XCTAssertEqual(Font.ripul(.caption, family: .code), Font.system(.caption, design: .monospaced))
+        XCTAssertEqual(Font.ripul(.caption, weight: .medium, family: .code),
+                       Font.system(.caption, design: .monospaced).weight(.medium))
+        XCTAssertEqual(Font.ripul(size: 12, family: .code), Font.system(size: 12, design: .monospaced))
+        XCTAssertEqual(Font.ripul(size: 12, weight: .semibold, family: .code),
+                       Font.system(size: 12, weight: .semibold, design: .monospaced))
+    }
+
+    func testFixedSizesAndIconsAreSystemFonts() {
+        XCTAssertEqual(Font.ripul(size: 14), Font.system(size: 14))
+        XCTAssertEqual(Font.ripul(size: 14, weight: .medium), Font.system(size: 14, weight: .medium))
+        XCTAssertEqual(Font.ripulIcon(size: 18), Font.system(size: 18))
+        XCTAssertEqual(Font.ripulIcon(size: 18, weight: .bold), Font.system(size: 18, weight: .bold))
+    }
+
+    func testColourRolesAreSwiftUIsOwnColours() {
+        XCTAssertEqual(Color.ripul(.accent), Color.accentColor)
+        XCTAssertEqual(Color.ripul(.text), Color.primary)
+        XCTAssertEqual(Color.ripul(.textSecondary), Color.secondary)
+        XCTAssertEqual(Color.ripul(.success), Color.green)
+        XCTAssertEqual(Color.ripul(.warning), Color.orange)
+        XCTAssertEqual(Color.ripul(.danger), Color.red)
+        XCTAssertEqual(Color.ripul(.info), Color.blue)
+        XCTAssertEqual(Color.ripul(.neutral), Color.gray)
+        XCTAssertEqual(Color.ripul(.onAccent), Color(RipulPlatformColor(red: 1, green: 1, blue: 1, alpha: 1)))
+    }
+
+    func testTheRootAppliesNothingWithNoTheme() {
+        XCTAssertNil(RipulTheme.accentOverride)
+        XCTAssertNil(RipulTheme.defaultFontOverride)
+        for role in RipulColorRole.allCases { XCTAssertTrue(RipulTheme.isDefault(role), "\(role)") }
+    }
+
+    func testEveryDefaultReferenceParses() {
+        for role in RipulColorRole.allCases {
+            XCTAssertNotNil(RipulColorLiteral(role.defaultReference), "\(role)")
+            XCTAssertTrue(RipulTheme.isBaseRole(role.tokenName))
+        }
+    }
+
+    // MARK: the repository's document
+
+    func testTheRepositoryDocumentIsTodaysLook() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let url = root.appendingPathComponent("theme/ripul-theme.json")
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            throw XCTSkip("theme/ripul-theme.json is outside the SDK; not present in a standalone package checkout")
+        }
+        try RipulTheme.adopt(documentData: Data(contentsOf: url))
+        for role in RipulColorRole.allCases { XCTAssertTrue(RipulTheme.isDefault(role), "\(role)") }
+        XCTAssertNil(RipulTheme.accentOverride)
+        XCTAssertNil(RipulTheme.defaultFontOverride)
+        XCTAssertEqual(Font.ripul(.body), Font.body)
+        XCTAssertEqual(Font.ripul(.eyebrow), Font.subheadline.weight(.semibold))
+    }
+
+    /// The trial brand document sets the accent, what sits on it and two families, and
+    /// leaves the canvas, the surfaces and every text colour the system's.
+    func testTheBrandDocumentSetsTheAccentAndFamiliesOnly() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let url = root.appendingPathComponent("theme/ripul-theme-brand.json")
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            throw XCTSkip("theme/ripul-theme-brand.json is outside the SDK; not present in a standalone package checkout")
+        }
+        try RipulTheme.adopt(documentData: Data(contentsOf: url))
+        XCTAssertEqual(RipulTheme.color(.accent), RipulColorValue(light: RipulColorLiteral("#1f6f70")!, dark: RipulColorLiteral("#62b9b4")))
+        XCTAssertEqual(RipulTheme.color(.onAccent), RipulColorValue(light: RipulColorLiteral("#FFFFFF")!, dark: RipulColorLiteral("#23253a")))
+        for role in RipulColorRole.allCases where role != .accent && role != .onAccent {
+            XCTAssertTrue(RipulTheme.isDefault(role), "\(role)")
+        }
+        XCTAssertEqual(RipulTheme.face(.text), "Archivo")
+        XCTAssertEqual(RipulTheme.face(.display), "Instrument Serif")
+        XCTAssertEqual(RipulTheme.face(.code), "system-monospaced")
+        XCTAssertEqual(RipulTheme.text(.headline).face, "Archivo")
+        XCTAssertNil(RipulTheme.text(.body).size)
+        // The serif has one weight, so the display role carries by size where a bold title did.
+        XCTAssertEqual(RipulTheme.text(.display).size, 36)
+        let eyebrow = RipulTheme.text(.eyebrow)
+        XCTAssertEqual(eyebrow.tracking, 1.8)
+        XCTAssertTrue(eyebrow.uppercase)
+    }
+
+    // MARK: a document changes it
+
+    func testALightAndDarkPairInThePaletteReachesARole() throws {
+        try adopt(##"{"palette":{"teal":{"light":"#1f6f70","dark":"#62b9b4"},"ink":"1b2a41"},"roles":{"ripul.accent":"teal","ripul.text":"ink"}}"##)
+        let accent = RipulTheme.color(.accent)
+        XCTAssertEqual(accent.light, RipulColorLiteral("#1f6f70"))
+        XCTAssertEqual(accent.dark, RipulColorLiteral("#62b9b4"))
+        XCTAssertFalse(RipulTheme.isDefault(.accent))
+        XCTAssertNotNil(RipulTheme.accentOverride)
+        XCTAssertEqual(RipulTheme.color(.text), RipulColorValue(light: RipulColorLiteral("#1b2a41")!))
+        XCTAssertTrue(RipulTheme.isDefault(.canvas))
+    }
+
+    func testARoleMayPointAtAnotherRoleASystemColourOrALiteral() throws {
+        try adopt(##"{"roles":{"ripul.info":"ripul.accent","ripul.accent":"system:systemPink","ripul.danger":"#FF000080"}}"##)
+        XCTAssertEqual(RipulTheme.color(.info).systemName, "systemPink")
+        XCTAssertEqual(Color.ripul(.info), Color.pink)
+        XCTAssertEqual(RipulTheme.color(.danger).light, .rgba(red: 1, green: 0, blue: 0, alpha: 128.0 / 255))
+    }
+
+    func testACycleOrANonsenseReferenceFallsBackToTheDefault() throws {
+        try adopt(##"{"roles":{"ripul.accent":"ripul.info","ripul.info":"ripul.accent","ripul.text":"no such thing","ripul.canvas":"system:notAColour"}}"##)
+        XCTAssertTrue(RipulTheme.isDefault(.accent))
+        XCTAssertTrue(RipulTheme.isDefault(.text))
+        XCTAssertTrue(RipulTheme.isDefault(.canvas))
+    }
+
+    func testInAHostsDocumentOnlyTheReservedKeyIsRead() throws {
+        // WAC's shape: its own palette, roles and fonts at the top level. None of it is ours.
+        try adopt(##"{"colors":{"accent":"12CEA8"},"semantic":{"accent":"accent","ripul.accent":"accent"},"fonts":{"family":"AvenirNext"}}"##)
+        XCTAssertTrue(RipulTheme.isDefault(.accent), "a host's own maps are never read")
+        XCTAssertEqual(Font.ripul(.body), Font.body)
+        // The same document with the SDK's part under the reserved key.
+        try adopt(##"{"colors":{"accent":"12CEA8"},"semantic":{"accent":"accent"},"fonts":{"family":"AvenirNext"},"ripul":{"palette":{"teal":{"light":"#1f6f70","dark":"#62b9b4"}},"roles":{"accent":"teal","ripul.danger":"#FF0000"},"typography":{"families":{"display":"system-serif"}}}}"##)
+        XCTAssertEqual(RipulTheme.color(.accent).dark, RipulColorLiteral("#62b9b4"))
+        XCTAssertEqual(RipulTheme.color(.danger).light, RipulColorLiteral("#FF0000"), "a role may be written with or without the prefix")
+        XCTAssertEqual(Font.ripul(.display), Font.system(.title, design: .serif))
+        XCTAssertEqual(Font.ripul(.body), Font.body)
+    }
+
+    func testANewerSchemaIsRefusedAndTheLastGoodThemeStays() throws {
+        try adopt(##"{"schema":1,"roles":{"ripul.accent":"#FF00FF"}}"##)
+        XCTAssertThrowsError(try adopt(##"{"schema":2,"roles":{"ripul.accent":"#00FF00"}}"##)) {
+            XCTAssertEqual($0 as? RipulTheme.DocumentError, .newerSchema(2))
+        }
+        XCTAssertThrowsError(try adopt(##"{"ripul":{"schema":7}}"##))
+        XCTAssertEqual(RipulTheme.color(.accent).light, RipulColorLiteral("#FF00FF"))
+    }
+
+    func testAnAccessorMayBeCalledOffTheMainThreadWhileADocumentIsAdopted() throws {
+        let done = expectation(description: "readers")
+        done.expectedFulfillmentCount = 4
+        for _ in 0..<4 {
+            DispatchQueue.global().async {
+                for _ in 0..<2_000 { _ = RipulTheme.color(.accent); _ = RipulTheme.text(.body); _ = Font.ripul(.caption) }
+                done.fulfill()
+            }
+        }
+        for index in 0..<200 {
+            try adopt(index.isMultiple(of: 2) ? ##"{"roles":{"ripul.accent":"#FF00FF"}}"## : ##"{"typography":{"families":{"text":"Georgia"}}}"##)
+        }
+        wait(for: [done], timeout: 20)
+    }
+
+    func testFamiliesAndTypeRoles() throws {
+        try adopt(##"{"typography":{"families":{"text":"Georgia","display":"system-serif"},"roles":{"eyebrow":{"size":11,"weight":"bold","tracking":1.2,"uppercase":true},"caption":{"family":"code"}}}}"##)
+        XCTAssertEqual(Font.ripul(.body), Font.custom("Georgia", size: 17, relativeTo: .body))
+        XCTAssertEqual(Font.ripul(.body, weight: .semibold), Font.custom("Georgia", size: 17, relativeTo: .body).weight(.semibold))
+        XCTAssertEqual(Font.ripul(.display), Font.system(.title, design: .serif))
+        XCTAssertEqual(Font.ripul(.headline), Font.custom("Georgia", size: 17, relativeTo: .headline).weight(.semibold),
+                       "a custom face is given the semibold the system's headline carries")
+        XCTAssertEqual(Font.ripul(.headline, weight: .light), Font.custom("Georgia", size: 17, relativeTo: .headline).weight(.light))
+        XCTAssertEqual(Font.ripul(.eyebrow), Font.custom("Georgia", size: 11, relativeTo: .subheadline).weight(.bold))
+        XCTAssertEqual(Font.ripul(.caption), Font.system(.caption, design: .monospaced))
+        XCTAssertEqual(Font.ripul(size: 14, weight: .medium), Font.custom("Georgia", fixedSize: 14).weight(.medium))
+        XCTAssertEqual(Font.ripul(size: 12, family: .code), Font.system(size: 12, design: .monospaced), "code family untouched")
+        XCTAssertEqual(Font.ripulIcon(size: 18), Font.system(size: 18), "icons are never themed")
+        let eyebrow = RipulTheme.text(.eyebrow)
+        XCTAssertEqual(eyebrow.tracking, 1.2)
+        XCTAssertTrue(eyebrow.uppercase)
+        XCTAssertNotNil(RipulTheme.defaultFontOverride)
+    }
+
+    func testAdoptingPostsTheThemeChange() throws {
+        let posted = expectation(forNotification: .ripulThemeDidChange, object: nil)
+        let before = RipulTheme.version
+        try adopt(##"{"roles":{"ripul.accent":"#FF00FF"}}"##)
+        wait(for: [posted], timeout: 1)
+        XCTAssertGreaterThan(RipulTheme.version, before)
+    }
+
+    // MARK: live repaint
+    //
+    // SwiftUI runs a body again when something the body read through Observation changes.
+    // `withObservationTracking` is that same mechanism, so these fail if an accessor stops
+    // reading the theme store when it is CALLED (for instance if the read moved back into a
+    // style's `resolve`, which runs at draw time, outside any body).
+
+    private func assertTracked(_ what: String, _ read: () -> Void, file: StaticString = #filePath, line: UInt = #line) throws {
+        var invalidated = false
+        withObservationTracking(read) { invalidated = true }
+        XCTAssertFalse(invalidated, what, file: file, line: line)
+        try adopt(##"{"roles":{"ripul.danger":"#00FF00"},"typography":{"families":{"text":"Georgia"}}}"##)
+        XCTAssertTrue(invalidated, "\(what) did not register with the theme store, so a view using it would not repaint", file: file, line: line)
+        RipulTheme.resetToDefaults()
+    }
+
+    func testEveryAccessorRegistersTheBodyThatCalledIt() throws {
+        try assertTracked("Font.ripul(role)") { _ = Font.ripul(.body) }
+        try assertTracked("Font.ripul(role, weight:)") { _ = Font.ripul(.caption, weight: .semibold) }
+        try assertTracked("Font.ripul(size:)") { _ = Font.ripul(size: 13) }
+        try assertTracked("Color.ripul(role)") { _ = Color.ripul(.danger) }
+        try assertTracked("the style form") { _ = RipulColorStyle.ripul(.danger) }
+        try assertTracked("ripulThemeRoot's overrides") { _ = RipulTheme.accentOverride; _ = RipulTheme.defaultFontOverride }
+    }
+
+    func testAStyleCarriesTheColourItHadWhenItWasMade() throws {
+        // SwiftUI resolves a style again only when the style's own value changes, so the
+        // value must differ after a theme change. A style that held only the role's name
+        // kept its old colour on screen (measured, 10 October 2026).
+        let before = RipulColorStyle.ripul(.danger)
+        try adopt(##"{"roles":{"ripul.danger":"#00FF00"}}"##)
+        let after = RipulColorStyle.ripul(.danger)
+        XCTAssertEqual(before.role, after.role)
+        XCTAssertNotEqual(before.value, after.value)
+        XCTAssertEqual(after.value.light, RipulColorLiteral("#00FF00"))
+    }
+
+    func testTheAdoptedDocumentIsTheSDKsPartOnlyAndFollowsAdoptAndReset() throws {
+        XCTAssertNil(RipulTheme.adoptedDocumentData)
+        // Ripul's own file: the whole document, keys sorted.
+        try adopt(##"{"roles":{"ripul.accent":"#FF00FF"},"name":"x"}"##)
+        XCTAssertEqual(RipulTheme.adoptedDocumentData.flatMap { String(data: $0, encoding: .utf8) },
+                       ##"{"name":"x","roles":{"ripul.accent":"#FF00FF"}}"##)
+        // A host's document: only what is under the reserved key travels.
+        try adopt(##"{"colors":{"secret":"12CEA8"},"ripul":{"roles":{"accent":"#00FF00"}}}"##)
+        let part = try XCTUnwrap(RipulTheme.adoptedDocumentData.flatMap { String(data: $0, encoding: .utf8) })
+        XCTAssertEqual(part, ##"{"roles":{"accent":"#00FF00"}}"##)
+        // The same document written in another key order gives the same bytes.
+        try adopt(##"{"ripul":{"roles":{"accent":"#00FF00"}},"colors":{"secret":"12CEA8"}}"##)
+        XCTAssertEqual(RipulTheme.adoptedDocumentData.flatMap { String(data: $0, encoding: .utf8) }, part)
+        // A refused document leaves it as it was.
+        XCTAssertThrowsError(try adopt(##"{"schema":9}"##))
+        XCTAssertEqual(RipulTheme.adoptedDocumentData.flatMap { String(data: $0, encoding: .utf8) }, part)
+        RipulTheme.resetToDefaults()
+        XCTAssertNil(RipulTheme.adoptedDocumentData)
+    }
+
+    func testADocumentThatIsNotAnObjectIsRefusedAndChangesNothing() {
+        XCTAssertThrowsError(try adopt("[1,2]"))
+        XCTAssertTrue(RipulTheme.isDefault(.accent))
+    }
+}
+
+#if os(iOS)
+import UIKit
+
+/// The UIKit accessors, and the host engine beside the base vocabulary.
+final class RipulThemeEngineBaseTests: XCTestCase {
+    private let conditions: [(String, UITraitCollection)] = [
+        ("light", UITraitCollection(userInterfaceStyle: .light)),
+        ("dark", UITraitCollection(userInterfaceStyle: .dark)),
+        ("increased contrast", UITraitCollection(traitsFrom: [.init(userInterfaceStyle: .light), .init(accessibilityContrast: .high)])),
+        ("dark, increased contrast", UITraitCollection(traitsFrom: [.init(userInterfaceStyle: .dark), .init(accessibilityContrast: .high)])),
+        ("elevated", UITraitCollection(traitsFrom: [.init(userInterfaceStyle: .dark), .init(userInterfaceLevel: .elevated)])),
+    ]
+    private var light: UITraitCollection { conditions[0].1 }
+    private var dark: UITraitCollection { conditions[1].1 }
+
+    override func setUp() {
+        RipulTheme.resetToDefaults()
+        UserDefaults.standard.removeObject(forKey: "RipulThemeCoreTests")
+        RipulThemeEngine.persistMutation = nil
+    }
+    override func tearDown() { RipulTheme.resetToDefaults() }
+
+    func testEveryUIColorRoleIsTheSystemColourItself() {
+        let pairs: [(RipulColorRole, UIColor)] = [
+            (.accent, .tintColor), (.canvas, .systemBackground), (.surface, .secondarySystemGroupedBackground),
+            (.surfaceSunken, .systemGroupedBackground), (.text, .label), (.textSecondary, .secondaryLabel),
+            (.textTertiary, .tertiaryLabel), (.textQuaternary, .quaternaryLabel), (.separator, .separator),
+            (.success, .systemGreen), (.warning, .systemOrange), (.danger, .systemRed), (.info, .systemBlue),
+            (.neutral, .systemGray),
+        ]
+        XCTAssertEqual(pairs.count + 1, RipulColorRole.allCases.count, "every role is in this test")
+        for (role, system) in pairs {
+            XCTAssertTrue(UIColor.ripul(role) === system, "\(role)")
+            XCTAssertNil(UIColor.ripul(role).ripulToken, "a system colour is shared and must not be tagged")
+            // The same object, so this cannot fail; it is here as the statement of what
+            // "exactly" means: the live colour under every condition, never a resolved one.
+            for (name, traits) in conditions {
+                XCTAssertEqual(UIColor.ripul(role).resolvedColor(with: traits), system.resolvedColor(with: traits), "\(role), \(name)")
+            }
+        }
+        XCTAssertEqual(UIColor.ripul(.onAccent), UIColor(red: 1, green: 1, blue: 1, alpha: 1))
+        XCTAssertEqual(Color.ripul(.canvas), Color(UIColor.systemBackground))
+        XCTAssertEqual(Color.ripul(.surface), Color(UIColor.secondarySystemGroupedBackground))
+        XCTAssertEqual(Color.ripul(.textTertiary), Color(UIColor.tertiaryLabel))
+        XCTAssertEqual(Color.ripul(.separator), Color(UIColor.separator))
+    }
+
+    func testTheSystemFormIsTheSystemColour() {
+        XCTAssertTrue(UIColor.ripul(system: .secondarySystemBackground) === UIColor.secondarySystemBackground)
+        XCTAssertTrue(UIColor.ripul(system: .tertiarySystemFill) === UIColor.tertiarySystemFill)
+        XCTAssertEqual(Color.ripul(system: .secondarySystemBackground), Color(UIColor.secondarySystemBackground))
+        XCTAssertEqual(Color.ripul(system: .secondaryLabel), Color(UIColor.secondaryLabel), "a fixed label colour, not the hierarchical style")
+        XCTAssertEqual(Color.ripul(system: .white), Color.white)
+        XCTAssertEqual(Color.ripul(system: .black), Color.black)
+        XCTAssertEqual(Color.ripul(system: .systemPink), Color.pink)
+        for name in RipulSystemColor.allCases where name != .white && name != .black {
+            XCTAssertTrue(RipulTheme.systemColorNames.contains(name.rawValue), "\(name)")
+        }
+    }
+
+    func testUIFontRolesAreTheSystemFonts() {
+        XCTAssertEqual(UIFont.ripul(.body), UIFont.preferredFont(forTextStyle: .body))
+        XCTAssertEqual(UIFont.ripul(.caption), UIFont.preferredFont(forTextStyle: .caption1))
+        XCTAssertEqual(UIFont.ripul(.title), UIFont.preferredFont(forTextStyle: .title1))
+        XCTAssertEqual(UIFont.ripul(size: 14, weight: .medium), UIFont.systemFont(ofSize: 14, weight: .medium))
+        XCTAssertEqual(UIFont.ripul(size: 12), UIFont.systemFont(ofSize: 12))
+        XCTAssertEqual(UIFont.ripul(size: 12, weight: .semibold, family: .code), UIFont.monospacedSystemFont(ofSize: 12, weight: .semibold))
+        XCTAssertEqual(UIFont.ripul(.footnote, weight: .semibold),
+                       UIFont.systemFont(ofSize: UIFont.preferredFont(forTextStyle: .footnote).pointSize, weight: .semibold))
+    }
+
+    func testAPairResolvesPerAppearanceInUIKit() throws {
+        try RipulTheme.adopt(documentData: Data(##"{"palette":{"teal":{"light":"#1f6f70","dark":"#62b9b4"}},"roles":{"ripul.accent":"teal"}}"##.utf8))
+        XCTAssertEqual(UIColor.ripul(.accent).resolvedColor(with: light), UIColor(ripulHexString: "#1f6f70"))
+        XCTAssertEqual(UIColor.ripul(.accent).resolvedColor(with: dark), UIColor(ripulHexString: "#62b9b4"))
+        RipulTheme.resetToDefaults()
+        XCTAssertTrue(UIColor.ripul(.accent) === UIColor.tintColor)
+    }
+
+    // MARK: the host engine and the base vocabulary are separate
+
+    private func configureAHost() {
+        RipulThemeEngine.configure(.init(bundleResource: "NoSuchBundledTheme", overrideDefaultsKey: "RipulThemeCoreTests",
+            vocabulary: .init(primitives: [.init(name: "green", label: "Green", path: [], defaultReference: "00AA00")],
+                              roles: [.init(name: "accent", label: "Accent", path: [], defaultReference: "green")],
+                              components: [.init(name: "fieldLabel", label: "Field label", path: [], defaultReference: "accent")]),
+            styleKinds: []))
+        RipulThemeEngine.adopt(RipulThemeDocument())
+    }
+
+    func testAHostsConfigureAndEditsDoNotTouchTheBaseVocabulary() throws {
+        try RipulTheme.adopt(documentData: Data(##"{"roles":{"ripul.accent":"#FF00FF"}}"##.utf8))
+        configureAHost()
+        RipulThemeEngine.setReference(label: "accent", to: "#0000FF")
+        RipulThemeEngine.setReference(label: "ripul.danger", to: "#0000FF")
+        XCTAssertEqual(RipulTheme.color(.accent).light, RipulColorLiteral("#FF00FF"), "configure does not clear it")
+        XCTAssertTrue(RipulTheme.isDefault(.danger), "a host's roles map is not where the base vocabulary lives")
+        RipulThemeEngine.removeSemanticLabel("ripul.danger")
+    }
+
+    func testAHostTokenResolvesAsBeforeAndTheHostEditorDoesNotListBaseRoles() {
+        configureAHost()
+        XCTAssertEqual(RipulThemeEngine.color(component: "fieldLabel"), UIColor(ripulHexString: "00AA00"))
+        XCTAssertEqual(RipulThemeEngine.color(component: "fieldLabel").ripulToken, "fieldLabel")
+        XCTAssertEqual(RipulThemeEngine.color(label: "nothing"), .magenta, "the host engine's own failure colour is unchanged")
+        XCTAssertFalse(RipulThemeEngine.isSemanticLabel("ripul.accent"))
+        XCTAssertEqual(RipulThemeEngine.semanticLabels, ["accent"])
+    }
+
+    func testAHostColourMayNowBeASystemColourOrAPair() {
+        configureAHost()
+        var doc = RipulThemeDocument()
+        doc.primitives = ["green": "#1f6f70"]
+        doc.primitivesDark = ["green": "#62b9b4"]
+        doc.semantic = ["accent": "green"]
+        RipulThemeEngine.adopt(doc)
+        let colour = RipulThemeEngine.color(component: "fieldLabel")
+        XCTAssertEqual(colour.resolvedColor(with: light), UIColor(ripulHexString: "#1f6f70"))
+        XCTAssertEqual(colour.resolvedColor(with: dark), UIColor(ripulHexString: "#62b9b4"))
+        RipulThemeEngine.setReference(label: "accent", to: "system:label")
+        let label = RipulThemeEngine.color(label: "accent")
+        XCTAssertEqual(label.resolvedColor(with: light), UIColor.label.resolvedColor(with: light))
+        XCTAssertEqual(label.resolvedColor(with: dark), UIColor.label.resolvedColor(with: dark))
+        XCTAssertEqual(label.ripulToken, "accent")
+        XCTAssertNil(UIColor.label.ripulToken, "tagging the engine's colour must not tag the system's")
+        RipulThemeEngine.adopt(RipulThemeDocument())
+    }
+
+    // MARK: additive: what an existing host document does is unchanged
+
+    func testAHexOnlyDocumentWithNoFontsReadsAndWritesAsBefore() throws {
+        let json = ##"{"colors":{"accent":"12CEA8","black":"373635"},"components":{"rowTitle":"textPrimary"},"elementColors":{},"semantic":{"textPrimary":"black"}}"##
+        let doc = try JSONDecoder().decode(RipulThemeDocument.self, from: Data(json.utf8))
+        XCTAssertEqual(doc.primitives, ["accent": "12CEA8", "black": "373635"])
+        XCTAssertTrue(doc.primitivesDark.isEmpty)
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        XCTAssertEqual(String(data: try encoder.encode(doc), encoding: .utf8), json)
+    }
+
+    func testAPairedPaletteEntryRoundTrips() throws {
+        let json = ##"{"colors":{"ink":"1b2a41","teal":{"dark":"#62b9b4","light":"#1f6f70"}},"components":{},"elementColors":{},"semantic":{}}"##
+        let doc = try JSONDecoder().decode(RipulThemeDocument.self, from: Data(json.utf8))
+        XCTAssertEqual(doc.primitives["teal"], "#1f6f70")
+        XCTAssertEqual(doc.primitivesDark, ["teal": "#62b9b4"])
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        XCTAssertEqual(String(data: try encoder.encode(doc), encoding: .utf8), json)
+    }
+
+    /// WAC's real bundled theme, read from its checkout on this Mac when it is there.
+    func testWACsRealThemeLoadsUnchangedWithAndWithoutARipulSection() throws {
+        // In a simulator the home directory is the simulator's own; the Mac's is in the environment.
+        let home = ProcessInfo.processInfo.environment["SIMULATOR_HOST_HOME"] ?? NSHomeDirectory()
+        let url = URL(fileURLWithPath: home)
+            .appendingPathComponent("Documents/WAC_ios_final-shift-rate-templates/WAC/Helper Class/Theme/Theme.json")
+        guard let data = try? Data(contentsOf: url) else { throw XCTSkip("no WAC checkout at \(url.path)") }
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let plain = try JSONDecoder().decode(RipulThemeDocument.self, from: data)
+        XCTAssertEqual(plain.primitives, json["colors"] as? [String: String])
+        XCTAssertEqual(plain.semantic, json["semantic"] as? [String: String])
+        XCTAssertEqual(plain.components, json["components"] as? [String: String])
+        XCTAssertTrue(plain.primitivesDark.isEmpty)
+
+        var withSection = json
+        withSection["ripul"] = ["schema": 1, "palette": ["teal": ["light": "#1f6f70", "dark": "#62b9b4"]],
+                                "roles": ["accent": "teal"], "typography": ["families": ["display": "system-serif"]]]
+        let extended = try JSONSerialization.data(withJSONObject: withSection)
+        XCTAssertEqual(try JSONDecoder().decode(RipulThemeDocument.self, from: extended), plain,
+                       "the host's slice does not see the reserved key")
+        XCTAssertNoThrow(try NativeTextTheme.decode(document: extended), "the SDK's own text section still reads")
+        try RipulTheme.adopt(documentData: extended)
+        XCTAssertEqual(RipulTheme.color(.accent).dark, RipulColorLiteral("#62b9b4"))
+        try RipulTheme.adopt(documentData: data)
+        XCTAssertTrue(RipulTheme.isDefault(.accent), "WAC's own document leaves the SDK's screens at the system look")
+        XCTAssertEqual(Font.ripul(.body), Font.body)
+    }
+}
+
+#endif

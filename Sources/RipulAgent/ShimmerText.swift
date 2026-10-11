@@ -36,7 +36,7 @@ extension View {
     /// Honors Reduce Motion by rendering the static base color.
     func ripulShimmer(
         base: Color,
-        highlight: Color = .primary,
+        highlight: Color = .ripul(.text),
         duration: Double = 2.0
     ) -> some View {
         modifier(RipulShimmerModifier(base: base, highlight: highlight, duration: duration))

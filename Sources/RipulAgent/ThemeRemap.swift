@@ -98,11 +98,13 @@ public enum RipulThemeRemapSheetPresenter {
             guard let view else { return nil }
             return RipulTokenInspector.bindings(for: view).first { $0.id == binding.id }
         }, sections: { [weak view] in
-            guard let view, let provider = RipulTokenInspector.provider,
-                  let current = provider.tokenBindings(for: view).first(where: { $0.id == binding.id }) else { return [] }
+            guard let view else { return [] }
+            let readout = RipulTokenInspector.readout(for: view)
+            guard let provider = readout.provider,
+                  let current = readout.bindings.first(where: { $0.id == binding.id }) else { return [] }
             return provider.remapSections(for: current, view: view)
         })
-        let host = UIHostingController(rootView: RipulAppearanceDetailSheet(item: item))
+        let host = UIHostingController(rootView: RipulAppearanceDetailSheet(item: item).ripulThemeRoot())
         host.sheetPresentationController?.detents = [.medium(), .large()]
         if binding.assignment != nil { host.sheetPresentationController?.selectedDetentIdentifier = .large }
         top.present(host, animated: true)
@@ -113,7 +115,7 @@ public enum RipulThemeRemapSheetPresenter {
         // is fired FROM the explorer, and presenting it from the app's window
         // would put it underneath the explorer's overlay window.
         guard let top = RipulChrome.presentationRoot() else { return }
-        let host = UIHostingController(rootView: RipulThemeRemapSheetView(targets: targets, tap: tap))
+        let host = UIHostingController(rootView: RipulThemeRemapSheetView(targets: targets, tap: tap).ripulThemeRoot())
         if let sheet = host.sheetPresentationController {
             sheet.detents = [.medium(), .large()]
         }
@@ -229,11 +231,11 @@ struct RipulAppearanceDetailView: View {
                         Text(binding.kind == .colourToken ? "Edit shared token" : "Change style")
                     }
                     .uiKitIdentifier("inspector.appearance.edit.\(binding.id)")
-                } footer: {
+                } footer: { RipulSectionFooter {
                     Text(binding.kind == .colourToken
                          ? "Changes apply wherever this token is used."
                          : "The style assignment applies to this element. Individual overrides still apply.")
-                }
+                } }
             } else {
                 Text("This appearance assignment is no longer available.")
             }
@@ -272,7 +274,7 @@ private struct RipulAppearanceOptionsView: View {
                         .foregroundStyle(.secondary)
                 }
                 ForEach(item.sections()) { section in
-                    Section(section.title) {
+                    Section(themed: section.title) {
                         ForEach(section.rows) { row in
                             Button {
                                 let line = row.select()
@@ -335,9 +337,9 @@ public struct RipulThemeRemapSheetView: View {
                             .uiKitIdentifier("inspector.appearance.\(item.id)")
                         }
                     }
-                } header: {
+                } header: { RipulSectionHeader {
                     Text(tap.view.accessibilityIdentifier ?? String(describing: type(of: tap.view)))
-                }
+                } }
                 if let editorAction = RipulThemeRemapSheetPresenter.editorAction {
                     Section {
                         Button {
@@ -378,6 +380,14 @@ public struct RipulThemeRemapSheetView: View {
 extension UIColor {
     /// Parse a `#RRGGBB` / `RRGGBB` hex string. Returns nil on malformed input.
     convenience init?(ripulHexString hex: String) {
+        // `system:label` and `#RRGGBBAA`: read by the shared grammar (docs/theming.md). A
+        // system colour comes back as a fresh dynamic colour, so the caller may tag it.
+        if hex.hasPrefix("system:") || hex.trimmingCharacters(in: .whitespacesAndNewlines).count > 7 {
+            guard let literal = RipulColorLiteral(hex) else { return nil }
+            let base = RipulTheme.platformColor(literal)
+            self.init { base.resolvedColor(with: $0) }
+            return
+        }
         var s = hex.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
         if s.hasPrefix("#") { s.removeFirst() }
         guard s.count == 6, let rgb = UInt64(s, radix: 16) else { return nil }

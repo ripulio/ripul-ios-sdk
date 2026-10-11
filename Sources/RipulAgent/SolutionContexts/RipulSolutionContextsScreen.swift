@@ -124,8 +124,8 @@ public struct RipulSolutionContextsScreen: View {
             if let error = model.errorMessage {
                 Section {
                     Label(error, systemImage: "exclamationmark.triangle")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
+                        .font(.ripul(.footnote))
+                        .foregroundStyle(.ripul(.textSecondary))
                 }
             }
             Section {
@@ -138,9 +138,9 @@ public struct RipulSolutionContextsScreen: View {
                     .buttonStyle(.plain)
                     .disabled(context.isBuiltIn)
                 }
-            } footer: {
+            } footer: { RipulSectionFooter {
                 Text("A context selects which tools (and prompt) a session gets. Reference a collection to curate membership once and have every referencing context follow it live. Enter one in the console chat with /context <id>.")
-            }
+            } }
         }
         .uiKitIdentifier("RipulSolutionContexts.list")
         .navigationTitle("Solution Contexts")
@@ -156,12 +156,12 @@ public struct RipulSolutionContextsScreen: View {
         }
         .refreshable { await model.load() }
         .task { await model.load() }
-        .sheet(isPresented: $creating) {
+        .ripulSheet(isPresented: $creating) {
             NavigationStack {
                 RipulSolutionContextEditorView(model: model, existing: nil, sources: sources)
             }
         }
-        .sheet(item: $editing) { context in
+        .ripulSheet(item: $editing) { context in
             NavigationStack {
                 RipulSolutionContextEditorView(model: model, existing: context, sources: sources)
             }
@@ -177,23 +177,23 @@ public struct RipulSolutionContextsScreen: View {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
                     Text(context.name)
-                        .font(.subheadline.weight(.semibold))
+                        .font(.ripul(.subheadline, weight: .semibold))
                     if context.isSeeded {
                         Text("seeded")
-                            .font(.caption2)
+                            .font(.ripul(.caption2))
                             .padding(.horizontal, 5).padding(.vertical, 1)
-                            .background(Color.secondary.opacity(0.15), in: Capsule())
+                            .background(Color.ripul(.textSecondary).opacity(0.15), in: Capsule())
                     }
                 }
                 Text(membershipSummary(context))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(.ripul(.caption))
+                    .foregroundStyle(.ripul(.textSecondary))
                     .lineLimit(1)
             }
             Spacer()
             Image(systemName: "chevron.right")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
+                .font(.ripulIcon(.caption))
+                .foregroundStyle(.ripul(.textTertiary))
         }
         .contentShape(Rectangle())
     }
@@ -242,7 +242,7 @@ struct RipulSolutionContextEditorView: View {
 
     var body: some View {
         Form {
-            Section("Context") {
+            Section(themed: "Context") {
                 TextField("Records", text: $name)
                     .uiKitIdentifier("RipulSolutionContexts.editor.name")
                 TextField("What sessions in this context are for", text: $descriptionText, axis: .vertical)
@@ -257,11 +257,11 @@ struct RipulSolutionContextEditorView: View {
                 )
                 .lineLimit(4...12)
                 .uiKitIdentifier("RipulSolutionContexts.editor.prompt")
-            } header: {
+            } header: { RipulSectionHeader {
                 Text("System prompt")
-            } footer: {
+            } } footer: { RipulSectionFooter {
                 Text("Injected as the system message for sessions in this context. Saved as its own prompt entity (\"<name> prompt\") so the dashboard sees the same one.")
-            }
+            } }
 
             toolsSection(
                 title: "Included tools",
@@ -284,11 +284,11 @@ struct RipulSolutionContextEditorView: View {
                     Button("Delete context", role: .destructive) {
                         confirmingDelete = true
                     }
-                } footer: {
+                } footer: { RipulSectionFooter {
                     if existing?.isSeeded == true {
                         Text("This is a seeded context. Deleting it is allowed — it will be re-created empty on the next seeding touch (new site key or console sign-in).")
                     }
-                }
+                } }
             }
         }
         .navigationTitle(isEditing ? "Edit Context" : "New Context")
@@ -314,7 +314,7 @@ struct RipulSolutionContextEditorView: View {
         } message: {
             Text("Sessions using it fall back to no context. Site keys listing it must be updated separately.")
         }
-        .sheet(item: $pickingFor) { target in
+        .ripulSheet(item: $pickingFor) { target in
             NavigationStack {
                 RipulContextToolPicker(sources: sources) { entry in
                     switch target {
@@ -337,10 +337,10 @@ struct RipulSolutionContextEditorView: View {
             ForEach(tools.wrappedValue, id: \.self) { entry in
                 HStack(spacing: 8) {
                     Image(systemName: entry.hasPrefix("group://") ? "folder.badge.gearshape" : "wrench.and.screwdriver")
-                        .font(.caption)
+                        .font(.ripulIcon(.caption))
                         .foregroundStyle(entry.hasPrefix("group://") ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
                     Text(entry)
-                        .font(.callout.monospaced())
+                        .font(.ripul(.callout, family: .code))
                 }
             }
             .onDelete { offsets in tools.wrappedValue.remove(atOffsets: offsets) }
@@ -349,11 +349,11 @@ struct RipulSolutionContextEditorView: View {
             } label: {
                 Label("Add", systemImage: "plus.circle")
             }
-        } header: {
+        } header: { RipulSectionHeader {
             Text(title)
-        } footer: {
+        } } footer: { RipulSectionFooter {
             Text(footer)
-        }
+        } }
     }
 
     private func loadExisting() {
@@ -400,17 +400,17 @@ private struct RipulContextToolPicker: View {
                 }
                 if collections.isEmpty {
                     Text("No collections yet — create one under Tool Collections.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
+                        .font(.ripul(.footnote))
+                        .foregroundStyle(.ripul(.textSecondary))
                 }
-            } header: {
+            } header: { RipulSectionHeader {
                 Text("Collections (by reference)")
-            } footer: {
+            } } footer: { RipulSectionFooter {
                 Text("A reference stays live: edit the collection and every context using it follows on the next request.")
-            }
+            } }
 
             ForEach(sources.catalogs()) { catalog in
-                Section(catalog.name) {
+                Section(themed: catalog.name) {
                     ForEach(catalog.tools, id: \.name) { tool in
                         // Context whitelists match WEB-side names exactly; a
                         // native tool's web name is host_-prefixed.
@@ -424,7 +424,7 @@ private struct RipulContextToolPicker: View {
                     TextField("web tool name", text: $freeText)
                         .autocorrectionDisabled()
                         .textInputAutocapitalization(.never)
-                        .font(.callout.monospaced())
+                        .font(.ripul(.callout, family: .code))
                     Button("Add") {
                         let trimmed = freeText.trimmingCharacters(in: .whitespaces)
                         guard !trimmed.isEmpty else { return }
@@ -434,11 +434,11 @@ private struct RipulContextToolPicker: View {
                     }
                     .disabled(freeText.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
-            } header: {
+            } header: { RipulSectionHeader {
                 Text("Other (exact name)")
-            } footer: {
+            } } footer: { RipulSectionFooter {
                 Text("For web app or deployed tools — stored exactly as typed.")
-            }
+            } }
         }
         .navigationTitle("Add to context")
         .navigationBarTitleDisplayMode(.inline)
@@ -462,10 +462,10 @@ private struct RipulContextToolPicker: View {
         } label: {
             HStack(spacing: 8) {
                 Image(systemName: icon)
-                    .font(.caption)
+                    .font(.ripulIcon(.caption))
                     .foregroundStyle(.tint)
                 Text(display)
-                    .font(.callout.monospaced())
+                    .font(.ripul(.callout, family: .code))
                 Spacer()
                 Image(systemName: "plus.circle")
                     .foregroundStyle(.tint)

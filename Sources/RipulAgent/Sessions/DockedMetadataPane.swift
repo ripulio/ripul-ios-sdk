@@ -56,14 +56,14 @@ struct DockedMetadataPane<Panel: View>: ViewModifier {
                     panel
                         .frame(width: paneWidth)
                         .frame(maxHeight: .infinity, alignment: .top)
-                        .background(Color(uiColor: .secondarySystemBackground))
+                        .background(Color.ripul(system: .secondarySystemBackground))
                         .preference(key: RipulMetadataColumnWidthKey.self, value: paneWidth + 1)
                 }
             }
         }
         // The previous inspector hosting controller supplied this opaque surface.
         // Compact navigation keeps the app sidebar mounted behind the chat.
-        .background(Color(uiColor: .systemBackground).ignoresSafeArea(.container))
+        .background(Color.ripul(.canvas).ignoresSafeArea(.container))
         .onChange(of: sizeClass) { _, _ in resizeStart = nil }
         #if targetEnvironment(macCatalyst)
         .ignoresSafeArea(.container, edges: .top)

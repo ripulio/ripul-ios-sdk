@@ -128,7 +128,7 @@ public struct RipulSolutionsScreen: View {
             // Opaque, like every other sidebar destination (Files, Dock, CMS
             // Test Bed). Without it the screen is only its glass panel and the
             // app sidebar shows straight through the gaps.
-            .background(Color(uiColor: .systemBackground))
+            .background(Color.ripul(.canvas))
             .uiKitIdentifier("RipulSolutionsScreen")
             .ripulTopBarInset {
                 GlassTopBar(
@@ -147,10 +147,10 @@ public struct RipulSolutionsScreen: View {
                     menu: { EmptyView() }
                 )
             }
-            .sheet(isPresented: $showingTheme) {
+            .ripulSheet(isPresented: $showingTheme) {
                 RipulThemeManagementScreen(baseURL: management.baseURL, tokenProvider: management.tokenProvider)
             }
-            .sheet(isPresented: $showingCollections) {
+            .ripulSheet(isPresented: $showingCollections) {
                 NavigationStack {
                     RipulToolCollectionsScreen(
                         catalogs: management.registry.editorCatalogs()
@@ -164,7 +164,7 @@ public struct RipulSolutionsScreen: View {
                     }
                 }
             }
-            .sheet(isPresented: $showingMacros) {
+            .ripulSheet(isPresented: $showingMacros) {
                 MacroLibraryScreen(
                     client: RipulMacroClient(baseURL: management.baseURL, tokenProvider: management.tokenProvider),
                     onChange: {
@@ -191,7 +191,7 @@ public struct RipulSolutionsScreen: View {
             .onReceive(NotificationCenter.default.publisher(for: .ripulOpenMacroEditor)) { _ in
                 consumeMacroDeepLink()
             }
-            .sheet(isPresented: $showingContexts) {
+            .ripulSheet(isPresented: $showingContexts) {
                 NavigationStack {
                     RipulSolutionContextsScreen(
                         client: RipulSolutionContextsClient(
@@ -219,7 +219,7 @@ public struct RipulSolutionsScreen: View {
                     }
                 }
             }
-            .sheet(isPresented: $showingViewContexts) {
+            .ripulSheet(isPresented: $showingViewContexts) {
                 NavigationStack {
                     RipulViewContextsScreen(client: RipulViewContextsClient(
                         baseURL: management.baseURL,
@@ -232,7 +232,7 @@ public struct RipulSolutionsScreen: View {
                     }
                 }
             }
-            .sheet(isPresented: $showingBuilds) {
+            .ripulSheet(isPresented: $showingBuilds) {
                 if let app = management.buildsApp {
                     NavigationStack {
                         RipulBuildsScreen(
@@ -248,7 +248,7 @@ public struct RipulSolutionsScreen: View {
                     }
                 }
             }
-            .sheet(isPresented: $showingSiteKeys) {
+            .ripulSheet(isPresented: $showingSiteKeys) {
                 NavigationStack {
                     RipulSiteKeysScreen(
                         siteKeysClient: RipulSiteKeysClient(
@@ -267,7 +267,7 @@ public struct RipulSolutionsScreen: View {
                     }
                 }
             }
-            .sheet(isPresented: $showingModels) {
+            .ripulSheet(isPresented: $showingModels) {
                 NavigationStack {
                     RipulModelCatalogScreen(
                         client: RipulModelCatalogClient(
@@ -282,7 +282,7 @@ public struct RipulSolutionsScreen: View {
                     }
                 }
             }
-            .sheet(isPresented: $showingUsers) {
+            .ripulSheet(isPresented: $showingUsers) {
                 NavigationStack {
                     RipulUsersScreen(
                         client: RipulUsersClient(
@@ -297,7 +297,7 @@ public struct RipulSolutionsScreen: View {
                     }
                 }
             }
-            .sheet(isPresented: $showingMessages) {
+            .ripulSheet(isPresented: $showingMessages) {
                 NavigationStack {
                     RipulMessagesScreen(
                         baseURL: management.baseURL,
@@ -310,7 +310,7 @@ public struct RipulSolutionsScreen: View {
                     }
                 }
             }
-            .sheet(isPresented: $showingVoiceProfiles) {
+            .ripulSheet(isPresented: $showingVoiceProfiles) {
                 NavigationStack {
                     VoiceProfilesScreen(
                         baseURL: management.baseURL,
@@ -323,7 +323,7 @@ public struct RipulSolutionsScreen: View {
                     }
                 }
             }
-            .sheet(isPresented: $showingBilling) {
+            .ripulSheet(isPresented: $showingBilling) {
                 NavigationStack {
                     RipulBillingScreen(
                         billingClient: RipulBillingClient(
@@ -523,15 +523,15 @@ public struct RipulSolutionsScreen: View {
                     )) {
                         HStack(spacing: 12) {
                             Image(systemName: "person.badge.key")
-                                .font(.body)
+                                .font(.ripulIcon(.body))
                                 .foregroundStyle(.tint)
                                 .frame(width: 24)
                             VStack(alignment: .leading, spacing: 1) {
                                 Text("Include end-user tools")
-                                    .font(.subheadline.weight(.medium))
+                                    .font(.ripul(.subheadline, weight: .medium))
                                 Text("Lend this dev agent the app's tools — this session only")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
+                                    .font(.ripul(.caption))
+                                    .foregroundStyle(.ripul(.textSecondary))
                             }
                         }
                     }
@@ -567,21 +567,21 @@ public struct RipulSolutionsScreen: View {
         Button(action: action) {
             HStack(spacing: 12) {
                 Image(systemName: icon)
-                    .font(.body)
+                    .font(.ripulIcon(.body))
                     .foregroundStyle(.tint)
                     .frame(width: 24)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(title)
-                        .font(.subheadline.weight(.medium))
-                        .foregroundStyle(.primary)
+                        .font(.ripul(.subheadline, weight: .medium))
+                        .foregroundStyle(.ripul(.text))
                     Text(subtitle)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .font(.ripul(.caption))
+                        .foregroundStyle(.ripul(.textSecondary))
                 }
                 Spacer()
                 Image(systemName: "chevron.right")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
+                    .font(.ripulIcon(.caption))
+                    .foregroundStyle(.ripul(.textTertiary))
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
@@ -627,7 +627,7 @@ public struct SolutionsSheet: ViewModifier {
                 guard management != nil else { return }
                 isPresented = true
             }
-            .sheet(isPresented: $isPresented) {
+            .ripulSheet(isPresented: $isPresented) {
                 if let management {
                     RipulSolutionsScreen(
                         management: management,

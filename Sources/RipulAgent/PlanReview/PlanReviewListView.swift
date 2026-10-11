@@ -110,7 +110,7 @@ public struct PlanReviewListView: View {
     @ViewBuilder
     private var projectFilterMenu: some View {
         if availableProjects.count > 1 {
-            Menu {
+            Menu { MenuIcons {
                 Picker("Filter by Project", selection: Binding(
                     get: { activeProjectFilter },
                     set: { projectFilter = $0 }
@@ -121,15 +121,15 @@ public struct PlanReviewListView: View {
                     }
                 }
                 .pickerStyle(.inline)
-            } label: {
+            }} label: {
                 HStack(spacing: 4) {
                     Image(systemName: "line.3.horizontal.decrease")
-                        .font(.caption2.weight(.bold))
+                        .font(.ripulIcon(.caption2, weight: .bold))
                     Text(activeProjectFilter ?? "All Projects")
-                        .font(.caption.weight(.semibold))
+                        .font(.ripul(.caption, weight: .semibold))
                         .lineLimit(1)
                 }
-                .foregroundStyle(activeProjectFilter != nil ? Color.accentColor : Color.secondary)
+                .foregroundStyle(activeProjectFilter != nil ? Color.accentColor : Color.ripul(.textSecondary))
             }
             .uiKitIdentifier("PlanReviewListView.projectFilterMenu")
         }
@@ -214,8 +214,8 @@ public struct PlanReviewListView: View {
                         Spacer(minLength: 0)
                         if !isSelecting {
                             Image(systemName: "chevron.right")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(.tertiary)
+                                .font(.ripulIcon(.caption, weight: .semibold))
+                                .foregroundStyle(.ripul(.textTertiary))
                         }
                     }
                 },
@@ -276,7 +276,7 @@ public struct PlanReviewListView: View {
                                 ? "Deleting…"
                                 : "Delete (\(selectedSlugs.count))",
                             systemImage: "trash",
-                            tint: .red,
+                            tint: .ripul(.danger),
                             perform: { showBatchDeleteConfirm = true }
                         )
                     ],
@@ -313,7 +313,7 @@ public struct PlanReviewListView: View {
                 .uiKitIdentifier("PlanReviewListView.createButton")
             }
         }
-        .sheet(isPresented: $showingCreate, onDismiss: {
+        .ripulSheet(isPresented: $showingCreate, onDismiss: {
             // Present the draft run sheet only AFTER the create sheet has
             // fully dismissed. The previous timed sleep raced the dismissal
             // animation, and when it lost, the run sheet (intent + MODEL +
@@ -331,7 +331,7 @@ public struct PlanReviewListView: View {
                 }
             }
         }
-        .sheet(item: $draftTarget) { target in
+        .ripulSheet(item: $draftTarget) { target in
             PlanRunSheet(
                 planTitle: store.detail?.title ?? target.slug,
                 models: store.models,
@@ -459,7 +459,7 @@ public struct PlanReviewListView: View {
     /// Where plans are read from, as an explicit control. Menu of the
     /// machine's directories plus Automatic (the old inference).
     private var workDirRow: some View {
-        Menu {
+        Menu { MenuIcons {
             Button {
                 choose(nil)
             } label: {
@@ -480,24 +480,24 @@ public struct PlanReviewListView: View {
                     }
                 }
             }
-        } label: {
+        }} label: {
             HStack(spacing: 10) {
                 Image(systemName: "folder")
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.ripul(.textSecondary))
                 VStack(alignment: .leading, spacing: 2) {
                     Text(displayFolder)
-                        .font(.subheadline.weight(.medium))
-                        .foregroundStyle(.primary)
+                        .font(.ripul(.subheadline, weight: .medium))
+                        .foregroundStyle(.ripul(.text))
                         .lineLimit(1)
                         .truncationMode(.head)
                     Text(folderCaption)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .font(.ripul(.caption))
+                        .foregroundStyle(.ripul(.textSecondary))
                 }
                 Spacer()
                 Image(systemName: "chevron.up.chevron.down")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+                    .font(.ripulIcon(.caption2))
+                    .foregroundStyle(.ripul(.textSecondary))
             }
             .contentShape(Rectangle())
         }
@@ -546,28 +546,28 @@ public struct PlanReviewListView: View {
             } else {
                 Image(systemName: symbol(for: entry))
                     .foregroundStyle(tint(for: entry))
-                    .font(.title3)
+                    .font(.ripulIcon(.title3))
                     .frame(width: 24)
             }
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(entry.title).font(.body).lineLimit(2)
+                Text(entry.title).font(.ripul(.body)).lineLimit(2)
                 if isRunning(entry) {
                     Text("Agent running…")
-                        .font(.caption)
-                        .foregroundStyle(Color.blue)
+                        .font(.ripul(.caption))
+                        .foregroundStyle(Color.ripul(.info))
                 } else {
                     // Subtitle then lozenges, the same order the session row
                     // uses — the sentence answers "does this need me?", the
                     // lozenges answer "which one is this?".
                     HStack(spacing: 6) {
                         Text(subtitle(for: entry))
-                            .font(.caption)
-                            .foregroundStyle(entry.blockingOutstanding > 0 ? Color.orange : Color.secondary)
+                            .font(.ripul(.caption))
+                            .foregroundStyle(entry.blockingOutstanding > 0 ? Color.ripul(.warning) : Color.ripul(.textSecondary))
                         if activeProjectFilter == nil, let project = entry.projectName {
                             Text("· \(project)")
-                                .font(.caption)
-                                .foregroundStyle(.tertiary)
+                                .font(.ripul(.caption))
+                                .foregroundStyle(.ripul(.textTertiary))
                         }
                         ForEach(store.tags(for: entry), id: \.self) { tag in
                             TagLozenge(text: tag)
@@ -584,8 +584,8 @@ public struct PlanReviewListView: View {
             // the session list uses ("5m", "2h", "3d").
             if let active = Self.lastActiveDate(for: entry) {
                 RelativeTimeText(date: active)
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
+                    .font(.ripul(.caption2))
+                    .foregroundStyle(.ripul(.textTertiary))
             }
         }
         .padding(.vertical, 2)
@@ -635,11 +635,11 @@ public struct PlanReviewListView: View {
 
     private func tint(for entry: PlanListEntry) -> Color {
         switch entry.state {
-        case .template: return .secondary
-        case .drafted: return .blue
-        case .openFindings: return .orange
-        case .lockedWithTasks: return .teal
-        case .lockedClean: return .green
+        case .template: return .ripul(.textSecondary)
+        case .drafted: return .ripul(.info)
+        case .openFindings: return .ripul(.warning)
+        case .lockedWithTasks: return .ripul(system: .systemTeal)
+        case .lockedClean: return .ripul(.success)
         }
     }
 

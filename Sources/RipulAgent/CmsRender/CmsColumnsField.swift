@@ -557,7 +557,7 @@ private struct CmsFormatPatternField: View {
                 .autocorrectionDisabled()
             }
         }
-        .sheet(isPresented: $showPicker) {
+        .ripulSheet(isPresented: $showPicker) {
             FormatPresetPicker(groups: Self.groups, current: value) { picked in
                 onChange(picked)
                 showPicker = false

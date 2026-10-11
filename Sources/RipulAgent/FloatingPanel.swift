@@ -77,7 +77,7 @@ public struct RipulFloatingPanel<Content: View>: View {
                 defaultSize: CGSize,
                 minSize: CGSize = CGSize(width: 220, height: 180),
                 showsResizeGrip: Bool = true,
-                gripTint: UIColor = UIColor.white.withAlphaComponent(0.55),
+                gripTint: UIColor = UIColor.ripul(system: .white).withAlphaComponent(0.55),
                 store: UserDefaults = .standard,
                 aspectRatio: CGFloat? = nil,
                 contentInsets: UIEdgeInsets = .zero,

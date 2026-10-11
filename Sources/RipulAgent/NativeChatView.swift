@@ -58,8 +58,8 @@ public struct NativeChatView: View {
 
     private var emptyState: some View {
         Text("No messages yet.\nEnable forwarding: window.__ripulSetNativeChatForwarding(true)")
-            .font(.footnote)
-            .foregroundStyle(.secondary)
+            .font(.ripul(.footnote))
+            .foregroundStyle(.ripul(.textSecondary))
             .multilineTextAlignment(.center)
             .frame(maxWidth: .infinity)
             .padding(.top, 40)
@@ -92,20 +92,20 @@ private struct NativeChatMessageRow: View {
                     if isUser {
                         Spacer(minLength: 40)
                         Image(systemName: "person.circle.fill")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
+                            .font(.ripulIcon(.caption2))
+                            .foregroundStyle(.ripul(.textSecondary))
                         Text(label)
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
+                            .font(.ripul(.caption2))
+                            .foregroundStyle(.ripul(.textSecondary))
                         Spacer(minLength: 0).frame(width: 12)
                     } else {
                         Spacer(minLength: 0).frame(width: 12)
                         Image(systemName: "sparkle")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
+                            .font(.ripulIcon(.caption2))
+                            .foregroundStyle(.ripul(.textSecondary))
                         Text(label)
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
+                            .font(.ripul(.caption2))
+                            .foregroundStyle(.ripul(.textSecondary))
                         Spacer(minLength: 40)
                     }
                 }
@@ -115,9 +115,9 @@ private struct NativeChatMessageRow: View {
                 VStack(alignment: .leading, spacing: 4) {
                     if let thinking = message.thinking, !thinking.isEmpty {
                         Text(thinking)
-                            .font(.callout)
+                            .font(.ripul(.callout))
                             .italic()
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(.ripul(.textSecondary))
                     }
                     if !message.content.isEmpty {
                         markdownBody(message.content)
@@ -127,15 +127,15 @@ private struct NativeChatMessageRow: View {
                         // Assistant prose is filled in by MessagePipeline (PR 3).
                         HStack(spacing: 6) {
                             Image(systemName: symbolName)
-                                .font(.caption2)
-                                .foregroundStyle(.tertiary)
+                                .font(.ripulIcon(.caption2))
+                                .foregroundStyle(.ripul(.textTertiary))
                             Text(message.label ?? message.method ?? message.role.rawValue)
-                                .font(.footnote.weight(.medium))
-                                .foregroundStyle(.secondary)
+                                .font(.ripul(.footnote, weight: .medium))
+                                .foregroundStyle(.ripul(.textSecondary))
                             if let status = message.status, status == "error" {
                                 Text("· error")
-                                    .font(.footnote)
-                                    .foregroundStyle(.red)
+                                    .font(.ripul(.footnote))
+                                    .foregroundStyle(.ripul(.danger))
                             }
                         }
                     }
@@ -149,7 +149,7 @@ private struct NativeChatMessageRow: View {
     }
 
     private var bubbleColor: Color {
-        isUser ? Color.accentColor.opacity(0.18) : Color.secondary.opacity(0.12)
+        isUser ? Color.accentColor.opacity(0.18) : Color.ripul(.textSecondary).opacity(0.12)
     }
 
     /// Full GFM markdown (headings, lists, tables, code blocks, blockquotes) via
@@ -161,7 +161,7 @@ private struct NativeChatMessageRow: View {
         Markdown(string)
             .markdownTextStyle { FontSize(.em(1.0)) }
             .markdownTextStyle(\.link) {
-                ForegroundColor(.blue)
+                ForegroundColor(.ripul(.info))
                 UnderlineStyle(.single)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -189,34 +189,34 @@ private struct NativeChatMessageRow: View {
             .padding(12)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .background(Color.primary.opacity(0.06))          // ~ action.hover
+        .background(Color.ripul(.text).opacity(0.06))          // ~ action.hover
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 
     private func optionRow(_ opt: NativeAskUser.Option, multiSelect: Bool) -> some View {
         HStack(alignment: .top, spacing: 8) {
             Image(systemName: multiSelect ? "square" : "circle")
-                .font(.system(size: 13))
-                .foregroundStyle(.secondary)
+                .font(.ripulIcon(size: 13))
+                .foregroundStyle(.ripul(.textSecondary))
                 .padding(.top, 2)
             VStack(alignment: .leading, spacing: 2) {
                 Text(opt.label)
-                    .font(.subheadline)
+                    .font(.ripul(.subheadline))
                 if let desc = opt.description, !desc.isEmpty {
                     Text(desc)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .font(.ripul(.caption))
+                        .foregroundStyle(.ripul(.textSecondary))
                 }
             }
             Spacer(minLength: 8)
             if !opt.value.isEmpty {
                 Text(opt.value)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+                    .font(.ripul(.caption2))
+                    .foregroundStyle(.ripul(.textSecondary))
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2)
                     .overlay(
-                        Capsule().stroke(Color.secondary.opacity(0.4), lineWidth: 1)
+                        Capsule().stroke(Color.ripul(.textSecondary).opacity(0.4), lineWidth: 1)
                     )
                     .fixedSize()
             }
@@ -225,10 +225,10 @@ private struct NativeChatMessageRow: View {
         .padding(.vertical, 6)
         .background(
             RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .fill(Color.primary.opacity(0.04))          // ~ background.paper over the hover card
+                .fill(Color.ripul(.text).opacity(0.04))          // ~ background.paper over the hover card
                 .overlay(
                     RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .stroke(Color.secondary.opacity(0.25), lineWidth: 1)
+                        .stroke(Color.ripul(.textSecondary).opacity(0.25), lineWidth: 1)
                 )
         )
     }
@@ -239,31 +239,31 @@ private struct NativeChatMessageRow: View {
         let isOk = tn.status == "completed"
         let isFailed = tn.status == "failed" || tn.status == "error"
         let iconName = isOk ? "checkmark.circle.fill" : isFailed ? "xmark.circle.fill" : "clock.fill"
-        let iconColor: Color = isOk ? .green : isFailed ? .red : .secondary
+        let iconColor: Color = isOk ? Color.ripul(.success) : isFailed ? Color.ripul(.danger) : Color.ripul(.textSecondary)
         let displayText = tn.summary ?? tn.taskId ?? "Task completed"
         HStack(alignment: .top, spacing: 6) {
             Image(systemName: iconName)
-                .font(.system(size: 12))
+                .font(.ripulIcon(size: 12))
                 .foregroundStyle(iconColor)
                 .padding(.top, 1)
             Text(displayText)
-                .font(.footnote)
-                .foregroundStyle(.secondary)
+                .font(.ripul(.footnote))
+                .foregroundStyle(.ripul(.textSecondary))
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 5)
-        .background(.secondary.opacity(0.07), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous).stroke(.secondary.opacity(0.18), lineWidth: 0.5))
+        .background(.ripul(.textSecondary).opacity(0.07), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous).stroke(.ripul(.textSecondary).opacity(0.18), lineWidth: 0.5))
         .padding(.horizontal, 12)
     }
 
     /// Web severity → colour: error→red, warning→orange, else primary (accent).
     private func severityColor(_ severity: String?) -> Color {
         switch severity {
-        case "error": return .red
-        case "warning": return .orange
+        case "error": return .ripul(.danger)
+        case "warning": return .ripul(.warning)
         default: return .accentColor
         }
     }

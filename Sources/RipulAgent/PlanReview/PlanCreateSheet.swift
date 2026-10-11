@@ -54,15 +54,15 @@ public struct PlanCreateSheet: View {
                         .submitLabel(.done)
                         .onSubmit { if !trimmed.isEmpty { create(draftAfter: false) } }
                         .uiKitIdentifier("PlanCreateSheet.titleField")
-                } footer: {
+                } footer: { RipulSectionFooter {
                     if !previewSlug.isEmpty {
                         Text("docs/plans/\(previewSlug).md")
-                            .font(.caption)
+                            .font(.ripul(.caption))
                             .monospaced()
                     } else {
                         Text("Creates a plan document with Problem, Approach and Open questions sections.")
                     }
-                }
+                } }
 
                 Section {
                     TextField(
@@ -72,16 +72,16 @@ public struct PlanCreateSheet: View {
                     )
                     .lineLimit(3...8)
                     .uiKitIdentifier("PlanCreateSheet.problemField")
-                } footer: {
+                } footer: { RipulSectionFooter {
                     Text("Seeds the Problem section. An agent drafts the Approach and Open questions from it — you review, it writes.")
-                }
+                } }
 
                 Section {
                     Button {
                         create(draftAfter: true)
                     } label: {
                         Label("Create & draft with agent", systemImage: "play.circle.fill")
-                            .font(.subheadline.weight(.semibold))
+                            .font(.ripul(.subheadline, weight: .semibold))
                             .frame(maxWidth: .infinity)
                     }
                     .disabled(trimmed.isEmpty || working)

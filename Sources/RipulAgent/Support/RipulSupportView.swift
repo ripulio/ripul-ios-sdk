@@ -28,7 +28,7 @@ public struct RipulSupportView: View {
             // navigation bar, and a sheet that can't be swiped away must still have Cancel.
             ZStack {
                 Text("Get Help")
-                    .font(.headline)
+                    .font(.ripul(.headline))
                 HStack {
                     Button(closeTitle) { close() }
                         .uiKitIdentifier("RipulSupportView.close")
@@ -100,25 +100,25 @@ public struct RipulSupportView: View {
             ProgressView()
                 .controlSize(.large)
             Text("Getting a code…")
-                .font(.headline)
+                .font(.ripul(.headline))
         case .waiting(let code):
             Text("Read this code to the person helping you")
-                .font(.headline)
+                .font(.ripul(.headline))
                 .multilineTextAlignment(.center)
             RipulSupportCode(code: code)
             Text("They will ask to see \(RipulLiveViewIdentity.appName). Nothing is shared until you agree.")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+                .font(.ripul(.subheadline))
+                .foregroundStyle(.ripul(.textSecondary))
                 .multilineTextAlignment(.center)
             HStack(spacing: 8) {
                 ProgressView()
                 Text("Waiting for them to enter it…")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+                    .font(.ripul(.footnote))
+                    .foregroundStyle(.ripul(.textSecondary))
             }
         case .asking(_, let supporter):
             Text("\(supporter) would like to see \(RipulLiveViewIdentity.appName)")
-                .font(.title3.weight(.semibold))
+                .font(.ripul(.title3, weight: .semibold))
                 .multilineTextAlignment(.center)
                 .uiKitIdentifier("RipulSupportView.asking")
             VStack(alignment: .leading, spacing: 10) {
@@ -131,30 +131,30 @@ public struct RipulSupportView: View {
             }
         case .sharing(let supporter):
             Image(systemName: "checkmark.circle.fill")
-                .font(.system(size: 52))
-                .foregroundStyle(.green)
+                .font(.ripulIcon(size: 52))
+                .foregroundStyle(.ripul(.success))
                 .accessibilityHidden(true)
             Text(support.isPaused ? "Waiting for \(supporter) to reconnect…" : "\(supporter) can see \(RipulLiveViewIdentity.appName)")
-                .font(.title3.weight(.semibold))
+                .font(.ripul(.title3, weight: .semibold))
                 .multilineTextAlignment(.center)
         case .ended(let reason):
             Image(systemName: "checkmark.circle")
-                .font(.system(size: 52))
-                .foregroundStyle(.secondary)
+                .font(.ripulIcon(size: 52))
+                .foregroundStyle(.ripul(.textSecondary))
                 .accessibilityHidden(true)
             Text(reason)
-                .font(.headline)
+                .font(.ripul(.headline))
                 .multilineTextAlignment(.center)
             Text("Nothing is being shared.")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+                .font(.ripul(.subheadline))
+                .foregroundStyle(.ripul(.textSecondary))
         case .failed(let reason):
             Image(systemName: "exclamationmark.triangle")
-                .font(.system(size: 52))
-                .foregroundStyle(.orange)
+                .font(.ripulIcon(size: 52))
+                .foregroundStyle(.ripul(.warning))
                 .accessibilityHidden(true)
             Text(reason)
-                .font(.headline)
+                .font(.ripul(.headline))
                 .multilineTextAlignment(.center)
         }
     }
@@ -169,7 +169,7 @@ public struct RipulSupportView: View {
                 } label: {
                     Text("Allow").frame(maxWidth: .infinity)
                 }
-                .buttonStyle(.borderedProminent)
+                .ripulProminentButtonStyle()
                 .controlSize(.large)
                 .uiKitIdentifier("RipulSupportView.allow")
                 Button {
@@ -220,7 +220,7 @@ private struct RipulSupportCode: View {
 
     var body: some View {
         Text(spaced)
-            .font(.system(size: 52, weight: .bold, design: .rounded))
+            .font(.system(size: 52, weight: .bold, design: .rounded)) // theme-exempt: rounded design
             .monospacedDigit()
             .minimumScaleFactor(0.5)
             .lineLimit(1)
@@ -238,7 +238,7 @@ private struct RipulSupportPoint: View {
     var body: some View {
         Label {
             Text(text)
-                .font(.subheadline)
+                .font(.ripul(.subheadline))
                 .fixedSize(horizontal: false, vertical: true)
         } icon: {
             Image(systemName: symbol)
@@ -251,7 +251,7 @@ public extension View {
     /// Presents the support session's screen: ask for a code, wait for the
     /// supporter, agree. Bind it to whatever the app's "Get help" button sets.
     func ripulSupportSheet(isPresented: Binding<Bool>, configuration: RipulSupportConfiguration) -> some View {
-        sheet(isPresented: isPresented) {
+        ripulSheet(isPresented: isPresented) {
             RipulSupportView(configuration: configuration)
                 .presentationDetents([.medium, .large])
         }
@@ -261,7 +261,7 @@ public extension View {
 public extension RipulSupport {
     /// Presents the support session's screen from a UIKit app.
     func present(from presenter: UIViewController, configuration: RipulSupportConfiguration) {
-        let host = UIHostingController(rootView: RipulSupportView(configuration: configuration))
+        let host = UIHostingController(rootView: RipulSupportView(configuration: configuration).ripulThemeRoot())
         if let sheet = host.sheetPresentationController {
             sheet.detents = [.medium(), .large()]
             sheet.prefersGrabberVisible = true
