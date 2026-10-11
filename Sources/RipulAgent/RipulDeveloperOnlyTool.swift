@@ -18,6 +18,7 @@ protocol RipulDeveloperOnlyTool: NativeTool {}
 
 extension ConsoleLogsTool: RipulDeveloperOnlyTool {}
 extension NetworkLogsTool: RipulDeveloperOnlyTool {}
+extension PerfJournalTool: RipulDeveloperOnlyTool {}
 extension InspectScreenTool: RipulDeveloperOnlyTool {}
 
 // MARK: - Screen actuation (ScreenActuationTools.swift is #if canImport(UIKit) — mirror that here)

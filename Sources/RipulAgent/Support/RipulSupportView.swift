@@ -27,7 +27,7 @@ public struct RipulSupportView: View {
             // Its own title and way out, not a navigation bar's: a host app may hide every
             // navigation bar, and a sheet that can't be swiped away must still have Cancel.
             ZStack {
-                Text("Get Help")
+                Text("Get Help").ripulText()
                     .font(.ripul(.headline))
                 HStack {
                     Button(closeTitle) { close() }
@@ -99,10 +99,10 @@ public struct RipulSupportView: View {
         case .idle, .starting:
             ProgressView()
                 .controlSize(.large)
-            Text("Getting a code…")
+            Text("Getting a code…").ripulText()
                 .font(.ripul(.headline))
         case .waiting(let code):
-            Text("Read this code to the person helping you")
+            Text("Read this code to the person helping you").ripulText()
                 .font(.ripul(.headline))
                 .multilineTextAlignment(.center)
             RipulSupportCode(code: code)
@@ -117,7 +117,7 @@ public struct RipulSupportView: View {
                     .foregroundStyle(.ripul(.textSecondary))
             }
         case .asking(_, let supporter):
-            Text("\(supporter) would like to see \(RipulLiveViewIdentity.appName)")
+            Text("\(supporter) would like to see \(RipulLiveViewIdentity.appName)").ripulText()
                 .font(.ripul(.title3, weight: .semibold))
                 .multilineTextAlignment(.center)
                 .uiKitIdentifier("RipulSupportView.asking")
@@ -134,7 +134,7 @@ public struct RipulSupportView: View {
                 .font(.ripulIcon(size: 52))
                 .foregroundStyle(.ripul(.success))
                 .accessibilityHidden(true)
-            Text(support.isPaused ? "Waiting for \(supporter) to reconnect…" : "\(supporter) can see \(RipulLiveViewIdentity.appName)")
+            Text(support.isPaused ? "Waiting for \(supporter) to reconnect…" : "\(supporter) can see \(RipulLiveViewIdentity.appName)").ripulText()
                 .font(.ripul(.title3, weight: .semibold))
                 .multilineTextAlignment(.center)
         case .ended(let reason):
@@ -142,7 +142,7 @@ public struct RipulSupportView: View {
                 .font(.ripulIcon(size: 52))
                 .foregroundStyle(.ripul(.textSecondary))
                 .accessibilityHidden(true)
-            Text(reason)
+            Text(reason).ripulText()
                 .font(.ripul(.headline))
                 .multilineTextAlignment(.center)
             Text("Nothing is being shared.")
@@ -153,7 +153,7 @@ public struct RipulSupportView: View {
                 .font(.ripulIcon(size: 52))
                 .foregroundStyle(.ripul(.warning))
                 .accessibilityHidden(true)
-            Text(reason)
+            Text(reason).ripulText()
                 .font(.ripul(.headline))
                 .multilineTextAlignment(.center)
         }
@@ -219,7 +219,7 @@ private struct RipulSupportCode: View {
     }
 
     var body: some View {
-        Text(spaced)
+        Text(spaced).ripulText()
             .font(.system(size: 52, weight: .bold, design: .rounded)) // theme-exempt: rounded design
             .monospacedDigit()
             .minimumScaleFactor(0.5)
@@ -237,7 +237,7 @@ private struct RipulSupportPoint: View {
 
     var body: some View {
         Label {
-            Text(text)
+            Text(text).ripulText()
                 .font(.ripul(.subheadline))
                 .fixedSize(horizontal: false, vertical: true)
         } icon: {

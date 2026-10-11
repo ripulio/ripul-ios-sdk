@@ -5,7 +5,7 @@ description: Give a SwiftUI iPhone or iPad app its own fonts and colours, light 
 
 # Giving an app a theme
 
-A theme here is one JSON document: colours for light and dark, three font families, and sizes and weights. The RipulAgent Swift package reads it and the app's own screens follow it. This is the procedure for doing that in someone's repository. Follow it in order. It needs RipulAgent 0.7.175 or later: 0.7.174 is the first whose level 1 reaches text, lists and the app's own colours and the first with the theme as a product of its own, and 0.7.175 adds markdown and every other kind of text, a label's title, a prominent button's label and a navigation title's colour.
+A theme here is one JSON document: colours for light and dark, three font families, and sizes and weights. The RipulAgent Swift package reads it and the app's own screens follow it. This is the procedure for doing that in someone's repository. Follow it in order. It needs RipulAgent 0.7.176 or later: 0.7.174 is the first whose level 1 reaches text, lists and the app's own colours and the first with the theme as a product of its own, and 0.7.175 adds markdown and every other kind of text, a label's title, a prominent button's label and a navigation title's colour. From 0.7.176 `migrate --text` writes `.ripulText()`, and a window's root draws the theme's canvas behind a screen with no ground of its own.
 
 Three rules hold throughout:
 
@@ -52,7 +52,7 @@ A Mac has no image library for this by itself: make a Python virtual environment
 
 The package has a build-tool plug-in, `RipulThemeRedirect`. On each build it writes one Swift file into the build folder, and that file is compiled into the app. It declares SwiftUI's own names again (`Font.body`, `Color(.systemBackground)`, `Color("Name")`, `.foregroundStyle(.secondary)`, `Text`, `List`, `Form`, `Section`, `WindowGroup`), each as one call into the package, so the app's existing code follows the theme. No Swift file of the app changes.
 
-1. **Add or move the package** to 0.7.175 or later, `https://github.com/ripulio/ripul-ios-sdk`, on the app target. **Which product:** an app that does not link the package yet, and was asked only for a theme, links `RipulThemeKit`, the theme alone (about 2 MB of a shipping app). Do not give it `RipulAgent`, the whole SDK with its developer console (about 60 MB), unless the person asks for the console. An app that links `RipulAgent` already keeps it; if everything of the app's that uses it is inside `#if DEBUG`, say that the SDK can be left out of the shipping app with one build setting, and where: `docs/theming-for-hosts.md`, "Shipping only the theme".
+1. **Add or move the package** to 0.7.176 or later, `https://github.com/ripulio/ripul-ios-sdk`, on the app target. **Which product:** an app that does not link the package yet, and was asked only for a theme, links `RipulThemeKit`, the theme alone (about 2 MB of a shipping app). Do not give it `RipulAgent`, the whole SDK with its developer console (about 60 MB), unless the person asks for the console. An app that links `RipulAgent` already keeps it; if everything of the app's that uses it is inside `#if DEBUG`, say that the SDK can be left out of the shipping app with one build setting, and where: `docs/theming-for-hosts.md`, "Shipping only the theme".
 2. **Switch the plug-in on for the app target.** In an XcodeGen `project.yml`, under the target:
 
    ```yaml
@@ -63,7 +63,7 @@ The package has a build-tool plug-in, `RipulThemeRedirect`. On each build it wri
 
    In a hand-kept Xcode project (a `.xcodeproj` in git, no generator), make both changes of steps 1 and 2 in `project.pbxproj` yourself, in a commit of their own. Do not ask a person to click: it is six objects, and a build proves them. Where the `xcodeproj` Ruby gem is installed (`gem list xcodeproj`), write them with it; otherwise edit the text, giving each new object a 24-character hexadecimal id that the file does not use. The project gains:
 
-   - one `XCRemoteSwiftPackageReference`, with `repositoryURL = "https://github.com/ripulio/ripul-ios-sdk";` and `requirement = { kind = upToNextMinorVersion; minimumVersion = 0.7.175; };`, listed in the project object's `packageReferences`;
+   - one `XCRemoteSwiftPackageReference`, with `repositoryURL = "https://github.com/ripulio/ripul-ios-sdk";` and `requirement = { kind = upToNextMinorVersion; minimumVersion = 0.7.176; };`, listed in the project object's `packageReferences`;
    - two `XCSwiftPackageProductDependency` objects, each with `package =` that reference: one with `productName = RipulThemeKit;` (or `RipulAgent`, by step 1), one with `productName = "plugin:RipulThemeRedirect";`;
    - the first of them in the app target's `packageProductDependencies`, and in a `PBXBuildFile` (`productRef =` it) listed in the target's Frameworks build phase. A target with no `PBXFrameworksBuildPhase` needs one made and added to its `buildPhases`;
    - one `PBXTargetDependency` with `productRef =` the plug-in's object, listed in the target's `dependencies`. This is what Xcode shows as Build Phases, "Run Build Tool Plug-ins".
@@ -108,7 +108,7 @@ It does not reach, and you should name each with the screens where it shows:
 
 Each is a small edit in the app's source, in a file that imports `RipulThemeKit` (or `RipulAgent`, which contains it). The forms are in `docs/theming-for-hosts.md`, "What it leaves for you" and "Your own colours". The ones that matter most:
 
-- **A text level 1 missed:** `.foregroundStyle(.ripul(.text))` on the `Text` itself. Never on a container or the root: there it recolours the labels of buttons, list links and section headers.
+- **A text level 1 missed:** `.ripulText()` on the `Text` itself. Never on a container or the root: there it recolours the labels of buttons, list links and section headers.
 - **A text level 1 themed that should have kept a container's colour:** give the text that colour itself, or put it on a line with a coloured text.
 - **A list level 1 left to SwiftUI:** `.ripulThemedList()` on the list, and `.ripulThemedListRows()` on each section or row. On the list itself a row background does nothing.
 - **The app's own colour that is not an asset colour:** declare it as a role with today's value as the default, `static let navy = RipulColorRole("navy", default: "#24386b")` in an `extension RipulColorRole`, read it as `.ripul(.navy)`, and name `navy` under `roles` in the document.
@@ -126,7 +126,7 @@ ripul-theme lint                                        # did each replacement k
 
 What the tool does not do, each measured on a real app:
 
-- **`--text` and `--lists` write what level 1 does with no edit**, by the same reading of the source: a text colour on each text with none, and the list modifiers. A text it could not tell was coloured from another file changes colour under the system look, so step 9 finds it: take the line off that text. A list row outside any `Section` needs `.ripulThemedListRows()` written on it.
+- **`--text` and `--lists` write what level 1 does with no edit**, by the same reading of the source: `.ripulText()` on each text with no colour, and the list modifiers. Each leaves its view untouched until a theme names the colour, so the system look cannot move. A text the tool could not tell was coloured from another file takes the theme's ink under the theme: look at each themed screen, and take the line off that text. A list row outside any `Section` needs `.ripulThemedListRows()` written on it.
 - **It writes `import RipulThemeKit`** in each file it left calling an accessor, unless the app has one `@_exported import` of it or of `RipulAgent`.
 - **It does not follow the app's own font helper** (`static func serif(…) -> Font`), and with `--named` it leaves `.black.opacity(…)` inside a gradient or a shadow. `check` lists each.
 - **`lint` reports a line you added by hand** (a root line, a list modifier) as "the hunk adds and removes different numbers of lines". That is the lint not knowing the line, not a moved value.

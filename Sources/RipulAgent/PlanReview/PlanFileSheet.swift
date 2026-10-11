@@ -20,7 +20,7 @@ struct PlanFileSheet: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                Text(contents.isEmpty ? "The file contents are not available from this web build." : contents)
+                Text(contents.isEmpty ? "The file contents are not available from this web build." : contents).ripulText()
                     .font(.ripul(.footnote, family: .code))
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)

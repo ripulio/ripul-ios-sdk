@@ -43,7 +43,9 @@ section is the second: you change settings and add files, and no line of your
 Swift changes. It is in the package from release 0.7.172; from 0.7.174 it
 also reaches text with no colour, lists and your own colours; and from 0.7.175
 markdown and every other kind of text, a label's title, a prominent button's
-label and a navigation title's colour. It has been measured on one app. It is where to start: the numbered steps are for an app
+label and a navigation title's colour. From 0.7.176 a window's root draws the
+canvas, and the migration's own lines leave a view untouched until a theme
+names its colour. It has been measured on one app. It is where to start: the numbered steps are for an app
 that wants what this does not reach.
 
 What you do:
@@ -280,6 +282,14 @@ Two other ways to say the same thing, for an app that cannot put it on a root:
 
 With no name at all, `.ripulThemeRoot()` leaves the app on the system look.
 
+**The canvas.** The root that names the theme is a window's own root, and
+under a theme that names `canvas` it draws that colour behind everything, so
+a screen with no ground of its own (an empty state, a plain stack, a start
+screen) stands on the theme's ground and not on the system's white or black.
+A root you write without a name does the same when you say it is a window's:
+`.ripulThemeRoot(window: true)`. Leave that off the root of a sheet, a popover
+or an overlay: those have a ground already, or are meant to be seen through.
+
 The root carries the accent (as the window's tint, so `.tint`,
 `Color.accentColor` and control tints follow with no edit) and the theme's
 body font for text with no font of its own. A sheet presented with
@@ -458,7 +468,7 @@ app has one `@_exported import` of either. It rewrites:
 | `.buttonStyle(.glassProminent)` | `.ripulGlassProminentButtonStyle()`, likewise |
 | with `--named`: `Color.red`, `.foregroundStyle(.orange)` | `Color.ripul(.danger)`, `.foregroundStyle(.ripul(.warning))` |
 | with `--named`: `.white`, `.black`, `.yellow` and the other hues | the system form, `.ripul(system: .white)` |
-| with `--text`: a `Text` with no colour of its own | `Text("…").foregroundStyle(.ripul(.text))`, on the same line |
+| with `--text`: a `Text` with no colour of its own | `Text("…").ripulText()`, on the same line: the theme's text colour once a theme names one, and until then the text exactly as it was |
 | with `--lists`: a `List` or a `Form`, and each `Section` | `.ripulThemedList()` after it, and `.ripulThemedListRows()` after each section |
 | `Color("BrandNavy")`, where you declared a role for that asset | `Color.ripul(.navy)` |
 
@@ -489,20 +499,24 @@ yet do for you.
 
 1. **Text with no colour of its own** is done by `--text`, and kept done by
    `check --text` in your build, which counts a text without the line. The
-   line must be on the text itself. On the root, or on a container, a text
-   colour changes what `.secondary` draws and recolours the labels of
-   bordered and prominent buttons, links in a list and section headers, even
-   under the default document (measured three times, the last on iOS 27.1
-   with both the one-colour and the three-colour form). What is left for
-   you: a text the command could not tell was coloured from another file.
-   Under the system look such a text changes colour, so the comparison of
-   step 8 finds it; take the line off.
+   line, `.ripulText()`, goes on the text itself. On the root, or on a
+   container, a text colour changes what `.secondary` draws and recolours the
+   labels of bordered and prominent buttons, links in a list and section
+   headers (measured three times, the last on iOS 27.1 with both the
+   one-colour and the three-colour form). `.ripulText()` leaves its text
+   untouched until a theme names `text`, so with no theme, and under a theme
+   that sets no text colour, a text the command misjudged still takes its
+   colour from wherever it took it before. What is left for you is to look
+   at the screens under a theme that does name `text`: a text that was
+   coloured from another file, through a property or a modifier, now takes
+   the theme's ink. Take the line off that one.
 2. **Lists** are done by `--lists`. A row that is not inside a `Section`
    needs `.ripulThemedListRows()` written on it, or on the `ForEach` that
    makes the rows: the list's own modifier cannot reach its rows from
-   outside (measured). With no theme each modifier sets the system's own
-   value, and the screens are the same pixel for pixel (measured on two
-   lists, light and dark).
+   outside (measured). Each modifier leaves its list untouched until a theme
+   names a surface or a separator. A list, form or section that already
+   sets `scrollContentBackground` or `listRowBackground` is left alone by the
+   command: it has a ground of its own.
 3. **Section headers and empty states.** `Section("Title")` becomes
    `Section(themed: "Title")`, a custom header `RipulSectionHeader { … }`, and
    `ContentUnavailableView("T", systemImage: "i")` becomes
@@ -685,6 +699,7 @@ So that nobody tries them again without a reason:
 ```swift
 .ripulThemeRoot(theme: "brand")          // the root of your own tree
 .ripulThemeRoot()                        // any other root; reads Info.plist's RipulTheme
+.ripulThemeRoot(window: true)            // a window's own root: it draws the theme's canvas behind the tree
 RipulTheme.install(theme:bundle:keepsChoice:)
 RipulTheme.select(_:)   RipulTheme.selectedTheme   RipulTheme.bundledThemes
 RipulTheme.handleThemeLink(_:)           RipulThemePicker(_:systemTitle:)
@@ -701,5 +716,5 @@ Color.ripul(.danger)              // where a Color is required
 .ripul(accentOr: .info)
 UIColor.ripul(.canvas)   UIFont.ripul(.caption)
 .ripulTextStyle(.eyebrow)   .ripulProminentButtonStyle()   .ripulGlassProminentButtonStyle()   Section(themed:)   ContentUnavailableView(themed:)
-.ripulThemedList()   .ripulThemedListRows()   .ripulSectionHeader()   .ripulSectionFooter()
+.ripulText()   .ripulThemedList()   .ripulThemedListRows()   .ripulSectionHeader()   .ripulSectionFooter()
 ```

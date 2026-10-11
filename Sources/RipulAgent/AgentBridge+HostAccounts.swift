@@ -13,6 +13,27 @@ extension AgentBridge {
         return HostAuthStatusInfo.from(dict: reply.dictionary ?? ["error": "Unexpected result"])
     }
 
+    /// One step of the owner's Claude approval for the Macs they rent, on the
+    /// paired Mac that keeps it. See `RentedMacsClaudeSheet`.
+    public func rentedMacsClaudeToken(machineId: String, step: RentedMacsClaudeStep) async -> RentedMacsClaudeInfo {
+        var arguments: [Any?] = [machineId, step.name]
+        if case .code(let sessionId, let code) = step { arguments += [sessionId, code] }
+        let reply = await hostAccountCall("__ripulRemoteHostRentedMacsToken", arguments,
+                                          machineId: machineId, missing: "{ ok: false, error: 'not ready' }")
+        if let reason = reply.failure() { return .failed(reason) }
+        guard let dict = reply.dictionary else { return .failed("Unexpected result") }
+        let endsAbout = (dict["endsAbout"] as? String).flatMap { ISO8601DateFormatter().date(from: $0) }
+        return RentedMacsClaudeInfo(
+            ok: dict["ok"] as? Bool ?? false,
+            stored: dict["stored"] as? Bool ?? false,
+            endsAbout: endsAbout,
+            pendingSessionId: dict["pendingSessionId"] as? String,
+            sessionId: dict["sessionId"] as? String,
+            authUrl: dict["authUrl"] as? String,
+            error: dict["error"] as? String
+        )
+    }
+
     /// One host sign-in or account callable. A thrown call goes to the bridge
     /// console with the machine it was for, which is where these have always
     /// been looked for.

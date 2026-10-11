@@ -1,12 +1,30 @@
 import SwiftUI
 
-/// Scoped to the session list. The host owns a single creation sheet.
+/// The host's "new chat" action as the session list reads it from the
+/// environment. Scoped to the session list: the host owns a single creation
+/// sheet.
+///
+/// A value SwiftUI can compare. It was a bare closure, and SwiftUI cannot tell
+/// two closures apart, so every render of the screen above was a changed
+/// environment for everything that read it: the equatable session list re-ran
+/// three or four times on every tab switch, rebuilding every row
+/// (`RipulSessionsView: _createNewChat changed`, 11 October 2026). Two of these
+/// are equal when they act through the same `RipulSessionsViewActions`, which
+/// the screen keeps for its lifetime and refills with the latest action.
+struct NewChatAction: Equatable {
+    let actions: RipulSessionsViewActions
+
+    nonisolated static func == (lhs: Self, rhs: Self) -> Bool { lhs.actions === rhs.actions }
+
+    @MainActor func callAsFunction(_ machineId: String?) { actions.onNewChat?(machineId) }
+}
+
 private struct NewChatActionKey: EnvironmentKey {
-    static let defaultValue: ((String?) -> Void)? = nil
+    static let defaultValue: NewChatAction? = nil
 }
 
 extension EnvironmentValues {
-    var createNewChat: ((String?) -> Void)? {
+    var newChatAction: NewChatAction? {
         get { self[NewChatActionKey.self] }
         set { self[NewChatActionKey.self] = newValue }
     }
@@ -64,7 +82,8 @@ struct QuickLaunchPickerButton: View {
     var onSwitchCodexAccount: (() -> Void)? = nil
 
     @State private var isPresented = false
-    @Environment(\.createNewChat) private var createNewChat
+    @Environment(\.newChatAction) private var newChatAction
+    private var createNewChat: ((String?) -> Void)? { newChatAction.map { action in { action($0) } } }
 
     /// The pill's in-progress state: a model pick on this button
     /// (`loadingId`) or the machine-level connect the row reports

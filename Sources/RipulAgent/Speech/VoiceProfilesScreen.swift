@@ -24,7 +24,7 @@ struct VoiceProfilesScreen: View {
                     Label(loadError, systemImage: "exclamationmark.triangle")
                         .foregroundStyle(.ripul(.danger))
                         .font(.ripul(.caption))
-                }
+                }.ripulThemedListRows()
             }
 
             Section {
@@ -44,7 +44,7 @@ struct VoiceProfilesScreen: View {
                     } label: {
                         VStack(alignment: .leading, spacing: 2) {
                             HStack(spacing: 6) {
-                                Text(profile.name)
+                                Text(profile.name).ripulText()
                                 if profile.allowUserOverride == false {
                                     Image(systemName: "lock.fill")
                                         .font(.ripulIcon(.caption2))
@@ -66,8 +66,8 @@ struct VoiceProfilesScreen: View {
                 }
             } footer: { RipulSectionFooter {
                 Text("Speech configuration site keys bind to. A locked profile (padlock) overrides user voice settings in its portals.")
-            } }
-        }
+            } }.ripulThemedListRows()
+        }.ripulThemedList()
         .navigationTitle("Voice Profiles")
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
@@ -160,7 +160,7 @@ struct VoiceProfileEditorScreen: View {
                     Label(saveError, systemImage: "exclamationmark.triangle")
                         .foregroundStyle(.ripul(.danger))
                         .font(.ripul(.caption))
-                }
+                }.ripulThemedListRows()
             }
 
             Section(themed: "Profile") {
@@ -169,7 +169,7 @@ struct VoiceProfileEditorScreen: View {
                 TextField("Description (optional)", text: $profileDescription, axis: .vertical)
                     .lineLimit(1...3)
                     .uiKitIdentifier("VoiceProfileEditor.description")
-            }
+            }.ripulThemedListRows()
 
             Section {
                 Picker(selection: $sttProviderId) {
@@ -182,7 +182,7 @@ struct VoiceProfileEditorScreen: View {
                 .uiKitIdentifier("VoiceProfileEditor.sttProvider")
             } header: { RipulSectionHeader {
                 Text("Recognition")
-            } }
+            } }.ripulThemedListRows()
 
             Section {
                 Picker(selection: $voiceId) {
@@ -227,7 +227,7 @@ struct VoiceProfileEditorScreen: View {
                 }
             } header: { RipulSectionHeader {
                 Text("Delivery")
-            } }
+            } }.ripulThemedListRows()
 
             Section {
                 Picker(selection: $language) {
@@ -251,7 +251,7 @@ struct VoiceProfileEditorScreen: View {
                 Text("Language & key terms")
             } } footer: { RipulSectionFooter {
                 Text("Key terms are comma-separated vocabulary the recognizer should prefer. Profiles merge these with the user's own terms.")
-            } }
+            } }.ripulThemedListRows()
 
             Section {
                 Toggle(isOn: $voiceEnabled) {
@@ -276,8 +276,8 @@ struct VoiceProfileEditorScreen: View {
                 Text(voiceEnabled
                      ? "With override off, this profile is authoritative: portals bound to it ignore user voice settings."
                      : "Voice off: portals bound to this profile show no mic, no read-aloud, and no hands-free mode.")
-            } }
-        }
+            } }.ripulThemedListRows()
+        }.ripulThemedList()
         .navigationTitle(existing == nil ? "New Profile" : existing!.name)
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {

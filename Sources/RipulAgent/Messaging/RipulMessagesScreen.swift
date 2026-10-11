@@ -177,11 +177,11 @@ public struct RipulMessagesScreen: View {
                 }
                 .disabled(!model.canSend)
                 .uiKitIdentifier("Messages.send")
-            }
+            }.ripulThemedListRows()
             if let result = model.lastResult {
                 lastSentSection(result)
             }
-        }
+        }.ripulThemedList()
         .overlay {
             if model.loading && model.users.isEmpty {
                 ProgressView("Loading people…")
@@ -228,7 +228,7 @@ public struct RipulMessagesScreen: View {
                 HStack(spacing: 12) {
                     RipulUserAvatar(user: user)
                     VStack(alignment: .leading, spacing: 1) {
-                        Text(user.displayName)
+                        Text(user.displayName).ripulText()
                             .font(.ripul(.subheadline, weight: .medium))
                             .lineLimit(1)
                         Text(Self.deviceCaption(model.devices(for: user.id)))
@@ -245,7 +245,7 @@ public struct RipulMessagesScreen: View {
 
             ForEach(model.selectedTeams) { team in
                 Label {
-                    Text(team.name)
+                    Text(team.name).ripulText()
                 } icon: {
                     Image(systemName: "person.3.fill")
                 }
@@ -278,7 +278,7 @@ public struct RipulMessagesScreen: View {
             } else if model.selectedUserIds.isEmpty && model.selectedTeamIds.isEmpty {
                 Text("One person, several, or whole teams. Swipe a recipient to remove it.")
             }
-        } }
+        } }.ripulThemedListRows()
     }
 
     private var messageSection: some View {
@@ -288,7 +288,7 @@ public struct RipulMessagesScreen: View {
             TextField("Message", text: $model.body, axis: .vertical)
                 .lineLimit(3...10)
                 .uiKitIdentifier("Messages.body")
-        }
+        }.ripulThemedListRows()
     }
 
     private var linkSection: some View {
@@ -315,7 +315,7 @@ public struct RipulMessagesScreen: View {
                 Text("Use an https:// address, or ripul://share/<token>.")
                     .foregroundStyle(.ripul(.danger))
             }
-        } }
+        } }.ripulThemedListRows()
     }
 
     private func lastSentSection(_ result: RipulAdminMessageResult) -> some View {
@@ -327,7 +327,7 @@ public struct RipulMessagesScreen: View {
             if !result.unreachable.isEmpty {
                 LabeledContent("No device", value: Self.people(result.unreachable.count))
             }
-        }
+        }.ripulThemedListRows()
     }
 
     // MARK: Wording
@@ -373,14 +373,14 @@ struct RipulMessagePeoplePicker: View {
             if !reachable.isEmpty {
                 Section(themed: "Can Receive (\(reachable.count))") {
                     ForEach(reachable) { row($0) }
-                }
+                }.ripulThemedListRows()
             }
             if !unreachable.isEmpty {
                 Section(themed: "No Device (\(unreachable.count))") {
                     ForEach(unreachable) { row($0) }
-                }
+                }.ripulThemedListRows()
             }
-        }
+        }.ripulThemedList()
         .searchable(text: $search, prompt: "Name or email")
         .navigationTitle("People")
         .navigationBarTitleDisplayMode(.inline)
@@ -455,7 +455,7 @@ struct RipulMessageTeamsPicker: View {
             }
             .accessibilityAddTraits(selected ? .isSelected : [])
             .uiKitIdentifier("Messages.teamRow")
-        }
+        }.ripulThemedList()
         .navigationTitle("Teams")
         .navigationBarTitleDisplayMode(.inline)
     }

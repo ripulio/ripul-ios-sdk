@@ -12,6 +12,9 @@ import UIKit
 //  - The accent reaches `.tint`, `Color.accentColor`, `UIColor.tintColor` and control
 //    tints everywhere, sheets, popovers and hosting controllers included, when it is the
 //    WINDOW's tint. SwiftUI's `.tint(_:)` alone misses `Color.accentColor` in a sheet.
+//  - The canvas reaches every screen that draws no ground of its own when a window's root
+//    draws it behind the tree (the start chooser, an empty state, a plain stack). Only a
+//    window's root does: a sheet has a ground, and an overlay is meant to be seen through.
 //  - Text colours cannot be set from a root: a root `foregroundStyle` changes what
 //    `.secondary` draws even when given today's colour, and recolours button labels.
 //    Text colour is an edit at the call site: `.foregroundStyle(.ripul(.textSecondary))`.
@@ -25,9 +28,15 @@ extension View {
     ///
     /// A host that names its theme in Info.plist (`RipulTheme`) writes only this, and one
     /// that names none keeps the system look.
-    public func ripulThemeRoot() -> some View {
+    ///
+    /// - Parameter window: true on the root of a window's own tree. Under a theme that
+    ///   names a canvas, that root draws it behind everything, so a screen with no ground
+    ///   of its own stands on the theme's and not on the system's white or black. Leave
+    ///   it false on the root of a sheet, a popover or an overlay: those have a ground
+    ///   already, or are meant to be seen through.
+    public func ripulThemeRoot(window: Bool = false) -> some View {
         RipulTheme.installIfNeeded()
-        return modifier(RipulThemeRootModifier())
+        return modifier(RipulThemeRootModifier(drawsCanvas: window))
     }
 
     /// The root of a host's own tree, naming its theme: `<name>.json` in the app's
@@ -39,11 +48,12 @@ extension View {
         // Here and not in the modifier's body: this runs when the parent's body does,
         // before any view below it reads a font or a colour.
         RipulTheme.install(theme: name)
-        return modifier(RipulThemeRootModifier())
+        return modifier(RipulThemeRootModifier(drawsCanvas: true))
     }
 }
 
 private struct RipulThemeRootModifier: ViewModifier {
+    let drawsCanvas: Bool
     @State private var revision = 0
 
     func body(content: Content) -> some View {
@@ -55,6 +65,10 @@ private struct RipulThemeRootModifier: ViewModifier {
             .tint(RipulTheme.accentOverride)
             .font(RipulTheme.defaultFontOverride)
             .modifier(RipulThemeLegacyRefresh(revision: stamp))
+            // A screen that draws no ground of its own stands on the window's, which is
+            // the system's white or black. Under a theme that names a canvas it stands on
+            // that. With no canvas named nothing is drawn here.
+            .background { if drawsCanvas, !RipulTheme.isDefault(.canvas) { Color.ripul(.canvas).ignoresSafeArea() } }
             .background(RipulWindowTint(revision: stamp))
             .onReceive(NotificationCenter.default.publisher(for: .ripulThemeDidChange)) { _ in
                 revision += 1

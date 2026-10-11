@@ -122,7 +122,7 @@ public struct RemoteActionSheet: View {
 
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 4) {
-                Text(label)
+                Text(label).ripulText()
                     .font(.ripul(.caption))
                     .fontWeight(.medium)
                 if isRequired {
@@ -175,7 +175,7 @@ public struct RemoteActionSheet: View {
         HStack(spacing: 6) {
             Image(systemName: isError ? "xmark.circle.fill" : "checkmark.circle.fill")
                 .foregroundStyle(isError ? .ripul(.danger) : .ripul(.success))
-            Text(isError ? "Failed" : "Success")
+            Text(isError ? "Failed" : "Success").ripulText()
                 .font(.ripul(.subheadline))
                 .fontWeight(.semibold)
             Spacer()
@@ -313,7 +313,7 @@ public struct RemoteActionSheet: View {
                         .font(.ripul(.caption2))
                         .foregroundStyle(.ripul(.textSecondary))
                 }
-                Text("\(value)")
+                Text("\(value)").ripulText()
                     .font(.ripul(.title3))
                     .fontWeight(.bold)
             }

@@ -206,7 +206,7 @@ public struct CpuHudView: View {
                         .font(.ripul(.caption2, family: .code))
                         .foregroundStyle(.ripul(.textSecondary))
                     Text(String(format: "avg tot %.0f%% · main %.0f%% · peak %.0f%%",
-                                m.avgTotal, m.avgMain, m.peakTotal))
+                                m.avgTotal, m.avgMain, m.peakTotal)).ripulText()
                         .font(.ripul(.caption2, family: .code))
                     if sampler.systemAvailable {
                         Text(String(format: "avg sys %.0f%% · web %.0f%%", m.avgSystem, m.avgWeb))

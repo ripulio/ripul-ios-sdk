@@ -12,7 +12,7 @@ and still shows in `ripul-theme check`.
   ripul-theme migrate --dry-run <file or directory>...   show what would change
   ripul-theme migrate --icons <file or directory>...     only move role fonts on an Image to ripulIcon
   ripul-theme migrate --named <file or directory>...     also the named colours, by the closed table
-  ripul-theme migrate --text <file or directory>...      also `.foregroundStyle(.ripul(.text))` on each text with no colour of its own
+  ripul-theme migrate --text <file or directory>...      also `.ripulText()` on each text with no colour of its own
   ripul-theme migrate --lists <file or directory>...     also `.ripulThemedList()` on each list and form, `.ripulThemedListRows()` on each section
   ripul-theme lint [<git range>] [-- <path>...]
         the mapping lint: read a migration diff (default: the working tree against
@@ -334,6 +334,9 @@ CONTROL_IDENTITIES = [
     (re.compile(r"\.ripul\(\s*accentOr:\s*\.(\w+)\s*\)"), r".ripul(.\1)"),
     # What `migrate --text` and `--lists` write: with no theme, the text's own colour and the list's own look.
     (re.compile(r"(?<=\))\.foregroundStyle\(\.ripul\(\.text\)\)"), ""),
+    (re.compile(r"\.ripulText\(\)"), ""),
+    # A window's root draws the canvas only under a theme that names one.
+    (re.compile(r"\.ripulThemeRoot\(window:\s*true\)"), ".ripulThemeRoot()"),
     (re.compile(r"\.ripulThemedList(?:Rows)?\(\)"), ""),
     # Not a token: the notification's name.
     (re.compile(r"\.ripulThemeDidChange\b"), ".themeDidChange"),
@@ -595,7 +598,7 @@ def add_imports(targets):
     for path, text in sources.items():
         if "/Sources/RipulAgent/" in path.as_posix() or any(part in path.as_posix() for part in SKIPPED):
             continue   # the SDK's own module has it already
-        if not re.search(r"\.ripul(?:Icon|ThemedList|ThemedListRows|TextStyle|ProminentButtonStyle|GlassProminentButtonStyle|ThemeRoot)?\(|\(themed:", text):
+        if not re.search(r"\.ripul(?:Icon|ThemedList|ThemedListRows|Text|TextStyle|ProminentButtonStyle|GlassProminentButtonStyle|ThemeRoot)?\(|\(themed:", text):
             continue
         modules = IMPORT.findall(text)
         if "RipulAgent" in modules or "RipulThemeKit" in modules:

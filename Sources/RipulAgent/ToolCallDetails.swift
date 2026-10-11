@@ -341,8 +341,8 @@ private struct ToolCallDisclosure: View {
 
     private func detailSection(_ title: String, text: String) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(title).font(.ripul(.headline))
-            Text(text)
+            Text(title).ripulText().font(.ripul(.headline))
+            Text(text).ripulText()
                 .font(.ripul(.callout, family: .code))
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)

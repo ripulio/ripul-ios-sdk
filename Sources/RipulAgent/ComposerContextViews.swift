@@ -136,7 +136,7 @@ struct ComposerContextPreview: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 16) {
                         if let screen = item.screen {
-                            Text(screen.appDescription).font(.ripul(.subheadline))
+                            Text(screen.appDescription).ripulText().font(.ripul(.subheadline))
                             ForEach(RipulScreenContextComponent.allCases.filter { screen.available.contains($0) }, id: \.self) { component in
                                 Toggle(component == .instrumentedText && item.optionID == "ripul.selectedElement" ? "Element description" : component.title, isOn: selection(component))
                                     .accessibilityIdentifier("ComposerContext.\(component.rawValue)")
@@ -145,19 +145,19 @@ struct ComposerContextPreview: View {
                                 Text("No screen content is available with this app's context settings.").foregroundStyle(.ripul(.textSecondary))
                             }
                             if screen.selected.contains(.instrumentedText), let text = screen.instrumentedText {
-                                Text(text).textSelection(.enabled)
+                                Text(text).ripulText().textSelection(.enabled)
                             }
                             if screen.selected.contains(.screenshot), let data = screen.screenshotJPEG {
                                 screenshot(data).resizable().scaledToFit().frame(maxHeight: 420)
                                     .accessibilityLabel("Screenshot that will be attached")
                             }
                             if screen.selected.contains(.fallbackText) {
-                                if let text = screen.fallbackText { Text(text).textSelection(.enabled) }
+                                if let text = screen.fallbackText { Text(text).ripulText().textSelection(.enabled) }
                                 else if let fallbackError { Text(fallbackError).foregroundStyle(.ripul(.textSecondary)) }
                                 else { ProgressView("Reading screen text…") }
                             }
                         } else {
-                            Text(item.content).textSelection(.enabled)
+                            Text(item.content).ripulText().textSelection(.enabled)
                         }
                     }.frame(maxWidth: .infinity, alignment: .leading)
                 }

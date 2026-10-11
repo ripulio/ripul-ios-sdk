@@ -49,7 +49,7 @@ struct DeviceSpeechKeySection: View {
             Text("Your ElevenLabs key")
         } } footer: { RipulSectionFooter {
             Text("Optional. Stored in this app’s Keychain on this device. Speech and transcription connect directly to ElevenLabs using your account and quota. Nothing passes through Ripul’s servers or your paired Mac. Without a key, Standalone uses Apple speech. Internet access is needed for ElevenLabs.")
-        } }
+        } }.ripulThemedListRows()
         .alert("Remove ElevenLabs key?", isPresented: $removing) {
             Button("Remove", role: .destructive) {
                 do {

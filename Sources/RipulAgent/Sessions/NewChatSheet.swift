@@ -107,7 +107,7 @@ public struct NewChatSheet: View {
                         .accessibilityIdentifier("NewChat.title")
                 } footer: { RipulSectionFooter {
                     Text("Leave it blank to name the chat from its first message.")
-                } }
+                } }.ripulThemedListRows()
                 .disabled(loadingID != nil)
                 if lockedMachine == nil {
                     Section {
@@ -127,7 +127,7 @@ public struct NewChatSheet: View {
                                 Text(machine.name + (machine.unavailableReason == nil ? "" : " · unavailable")).tag(machine.id)
                             }
                         }.accessibilityIdentifier("NewChat.machine")
-                    }
+                    }.ripulThemedListRows()
                     .disabled(loadingID != nil)
                 }
                 Section {
@@ -148,12 +148,12 @@ public struct NewChatSheet: View {
                          : (draft.connection == .direct
                             ? "Work uses the selected Mac's configured working directory. History stays on the Mac."
                             : "History stays in Ripul cloud. Coding chats use the selected Mac's configured working directory."))
-                } }
+                } }.ripulThemedListRows()
                 .disabled(loadingID != nil)
-                if let error { Section { Text(error).foregroundStyle(.ripul(.danger)).textSelection(.enabled).accessibilityIdentifier("NewChat.error") } }
-                if let validationError { Section { Text(validationError).foregroundStyle(.ripul(.textSecondary)) } }
+                if let error { Section { Text(error).foregroundStyle(.ripul(.danger)).textSelection(.enabled).accessibilityIdentifier("NewChat.error") }.ripulThemedListRows() }
+                if let validationError { Section { Text(validationError).foregroundStyle(.ripul(.textSecondary)) }.ripulThemedListRows() }
                 if draft.connection == .direct {
-                    Section { Button("Pair or manage Macs", action: onManageAccess).accessibilityIdentifier("NewChat.manageAccess") }
+                    Section { Button("Pair or manage Macs", action: onManageAccess).accessibilityIdentifier("NewChat.manageAccess") }.ripulThemedListRows()
                         .disabled(loadingID != nil)
                 }
                 ModelPickerSections(models: models, pinCatalog: pinCatalog,
@@ -165,7 +165,7 @@ public struct NewChatSheet: View {
                         else { onRetryModels?() }
                     }, onPick: pick)
                     .disabled(validationError != nil || loadingID != nil)
-            }
+            }.ripulThemedList()
             .scrollDismissesKeyboard(.interactively)
             .dismissesKeyboardOnTapAway()
             .searchable(text: $search, prompt: "Search models")
@@ -214,7 +214,7 @@ public struct NewChatSheet: View {
                 .font(.ripulIcon(.title3, weight: .semibold))
                 .foregroundStyle(destination == nil ? AnyShapeStyle(.ripul(.textSecondary)) : AnyShapeStyle(.tint))
             VStack(alignment: .leading, spacing: 0) {
-                Text("New Chat").font(.ripul(.headline))
+                Text("New Chat").ripulText().font(.ripul(.headline))
                 Text(destination?.name ?? draft.machineName ?? "Choose a Mac")
                     .font(.ripul(.caption)).foregroundStyle(.ripul(.textSecondary)).lineLimit(1)
             }
@@ -238,7 +238,7 @@ public struct NewChatSheet: View {
                 } else {
                     VStack(alignment: .leading, spacing: 1) {
                         Text("The Mac's working directory").font(.ripul(.caption)).foregroundStyle(.ripul(.textSecondary))
-                        Text("Default").font(.ripul(.headline))
+                        Text("Default").ripulText().font(.ripul(.headline))
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }

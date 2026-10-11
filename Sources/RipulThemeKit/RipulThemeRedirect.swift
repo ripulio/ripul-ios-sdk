@@ -310,6 +310,6 @@ public enum RipulThemeRedirect {
             self.content = content
         }
 
-        public var body: some View { content().ripulThemeRoot() }
+        public var body: some View { content().ripulThemeRoot(window: true) }
     }
 }

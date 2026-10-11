@@ -48,7 +48,7 @@ struct SessionMilestonesSection: View {
             Text("Working toward")
                 .font(.ripul(.caption))
                 .foregroundStyle(.ripul(.textSecondary))
-            Text(goal)
+            Text(goal).ripulText()
                 .font(.ripul(.subheadline, weight: .semibold))
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -116,7 +116,7 @@ struct SessionMilestonesSection: View {
 
             if let summary = story?.openSummary, !summary.isEmpty {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Since the last milestone")
+                    Text("Since the last milestone").ripulText()
                         .font(.ripul(.subheadline, weight: .semibold))
                     Text(summary)
                         .font(.ripul(.caption))
@@ -211,7 +211,7 @@ struct SessionMilestonesSection: View {
                                     .foregroundStyle(milestone.isDecided ? .ripul(.textSecondary) : .ripul(.success))
                                     .frame(width: 18)
                                     .accessibilityLabel(milestone.isDecided ? "Decided" : "Delivered")
-                                Text(milestone.title)
+                                Text(milestone.title).ripulText()
                                     .font(.ripul(.subheadline, weight: .semibold))
                                     .multilineTextAlignment(.leading)
                                     .fixedSize(horizontal: false, vertical: true)
@@ -304,7 +304,7 @@ struct SessionMilestonesSection: View {
     private func contents(of milestone: AgentBridge.StoryMilestone) -> some View {
         VStack(alignment: .leading, spacing: 5) {
             if let detail = milestone.detail, !detail.isEmpty {
-                Text(detail)
+                Text(detail).ripulText()
                     .font(.ripul(.footnote))
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -313,7 +313,7 @@ struct SessionMilestonesSection: View {
                     Text(String(commit.sha.prefix(7)))
                         .font(.ripul(.caption2).monospacedDigit())
                         .foregroundStyle(.ripul(.textSecondary))
-                    Text(commit.subject.isEmpty ? "Commit" : commit.subject)
+                    Text(commit.subject.isEmpty ? "Commit" : commit.subject).ripulText()
                         .font(.ripul(.caption))
                         .lineLimit(1)
                         .truncationMode(.tail)

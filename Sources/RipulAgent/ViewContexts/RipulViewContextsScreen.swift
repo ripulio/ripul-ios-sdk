@@ -19,7 +19,7 @@ public struct RipulViewContextsScreen: View {
                 Section {
                     Text(error).foregroundStyle(.ripul(.danger))
                     Button("Retry") { Task { await load() } }
-                }
+                }.ripulThemedListRows()
             }
             if loading { ProgressView("Loading view contexts…") }
             if !loading && contexts.isEmpty && error == nil {
@@ -39,7 +39,7 @@ public struct RipulViewContextsScreen: View {
                 }
                 .uiKitIdentifier("RipulViewContexts.row.\(context.id)")
             }
-        }
+        }.ripulThemedList()
         .navigationTitle("View Contexts")
         .searchable(text: $search)
         .uiKitIdentifier("RipulViewContexts.list")
@@ -96,8 +96,8 @@ private struct RipulViewContextEditor: View {
 
     var body: some View {
         Form {
-            if let error { Section { Text(error).foregroundStyle(.ripul(.danger)) } }
-            if context.isSystem { Section { Label("System contexts are read-only.", systemImage: "lock") } }
+            if let error { Section { Text(error).foregroundStyle(.ripul(.danger)) }.ripulThemedListRows() }
+            if context.isSystem { Section { Label("System contexts are read-only.", systemImage: "lock") }.ripulThemedListRows() }
             Group {
                 identitySection
                 ForEach(RipulViewContextField.groups, id: \.self) { group in
@@ -107,23 +107,23 @@ private struct RipulViewContextEditor: View {
                                 ForEach(RipulViewContextField.all.filter { $0.group == group }) { field in
                                     RipulViewFeatureControl(field: field, values: $context.features, invalidNumbers: $invalidNumbers)
                                 }
-                            }
+                            }.ripulThemedList()
                             .navigationTitle(group)
                             .disabled(context.isSystem || busy)
                         }
-                    }
+                    }.ripulThemedListRows()
                 }
                 Section {
                     NavigationLink("Chat action buttons") {
                         RipulViewActionButtons(features: $context.features)
                             .disabled(context.isSystem || busy)
                     }
-                }
+                }.ripulThemedListRows()
                 if !creating && !context.isSystem {
-                    Section { Button("Delete View Context", role: .destructive) { deleting = true } }
+                    Section { Button("Delete View Context", role: .destructive) { deleting = true } }.ripulThemedListRows()
                 }
             }.disabled(busy)
-        }
+        }.ripulThemedList()
         .navigationTitle(creating ? "New View Context" : context.name)
         .navigationBarTitleDisplayMode(.inline)
         .uiKitIdentifier("RipulViewContexts.editor")
@@ -169,7 +169,7 @@ private struct RipulViewContextEditor: View {
             }
         } header: { RipulSectionHeader { Text("Details and navigation") } } footer: { RipulSectionFooter {
             Text("Use tab IDs from your solution, separated by commas. The default tab must be selected. IDs may contain letters, numbers, underscores and hyphens.")
-        } }.disabled(context.isSystem)
+        } }.ripulThemedListRows().disabled(context.isSystem)
     }
 
     @MainActor private func save(delete: Bool = false) async {
@@ -266,7 +266,7 @@ private struct RipulViewFeatureControl: View {
                     )).textInputAutocapitalization(.never).autocorrectionDisabled()
                 }
             }
-        } header: { RipulSectionHeader { Text(field.title) } }
+        } header: { RipulSectionHeader { Text(field.title) } }.ripulThemedListRows()
         .uiKitIdentifier("RipulViewContexts.\(field.key)")
     }
 }
@@ -317,14 +317,14 @@ private struct RipulViewActionButtons: View {
                                         $0["condition"] = condition
                                     } }
                                 ), in: 0...10000)
-                            }.navigationTitle("Visibility conditions")
+                            }.ripulThemedList().navigationTitle("Visibility conditions")
                         }
                         Button("Move Up") { move(index, by: -1) }.disabled(index == 0)
                         Button("Move Down") { move(index, by: 1) }.disabled(index == buttons.count - 1)
                         Button("Remove Button", role: .destructive) {
                             var rows = buttons; rows.remove(at: index); features["chatActionButtons"] = rows
                         }
-                    }
+                    }.ripulThemedListRows()
                 }
                 Button("Add Button") {
                     var rows = buttons
@@ -332,7 +332,7 @@ private struct RipulViewActionButtons: View {
                     features["chatActionButtons"] = rows
                 }
             }
-        }.navigationTitle("Chat action buttons")
+        }.ripulThemedList().navigationTitle("Chat action buttons")
     }
     private func minimumMessages(_ index: Int) -> Int {
         guard buttons.indices.contains(index) else { return 0 }

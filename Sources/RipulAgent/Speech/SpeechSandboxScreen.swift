@@ -39,7 +39,7 @@ public struct SpeechSandboxScreen: View {
                 }
                 .pickerStyle(.segmented)
                 .uiKitIdentifier("SpeechSandboxScreen.providerPicker")
-            }
+            }.ripulThemedListRows()
 
             Section(themed: "Voice") {
                 if let voicesError {
@@ -53,7 +53,7 @@ public struct SpeechSandboxScreen: View {
                     .uiKitIdentifier("SpeechSandboxScreen.voicePicker")
                     LabeledContent("Available", value: "\(voices.count) voices")
                 }
-            }
+            }.ripulThemedListRows()
 
             Section(themed: "Text to speech") {
                 TextField("Text", text: $ttsText, axis: .vertical)
@@ -71,7 +71,7 @@ public struct SpeechSandboxScreen: View {
                     Button("Stop") { provider?.stopSpeaking() }
                         .uiKitIdentifier("SpeechSandboxScreen.stopSpeakingButton")
                 }
-            }
+            }.ripulThemedListRows()
 
             Section(themed: "Live transcription") {
                 Button {
@@ -95,16 +95,16 @@ public struct SpeechSandboxScreen: View {
                     Text("Transcript appears here.")
                         .foregroundStyle(.ripul(.textTertiary))
                 }
-            }
+            }.ripulThemedListRows()
 
             if let errorMessage {
                 Section {
                     Text(errorMessage)
                         .foregroundStyle(.ripul(.danger))
                         .uiKitIdentifier("SpeechSandboxScreen.error")
-                }
+                }.ripulThemedListRows()
             }
-        }
+        }.ripulThemedList()
         .navigationTitle("Speech Sandbox")
         #if os(macOS)
         .formStyle(.grouped)

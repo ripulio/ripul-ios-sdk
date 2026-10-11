@@ -53,7 +53,7 @@ struct ConnectionDiagnosticsView: View {
                         .foregroundStyle(.ripul(.textSecondary))
                 }
             }
-            Text(phase.title)
+            Text(phase.title).ripulText()
                 .font(.ripul(.subheadline, weight: .semibold))
                 .fixedSize(horizontal: false, vertical: true)
             if let explanation = phase.scopeExplanation {
@@ -65,7 +65,7 @@ struct ConnectionDiagnosticsView: View {
             if let machine = report.targetMachine {
                 HStack(spacing: 6) {
                     statusDot(machine.presumedOnline ? .ripul(.success) : .ripul(.warning))
-                    Text("Talking to \(machine.displayName)")
+                    Text("Talking to \(machine.displayName)").ripulText()
                         .font(.ripul(.caption))
                     if let seen = machine.lastSeenText {
                         Text("· last seen \(seen)")
@@ -98,7 +98,7 @@ struct ConnectionDiagnosticsView: View {
         let problems = focus.findings.filter(\.isProblem)
         return section("This chat", subtitle: String(focus.chatId.suffix(8))) {
             ForEach(focus.facts, id: \.self) { fact in
-                Text(fact)
+                Text(fact).ripulText()
                     .font(.ripul(.caption))
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -124,7 +124,7 @@ struct ConnectionDiagnosticsView: View {
                 HStack(spacing: 8) {
                     statusDot(machine.presumedOnline ? .ripul(.success) : .ripul(.warning))
                     VStack(alignment: .leading, spacing: 1) {
-                        Text(machine.displayName)
+                        Text(machine.displayName).ripulText()
                             .font(.ripul(.caption).weight(machine.machineId == report.targetMachineId ? .semibold : .regular))
                         Text(machine.presumedOnline ? "presumed online" : "looks offline")
                             .font(.ripul(.caption2))
@@ -152,7 +152,7 @@ struct ConnectionDiagnosticsView: View {
                     statusDot(color(for: transport.health))
                         .padding(.top, 3)
                     VStack(alignment: .leading, spacing: 1) {
-                        Text(transport.label)
+                        Text(transport.label).ripulText()
                             .font(.ripul(.caption, family: .code))
                         Text(transport.detailText)
                             .font(.ripul(.caption2))
@@ -182,7 +182,7 @@ struct ConnectionDiagnosticsView: View {
         section("Paired sessions", subtitle: "\(report.totalPairings) total") {
             ForEach(report.pairingGroups) { group in
                 HStack(spacing: 8) {
-                    Text(group.machineName).font(.ripul(.caption))
+                    Text(group.machineName).ripulText().font(.ripul(.caption))
                     Spacer(minLength: 8)
                     Text("\(group.tabCount)")
                         .font(.ripul(.caption2).monospacedDigit())
@@ -270,7 +270,7 @@ struct ConnectionDiagnosticsView: View {
         // Wraps naturally on narrow sheets; these are 1–3 short `key value` pairs.
         HStack(spacing: 6) {
             ForEach(items, id: \.self) { item in
-                Text(item)
+                Text(item).ripulText()
                     .font(.ripul(.caption2, family: .code))
                     .lineLimit(1)
                     .truncationMode(.middle)

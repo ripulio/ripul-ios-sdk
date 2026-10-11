@@ -19,7 +19,7 @@ public struct ClaudeAccountsSettingsScreen: View {
             ForEach(machines) { machine in
                 ClaudeAccountSection(machine: machine, bridge: bridge, refreshToken: refreshToken)
             }
-        }
+        }.ripulThemedList()
         .navigationTitle("Claude accounts")
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)

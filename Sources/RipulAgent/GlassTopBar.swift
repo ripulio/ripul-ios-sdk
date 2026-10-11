@@ -116,7 +116,7 @@ private struct GlassTopBarScopePicker: View {
                 } label: {
                     HStack(spacing: 12) {
                         Image(systemName: option.icon).frame(width: 24)
-                        Text(option.title).lineLimit(1)
+                        Text(option.title).ripulText().lineLimit(1)
                         Spacer(minLength: 12)
                         Image(systemName: "checkmark").opacity(option.id == scope.current.id ? 1 : 0)
                     }

@@ -996,7 +996,7 @@ private struct CompactAgentBarView: View {
                 Image(systemName: "terminal.fill")
                     .foregroundStyle(.ripul(.info))
                     .frame(width: 28, height: 28)
-                Text("Agent")
+                Text("Agent").ripulText()
                     .font(.ripul(.subheadline, weight: .semibold))
                     .lineLimit(1)
             }

@@ -97,7 +97,7 @@ struct PlanRunSheet: View {
                     Text("Run")
                 } } footer: { RipulSectionFooter {
                     Text(hint)
-                } }
+                } }.ripulThemedListRows()
 
                 Section(themed: "Model") {
                     if models.isEmpty {
@@ -117,7 +117,7 @@ struct PlanRunSheet: View {
                             )
                         } label: {
                             HStack {
-                                Text("Model")
+                                Text("Model").ripulText()
                                 Spacer()
                                 Text(selectedModelName)
                                     .foregroundStyle(.ripul(.textSecondary))
@@ -125,7 +125,7 @@ struct PlanRunSheet: View {
                         }
                         .uiKitIdentifier("PlanRunSheet.modelPicker")
                     }
-                }
+                }.ripulThemedListRows()
 
                 Section {
                     if loadingPrompt {
@@ -140,14 +140,14 @@ struct PlanRunSheet: View {
                     Text("Prompt")
                 } } footer: { RipulSectionFooter {
                     Text("Sent as the first message of a new session, in this plan's working directory.")
-                } }
+                } }.ripulThemedListRows()
 
                 if let failure {
                     Section {
                         Text(failure).foregroundStyle(.ripul(.danger)).font(.ripul(.callout))
-                    }
+                    }.ripulThemedListRows()
                 }
-            }
+            }.ripulThemedList()
             .navigationTitle("Run on \(planTitle)")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)

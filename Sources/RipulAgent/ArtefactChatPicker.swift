@@ -34,7 +34,7 @@ struct ArtefactChatPicker: View {
                 if let choice {
                     Form {
                         Section {
-                            Text(choice.title).font(.ripul(.headline))
+                            Text(choice.title).ripulText().font(.ripul(.headline))
                             Text("Revision \(choice.revision) · saved with this card").foregroundStyle(.ripul(.textSecondary))
                             Picker("Display", selection: $surface) {
                                 ForEach(choice.surfaces, id: \.self) { value in
@@ -47,13 +47,13 @@ struct ArtefactChatPicker: View {
                             }.disabled(busy || attempted || !choice.canShare)
                         } footer: { RipulSectionFooter {
                             Text("People need artefact access to open the card. Sharing with a team gives its members access across chats. Private scenarios and run history stay private.")
-                        } }
+                        } }.ripulThemedListRows()
                         Section {
                             Button(attempted ? "Retry add to chat" : "Add to chat") { Task { await post(choice) } }
                                 .disabled(busy).accessibilityIdentifier("ArtefactChat.add")
                             if !attempted { Button("Back to library") { self.choice = nil; error = nil }.disabled(busy) }
-                        }
-                    }
+                        }.ripulThemedListRows()
+                    }.ripulThemedList()
                 } else {
                     TextField("Search artefacts", text: $search).textFieldStyle(.roundedBorder).padding()
                     List {
@@ -68,7 +68,7 @@ struct ArtefactChatPicker: View {
                         if !busy && items.filter({ search.isEmpty || $0.title.localizedCaseInsensitiveContains(search) }).isEmpty {
                             Text("No artefacts found.").foregroundStyle(.ripul(.textSecondary))
                         }
-                    }
+                    }.ripulThemedList()
                     if !busy && error != nil { Button("Reload library") { Task { await load() } }.padding() }
                 }
             }

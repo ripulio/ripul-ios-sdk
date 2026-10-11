@@ -126,7 +126,7 @@ public struct RipulSolutionContextsScreen: View {
                     Label(error, systemImage: "exclamationmark.triangle")
                         .font(.ripul(.footnote))
                         .foregroundStyle(.ripul(.textSecondary))
-                }
+                }.ripulThemedListRows()
             }
             Section {
                 ForEach(model.contexts) { context in
@@ -140,8 +140,8 @@ public struct RipulSolutionContextsScreen: View {
                 }
             } footer: { RipulSectionFooter {
                 Text("A context selects which tools (and prompt) a session gets. Reference a collection to curate membership once and have every referencing context follow it live. Enter one in the console chat with /context <id>.")
-            } }
-        }
+            } }.ripulThemedListRows()
+        }.ripulThemedList()
         .uiKitIdentifier("RipulSolutionContexts.list")
         .navigationTitle("Solution Contexts")
         .toolbar {
@@ -176,10 +176,10 @@ public struct RipulSolutionContextsScreen: View {
                 .frame(width: 24)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
-                    Text(context.name)
+                    Text(context.name).ripulText()
                         .font(.ripul(.subheadline, weight: .semibold))
                     if context.isSeeded {
-                        Text("seeded")
+                        Text("seeded").ripulText()
                             .font(.ripul(.caption2))
                             .padding(.horizontal, 5).padding(.vertical, 1)
                             .background(Color.ripul(.textSecondary).opacity(0.15), in: Capsule())
@@ -247,7 +247,7 @@ struct RipulSolutionContextEditorView: View {
                     .uiKitIdentifier("RipulSolutionContexts.editor.name")
                 TextField("What sessions in this context are for", text: $descriptionText, axis: .vertical)
                     .lineLimit(2...4)
-            }
+            }.ripulThemedListRows()
 
             Section {
                 TextField(
@@ -261,7 +261,7 @@ struct RipulSolutionContextEditorView: View {
                 Text("System prompt")
             } } footer: { RipulSectionFooter {
                 Text("Injected as the system message for sessions in this context. Saved as its own prompt entity (\"<name> prompt\") so the dashboard sees the same one.")
-            } }
+            } }.ripulThemedListRows()
 
             toolsSection(
                 title: "Included tools",
@@ -288,9 +288,9 @@ struct RipulSolutionContextEditorView: View {
                     if existing?.isSeeded == true {
                         Text("This is a seeded context. Deleting it is allowed — it will be re-created empty on the next seeding touch (new site key or console sign-in).")
                     }
-                } }
+                } }.ripulThemedListRows()
             }
-        }
+        }.ripulThemedList()
         .navigationTitle(isEditing ? "Edit Context" : "New Context")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -339,7 +339,7 @@ struct RipulSolutionContextEditorView: View {
                     Image(systemName: entry.hasPrefix("group://") ? "folder.badge.gearshape" : "wrench.and.screwdriver")
                         .font(.ripulIcon(.caption))
                         .foregroundStyle(entry.hasPrefix("group://") ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
-                    Text(entry)
+                    Text(entry).ripulText()
                         .font(.ripul(.callout, family: .code))
                 }
             }
@@ -353,7 +353,7 @@ struct RipulSolutionContextEditorView: View {
             Text(title)
         } } footer: { RipulSectionFooter {
             Text(footer)
-        } }
+        } }.ripulThemedListRows()
     }
 
     private func loadExisting() {
@@ -407,7 +407,7 @@ private struct RipulContextToolPicker: View {
                 Text("Collections (by reference)")
             } } footer: { RipulSectionFooter {
                 Text("A reference stays live: edit the collection and every context using it follows on the next request.")
-            } }
+            } }.ripulThemedListRows()
 
             ForEach(sources.catalogs()) { catalog in
                 Section(themed: catalog.name) {
@@ -416,7 +416,7 @@ private struct RipulContextToolPicker: View {
                         // native tool's web name is host_-prefixed.
                         pickRow(webName(for: tool.name), icon: "wrench.and.screwdriver", display: tool.name)
                     }
-                }
+                }.ripulThemedListRows()
             }
 
             Section {
@@ -438,8 +438,8 @@ private struct RipulContextToolPicker: View {
                 Text("Other (exact name)")
             } } footer: { RipulSectionFooter {
                 Text("For web app or deployed tools — stored exactly as typed.")
-            } }
-        }
+            } }.ripulThemedListRows()
+        }.ripulThemedList()
         .navigationTitle("Add to context")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -464,7 +464,7 @@ private struct RipulContextToolPicker: View {
                 Image(systemName: icon)
                     .font(.ripulIcon(.caption))
                     .foregroundStyle(.tint)
-                Text(display)
+                Text(display).ripulText()
                     .font(.ripul(.callout, family: .code))
                 Spacer()
                 Image(systemName: "plus.circle")

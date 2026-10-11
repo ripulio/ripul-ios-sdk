@@ -376,7 +376,7 @@ public struct RelayHostStatsView: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 healthBadge(room.health)
-                Text(room.title)
+                Text(room.title).ripulText()
                     .font(.ripul(.subheadline, family: .code))
                     .lineLimit(1)
                     .truncationMode(.middle)

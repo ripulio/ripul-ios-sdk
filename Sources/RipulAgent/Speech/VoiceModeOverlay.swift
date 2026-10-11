@@ -564,7 +564,7 @@ struct VoiceModeCompactPanel: View {
             .uiKitIdentifier("VoiceModeCompactPanel.orb")
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(statusText)
+                Text(statusText).ripulText()
                     .font(.ripul(.footnote, weight: .semibold))
                     .lineLimit(2)
                     .uiKitIdentifier("VoiceModeCompactPanel.status")

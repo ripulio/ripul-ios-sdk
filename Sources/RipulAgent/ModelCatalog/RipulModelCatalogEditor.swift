@@ -79,7 +79,7 @@ struct RipulModelCatalogEditorSheet: View {
                     TextField("Display name", text: $name)
                     TextField("Group", text: $group)
                     TextField("Description", text: $descriptionText, axis: .vertical)
-                }
+                }.ripulThemedListRows()
                 Section(themed: "Type") {
                     Picker("Provider", selection: $provider) {
                         ForEach(Self.providers, id: \.self) { Text($0.capitalized).tag($0) }
@@ -98,7 +98,7 @@ struct RipulModelCatalogEditorSheet: View {
                     TextField("Client type (CLI models, e.g. claude-cli)", text: $clientType)
                         .autocorrectionDisabled()
                         .textInputAutocapitalization(.never)
-                }
+                }.ripulThemedListRows()
                 if isCli {
                     Section(themed: "CLI") {
                         TextField("Model alias (passed via --model)", text: $cliModelId)
@@ -115,7 +115,7 @@ struct RipulModelCatalogEditorSheet: View {
                             Text("Stateless").tag("stateless")
                         }
                         Toggle("Supports tools", isOn: $supportsTools)
-                    }
+                    }.ripulThemedListRows()
                 } else {
                     Section(themed: "API") {
                         TextField("Model ID sent to the API", text: $apiModelId)
@@ -134,7 +134,7 @@ struct RipulModelCatalogEditorSheet: View {
                             .keyboardType(.numberPad)
                         Toggle("Supports extended thinking", isOn: $supportsThinking)
                         Toggle("Use native endpoint (site keys)", isOn: $useNativeEndpoint)
-                    }
+                    }.ripulThemedListRows()
                 }
                 Section(themed: "Pricing") {
                     TextField("$ per M input tokens", text: $perMInputText)
@@ -145,12 +145,12 @@ struct RipulModelCatalogEditorSheet: View {
                         Text("Standard").tag("standard")
                         Text("Premium").tag("premium")
                     }
-                }
+                }.ripulThemedListRows()
                 Section(themed: "Availability") {
                     Toggle("Enabled", isOn: $enabled)
                     TextField("Sort order", text: $sortOrderText)
                         .keyboardType(.numberPad)
-                }
+                }.ripulThemedListRows()
                 Section {
                     TextField("id", text: $catalogId)
                         .autocorrectionDisabled()
@@ -170,13 +170,13 @@ struct RipulModelCatalogEditorSheet: View {
                     Text(isNew
                         ? "Auto-suggested from the name; edit if you like."
                         : "The catalog id can't be changed.")
-                } }
+                } }.ripulThemedListRows()
                 if let errorMessage {
                     Section {
                         Text(errorMessage).foregroundStyle(.ripul(.danger)).font(.ripul(.callout))
-                    }
+                    }.ripulThemedListRows()
                 }
-            }
+            }.ripulThemedList()
             .navigationTitle(isNew ? "New Model" : "Edit Model")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

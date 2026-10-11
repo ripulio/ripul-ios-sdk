@@ -17,7 +17,8 @@ import SwiftUI
 /// `RipulSessionCache` — and passed in, with `onSetDefault` / `onSetIcon`
 /// callbacks writing back through the same cache.
 public struct MachineRowExpandable: View {
-    @Environment(\.createNewChat) private var createNewChat
+    @Environment(\.newChatAction) private var newChatAction
+    private var createNewChat: ((String?) -> Void)? { newChatAction.map { action in { action($0) } } }
     let machine: RemoteMachine
     let activeSessions: [ChatSession]
     let isConnecting: Bool
@@ -149,6 +150,7 @@ public struct MachineRowExpandable: View {
     @State private var showDestructiveConfirm: RemoteActionDescriptor?
     @State private var showResultSheet: (action: RemoteActionDescriptor, result: [String: Any])?
     @State private var showSignInSheet = false
+    @State private var showRentedMacsClaude = false
     @State private var hostAuthStatus: HostAuthStatusInfo?
     /// The machine-global active profile shown in the expanded Claude row.
     @State private var activeAccount: ClaudeAccountProfile?
@@ -253,6 +255,11 @@ public struct MachineRowExpandable: View {
                     direct: machine.meta?["connection"] == "direct", bridge: hostAuthBridge)
             }
         }
+        .ripulSheet(isPresented: $showRentedMacsClaude) { // theme-mapping: a new sheet, nothing is replaced
+            if let hostAuthBridge {
+                RentedMacsClaudeSheet(machine: machine, bridge: hostAuthBridge)
+            }
+        }
         .ripulSheet(isPresented: $showHostSettings) {
             if let hostAuthBridge {
                 HostSettingsSheet(machineId: machine.machineId, machineName: machine.displayName, bridge: hostAuthBridge)
@@ -327,7 +334,7 @@ public struct MachineRowExpandable: View {
 
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 6) {
-                        Text(machine.displayName)
+                        Text(machine.displayName).ripulText()
                             .font(.ripul(.body))
                             .lineLimit(1)
                             .uiKitIdentifier("MachineRowExpandable.name")
@@ -693,6 +700,24 @@ public struct MachineRowExpandable: View {
             available: actionable && hostAuthBridge != nil
         ) {
             showCodexAccounts = true
+        })
+
+        // The owner's one approval that signs Claude Code in on every Mac
+        // rented from this one. The owner's alone: not on a Mac someone else
+        // shares with this person (the owner of a team's Mac still has it),
+        // and not over a direct pairing, which carries no account. The Mac
+        // itself refuses anyone but its owner whatever is shown here.
+        entries.append(MachinePanelEntry(
+            id: "builtin:rentedMacsClaude",
+            icon: "person.badge.key",
+            label: "Claude for Rented Macs",
+            subtitle: "Approve once, for every Mac rented from here",
+            tint: Color.ripul(.textSecondary), // theme-mapping: a new entry, the tint its neighbours use
+            defaultPlacement: .row,
+            available: actionable && hostAuthBridge != nil
+                && machine.meta?["connection"] != "direct" && machine.shared != true
+        ) {
+            showRentedMacsClaude = true
         })
 
         // The Mac's own settings. Relay only: direct pairing deliberately

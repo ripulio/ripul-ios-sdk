@@ -47,7 +47,7 @@ public struct RipulProfileScreen<PlanContent: View>: View {
             preferencesSection
             additionalPreferences?()
             signOutSection
-        }
+        }.ripulThemedList()
         .navigationTitle("Profile")
         #if os(macOS)
         .formStyle(.grouped)
@@ -68,7 +68,7 @@ public struct RipulProfileScreen<PlanContent: View>: View {
                         """)
                 }
             }
-        }
+        }.ripulThemedListRows()
     }
 
     // MARK: Service keys
@@ -128,7 +128,7 @@ public struct RipulProfileScreen<PlanContent: View>: View {
             Text("Service Keys")
         } } footer: { RipulSectionFooter {
             Text(serviceKeysFooter)
-        } }
+        } }.ripulThemedListRows()
     }
 
     /// The footer answers the only question this section really raises: what
@@ -164,7 +164,7 @@ public struct RipulProfileScreen<PlanContent: View>: View {
                 Label("Sign Out", systemImage: "rectangle.portrait.and.arrow.right")
             }
             .uiKitIdentifier("ProfileScreen.account.signOutButton")
-        }
+        }.ripulThemedListRows()
     }
 
     private func loadSecrets() async {

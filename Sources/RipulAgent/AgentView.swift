@@ -493,6 +493,14 @@ public struct AgentView<TopBar: View>: View {
                 bridge.linkOpenDelegate = linkOpenDelegate
             }
 
+            // Once is enough. The web view reads its configuration when it is
+            // made and never again, and a tab's `.task` runs every time the tab
+            // is selected: each return to the agent tab prepared the
+            // configuration again, re-ran this view for a value nothing reads,
+            // and asked the server to validate the site key again
+            // (`AgentView: __readyConfig changed`, 11 October 2026).
+            guard readyConfig == nil else { return }
+
             // An owned page was configured by whoever built it.
             if showsOwnedPage {
                 readyConfig = configuration

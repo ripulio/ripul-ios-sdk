@@ -195,9 +195,9 @@ public struct RipulTeamsScreen: View {
                         .foregroundStyle(.ripul(.textSecondary))
                         .frame(maxWidth: .infinity, alignment: .center)
                         .listRowBackground(Color.clear)
-                }
+                }.ripulThemedListRows()
             }
-        }
+        }.ripulThemedList()
         .overlay { emptyState }
         .navigationTitle("Teams")
         .navigationBarTitleDisplayMode(.inline)
@@ -236,7 +236,7 @@ public struct RipulTeamsScreen: View {
                 )
                 .uiKitIdentifier("Teams.invite")
             }
-        }
+        }.ripulThemedListRows()
     }
 
     private var myTeamsSection: some View {
@@ -266,7 +266,7 @@ public struct RipulTeamsScreen: View {
             if !model.memberships.isEmpty {
                 Text("Teams share deployed tools, prompts and artefacts, and can scope which solution context your chats use.")
             }
-        } }
+        } }.ripulThemedListRows()
     }
 
     private var otherTeamsSection: some View {
@@ -289,7 +289,7 @@ public struct RipulTeamsScreen: View {
             Text("All teams")
         } } footer: { RipulSectionFooter {
             Text("Visible because you're a platform admin.")
-        } }
+        } }.ripulThemedListRows()
     }
 
     @ViewBuilder
@@ -299,7 +299,7 @@ public struct RipulTeamsScreen: View {
                 .foregroundStyle(.tint)
                 .frame(width: 28)
             VStack(alignment: .leading, spacing: 1) {
-                Text(name)
+                Text(name).ripulText()
                     .font(.ripul(.subheadline, weight: .medium))
                     .lineLimit(1)
                 Text(role)
@@ -340,7 +340,7 @@ struct RipulTeamInviteInboxRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(invite.teamName ?? invite.teamId)
+            Text(invite.teamName ?? invite.teamId).ripulText()
                 .font(.ripul(.subheadline, weight: .semibold))
             Text("\(invite.inviterName ?? "Someone") invited you to join as \(invite.role.label.lowercased()).")
                 .font(.ripul(.caption))
@@ -584,7 +584,7 @@ struct RipulTeamDetailScreen: View {
             if model.canManage {
                 invitationsSection
             }
-        }
+        }.ripulThemedList()
         .navigationTitle(team?.name ?? initialName)
         .navigationBarTitleDisplayMode(.inline)
         .uiKitIdentifier("RipulTeamDetailScreen")
@@ -704,13 +704,13 @@ struct RipulTeamDetailScreen: View {
             Text("Shared Hosts")
         } } footer: { RipulSectionFooter {
             Text("Accepted team members can start chats using each Mac's files, tools and coding account. Each person's chats are private until they share one with the team. Find shared Macs in Agents. Stopping sharing ends command and chat access within 30 seconds; accepted jobs can finish.")
-        } }
+        } }.ripulThemedListRows()
     }
 
     private var aboutSection: some View {
         Section {
             if let description = team?.description {
-                Text(description)
+                Text(description).ripulText()
                     .font(.ripul(.subheadline))
             }
             if let role = model.myRole {
@@ -732,7 +732,7 @@ struct RipulTeamDetailScreen: View {
             if model.activeTeam != nil, model.myRole != nil {
                 Text("When on, chats and prompt lookups are scoped to this team's solution context. If you're in several teams with different contexts, one must be chosen or requests are refused.")
             }
-        } }
+        } }.ripulThemedListRows()
     }
 
     private var membersSection: some View {
@@ -774,7 +774,7 @@ struct RipulTeamDetailScreen: View {
             if model.canManage {
                 Text("Owners and admins can invite people and change roles. A team always keeps at least one owner.")
             }
-        } }
+        } }.ripulThemedListRows()
     }
 
     @ViewBuilder
@@ -783,7 +783,7 @@ struct RipulTeamDetailScreen: View {
             RipulTeamMemberAvatar(member: member)
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 4) {
-                    Text(member.title)
+                    Text(member.title).ripulText()
                         .font(.ripul(.subheadline, weight: .medium))
                         .lineLimit(1)
                     if member.userId == model.me?.userId {
@@ -845,7 +845,7 @@ struct RipulTeamDetailScreen: View {
             }
             ForEach(model.invites) { invite in
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(invite.email)
+                    Text(invite.email).ripulText()
                         .font(.ripul(.subheadline))
                         .lineLimit(1)
                     Text(inviteFootnote(invite))
@@ -865,7 +865,7 @@ struct RipulTeamDetailScreen: View {
             Text("Invitations")
         } } footer: { RipulSectionFooter {
             Text("Invitations expire after two weeks. Swipe to withdraw one.")
-        } }
+        } }.ripulThemedListRows()
     }
 
     private func inviteFootnote(_ invite: RipulTeamInvite) -> String {
@@ -929,7 +929,7 @@ struct RipulTeamEditorSheet: View {
                     TextField("Team name", text: $name)
                         .textInputAutocapitalization(.words)
                         .uiKitIdentifier("TeamEditor.name")
-                }
+                }.ripulThemedListRows()
                 Section {
                     TextField("What this team is for", text: $description, axis: .vertical)
                         .lineLimit(2...5)
@@ -938,8 +938,8 @@ struct RipulTeamEditorSheet: View {
                     Text("Description")
                 } } footer: { RipulSectionFooter {
                     Text("Optional. Shown to people you invite.")
-                } }
-            }
+                } }.ripulThemedListRows()
+            }.ripulThemedList()
             .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -1025,7 +1025,7 @@ struct RipulTeamInviteSheet: View {
                     Text(mode == .email
                          ? "They'll see the invitation in Ripul and can accept or decline. Nothing is shared until they accept."
                          : "Adds the account to the team immediately.")
-                } }
+                } }.ripulThemedListRows()
                 Section(themed: "Role") {
                     Picker("Role", selection: $role) {
                         ForEach(RipulTeamRole.allCases, id: \.self) { role in
@@ -1034,8 +1034,8 @@ struct RipulTeamInviteSheet: View {
                     }
                     .pickerStyle(.inline)
                     .labelsHidden()
-                }
-            }
+                }.ripulThemedListRows()
+            }.ripulThemedList()
             .navigationTitle(mode == .email ? "Invite" : "Add Member")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -1106,24 +1106,24 @@ private struct RipulDepartmentActivityScreen: View {
     var body: some View {
         List {
             Section {
-                Text("Shared with \(host.teamName)")
+                Text("Shared with \(host.teamName)").ripulText()
                 Text("Runs on the Mac's configured coding account. Team members' requests are recorded below.")
                     .font(.ripul(.subheadline)).foregroundStyle(.ripul(.textSecondary))
-            }
+            }.ripulThemedListRows()
             Section(themed: "Recent Activity") {
                 if loading { ProgressView() }
                 else if activity.isEmpty { Text("No team activity yet.").foregroundStyle(.ripul(.textSecondary)) }
                 ForEach(Array(activity.enumerated()), id: \.offset) { _, item in
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(item.actorName).font(.ripul(.headline))
-                        Text(item.title).font(.ripul(.subheadline))
+                        Text(item.actorName).ripulText().font(.ripul(.headline))
+                        Text(item.title).ripulText().font(.ripul(.subheadline))
                         if let date = item.date {
                             Text(date, style: .relative).font(.ripul(.caption)).foregroundStyle(.ripul(.textSecondary))
                         }
                     }
                 }
-            }
-        }
+            }.ripulThemedListRows()
+        }.ripulThemedList()
         .navigationTitle(host.displayName)
         .task { await load() }
         .refreshable { await load() }

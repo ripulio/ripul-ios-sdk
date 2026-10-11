@@ -150,7 +150,7 @@ struct RipulConformanceView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
                 Group {
-                    Text("UIKit").font(.ripul(.headline))
+                    Text("UIKit").ripulText().font(.ripul(.headline))
                     RipulUIKitButtonRow(id: RipulConformance.prefix + "uikit.button") { note("uikit.button") }
                         .frame(height: 44)
                     RipulUIKitTextFieldRow(id: RipulConformance.prefix + "uikit.textfield", text: $uikitText)
@@ -161,7 +161,7 @@ struct RipulConformanceView: View {
                         .frame(height: 44)
                 }
                 Group {
-                    Text("SwiftUI").font(.ripul(.headline))
+                    Text("SwiftUI").ripulText().font(.ripul(.headline))
                     Button("SwiftUI Button") { note("swiftui.button") }
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .uiKitIdentifier(RipulConformance.prefix + "swiftui.button")
@@ -179,13 +179,13 @@ struct RipulConformanceView: View {
                         .onChange(of: toggleOn) { note("swiftui.toggle") }
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .uiKitIdentifier(RipulConformance.prefix + "swiftui.toggle")
-                    Text("Tap gesture only")
+                    Text("Tap gesture only").ripulText()
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .contentShape(Rectangle())
                         .onTapGesture { note("swiftui.ontap") }
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .uiKitIdentifier(RipulConformance.prefix + "swiftui.ontap")
-                    Text("Inert label — theme-selectable, never pressable")
+                    Text("Inert label — theme-selectable, never pressable").ripulText()
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .uiKitIdentifier(RipulConformance.prefix + "swiftui.label")
                     // A button inside a nested hosting island — the shape that
@@ -201,7 +201,7 @@ struct RipulConformanceView: View {
                     .frame(height: 44)
                 }
                 Group {
-                    Text("Anchor").font(.ripul(.headline))
+                    Text("Anchor").ripulText().font(.ripul(.headline))
                     // Two wired but deliberately ANONYMOUS controls in one
                     // stamped container — no id, no title, no accessibility
                     // element on either half, so the tap POINT is the only
@@ -215,8 +215,8 @@ struct RipulConformanceView: View {
                         .frame(height: 44)
                 }
                 if !log.fired.isEmpty {
-                    Text("Activations").font(.ripul(.headline))
-                    ForEach(log.fired, id: \.self) { Text($0).font(.ripul(.caption, family: .code)) }
+                    Text("Activations").ripulText().font(.ripul(.headline))
+                    ForEach(log.fired, id: \.self) { Text($0).ripulText().font(.ripul(.caption, family: .code)) }
                 }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)

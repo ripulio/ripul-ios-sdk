@@ -69,17 +69,17 @@ public struct WorkingDirectoryPicker: View {
         NavigationStack {
             List {
                 if let explanation {
-                    Section { Text(explanation).font(.ripul(.footnote)).foregroundStyle(.ripul(.textSecondary)) }
+                    Section { Text(explanation).font(.ripul(.footnote)).foregroundStyle(.ripul(.textSecondary)) }.ripulThemedListRows()
                 }
                 if isLoading {
-                    Section { ProgressView("Loading directories…") }
+                    Section { ProgressView("Loading directories…") }.ripulThemedListRows()
                 } else if let error {
                     Section {
                         Text(error).font(.ripul(.footnote)).foregroundStyle(.ripul(.textSecondary))
                         if let onRetry { Button("Retry", action: onRetry) }
-                    }
+                    }.ripulThemedListRows()
                 } else {
-                    Section { defaultRow }
+                    Section { defaultRow }.ripulThemedListRows()
                 }
 
                 if directories.isEmpty && !isLoading && error == nil {
@@ -88,7 +88,7 @@ public struct WorkingDirectoryPicker: View {
                             .font(.ripul(.footnote))
                             .foregroundStyle(.ripul(.textSecondary))
                             .uiKitIdentifier("\(identifierPrefix).emptyState")
-                    }
+                    }.ripulThemedListRows()
                 } else if !isLoading && error == nil {
                     Section {
                         ForEach(directories, id: \.self) { dir in
@@ -96,7 +96,7 @@ public struct WorkingDirectoryPicker: View {
                         }
                     } header: { RipulSectionHeader {
                         Text("Favourites")
-                    } }
+                    } }.ripulThemedListRows()
                 }
 
                 if let onBrowse {
@@ -108,9 +108,9 @@ public struct WorkingDirectoryPicker: View {
                         }
                         .buttonStyle(.plain)
                         .uiKitIdentifier("\(identifierPrefix).browseButton")
-                    }
+                    }.ripulThemedListRows()
                 }
-            }
+            }.ripulThemedList()
             #if os(iOS)
             .listStyle(.insetGrouped)
             #endif

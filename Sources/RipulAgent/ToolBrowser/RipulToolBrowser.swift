@@ -339,7 +339,7 @@ public struct RipulToolBrowserView: View {
                             .rotationEffect(.degrees(isOpen ? 90 : 0))
                             .frame(width: 12)
                         VStack(alignment: .leading, spacing: 1) {
-                            Text("Always on").font(.ripul(.caption, weight: .medium)).lineLimit(1)
+                            Text("Always on").ripulText().font(.ripul(.caption, weight: .medium)).lineLimit(1)
                             Text(inventory.uncategorized.count == 1 ? "1 tool · no category" : "\(inventory.uncategorized.count) tools · no category")
                                 .font(.ripul(.caption2)).foregroundStyle(.ripul(.textTertiary)).lineLimit(1)
                         }

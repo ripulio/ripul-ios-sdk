@@ -90,7 +90,7 @@ public struct SessionTagsEditor: View {
                         }
                         .onDelete { offsets in tags.remove(atOffsets: offsets) }
                     }
-                }
+                }.ripulThemedListRows()
 
                 Section {
                     HStack(spacing: 8) {
@@ -121,7 +121,7 @@ public struct SessionTagsEditor: View {
                         Text(session.title)
                             .lineLimit(1)
                     }
-                } }
+                } }.ripulThemedListRows()
 
                 if !filteredSuggestions.isEmpty {
                     Section(themed: "Recent Tags") {
@@ -140,9 +140,9 @@ public struct SessionTagsEditor: View {
                             .buttonStyle(.plain)
                             .uiKitIdentifier("SessionTagsEditor.suggestionRow")
                         }
-                    }
+                    }.ripulThemedListRows()
                 }
-            }
+            }.ripulThemedList()
             .navigationTitle("Tags")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)

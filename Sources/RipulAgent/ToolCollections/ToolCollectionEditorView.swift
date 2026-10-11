@@ -67,7 +67,7 @@ struct RipulToolCollectionEditorView: View {
             explicitToolsSection
             previewSection
             if isEditing { deleteSection }
-        }
+        }.ripulThemedList()
         .navigationTitle(isEditing ? (existing?.displayLabel ?? "Collection") : "New Collection")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -125,7 +125,7 @@ struct RipulToolCollectionEditorView: View {
             Text(isEditing
                  ? "The name cannot be changed after creation."
                  : "A unique identifier. The label and description are what the agent reads when deciding whether to expand this collection.")
-        } }
+        } }.ripulThemedListRows()
     }
 
     private var modeSection: some View {
@@ -147,14 +147,14 @@ struct RipulToolCollectionEditorView: View {
             Text(mode == "isolate"
                  ? "A focused sub-agent runs with only these tools, then reports back. Best when the area is self-contained."
                  : "Tools join the agent's current scope alongside everything else. Best when tasks mix this area with others.")
-        } }
+        } }.ripulThemedListRows()
     }
 
     private var patternsSection: some View {
         Section {
             ForEach(patterns, id: \.self) { pattern in
                 HStack {
-                    Text(pattern).font(.ripul(.footnote, family: .code))
+                    Text(pattern).ripulText().font(.ripul(.footnote, family: .code))
                     Spacer()
                     Text("\(matchCount(for: pattern))")
                         .font(.ripul(.caption))
@@ -180,7 +180,7 @@ struct RipulToolCollectionEditorView: View {
             Text("Name Patterns")
         } } footer: { RipulSectionFooter {
             Text("Regexes matched against tool names. Any tool matching joins this collection, so future tools following the convention are absorbed automatically — no regrouping. Match the name your app registers (get_events), not the prefixed one (host_get_events).")
-        } }
+        } }.ripulThemedListRows()
     }
 
     private var explicitToolsSection: some View {
@@ -205,7 +205,7 @@ struct RipulToolCollectionEditorView: View {
             Text("Picked Tools")
         } } footer: { RipulSectionFooter {
             Text("Hand-picked members, in addition to anything the patterns capture.")
-        } }
+        } }.ripulThemedListRows()
     }
 
     private var previewSection: some View {
@@ -217,7 +217,7 @@ struct RipulToolCollectionEditorView: View {
             }
             ForEach(matcher.presentMatches, id: \.self) { toolName in
                 HStack {
-                    Text(toolName).font(.ripul(.footnote, family: .code))
+                    Text(toolName).ripulText().font(.ripul(.footnote, family: .code))
                     Spacer()
                     if matcher.patternMatches.contains(toolName) {
                         Text("pattern").font(.ripul(.caption2)).foregroundStyle(.ripul(.textSecondary))
@@ -245,13 +245,13 @@ struct RipulToolCollectionEditorView: View {
             Text("\(matcher.memberCount) members · \(matcher.presentCount) in this app")
         } } footer: { RipulSectionFooter {
             Text("Collections are account-wide. Members this build doesn't register are still part of the collection — they belong to the web app or another device.")
-        } }
+        } }.ripulThemedListRows()
     }
 
     private var deleteSection: some View {
         Section {
             Button("Delete Collection", role: .destructive) { confirmingDelete = true }
-        }
+        }.ripulThemedListRows()
     }
 
     // MARK: - Actions
@@ -337,7 +337,7 @@ struct RipulToolPickerView: View {
         List {
             section(title: "App Tools", items: filtered.filter { !$0.isBuiltIn })
             section(title: "SDK Built-ins", items: filtered.filter(\.isBuiltIn))
-        }
+        }.ripulThemedList()
         .searchable(text: $search)
         .navigationTitle("Pick Tools")
         .navigationBarTitleDisplayMode(.inline)
@@ -375,7 +375,7 @@ struct RipulToolPickerView: View {
                         }
                     }
                 }
-            }
+            }.ripulThemedListRows()
         }
     }
 

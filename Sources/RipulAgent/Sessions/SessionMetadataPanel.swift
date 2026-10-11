@@ -284,7 +284,7 @@ public struct SessionMetadataPanel: View {
                     .foregroundStyle(.ripul(.textTertiary))
                     .frame(width: 28, alignment: .trailing)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(anchor.text)
+                    Text(anchor.text).ripulText()
                         .font(.ripul(.subheadline))
                         .lineLimit(1)
                         .truncationMode(.tail)
@@ -343,7 +343,7 @@ public struct SessionMetadataPanel: View {
                 Text("MODEL")
                     .font(.ripul(.caption, weight: .semibold))
                     .foregroundStyle(.ripul(.textSecondary))
-                Text(model)
+                Text(model).ripulText()
                     .font(.ripul(.subheadline, weight: .semibold))
                     .uiKitIdentifier("SessionMetadataPanel.model.name")
                 if let history = metadata?.modelHistory, history.count > 1 {
@@ -382,7 +382,7 @@ public struct SessionMetadataPanel: View {
                         .foregroundStyle(FileTypeIcon.color(for: file.filePath ?? file.fileName))
                         .frame(width: 28)
                     VStack(alignment: .leading, spacing: 1) {
-                        Text(file.fileName)
+                        Text(file.fileName).ripulText()
                             .font(.ripul(.subheadline))
                             .lineLimit(1)
                         if let path = file.filePath {
@@ -509,7 +509,7 @@ public struct SessionMetadataPanel: View {
                         .foregroundStyle(.ripul(.textSecondary))
                         .frame(width: 28)
                     VStack(alignment: .leading, spacing: 1) {
-                        Text(participant.displayName ?? participant.id)
+                        Text(participant.displayName ?? participant.id).ripulText()
                             .font(.ripul(.subheadline))
                             .lineLimit(1)
                         if let group = participant.group, !group.isEmpty {
@@ -625,7 +625,7 @@ public struct SessionMetadataPanel: View {
                         ForEach(notes) { note in
                             HStack(alignment: .top, spacing: 8) {
                                 VStack(alignment: .leading, spacing: 3) {
-                                    Text(note.text)
+                                    Text(note.text).ripulText()
                                         .font(.ripul(.subheadline))
                                     if let ts = note.createdAt ?? note.timestamp {
                                         Text(relativeTime(ts))

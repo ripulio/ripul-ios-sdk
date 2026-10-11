@@ -37,7 +37,7 @@ struct RipulProfilePhotoEditor: View {
             .clipShape(Circle())
             .accessibilityLabel("Profile photo")
             VStack(alignment: .leading, spacing: 2) {
-                Text(name ?? email ?? "Signed in").font(.ripul(.headline))
+                Text(name ?? email ?? "Signed in").ripulText().font(.ripul(.headline))
                 if let email, name != nil { Text(email).font(.ripul(.subheadline)).foregroundStyle(.ripul(.textSecondary)) }
             }
         }

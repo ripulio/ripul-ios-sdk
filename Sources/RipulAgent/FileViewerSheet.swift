@@ -38,7 +38,7 @@ struct FileViewerSheet: View {
 
                 Spacer()
 
-                Text(fileName)
+                Text(fileName).ripulText()
                     .font(.ripul(.subheadline, weight: .semibold))
                     .lineLimit(1)
                     .padding(.horizontal, 14)

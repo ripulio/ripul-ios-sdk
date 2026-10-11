@@ -226,24 +226,24 @@ public struct ModelPickerSections: View {
     public var body: some View {
         Group {
             if offered.isEmpty {
-                Section { statusRow }
+                Section { statusRow }.ripulThemedListRows()
             } else {
                 // Effort and Default are answers to "how should this run", not
                 // "which model" — searching is a model question, so they get out
                 // of the way while a query is active.
                 if !searching {
                     if let effort {
-                        Section(themed: "Reasoning effort") { effortRow(effort) }
+                        Section(themed: "Reasoning effort") { effortRow(effort) }.ripulThemedListRows()
                     }
                     if showsDefaultRow {
-                        Section { defaultRow }
+                        Section { defaultRow }.ripulThemedListRows()
                     }
                 }
 
                 if searching {
                     Section(themed: matches.isEmpty ? "No matches" : "Results") {
                         ForEach(matches) { row(for: $0) }
-                    }
+                    }.ripulThemedListRows()
                 } else {
                     if !pinnedModels.isEmpty {
                         Section {
@@ -253,7 +253,7 @@ public struct ModelPickerSections: View {
                             Text("Pinned")
                         } } footer: { RipulSectionFooter {
                             Text("Also the quick-start circles, in this order, left to right. Drag to reorder; tap the pin to remove.")
-                        } }
+                        } }.ripulThemedListRows()
                     }
                     ForEach(sections(for: unpinned)) { section in
                         Section {
@@ -262,7 +262,7 @@ public struct ModelPickerSections: View {
                             Text(section.title)
                         } } footer: { RipulSectionFooter {
                             if let footer = section.footer { Text(footer) }
-                        } }
+                        } }.ripulThemedListRows()
                     }
                 }
             }
@@ -773,7 +773,7 @@ public struct ModelPickerList: View {
                 onDeletePersonal: onDeletePersonal,
                 onPick: onPick
             )
-        }
+        }.ripulThemedList()
         #if os(iOS)
         .listStyle(.insetGrouped)
         #endif

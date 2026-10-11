@@ -45,14 +45,14 @@ struct MachinePanelCustomiserSheet: View {
                     Text("Shown")
                 } } footer: { RipulSectionFooter {
                     Text("Drag to reorder. Tiles fill the grid at the top of the panel; rows sit in the list below it.")
-                } }
+                } }.ripulThemedListRows()
 
                 if !hidden.isEmpty {
                     Section(themed: "Hidden") {
                         ForEach(hidden) { entry in
                             entryRow(entry, isHidden: true)
                         }
-                    }
+                    }.ripulThemedListRows()
                 }
 
                 if !unavailable.isEmpty {
@@ -61,7 +61,7 @@ struct MachinePanelCustomiserSheet: View {
                             Label(entry.label, systemImage: entry.icon)
                                 .foregroundStyle(.ripul(.textSecondary))
                         }
-                    }
+                    }.ripulThemedListRows()
                 }
 
                 Section {
@@ -69,8 +69,8 @@ struct MachinePanelCustomiserSheet: View {
                         store.reset(machineId: machineId)
                     }
                     .disabled(layout.isEmpty)
-                }
-            }
+                }.ripulThemedListRows()
+            }.ripulThemedList()
             #if os(iOS)
             .environment(\.editMode, .constant(.active))
             .navigationBarTitleDisplayMode(.inline)

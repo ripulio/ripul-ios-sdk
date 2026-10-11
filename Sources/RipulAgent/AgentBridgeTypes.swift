@@ -580,6 +580,38 @@ public struct HostAuthStatusInfo {
 /// device, and the host-side session the pasted code must be returned to.
 /// No credential ever crosses the relay — the code is PKCE-bound to the
 /// host process and the token lands in the host's Keychain.
+/// One step of the owner's Claude approval for rented Macs (`agent:hostRentedMacsToken`).
+public enum RentedMacsClaudeStep {
+    case status, begin, cancel, forget
+    case code(sessionId: String, code: String)
+
+    var name: String {
+        switch self {
+        case .status: return "status"
+        case .begin: return "begin"
+        case .cancel: return "cancel"
+        case .forget: return "forget"
+        case .code: return "code"
+        }
+    }
+}
+
+/// What the Mac that keeps the approval answered. Never the token: only
+/// whether one is kept, and until about when.
+public struct RentedMacsClaudeInfo {
+    public let ok: Bool
+    public let stored: Bool
+    public let endsAbout: Date?
+    public let pendingSessionId: String?
+    public let sessionId: String?
+    public let authUrl: String?
+    public let error: String?
+
+    static func failed(_ reason: String) -> RentedMacsClaudeInfo {
+        RentedMacsClaudeInfo(ok: false, stored: false, endsAbout: nil, pendingSessionId: nil, sessionId: nil, authUrl: nil, error: reason)
+    }
+}
+
 public struct HostAuthBeginInfo {
     public let sessionId: String?
     public let authUrl: String?

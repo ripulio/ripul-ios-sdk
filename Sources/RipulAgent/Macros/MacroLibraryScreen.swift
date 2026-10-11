@@ -48,7 +48,7 @@ struct MacroLibraryScreen: View {
                         ForEach(macros) { macro in
                             row(macro)
                         }
-                    }
+                    }.ripulThemedList()
                 }
             }
             .navigationTitle("Macros")
@@ -130,7 +130,7 @@ struct MacroLibraryScreen: View {
     private func row(_ macro: RipulMacro) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
-                Text(macro.name)
+                Text(macro.name).ripulText()
                     .font(.ripul(.headline))
                 Spacer()
                 Image(systemName: "chevron.right")
@@ -214,7 +214,7 @@ private struct ContentUnavailableViewCompat: View {
     let message: String
     var body: some View {
         VStack(spacing: 8) {
-            Text(title).font(.ripul(.headline))
+            Text(title).ripulText().font(.ripul(.headline))
             Text(message).font(.ripul(.subheadline)).foregroundStyle(.ripul(.textSecondary))
         }
         .multilineTextAlignment(.center)

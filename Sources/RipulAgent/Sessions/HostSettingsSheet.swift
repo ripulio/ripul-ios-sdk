@@ -135,17 +135,17 @@ public struct HostSettingsForm: View {
     public var body: some View {
         Form {
             if let error = model.error {
-                Section { Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(.ripul(.warning)) }
+                Section { Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(.ripul(.warning)) }.ripulThemedListRows()
             }
             if !model.loaded {
-                Section { ProgressView("Reading \(machineName)'s settings…") }
+                Section { ProgressView("Reading \(machineName)'s settings…") }.ripulThemedListRows()
             }
             ForEach(model.groups, id: \.name) { group in
                 Section(themed: group.name) {
                     ForEach(group.settings) { setting in HostSettingRow(setting: setting, model: model) }
-                }
+                }.ripulThemedListRows()
             }
-        }
+        }.ripulThemedList()
         .navigationTitle(machineName)
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
@@ -204,7 +204,7 @@ public struct HostSettingsListScreen: View {
                 .disabled(!machine.isOnline)
                 .uiKitIdentifier("HostSettingsList.machine")
             }
-        }
+        }.ripulThemedList()
         .navigationTitle("Mac Settings")
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
@@ -282,7 +282,7 @@ private struct HostSettingRow: View {
 
     private var labelled: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(setting.label)
+            Text(setting.label).ripulText()
             if let detail = setting.detail, setting.kind != "choice" {
                 Text(detail).font(.ripul(.caption)).foregroundStyle(.ripul(.textSecondary))
             }
@@ -323,8 +323,8 @@ private struct HostMultiChoiceScreen: View {
                     }
                     .uiKitIdentifier("HostSettings.multiChoice.option")
                 }
-            } footer: { RipulSectionFooter { if let detail = setting?.detail { Text(detail) } } }
-        }
+            } footer: { RipulSectionFooter { if let detail = setting?.detail { Text(detail) } } }.ripulThemedListRows()
+        }.ripulThemedList()
         .disabled(model.saving.contains(key))
         .navigationTitle(setting?.label ?? "")
     }
@@ -342,11 +342,11 @@ private struct HostDirectoryScreen: View {
         let current: String = { if case .text(let t)? = setting?.value { return t }; return "" }()
         List {
             if let error = model.error {
-                Section { Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(.ripul(.warning)) }
+                Section { Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(.ripul(.warning)) }.ripulThemedListRows()
             }
             Section {
-                Text(current).font(.ripul(.callout, family: .code)).textSelection(.enabled)
-            } header: { RipulSectionHeader { Text("Current") } } footer: { RipulSectionFooter { if let detail = setting?.detail { Text(detail) } } }
+                Text(current).ripulText().font(.ripul(.callout, family: .code)).textSelection(.enabled)
+            } header: { RipulSectionHeader { Text("Current") } } footer: { RipulSectionFooter { if let detail = setting?.detail { Text(detail) } } }.ripulThemedListRows()
             if let options = setting?.options, !options.isEmpty {
                 Section(themed: "Favorites") {
                     ForEach(options, id: \.value) { option in
@@ -359,7 +359,7 @@ private struct HostDirectoryScreen: View {
                         }
                         .uiKitIdentifier("HostSettings.directory.favorite")
                     }
-                }
+                }.ripulThemedListRows()
             }
             Section {
                 Button { browsing = true } label: { Label("Browse…", systemImage: "folder") }
@@ -374,8 +374,8 @@ private struct HostDirectoryScreen: View {
                 Button("Use This Folder") { model.set(key, .text(typed)); typed = "" }
                     .disabled(typed.trimmingCharacters(in: .whitespaces).isEmpty)
                     .uiKitIdentifier("HostSettings.directory.use")
-            } header: { RipulSectionHeader { Text("Other Folder") } } footer: { RipulSectionFooter { Text("Browse the Mac's folders, or type a path. ~ means its home folder. The folder must already exist.") } }
-        }
+            } header: { RipulSectionHeader { Text("Other Folder") } } footer: { RipulSectionFooter { Text("Browse the Mac's folders, or type a path. ~ means its home folder. The folder must already exist.") } }.ripulThemedListRows()
+        }.ripulThemedList()
         .disabled(model.saving.contains(key))
         .navigationTitle(setting?.label ?? "")
         .ripulSheet(isPresented: $browsing) {
@@ -395,7 +395,7 @@ private struct HostDirectoryListScreen: View {
         let paths: [String] = { if case .list(let l)? = setting?.value { return l }; return [] }()
         List {
             if let error = model.error {
-                Section { Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(.ripul(.warning)) }
+                Section { Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(.ripul(.warning)) }.ripulThemedListRows()
             }
             Section {
                 ForEach(paths, id: \.self) { path in
@@ -407,7 +407,7 @@ private struct HostDirectoryListScreen: View {
                     model.set(key, .list(next))
                 }
                 if paths.isEmpty { Text("No favorites yet").foregroundStyle(.ripul(.textSecondary)) }
-            } footer: { RipulSectionFooter { if let detail = setting?.detail { Text(detail) } } }
+            } footer: { RipulSectionFooter { if let detail = setting?.detail { Text(detail) } } }.ripulThemedListRows()
             Section {
                 Button { browsing = true } label: { Label("Browse…", systemImage: "folder.badge.plus") }
                     .uiKitIdentifier("HostSettings.directoryList.browse")
@@ -421,8 +421,8 @@ private struct HostDirectoryListScreen: View {
                 Button("Add Favorite") { model.set(key, .list(paths + [typed.trimmingCharacters(in: .whitespaces)])); typed = "" }
                     .disabled(typed.trimmingCharacters(in: .whitespaces).isEmpty)
                     .uiKitIdentifier("HostSettings.directoryList.add")
-            } header: { RipulSectionHeader { Text("Add") } } footer: { RipulSectionFooter { Text("Browse the Mac's folders, or type a path. ~ means its home folder.") } }
-        }
+            } header: { RipulSectionHeader { Text("Add") } } footer: { RipulSectionFooter { Text("Browse the Mac's folders, or type a path. ~ means its home folder.") } }.ripulThemedListRows()
+        }.ripulThemedList()
         .disabled(model.saving.contains(key))
         .navigationTitle(setting?.label ?? "")
         .ripulSheet(isPresented: $browsing) {

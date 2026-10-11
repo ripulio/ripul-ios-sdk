@@ -130,15 +130,15 @@ public struct TodoListExpandedView: View {
                 }
                 .textCase(nil)
                 .padding(.vertical, 6)
-            } }
+            } }.ripulThemedListRows()
 
             Section {
                 Button(role: .destructive, action: onDismiss) {
                     Label("Clear plan", systemImage: "xmark.circle")
                         .frame(maxWidth: .infinity)
                 }
-            }
-        }
+            }.ripulThemedListRows()
+        }.ripulThemedList()
         #if os(iOS)
         .listStyle(.insetGrouped)
         #else

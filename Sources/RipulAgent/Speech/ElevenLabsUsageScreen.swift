@@ -29,7 +29,7 @@ struct ElevenLabsUsageScreen: View {
                 }
             } header: { RipulSectionHeader {
                 Text("Plan")
-            } }
+            } }.ripulThemedListRows()
             if let usage { billing(usage); daily(usage) }
             Section {
                 Link(destination: URL(string: "https://elevenlabs.io/app/subscription")!) {
@@ -37,8 +37,8 @@ struct ElevenLabsUsageScreen: View {
                 }.uiKitIdentifier("ElevenLabsUsage.manage")
             } footer: { RipulSectionFooter {
                 Text("Figures come straight from ElevenLabs. Invoices, payment methods and plan changes live in your ElevenLabs account.")
-            } }
-        }
+            } }.ripulThemedListRows()
+        }.ripulThemedList()
         .navigationTitle(title)
         #if os(macOS)
         .formStyle(.grouped)
@@ -71,7 +71,7 @@ struct ElevenLabsUsageScreen: View {
             if usage.openInvoiceCount > 0 {
                 LabeledContent("Unpaid invoices") { Text("\(usage.openInvoiceCount)").foregroundStyle(.ripul(.danger)) }
             }
-        }
+        }.ripulThemedListRows()
         .uiKitIdentifier("ElevenLabsUsage.billing")
     }
 
@@ -91,7 +91,7 @@ struct ElevenLabsUsageScreen: View {
             }
         } header: { RipulSectionHeader {
             Text("Daily usage")
-        } }
+        } }.ripulThemedListRows()
     }
 
     private func refresh() async {

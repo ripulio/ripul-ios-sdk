@@ -117,7 +117,7 @@ public struct HostSignInSheet: View {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 10) {
                     ProgressView()
-                    Text("Verifying…")
+                    Text("Verifying…").ripulText()
                         .font(.ripul(.headline))
                 }
                 Text("The Mac is redeeming the code and confirming the sign-in. This can take up to 90 seconds.")
@@ -201,7 +201,7 @@ public struct HostSignInSheet: View {
                 .font(.ripulIcon(.caption))
                 .foregroundStyle(.ripul(.textSecondary))
                 .frame(width: 18)
-            Text(value)
+            Text(value).ripulText()
                 .font(.ripul(.subheadline))
         }
     }

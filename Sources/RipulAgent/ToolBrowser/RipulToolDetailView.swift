@@ -36,7 +36,7 @@ public struct RipulToolDetailView: View {
                     }
                     if !tool.description.isEmpty {
                         section("Description") {
-                            Text(tool.description)
+                            Text(tool.description).ripulText()
                                 .font(.ripul(.callout))
                                 .textSelection(.enabled)
                                 .fixedSize(horizontal: false, vertical: true)
@@ -68,7 +68,7 @@ public struct RipulToolDetailView: View {
                                 .uiKitIdentifier("ToolDetail.schema.copy")
                             }
                             if schemaExpanded {
-                                Text(tool.schemaJSON)
+                                Text(tool.schemaJSON).ripulText()
                                     .font(.ripul(.caption2, family: .code))
                                     .textSelection(.enabled)
                                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -103,7 +103,7 @@ public struct RipulToolDetailView: View {
     private var header: some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
             VStack(alignment: .leading, spacing: 3) {
-                Text(tool.name)
+                Text(tool.name).ripulText()
                     .font(.ripul(.headline, family: .code))
                     .textSelection(.enabled)
                     .lineLimit(2)
@@ -146,7 +146,7 @@ public struct RipulToolDetailView: View {
     private func parameterRow(_ param: RipulToolInventory.Parameter) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 6) {
-                Text(param.name).font(.ripul(.callout, family: .code))
+                Text(param.name).ripulText().font(.ripul(.callout, family: .code))
                 Text(param.type).font(.ripul(.caption)).foregroundStyle(.ripul(.textSecondary))
                 if param.required {
                     Text("required")

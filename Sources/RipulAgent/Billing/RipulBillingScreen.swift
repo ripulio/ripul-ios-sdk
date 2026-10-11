@@ -278,7 +278,7 @@ public struct RipulBillingScreen: View {
                         }
                         .uiKitIdentifier("RipulBilling.error.advanced")
                     }
-                }
+                }.ripulThemedListRows()
             }
 
             if model.siteKeys.isEmpty && !model.loading {
@@ -286,7 +286,7 @@ public struct RipulBillingScreen: View {
                     Text("No site key is linked to a CMS portal. Row billing binds a portal's queries, so link a key first.")
                         .font(.ripul(.footnote))
                         .foregroundStyle(.ripul(.textSecondary))
-                }
+                }.ripulThemedListRows()
             } else {
                 if model.siteKeys.count > 1 {
                     Section {
@@ -296,14 +296,14 @@ public struct RipulBillingScreen: View {
                             }
                         }
                         .uiKitIdentifier("RipulBilling.siteKeyPicker")
-                    }
+                    }.ripulThemedListRows()
                 }
 
                 accountSection
                 rulesSection
                 stripeLinksSection
             }
-        }
+        }.ripulThemedList()
         .uiKitIdentifier("RipulBilling.list")
         .navigationTitle("Row Billing")
         .refreshable { await model.load() }
@@ -383,7 +383,7 @@ public struct RipulBillingScreen: View {
                         .foregroundStyle(accountTint(account))
                         .frame(width: 24)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(accountLabel(account))
+                        Text(accountLabel(account)).ripulText()
                             .font(.ripul(.subheadline, weight: .medium))
                         Text(account.stripeAccountId + (account.livemode ? "" : " · test mode"))
                             .font(.ripul(.caption, family: .code))
@@ -443,7 +443,7 @@ public struct RipulBillingScreen: View {
             if model.account == nil && model.accountLoaded {
                 Text("Onboarding is Stripe-hosted and entirely self-serve: the account is the tenant's own — merchant of record, full dashboard; Ripul never holds funds and takes no fee. Opens in the browser; pull to refresh here afterwards.")
             }
-        } }
+        } }.ripulThemedListRows()
     }
 
     /// "Start over" — unbind so the create/connect choice comes back. The
@@ -589,7 +589,7 @@ public struct RipulBillingScreen: View {
             Text("Stripe dashboard")
         } } footer: { RipulSectionFooter {
             Text("Opens the platform's Stripe dashboard in the browser\(model.platform?.mode == "test" ? " (test mode)" : "").")
-        } }
+        } }.ripulThemedListRows()
     }
 
     // MARK: Rules
@@ -636,7 +636,7 @@ public struct RipulBillingScreen: View {
             Text("Billing rules")
         } } footer: { RipulSectionFooter {
             Text("Billing is in arrears: Checkout captures the card but charges nothing — each period's invoice bills that period's peak quantity. Revenue and failed payments live in the tenant's own Stripe dashboard.")
-        } }
+        } }.ripulThemedListRows()
     }
 
     @ViewBuilder
@@ -646,7 +646,7 @@ public struct RipulBillingScreen: View {
                 .foregroundStyle(rule.status == "active" && !rule.dryRun ? AnyShapeStyle(.tint) : AnyShapeStyle(.ripul(.textSecondary)))
                 .frame(width: 24)
             VStack(alignment: .leading, spacing: 2) {
-                Text(rule.name)
+                Text(rule.name).ripulText()
                     .font(.ripul(.subheadline, weight: .semibold))
                 Text("\(rule.status)\(rule.dryRun ? " · dry run" : "") · \(rule.subjectQuery) · \(model.priceLabel(for: rule.stripePriceId))\(rule.trialDays.map { " · \($0)-day trial" } ?? "")")
                     .font(.ripul(.caption))
@@ -686,7 +686,7 @@ struct RipulBillingRuleEditorView: View {
                             .font(.ripul(.footnote))
                             .foregroundStyle(.ripul(.textSecondary))
                     }
-                }
+                }.ripulThemedListRows()
             }
 
             Section {
@@ -700,7 +700,7 @@ struct RipulBillingRuleEditorView: View {
                     .uiKitIdentifier("RipulBilling.editor.dryRun")
             } footer: { RipulSectionFooter {
                 Text("Dry run is shadow mode: the billing engine computes and logs every push it would make, and pushes nothing to Stripe. The natural first step for a new rule.")
-            } }
+            } }.ripulThemedListRows()
 
             Section {
                 Picker("Subject query", selection: $input.subjectQuery) {
@@ -722,7 +722,7 @@ struct RipulBillingRuleEditorView: View {
                 Text("Subject — which rows get billed")
             } } footer: { RipulSectionFooter {
                 Text("Each row matching the subject query becomes one Stripe subscriber. The primary key must stay stable for years — it links the row to its subscription.")
-            } }
+            } }.ripulThemedListRows()
 
             Section {
                 Picker("Relationship", selection: $input.quantityRelationshipId) {
@@ -751,7 +751,7 @@ struct RipulBillingRuleEditorView: View {
                 } else {
                     Text("The related set is aggregated per subject row, server-side, one grouped query per cycle.")
                 }
-            } }
+            } }.ripulThemedListRows()
 
             Section {
                 if model.prices.isEmpty {
@@ -793,11 +793,11 @@ struct RipulBillingRuleEditorView: View {
                 Text("Price — authored in the Stripe dashboard")
             } } footer: { RipulSectionFooter {
                 Text("The period's peak bills, in arrears — one invoice per period, no mid-period charges. The meter's event name is read from the Price at push time.")
-            } }
+            } }.ripulThemedListRows()
 
             Section {
                 HStack {
-                    Text("Free trial (days)")
+                    Text("Free trial (days)").ripulText()
                     Spacer()
                     TextField("None", value: $input.trialDays, format: .number)
                         .keyboardType(.numberPad)
@@ -809,8 +809,8 @@ struct RipulBillingRuleEditorView: View {
                 Text("Free trial")
             } } footer: { RipulSectionFooter {
                 Text("Optional. New sign-ups start with this many free days (1–730) before the first billing period. Leave empty for no trial.")
-            } }
-        }
+            } }.ripulThemedListRows()
+        }.ripulThemedList()
         .uiKitIdentifier("RipulBilling.editor")
         .navigationTitle(rule == nil ? "New rule" : "Edit rule")
         .navigationBarTitleDisplayMode(.inline)
@@ -923,13 +923,13 @@ struct RipulBillingPlanSheet: View {
                 .uiKitIdentifier("RipulBillingPlan.interval")
             } footer: { RipulSectionFooter {
                 Text("Creates the Meter, Product and metered Price on the connected Stripe account — the account owner's objects, in their dashboard. Ripul takes no cut.")
-            } }
+            } }.ripulThemedListRows()
             if let localError {
                 Section {
                     Label(localError, systemImage: "exclamationmark.triangle")
                         .font(.ripul(.footnote))
                         .foregroundStyle(.ripul(.textSecondary))
-                }
+                }.ripulThemedListRows()
             }
             if let createdPriceId {
                 Section {
@@ -937,9 +937,9 @@ struct RipulBillingPlanSheet: View {
                     Text(model.priceLabel(for: createdPriceId))
                         .font(.ripul(.footnote))
                         .foregroundStyle(.ripul(.textSecondary))
-                }
+                }.ripulThemedListRows()
             }
-        }
+        }.ripulThemedList()
         .navigationTitle("Create plan")
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {

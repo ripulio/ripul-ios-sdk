@@ -167,8 +167,8 @@ public struct RipulThemedText: View {
     }
     public var body: some View {
         let _ = updates.version
-        if stampsIdentity { Text(verbatim: assignment.text).uiKitIdentifier(assignment.element) }
-        else { Text(verbatim: assignment.text) }
+        if stampsIdentity { Text(verbatim: assignment.text).ripulText().uiKitIdentifier(assignment.element) }
+        else { Text(verbatim: assignment.text).ripulText() }
     }
 }
 #endif

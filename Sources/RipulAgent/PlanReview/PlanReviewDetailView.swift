@@ -229,7 +229,7 @@ struct PlanReviewDetailView: View {
                     ) {
                         panelRows(plan.violations) { violation in
                             VStack(alignment: .leading, spacing: 2) {
-                                Text(violation.reason).font(.ripul(.subheadline, weight: .medium))
+                                Text(violation.reason).ripulText().font(.ripul(.subheadline, weight: .medium))
                                 Text(violation.detail).font(.ripul(.caption)).foregroundStyle(.ripul(.textSecondary))
                             }
                         }
@@ -367,7 +367,7 @@ struct PlanReviewDetailView: View {
                     .font(.ripulIcon(.title2))
                     .foregroundStyle(plan.locked ? Color.ripul(.success) : Color.ripul(.warning))
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(plan.locked ? "Locked" : "Open")
+                    Text(plan.locked ? "Locked" : "Open").ripulText()
                         .font(.ripul(.headline))
                     Text(plan.locked
                          ? "No blocking comments outstanding."
@@ -516,7 +516,7 @@ struct PlanReviewDetailView: View {
     }
 
     private func countPill(_ count: Int, highlight: Bool) -> some View {
-        Text("\(count)")
+        Text("\(count)").ripulText()
             .font(.ripul(.caption2, weight: .semibold))
             .padding(.horizontal, 6)
             .padding(.vertical, 1)
@@ -598,7 +598,7 @@ struct PlanReviewDetailView: View {
                     .font(.ripul(.caption, weight: .semibold))
                     .foregroundStyle(comment.severity.tint)
                 if comment.status != .open {
-                    Text(comment.status.label)
+                    Text(comment.status.label).ripulText()
                         .font(.ripul(.caption2, weight: .medium))
                         .padding(.horizontal, 6).padding(.vertical, 2)
                         .background(.ripul(.textQuaternary), in: Capsule())
@@ -609,7 +609,7 @@ struct PlanReviewDetailView: View {
                 }
             }
 
-            Text(comment.body)
+            Text(comment.body).ripulText()
                 .font(.ripul(.callout))
                 .fixedSize(horizontal: false, vertical: true)
 
@@ -728,13 +728,13 @@ struct PlanReviewDetailView: View {
             Form {
                 Section(themed: "Replying to") {
                     Text(comment.body).font(.ripul(.callout)).foregroundStyle(.ripul(.textSecondary))
-                }
+                }.ripulThemedListRows()
                 Section {
                     TextField("Your reply", text: $replyText, axis: .vertical)
                         .lineLimit(3...10)
                         .uiKitIdentifier("PlanReviewDetailView.replyField")
-                }
-            }
+                }.ripulThemedListRows()
+            }.ripulThemedList()
             .navigationTitle("Reply")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)

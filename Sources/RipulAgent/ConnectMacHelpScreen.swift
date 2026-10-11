@@ -22,7 +22,7 @@ struct ConnectMacHelpScreen: View {
                 Section {
                     Text("Ripul's agents run on your Mac. This device reaches the Mac in one of two ways, and both need Ripul Host installed on it.")
                         .foregroundStyle(.ripul(.textSecondary))
-                }
+                }.ripulThemedListRows()
                 Section(themed: "Normal") {
                     Text("Your Mac connects through your Ripul account. You can reach it from anywhere, and every screen can use it.")
                         .foregroundStyle(.ripul(.textSecondary))
@@ -37,7 +37,7 @@ struct ConnectMacHelpScreen: View {
                     step(firstMacStep + 1, signedIn ? "Open Ripul Host and sign in with the Ripul account you use here."
                                                     : "Open Ripul Host and sign in with the same Ripul account.")
                     step(firstMacStep + 2, "Leave it running. Your Mac appears in Ripul by itself.")
-                }
+                }.ripulThemedListRows()
                 Section {
                     Text("This device talks straight to your Mac over the same Wi-Fi, or over Tailscale when you are away. Nothing goes through Ripul's servers, and no account is needed.")
                         .foregroundStyle(.ripul(.textSecondary))
@@ -49,8 +49,8 @@ struct ConnectMacHelpScreen: View {
                 } } footer: { RipulSectionFooter {
                     Text(signedIn ? "Direct pairing is for chats. With App startup set to Standalone in Settings, Files and the Dock use a paired Mac too. Every other screen needs the Normal connection."
                                   : "Direct pairing covers chats, Files and the Dock. Every other screen needs the Normal connection.")
-                } }
-            }
+                } }.ripulThemedListRows()
+            }.ripulThemedList()
             .navigationTitle("Connecting a Mac")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)

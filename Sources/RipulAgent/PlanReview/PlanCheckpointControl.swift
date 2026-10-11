@@ -234,7 +234,7 @@ public struct PlanCheckpointControl: View {
                 HStack(spacing: 10) {
                     ProgressView().controlSize(.small)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("Running").font(.ripul(.subheadline, weight: .semibold))
+                        Text("Running").ripulText().font(.ripul(.subheadline, weight: .semibold))
                         Text(title).font(.ripul(.caption)).foregroundStyle(.ripul(.textSecondary)).lineLimit(1)
                     }
                     Spacer(minLength: 0)
@@ -277,7 +277,7 @@ public struct PlanCheckpointControl: View {
                 HStack(spacing: 10) {
                     Image(systemName: "checkmark.seal.fill").foregroundStyle(.ripul(.success))
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("Reviewed & locked").font(.ripul(.subheadline, weight: .semibold))
+                        Text("Reviewed & locked").ripulText().font(.ripul(.subheadline, weight: .semibold))
                         if openTasks > 0 {
                             Text("\(openTasks) open tasks — Run agent… → Do the tasks")
                                 .font(.ripul(.caption)).foregroundStyle(.ripul(.textSecondary))
@@ -355,7 +355,7 @@ public struct PlanCheckpointControl: View {
                     Image(systemName: icon).font(.ripulIcon(.title3))
                 }
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(label).font(.ripul(.subheadline, weight: .semibold))
+                    Text(label).ripulText().font(.ripul(.subheadline, weight: .semibold))
                     if let subtitle {
                         Text(subtitle).font(.ripul(.caption)).foregroundStyle(.ripul(.textSecondary)).lineLimit(1)
                     }

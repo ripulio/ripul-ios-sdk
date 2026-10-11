@@ -165,7 +165,7 @@ public struct GlassSelectButton: View {
             HStack(spacing: 4) {
                 Image(systemName: isSelecting ? "xmark" : "checkmark.circle")
                     .font(.ripulIcon(.caption2, weight: .semibold))
-                Text(isSelecting ? "Cancel" : "Select")
+                Text(isSelecting ? "Cancel" : "Select").ripulText()
                     .font(.ripul(.caption, weight: .medium))
             }
             .textCase(nil)

@@ -72,7 +72,7 @@ struct HostScriptsSheet: View {
                 if let loadError {
                     Section {
                         Text(loadError).foregroundStyle(.ripul(.danger)).font(.ripul(.callout))
-                    }
+                    }.ripulThemedListRows()
                 }
                 if scripts.isEmpty {
                     ContentUnavailableView {
@@ -101,9 +101,9 @@ struct HostScriptsSheet: View {
                         }
                     } footer: { RipulSectionFooter {
                         Text("Each script is a tile in \(machine.displayName)’s panel.")
-                    } }
+                    } }.ripulThemedListRows()
                 }
-            }
+            }.ripulThemedList()
             .refreshable { await refresh() }
             .confirmationDialog(
                 "Delete “\(pendingDelete?.name ?? "")”?",
@@ -122,7 +122,7 @@ struct HostScriptsSheet: View {
     private func scriptRow(_ script: HostScript) -> some View {
         Label {
             VStack(alignment: .leading, spacing: 2) {
-                Text(script.name).lineLimit(1)
+                Text(script.name).ripulText().lineLimit(1)
                 if !script.description.isEmpty {
                     Text(script.description)
                         .font(.ripul(.caption))
@@ -205,7 +205,7 @@ struct HostScriptEditorView: View {
                     .lineLimit(1...3)
             } footer: { RipulSectionFooter {
                 Text("The name is the tile’s label in the machine panel.")
-            } }
+            } }.ripulThemedListRows()
 
             Section(themed: "Type") {
                 Picker("Type", selection: $draft.scriptType) {
@@ -214,7 +214,7 @@ struct HostScriptEditorView: View {
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
-            }
+            }.ripulThemedListRows()
 
             Section(themed: "Script") {
                 TextEditor(text: $draft.source)
@@ -224,7 +224,7 @@ struct HostScriptEditorView: View {
                     #if os(iOS)
                     .textInputAutocapitalization(.never)
                     #endif
-            }
+            }.ripulThemedListRows()
 
             Section {
                 ForEach($draft.parameters) { $param in
@@ -260,12 +260,12 @@ struct HostScriptEditorView: View {
                 Text("Parameters")
             } } footer: { RipulSectionFooter {
                 Text("Parameters are asked for when the tile is tapped, and passed to the script.")
-            } }
+            } }.ripulThemedListRows()
 
             if let saveError {
                 Section {
                     Text(saveError).foregroundStyle(.ripul(.danger)).font(.ripul(.callout))
-                }
+                }.ripulThemedListRows()
             }
 
             if baseline != nil {
@@ -287,7 +287,7 @@ struct HostScriptEditorView: View {
                     .disabled(isRunning || isDirty || !draft.parameters.isEmpty)
 
                     if let runOutput {
-                        Text(runOutput)
+                        Text(runOutput).ripulText()
                             .font(.ripul(.caption, family: .code))
                             .textSelection(.enabled)
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -298,13 +298,13 @@ struct HostScriptEditorView: View {
                     } else if isDirty {
                         Text("Save first — Run uses the copy stored on the host.")
                     }
-                } }
+                } }.ripulThemedListRows()
 
                 Section {
                     Button("Delete Script", role: .destructive) { confirmDelete = true }
-                }
+                }.ripulThemedListRows()
             }
-        }
+        }.ripulThemedList()
         .navigationTitle(baseline == nil ? "New Script" : "Edit Script")
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)

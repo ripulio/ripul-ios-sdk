@@ -1697,7 +1697,7 @@ public struct NativeChatInput: View {
         .frame(maxWidth: .infinity, minHeight: textHeight + (36 - textHeight) * composerCollapse, maxHeight: textHeight + (36 - textHeight) * composerCollapse, alignment: .leading)
         .overlay(alignment: .topLeading) {
             if agentWaiting && text.isEmpty {
-                Text("Waiting on agent…")
+                Text("Waiting on agent…").ripulText()
                     .font(placeholderFont)
                     .ripulShimmer(base: Color.ripul(system: .placeholderText))
                     .padding(.leading, 12)
@@ -2960,7 +2960,7 @@ public struct NativeChatInput: View {
             .padding(.vertical, 8)
             .overlay(alignment: .leading) {
                 if agentWaiting && text.isEmpty {
-                    Text("Waiting on agent…")
+                    Text("Waiting on agent…").ripulText()
                         .ripulShimmer(base: Color(nsColor: .placeholderTextColor))
                         .padding(.leading, 12)
                         .allowsHitTesting(false)
@@ -3245,16 +3245,16 @@ struct HistorySheet: View {
                         ForEach(favs.prefix(15), id: \.self) { msg in
                             historyRow(msg)
                         }
-                    }
+                    }.ripulThemedListRows()
                 }
                 if !recent.isEmpty {
                     Section(themed: "Recent") {
                         ForEach(recent.prefix(15), id: \.self) { msg in
                             historyRow(msg)
                         }
-                    }
+                    }.ripulThemedListRows()
                 }
-            }
+            }.ripulThemedList()
             .navigationTitle("Recent Prompts")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
@@ -3346,7 +3346,7 @@ struct TodoPickerSheet: View {
                         Image(systemName: "list.bullet.clipboard")
                             .font(.ripulIcon(.largeTitle))
                             .foregroundStyle(.ripul(.textSecondary))
-                        Text("No to do items")
+                        Text("No to do items").ripulText()
                             .font(.ripul(.headline))
                         Text("Create one from the + menu to pick it later.")
                             .font(.ripul(.caption))
@@ -3362,16 +3362,16 @@ struct TodoPickerSheet: View {
                                 ForEach(thisChatItems) { item in
                                     todoRow(item, showChatName: false)
                                 }
-                            }
+                            }.ripulThemedListRows()
                         }
                         if !otherChatItems.isEmpty {
                             Section(themed: "Other chats") {
                                 ForEach(otherChatItems) { item in
                                     todoRow(item, showChatName: true)
                                 }
-                            }
+                            }.ripulThemedListRows()
                         }
-                    }
+                    }.ripulThemedList()
                 }
             }
             .navigationTitle("Pick to do")

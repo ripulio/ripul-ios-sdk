@@ -91,7 +91,7 @@ public struct RipulSiteKeysScreen: View {
                     Label(error, systemImage: "exclamationmark.triangle")
                         .font(.ripul(.footnote))
                         .foregroundStyle(.ripul(.textSecondary))
-                }
+                }.ripulThemedListRows()
             }
             Section {
                 ForEach(model.siteKeys) { key in
@@ -105,8 +105,8 @@ public struct RipulSiteKeysScreen: View {
                 }
             } footer: { RipulSectionFooter {
                 Text("A context only reaches real sessions once a key allows it. The default is what sessions boot into; surfaces let an app screen ask for a context by name.")
-            } }
-        }
+            } }.ripulThemedListRows()
+        }.ripulThemedList()
         .uiKitIdentifier("RipulSiteKeys.list")
         .navigationTitle("Site Keys")
         .refreshable { await model.load() }
@@ -125,7 +125,7 @@ public struct RipulSiteKeysScreen: View {
                 .foregroundStyle(key.hasContextBinding ? AnyShapeStyle(.tint) : AnyShapeStyle(.ripul(.textSecondary)))
                 .frame(width: 24)
             VStack(alignment: .leading, spacing: 2) {
-                Text(key.name)
+                Text(key.name).ripulText()
                     .font(.ripul(.subheadline, weight: .semibold))
                 Text(summary(key))
                     .font(.ripul(.caption))
@@ -178,7 +178,7 @@ struct RipulSiteKeyContextEditorView: View {
                         systemImage: "exclamationmark.triangle"
                     )
                     .font(.ripul(.footnote))
-                }
+                }.ripulThemedListRows()
             }
 
             Section {
@@ -210,7 +210,7 @@ struct RipulSiteKeyContextEditorView: View {
                 Text(allowed.isEmpty
                      ? "None selected: this key's sessions run with no context — every tool available, no curated prompt."
                      : "Sessions may enter any of these; anything else is refused by the server.")
-            } }
+            } }.ripulThemedListRows()
 
             if !allowed.isEmpty {
                 Section {
@@ -226,12 +226,12 @@ struct RipulSiteKeyContextEditorView: View {
                     Text("Default context")
                 } } footer: { RipulSectionFooter {
                     Text("What a session boots into when it doesn't ask for a specific context or surface.")
-                } }
+                } }.ripulThemedListRows()
 
                 Section {
                     ForEach(surfaceMap.keys.sorted(), id: \.self) { surface in
                         HStack {
-                            Text(surface)
+                            Text(surface).ripulText()
                                 .font(.ripul(.callout, family: .code))
                             Spacer()
                             Picker("", selection: Binding(
@@ -266,9 +266,9 @@ struct RipulSiteKeyContextEditorView: View {
                     Text("Surfaces")
                 } } footer: { RipulSectionFooter {
                     Text("An app screen asks for a context by name (surface=records). Re-pointing a screen then becomes a config change here, not an app release.")
-                } }
+                } }.ripulThemedListRows()
             }
-        }
+        }.ripulThemedList()
         .navigationTitle(key.name)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {

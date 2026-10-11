@@ -101,6 +101,7 @@ struct DevToolsModifier: ViewModifier {
         var tools: [NativeTool] = [
             ConsoleLogsTool(bridge: bridge),
             NetworkLogsTool(bridge: bridge),
+            PerfJournalTool(),
         ]
         #if canImport(UIKit)
         // Native screen inspection and actuation, as RipulAgentConsole gives a

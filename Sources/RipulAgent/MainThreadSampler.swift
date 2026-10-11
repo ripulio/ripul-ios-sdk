@@ -43,6 +43,7 @@ public final class MainThreadSampler: @unchecked Sendable {
     // Sampler-thread only.
     private var stallSamples: [[UInt]] = []
     private var stallStartedAt: Double = 0
+    private var stallLastSeenAt: Double = 0
     private var profile: [[UInt]] = []
     /// Guards `profile`, swapped out by the minute report on main. Taken only
     /// after the main thread has been resumed, so it cannot deadlock a capture.
@@ -57,6 +58,17 @@ public final class MainThreadSampler: @unchecked Sendable {
     public static func start() {
         MainActor.assumeIsolated { shared.startOnMain() }
     }
+
+    /// Launched with `-perfStallStacks YES`: a `[STALLSTACK]` line for every
+    /// time the main thread stays awake past 30ms, not only during a slide. It
+    /// is how one tab switch is read as the blocks a person feels, each with
+    /// its length and what filled it; a `sample` of the process gives totals
+    /// with no order.
+    private var alwaysArmed = ProcessInfo.processInfo.arguments.contains("-perfStallStacks")
+
+    /// The same switch while the app runs, for a phone, which takes no launch
+    /// arguments: the debug link `ripul://perf?stallStacks=on`.
+    public static func setStallStacks(_ on: Bool) { shared.alwaysArmed = on }
 
     /// While a slide is measured: capture stacks for main-thread stalls.
     public static func arm() { shared.armed = true }
@@ -96,6 +108,13 @@ public final class MainThreadSampler: @unchecked Sendable {
         thread.qualityOfService = .userInteractive
         thread.start()
 
+        // The moment the phone's thermal state changes, with the time, kept
+        // where a page restart or a relaunch does not lose it (PerfJournal).
+        PerfJournal.append("[THERMAL] launched, state \(Self.thermalName(ProcessInfo.processInfo.thermalState))")
+        NotificationCenter.default.addObserver(forName: ProcessInfo.thermalStateDidChangeNotification, object: nil, queue: nil) { _ in
+            PerfJournal.append("[THERMAL] now \(Self.thermalName(ProcessInfo.processInfo.thermalState))")
+        }
+
         // Name what writes UserDefaults: every write re-evaluates @AppStorage
         // views and costs cfprefsd traffic. Diff snapshots per notification.
         NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification, object: nil, queue: .main) { [unowned self] note in
@@ -118,9 +137,10 @@ public final class MainThreadSampler: @unchecked Sendable {
             let since = awakeSince.pointee
             let awakeMs = since > 0 ? (now - since) * 1000 : 0
 
-            if armed && awakeMs > 30 {
+            if (armed || alwaysArmed) && awakeMs > 30 {
                 if stallStartedAt != since { flushStall(); stallStartedAt = since }
-                if stallSamples.count < 60, let stack = captureMain() { stallSamples.append(stack) }
+                stallLastSeenAt = now
+                if stallSamples.count < (alwaysArmed ? 200 : 60), let stack = captureMain() { stallSamples.append(stack) }
             } else if !stallSamples.isEmpty && stallStartedAt != since {
                 flushStall()
             }
@@ -170,8 +190,11 @@ public final class MainThreadSampler: @unchecked Sendable {
     private func flushStall() {
         defer { stallSamples = []; stallStartedAt = 0 }
         guard stallSamples.count >= 2 else { return }
-        let ms = Double(stallSamples.count) * 4 + 30
-        let summary = Self.summarize(stallSamples, top: 10, minShare: 0.4)
+        // From when the main thread woke to when it was last seen awake. Counting
+        // samples read short: taking one costs time on top of the 4ms between them.
+        let ms = alwaysArmed ? (stallLastSeenAt - stallStartedAt) * 1000 : Double(stallSamples.count) * 4 + 30
+        // Always on, a block holds several pieces of work in turn: show the smaller shares too.
+        let summary = Self.summarize(stallSamples, top: alwaysArmed ? 18 : 10, minShare: alwaysArmed ? 0.15 : 0.4)
         let line = String(format: "[STALLSTACK] ~%.0fms samples=%d | %@", ms, stallSamples.count, summary)
         DispatchQueue.main.async { NSLog("%@", line) }
     }
@@ -211,14 +234,7 @@ public final class MainThreadSampler: @unchecked Sendable {
         counts = [:]
         let writes = defaultsWrites.sorted { $0.value > $1.value }.prefix(8).map { "\($0.key)x\($0.value)" }.joined(separator: " ")
         defaultsWrites = [:]
-        let thermal: String
-        switch ProcessInfo.processInfo.thermalState {
-        case .nominal: thermal = "nominal"
-        case .fair: thermal = "fair"
-        case .serious: thermal = "serious"
-        case .critical: thermal = "critical"
-        @unknown default: thermal = "?"
-        }
+        let thermal = Self.thermalName(ProcessInfo.processInfo.thermalState)
         profileLock.lock()
         let samples = profile
         profile = []
@@ -231,6 +247,17 @@ public final class MainThreadSampler: @unchecked Sendable {
         DispatchQueue.global(qos: .utility).async {
             let hot = Self.summarize(samples, top: 12, minShare: 0.03)
             NSLog("%@", "\(header) | main: \(hot)")
+            PerfJournal.append("\(header) | main: \(hot)")
+        }
+    }
+
+    private static func thermalName(_ state: ProcessInfo.ThermalState) -> String {
+        switch state {
+        case .nominal: return "nominal"
+        case .fair: return "fair"
+        case .serious: return "serious"
+        case .critical: return "critical"
+        @unknown default: return "?"
         }
     }
 
@@ -276,8 +303,13 @@ public final class MainThreadSampler: @unchecked Sendable {
     /// skipping run loop / dispatch plumbing that is present in every stack.
     private static func summarize(_ samples: [[UInt]], top: Int, minShare: Double) -> String {
         guard !samples.isEmpty else { return "-" }
-        let plumbing = ["CFRunLoop", "__CFRunLoop", "_dispatch", "dispatch_", "UIApplicationMain", "GSEventRun",
-                        "start", "main", "UIApplication _run", "_pthread", "thread_start", "?"]
+        let plumbing = ["CFRunLoop", "__CFRunLoop", "_CFRunLoop", "__CFRUNLOOP_IS", "__CFMachPortPerform",
+                        "_dispatch", "dispatch_", "UIApplicationMain", "GSEventRun",
+                        "start", "main", "UIApplication _run", "_pthread", "thread_start", "?",
+                        // The app's entry, under every sample, and the update cycle's own steps.
+                        "dyld", "__debug_main_executable", "static RipulAppApp.$main", "SwiftUI.runApp",
+                        "static (extension in SwiftUI):SwiftUI.App.main", "closure #1 (Swift.UnsafeMutablePointer",
+                        "_ZN2UC10DriverCore", "schedulerStep", "_UIUpdateSequenceRunNext", "__swift_closure_destructor"]
         var tally: [String: Int] = [:]
         for stack in samples {
             var seen = Set<String>()
@@ -302,6 +334,7 @@ public enum MainThreadSampler {
     public static func start() {}
     public static func arm() {}
     public static func disarm() {}
+    public static func setStallStacks(_ on: Bool) {}
     public static func count(_ name: String) {}
 }
 #endif

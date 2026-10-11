@@ -372,6 +372,15 @@ public struct GlassSessionsList: View {
     /// row's own header plus the Sessions header on any screen size. Nil
     /// until measured, which means "no ceiling" — the row
     /// still bounds itself by its own natural height.
+    /// The height of the window the list is in, where the platform can say.
+    private static func windowHeight() -> CGFloat? {
+        #if canImport(UIKit)
+        return MainActor.assumeIsolated { RipulChrome.appWindow()?.bounds.height }
+        #else
+        return nil
+        #endif
+    }
+
     private var machinePanelCap: CGFloat? {
         guard panelStackHeight > 0 else { return nil }
         return max(260, panelStackHeight * 0.5)
@@ -1379,7 +1388,16 @@ public struct GlassSessionsList: View {
                 .padding(.bottom, SessionsPanelLayout.bottomGap)
                 .ignoresSafeArea(.container, edges: .bottom)
                 .onPreferenceChange(SessionsPanelStackHeightKey.self) { height in
-                    panelStackHeight = height
+                    // Never more than the window is tall. With the phone on its
+                    // side this frame is not held to the container: it takes its
+                    // content's height, the ceiling below is half of that, the
+                    // machine panel grows to the ceiling, and the next pass
+                    // measures a taller frame. On 11 October 2026 that ran away
+                    // 43 points a pass (5,953 on a 440-point screen), redrawing
+                    // the whole list each time: one core at 100% for as long as
+                    // the phone stayed turned, and the heat Peter reported.
+                    let bounded = min(height, Self.windowHeight() ?? height)
+                    if bounded != panelStackHeight { panelStackHeight = bounded }
                 }
                 .onChange(of: panelStackHeight) { _, height in
                     RipulLog.log("[SOLOPANEL] panelStack=\(Int(height)) "

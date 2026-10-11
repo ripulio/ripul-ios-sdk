@@ -66,8 +66,8 @@ struct PutUnderSheet: View {
                         Text(candidates.isEmpty ? "There is no other chat to put it under." : "No chat matches “\(searchText)”.")
                             .uiKitIdentifier("PutUnderSheet.empty")
                     }
-                }
-            }
+                }.ripulThemedListRows()
+            }.ripulThemedList()
             .searchable(text: $searchText, prompt: "Search chats")
             .navigationTitle("Put Under")
             #if os(iOS)

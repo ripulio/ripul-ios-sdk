@@ -19,7 +19,7 @@ struct MacroReplayHUDView: View {
                 ProgressView()
                     .frame(width: 20, height: 20)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text("Replaying \(controller.macroName)")
+                    Text("Replaying \(controller.macroName)").ripulText()
                         .font(.ripul(.subheadline, weight: .semibold))
                         .lineLimit(1)
                     Text("\(controller.currentIndex + 1)/\(controller.stepLabels.count) · \(controller.currentLabel ?? "")")
@@ -35,7 +35,7 @@ struct MacroReplayHUDView: View {
                     VStack(alignment: .leading, spacing: 1) {
                         Text(outcome.success
                              ? "\(controller.macroName) completed"
-                             : "\(controller.macroName) stopped at step \((outcome.failedStepIndex ?? 0) + 1)")
+                             : "\(controller.macroName) stopped at step \((outcome.failedStepIndex ?? 0) + 1)").ripulText()
                             .font(.ripul(.subheadline, weight: .semibold))
                             .lineLimit(1)
                         if let error = outcome.error {

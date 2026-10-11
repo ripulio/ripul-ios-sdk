@@ -58,7 +58,8 @@ public struct RipulSessionsView: View {
     /// change. This is the sessions list as a picker (the link-to-plan sheet).
     /// `ripul://choose` keeps the open path: it needs an openable tab back.
 
-    @Environment(\.createNewChat) private var createNewChat
+    @Environment(\.newChatAction) private var newChatAction
+    private var createNewChat: ((String?) -> Void)? { newChatAction.map { action in { action($0) } } }
     @Environment(\.ripulBottomBarFrame) private var bottomBar
     /// How far the bottom notice must rise to clear the host's tab bar (or
     /// the home indicator). The workspace column ignores the vertical safe
@@ -322,6 +323,7 @@ public struct RipulSessionsView: View {
     }
 
     public var body: some View {
+        let _ = ChatSlideProbe.markBody("RipulSessionsView") { Self._printChanges() }
         // Only this subtree follows the ~2s last-active ticks of a running agent.
         LastActiveReader(model.lastActive) { lastActiveBySessionId in
         GlassSessionsList(
@@ -597,6 +599,11 @@ public final class RipulSessionsViewActions {
     public internal(set) var emptyStateOverride: (() -> AnyView)?
     public internal(set) var onListedSessionsChanged: (([RipulListedSession]) -> Void)?
     public internal(set) var onPickUnifiedSession: ((UnifiedSession) -> Void)?
+
+    /// The host's "new chat" action, refilled on each render of the screen.
+    /// The list reaches it through `NewChatAction`, which compares by this
+    /// object and so does not change when the action's closure does.
+    var onNewChat: ((String?) -> Void)?
 
     public init() {}
 

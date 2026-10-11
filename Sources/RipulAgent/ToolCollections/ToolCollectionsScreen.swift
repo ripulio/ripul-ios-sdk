@@ -387,7 +387,7 @@ public struct RipulToolCollectionsScreen: View {
                 .pickerStyle(.segmented)
                 .accessibilityIdentifier("ripul.toolCollections.catalogPicker")
             } else {
-                Text(catalog.name).font(.ripul(.subheadline, weight: .semibold))
+                Text(catalog.name).ripulText().font(.ripul(.subheadline, weight: .semibold))
             }
             Text(catalog.purpose).font(.ripul(.caption)).foregroundStyle(.ripul(.textSecondary))
             Text("\(catalog.tools.count) tool\(catalog.tools.count == 1 ? "" : "s") registered")
@@ -426,7 +426,7 @@ public struct RipulToolCollectionsScreen: View {
                                 .font(.ripul(.subheadline, weight: .semibold))
                                 .foregroundStyle(.ripul(.text))
                             if collection.isIsolate {
-                                Text("isolate")
+                                Text("isolate").ripulText()
                                     .font(.ripul(.caption2))
                                     .padding(.horizontal, 5).padding(.vertical, 1)
                                     .background(Color.ripul(.textSecondary).opacity(0.15), in: Capsule())
@@ -539,7 +539,7 @@ public struct RipulToolCollectionsScreen: View {
         return card(highlighted: dropTarget == ungroupedDropId) {
             HStack(spacing: 8) {
                 Image(systemName: "tray").font(.ripulIcon(.caption)).foregroundStyle(.ripul(.textSecondary))
-                Text("Ungrouped in \(catalog.name) (\(ungrouped.count))")
+                Text("Ungrouped in \(catalog.name) (\(ungrouped.count))").ripulText()
                     .font(.ripul(.subheadline, weight: .semibold))
                 Spacer()
             }
@@ -550,7 +550,7 @@ public struct RipulToolCollectionsScreen: View {
                 HStack(spacing: 8) {
                     Image(systemName: "line.3.horizontal").font(.ripulIcon(.caption2)).foregroundStyle(.ripul(.textSecondary))
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(tool.name).font(.ripul(.footnote, family: .code))
+                        Text(tool.name).ripulText().font(.ripul(.footnote, family: .code))
                         if !tool.description.isEmpty {
                             Text(tool.description)
                                 .font(.ripul(.caption2)).foregroundStyle(.ripul(.textSecondary)).lineLimit(2)
@@ -602,7 +602,7 @@ public struct RipulToolCollectionsScreen: View {
                     Divider()
                     ForEach(otherCollections) { collection in
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(collection.displayLabel).font(.ripul(.footnote))
+                            Text(collection.displayLabel).ripulText().font(.ripul(.footnote))
                             Text(elsewhereReason(collection))
                                 .font(.ripul(.caption2)).foregroundStyle(.ripul(.textSecondary))
                         }

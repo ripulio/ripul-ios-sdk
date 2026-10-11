@@ -66,7 +66,7 @@ public struct QuickCommandsSheet: View {
                                             .foregroundStyle(.tint)
                                             .frame(width: 28)
                                         VStack(alignment: .leading, spacing: 3) {
-                                            Text("Plan review")
+                                            Text("Plan review").ripulText()
                                                 .font(.ripul(.body))
                                                 .fontWeight(.medium)
                                             Text("Comments, tasks and lock state for this repo's plans")
@@ -77,7 +77,7 @@ public struct QuickCommandsSheet: View {
                                     .padding(.vertical, 4)
                                 }
                                 .uiKitIdentifier("QuickCommandsSheet.planReviewLink")
-                            }
+                            }.ripulThemedListRows()
                         }
 
                         if commands.isEmpty && !debugMode {
@@ -85,7 +85,7 @@ public struct QuickCommandsSheet: View {
                                 Label("No slash commands available.", systemImage: "bolt.slash")
                                     .foregroundStyle(.ripul(.textSecondary))
                                     .font(.ripul(.callout))
-                            }
+                            }.ripulThemedListRows()
                         }
                         // Native debug tools (only in /rr. menu)
                         if debugMode {
@@ -100,7 +100,7 @@ public struct QuickCommandsSheet: View {
                                             .frame(width: 28)
 
                                         VStack(alignment: .leading, spacing: 3) {
-                                            Text("Console Logs")
+                                            Text("Console Logs").ripulText()
                                                 .font(.ripul(.body))
                                                 .fontWeight(.medium)
                                             Text("View JavaScript console output")
@@ -134,7 +134,7 @@ public struct QuickCommandsSheet: View {
                                             .frame(width: 28)
 
                                         VStack(alignment: .leading, spacing: 3) {
-                                            Text("Relay Host Stats")
+                                            Text("Relay Host Stats").ripulText()
                                                 .font(.ripul(.body))
                                                 .fontWeight(.medium)
                                             Text("Live ping/pong + frame vs command diagnostics")
@@ -177,7 +177,7 @@ public struct QuickCommandsSheet: View {
                                     .padding(.vertical, 4)
                                 }
                                 .disabled(isEvicting || bridge.activeSession?.sourceChatId == nil)
-                            }
+                            }.ripulThemedListRows()
                         }
 
                         // Web-defined commands
@@ -205,9 +205,9 @@ public struct QuickCommandsSheet: View {
                                         }
                                     }
                                 }
-                            }
+                            }.ripulThemedListRows()
                         }
-                    }
+                    }.ripulThemedList()
                     #if os(iOS)
                     .listStyle(.insetGrouped)
                     #else
@@ -324,7 +324,7 @@ private struct CommandOptionsView: View {
         List(command.options) { option in
             HStack(spacing: 12) {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(option.label)
+                    Text(option.label).ripulText()
                         .font(.ripul(.body))
                     if let desc = option.description {
                         Text(desc)
@@ -337,7 +337,7 @@ private struct CommandOptionsView: View {
             .contentShape(Rectangle())
             .onTapGesture { onSelect(option.value) }
             .padding(.vertical, 2)
-        }
+        }.ripulThemedList()
         #if os(iOS)
         .listStyle(.insetGrouped)
         .navigationBarTitleDisplayMode(.inline)
@@ -362,7 +362,7 @@ private struct CommandRow: View {
                 .frame(width: 28)
 
             VStack(alignment: .leading, spacing: 3) {
-                Text(command.command.prefix(1).uppercased() + command.command.dropFirst())
+                Text(command.command.prefix(1).uppercased() + command.command.dropFirst()).ripulText()
                     .font(.ripul(.body))
                     .fontWeight(.medium)
 

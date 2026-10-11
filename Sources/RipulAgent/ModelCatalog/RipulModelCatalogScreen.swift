@@ -121,7 +121,7 @@ public struct RipulModelCatalogScreen: View {
             ForEach(groups) { group in
                 Section(themed: group.name) {
                     ForEach(group.models) { row($0) }
-                }
+                }.ripulThemedListRows()
             }
             if let stats = model.stats {
                 Section {
@@ -130,9 +130,9 @@ public struct RipulModelCatalogScreen: View {
                         .foregroundStyle(.ripul(.textSecondary))
                         .frame(maxWidth: .infinity, alignment: .center)
                         .listRowBackground(Color.clear)
-                }
+                }.ripulThemedListRows()
             }
-        }
+        }.ripulThemedList()
         .searchable(text: $search, prompt: "Name or model id")
         .overlay {
             if model.loading && model.models.isEmpty {
@@ -250,7 +250,7 @@ public struct RipulModelCatalogScreen: View {
             Text("Default models")
         } } footer: { RipulSectionFooter {
             Text("What each context gets when no model is chosen.")
-        } }
+        } }.ripulThemedListRows()
     }
 
     private func defaultRow(_ label: String, slot: String, current: String) -> some View {

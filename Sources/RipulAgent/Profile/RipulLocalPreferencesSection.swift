@@ -34,7 +34,7 @@ public struct RipulLocalPreferencesSection: View {
                 .task {
                     if SpeechPreferences.store.object(forKey: "ripul.localTheme") != nil { apply() }
                 }
-        }
+        }.ripulThemedListRows()
     }
     private func apply() { bridge.applyDeviceTheme() }
 }

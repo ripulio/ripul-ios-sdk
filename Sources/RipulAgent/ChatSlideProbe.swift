@@ -154,8 +154,39 @@ public final class ChatSlideProbe {
     /// names re-render sources `watch` cannot see — view @State, @Observable
     /// models, environment values. It prints to stdout, so stdout is briefly
     /// redirected into a pipe around the call. Only while a slide is measured.
+    #if DEBUG
+    private static let logsEveryBody = UserDefaults.standard.bool(forKey: "perfBodyChanges")
+
+    /// What `_printChanges()` printed, read back from stdout through a pipe.
+    private static func changes(_ printChanges: () -> Void) -> String {
+        var fds: [Int32] = [0, 0]
+        fflush(stdout)
+        let saved = dup(STDOUT_FILENO)
+        guard saved >= 0, pipe(&fds) == 0 else { return "" }
+        dup2(fds[1], STDOUT_FILENO)
+        printChanges()
+        fflush(stdout)
+        dup2(saved, STDOUT_FILENO)
+        close(saved)
+        close(fds[1])
+        let data = FileHandle(fileDescriptor: fds[0], closeOnDealloc: true).readDataToEndOfFile()
+        return String(decoding: data, as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "\n", with: " / ")
+    }
+    #endif
+
     public static func markBody(_ name: String, _ printChanges: () -> Void) {
         MainThreadSampler.count("\(name).body")
+        #if DEBUG
+        // `-perfBodyChanges YES` at launch: every evaluation and its cause goes
+        // to the log as `[BODY] …`, slide or no slide. For finding why one tap
+        // (a tab switch) re-evaluates a screen several times.
+        if shared.link == nil, logsEveryBody {
+            NSLog("%@", "[BODY] \(name){\(changes(printChanges).prefix(300))}")
+            return
+        }
+        #endif
         guard shared.link != nil else { return }
         #if DEBUG
         var fds: [Int32] = [0, 0]

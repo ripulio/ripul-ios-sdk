@@ -127,7 +127,7 @@ struct BrowserPreviewPanel: View {
                                 .contextMenu { MenuIcons { Button("Close preview", role: .destructive) { state.close() } }}
                         } else {
                             if let message = state.message {
-                                Text(message).font(.ripul(.caption)).multilineTextAlignment(.center)
+                                Text(message).ripulText().font(.ripul(.caption)).multilineTextAlignment(.center)
                                     .padding(8).padding(.top, 44).frame(maxWidth: .infinity, maxHeight: .infinity)
                             } else if state.imageSize == .zero {
                                 ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)

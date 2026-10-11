@@ -128,8 +128,17 @@ struct SessionsScrollBoundsReader: UIViewRepresentable {
                 guard let self else { return }
                 self.scheduled = false
                 guard let window = self.window, !self.bounds.isEmpty else { return }
+                // Only the part of this view that is in the window. The inset
+                // this reports becomes padding inside the view it measures, so
+                // a view that overflows the window (the list on a phone turned
+                // on its side, 440 points for content that needs more) measured
+                // its own padding as more to clear and grew without end: past
+                // 10,000 points and 85 a second on 11 October 2026, the whole
+                // list redrawn each time and one core at 100%.
+                let visible = self.convert(self.bounds, to: window).intersection(window.bounds)
+                guard !visible.isNull, !visible.isEmpty else { return }
                 let inset = SessionsPanelLayout.scrollBottomInset(
-                    view: self.convert(self.bounds, to: window),
+                    view: visible,
                     safeBottom: window.bounds.maxY - window.safeAreaInsets.bottom,
                     bottomBar: self.bottomBar, gap: self.gap
                 )

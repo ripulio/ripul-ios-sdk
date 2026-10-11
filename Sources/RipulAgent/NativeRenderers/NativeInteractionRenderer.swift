@@ -210,7 +210,7 @@ private struct NativeInteractionPanel: View {
           Label("Answered", systemImage: "checkmark.circle").font(.ripul(.caption)).foregroundStyle(.ripul(.textSecondary))
         }
         if !snapshot.answer.isEmpty {
-          Label { Text(snapshot.answer).textSelection(.enabled) } icon: { Image(systemName: "arrowshape.turn.up.left") }
+          Label { Text(snapshot.answer).ripulText().textSelection(.enabled) } icon: { Image(systemName: "arrowshape.turn.up.left") }
             .accessibilityIdentifier("NativeInteraction.answer")
         }
         if !snapshot.error.isEmpty {

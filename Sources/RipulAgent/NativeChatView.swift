@@ -200,7 +200,7 @@ private struct NativeChatMessageRow: View {
                 .foregroundStyle(.ripul(.textSecondary))
                 .padding(.top, 2)
             VStack(alignment: .leading, spacing: 2) {
-                Text(opt.label)
+                Text(opt.label).ripulText()
                     .font(.ripul(.subheadline))
                 if let desc = opt.description, !desc.isEmpty {
                     Text(desc)

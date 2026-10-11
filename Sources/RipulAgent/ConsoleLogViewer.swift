@@ -267,7 +267,7 @@ private struct ConsoleTabView: View {
                             : Color.clear
                     )
                     .id(entry.id)
-                }
+                }.ripulThemedList()
                 .listStyle(.plain)
                 .font(.ripul(.caption, family: .code))
                 .onChange(of: logVersion) { _ in
@@ -539,7 +539,7 @@ private struct ToolsTabView: View {
                 }
             } footer: { RipulSectionFooter {
                 Text("Inspect elements, explore their hierarchy and attach a selection to chat.")
-            } }
+            } }.ripulThemedListRows()
 
             // Solution management (collections, contexts, testing mode) moved to
             // the host's own "Solutions" screen (RipulSolutionsScreen).
@@ -568,8 +568,8 @@ private struct ToolsTabView: View {
                 Text("Web HUDs")
             } } footer: { RipulSectionFooter {
                 Text("Toggles the floating debug overlays in the web app. Changes take effect immediately.")
-            } }
-        }
+            } }.ripulThemedListRows()
+        }.ripulThemedList()
         .task {
             do {
                 let result = try await bridge.callAsyncJavaScript(

@@ -44,7 +44,7 @@ public struct VoiceSettingsScreen: View {
                 Section {
                     Label {
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("Managed by \(SpeechPreferences.managingProfileName ?? "this site key")")
+                            Text("Managed by \(SpeechPreferences.managingProfileName ?? "this site key")").ripulText()
                             Text("Voice and recognition settings are managed here. You can still choose when to send your messages.")
                                 .font(.ripul(.caption))
                                 .foregroundStyle(.ripul(.textSecondary))
@@ -53,7 +53,7 @@ public struct VoiceSettingsScreen: View {
                         Image(systemName: "lock.fill")
                     }
                     .uiKitIdentifier("VoiceSettingsScreen.managedBanner")
-                }
+                }.ripulThemedListRows()
             }
 
             // Standalone without a key speaks with Apple, so there is no model to choose.
@@ -67,7 +67,7 @@ public struct VoiceSettingsScreen: View {
                 } } footer: { RipulSectionFooter {
                     Text("Replies are what conversation mode says back, acknowledgements are the short lines while the agent works, and read aloud is the speaker button on a message. "
                          + ElevenLabsModelOption.all.map { "\($0.label): \($0.summary)" }.joined(separator: " "))
-                } }
+                } }.ripulThemedListRows()
                 .disabled(isManaged)
             }
 
@@ -84,7 +84,7 @@ public struct VoiceSettingsScreen: View {
                 Text("Recognition")
             } } footer: { RipulSectionFooter {
                 Text("Apple runs on-device and works offline; ElevenLabs uses cloud transcription. Your choice is saved in this app and is not synced to other apps or devices.")
-            } }
+            } }.ripulThemedListRows()
             .disabled(isManaged)
 
             Section {
@@ -96,7 +96,7 @@ public struct VoiceSettingsScreen: View {
                 Text("Key terms")
             } } footer: { RipulSectionFooter {
                 Text("Comma-separated names and jargon the recognizer should prefer — product names, technical terms. Applies to ElevenLabs recognition.")
-            } }
+            } }.ripulThemedListRows()
             .disabled(isManaged)
 
             Section {
@@ -111,7 +111,7 @@ public struct VoiceSettingsScreen: View {
                 Text("Conversation mode")
             } } footer: { RipulSectionFooter {
                 Text("Tap the mic in chat to start a hands-free conversation; double-tap for dictation into the text box.")
-            } }
+            } }.ripulThemedListRows()
             .disabled(isManaged)
 
             Section {
@@ -126,7 +126,7 @@ public struct VoiceSettingsScreen: View {
                 Text(voiceSendMode == VoiceSendMode.sendCommand.rawValue
                      ? "Finish with \"Send command\" and pause briefly. The closing phrase is removed before sending. Other pauses let you keep thinking; you can also tap Send. Saved in this app on this device."
                      : "Messages send automatically when you pause speaking. You can also tap Send. Saved in this app on this device.")
-            } }
+            } }.ripulThemedListRows()
 
             Section {
                 Toggle("Say \"Stop\" to interrupt", isOn: $sayStopToInterrupt)
@@ -141,7 +141,7 @@ public struct VoiceSettingsScreen: View {
                 Text("Interrupting")
             } } footer: { RipulSectionFooter {
                 Text("Experimental. While Ripul is talking, the microphone stays on and listens only for \"stop\", \"pause\" or \"wait\", using speech recognition on this device. Tapping always works. Saved in this app on this device.")
-            } }
+            } }.ripulThemedListRows()
 
             Section {
                 VStack(alignment: .leading, spacing: 2) {
@@ -170,7 +170,7 @@ public struct VoiceSettingsScreen: View {
                 Text("Delivery")
             } } footer: { RipulSectionFooter {
                 Text("Applies to ElevenLabs speech — replies, acknowledgments, and read-aloud. Higher expressiveness is livelier but slightly less steady. Eleven v4 ignores Pace.")
-            } }
+            } }.ripulThemedListRows()
             .disabled(isManaged)
 
             Section(themed: "Language") {
@@ -187,7 +187,7 @@ public struct VoiceSettingsScreen: View {
                     Label("Speech language", systemImage: "globe")
                 }
                 .uiKitIdentifier("VoiceSettingsScreen.speechLanguage")
-            }
+            }.ripulThemedListRows()
             .disabled(isManaged)
 
             Section(themed: "Testing") {
@@ -197,8 +197,8 @@ public struct VoiceSettingsScreen: View {
                     Label("Speech Sandbox", systemImage: "waveform")
                 }
                 .uiKitIdentifier("VoiceSettingsScreen.speechSandbox")
-            }
-        }
+            }.ripulThemedListRows()
+        }.ripulThemedList()
         .navigationTitle("Voice")
         .onReceive(NotificationCenter.default.publisher(for: DeviceSpeechCredentials.changed)) { _ in hasDeviceKey = DeviceSpeechCredentials.isConfigured }
         #if os(macOS)

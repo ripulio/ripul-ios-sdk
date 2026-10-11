@@ -98,7 +98,7 @@ public struct RipulUsersScreen: View {
                         }
                         .uiKitIdentifier("Users.row")
                     }
-                }
+                }.ripulThemedListRows()
             }
             if !model.users.isEmpty {
                 Section {
@@ -107,9 +107,9 @@ public struct RipulUsersScreen: View {
                         .foregroundStyle(.ripul(.textSecondary))
                         .frame(maxWidth: .infinity, alignment: .center)
                         .listRowBackground(Color.clear)
-                }
+                }.ripulThemedListRows()
             }
-        }
+        }.ripulThemedList()
         .searchable(text: $search, prompt: "Name, email or user id")
         .overlay { emptyState }
         .navigationTitle("Users")
@@ -153,7 +153,7 @@ public struct RipulUsersScreen: View {
         HStack(spacing: 12) {
             RipulUserAvatar(user: user)
             VStack(alignment: .leading, spacing: 1) {
-                Text(user.displayName)
+                Text(user.displayName).ripulText()
                     .font(.ripul(.subheadline, weight: .medium))
                     .lineLimit(1)
                 Text(user.email)
@@ -246,12 +246,12 @@ struct RipulUserDetailView: View {
                 HStack(spacing: 12) {
                     RipulUserAvatar(user: user)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(user.displayName).font(.ripul(.headline))
+                        Text(user.displayName).ripulText().font(.ripul(.headline))
                         Text(user.email).font(.ripul(.caption)).foregroundStyle(.ripul(.textSecondary))
                     }
                 }
                 .padding(.vertical, 4)
-            }
+            }.ripulThemedListRows()
 
             planSection
 
@@ -268,7 +268,7 @@ struct RipulUserDetailView: View {
                 Text(user.isAdmin
                      ? "Admin is granted by Clerk public_metadata.role and outranks the tier."
                      : "No admin claim, so the API resolves this account from its subscription tier.")
-            } }
+            } }.ripulThemedListRows()
 
             Section(themed: "Usage") {
                 field("Quota used", user.quotaLimit > 0
@@ -276,14 +276,14 @@ struct RipulUserDetailView: View {
                       : "\(user.quotaUsed)")
                 field("Last active", user.lastActive.map { Self.stamp.string(from: $0) } ?? "Never")
                 field("Created", user.createdAt.map { Self.stamp.string(from: $0) } ?? "—")
-            }
+            }.ripulThemedListRows()
 
             Section(themed: "Identity") {
                 if let username = user.username { field("Username", username) }
                 copyableField("User ID", user.id)
                 copyableField("Email", user.email)
-            }
-        }
+            }.ripulThemedListRows()
+        }.ripulThemedList()
         .navigationTitle(user.displayName)
         .navigationBarTitleDisplayMode(.inline)
         .disabled(saving)
@@ -352,7 +352,7 @@ struct RipulUserDetailView: View {
             Text("Plan")
         } } footer: { RipulSectionFooter {
             Text(planFootnote)
-        } }
+        } }.ripulThemedListRows()
     }
 
     private var planFootnote: String {
@@ -383,7 +383,7 @@ struct RipulUserDetailView: View {
         HStack(alignment: .firstTextBaseline) {
             Text(label).font(.ripul(.subheadline)).foregroundStyle(.ripul(.textSecondary))
             Spacer(minLength: 12)
-            Text(value)
+            Text(value).ripulText()
                 .font(.ripul(.subheadline))
                 .multilineTextAlignment(.trailing)
                 .textSelection(.enabled)

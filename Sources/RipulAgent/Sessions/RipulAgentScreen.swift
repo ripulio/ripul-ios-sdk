@@ -141,6 +141,13 @@ public struct RipulAgentScreen: View {
     @State private var availableWidth: CGFloat = 0
     /// The session list's callbacks, one box for the screen's lifetime.
     @State private var listActions = RipulSessionsViewActions()
+    /// The host's new-chat action in a form the environment can compare: see
+    /// `NewChatAction`. Nil when the host gives none,
+    /// which the list's rows read as "offer the built-in launchers".
+    private var stableNewChat: NewChatAction? {
+        listActions.onNewChat = slots.onNewChat
+        return slots.onNewChat == nil ? nil : NewChatAction(actions: listActions)
+    }
     @State private var dockedMetadataWidth: CGFloat = 0
     private var chatAreaWidth: CGFloat { max(1, availableWidth - (metadataIsDocked ? dockedMetadataWidth : 0)) }
     private var canShowSessionSplit: Bool {
@@ -477,7 +484,7 @@ public struct RipulAgentScreen: View {
         // The list's own 52pt reservation follows the bar's row; content still
         // clears the rectangular safe area when the row sits beside a camera.
         .padding(.top, topChrome.contentClearance(below: 52) - 52)
-        .environment(\.createNewChat, slots.onNewChat)
+        .environment(\.newChatAction, stableNewChat)
         .environment(\.cloudSessionFeaturesEnabled, !configuration.standalone)
     }
 
@@ -1197,7 +1204,7 @@ public struct RipulAgentScreen: View {
             agentMenuItems(session: session)
         }
         if let hostMenuItems = slots.hostMenuItems {
-            Section { hostMenuItems() }
+            Section { hostMenuItems() }.ripulThemedListRows()
         }
     }
 
@@ -1482,7 +1489,7 @@ public struct RipulAgentScreen: View {
                     }
                     .uiKitIdentifier("AgentScreen.fileViewer.menu.zoomInButton")
                 }
-            }
+            }.ripulThemedListRows()
             .menuActionDismissBehavior(.disabled)
 
             Divider()
@@ -2273,24 +2280,40 @@ public struct RipulAgentScreen: View {
         if showingWorkingDirectoryPicker, let pickerSession = workingDirectoryPickerSession, sessionId != pickerSession { return }
         let request = UUID()
         directoryRequest = request
-        directoryStateSession = sessionId
-        favoriteDirectories = []
-        sessionWorkingDirectory = nil
-        hostWorkingDirectory = nil
-        directoryError = nil
-        directoryLoading = true
+        // Asking again about the chat already shown keeps what is shown until
+        // the host answers, and changes nothing when the answer is the same.
+        // The screen's `.task` asks on every return to the agent tab, and
+        // emptying the state first re-ran the whole screen twice per return
+        // for directories that had not changed (11 October 2026). These are
+        // still this chat's own host's directories, read fresh each time.
+        let sameChat = directoryStateSession == sessionId && !directoryLoading && directoryError == nil
+        if !sameChat {
+            directoryStateSession = sessionId
+            favoriteDirectories = []
+            sessionWorkingDirectory = nil
+            hostWorkingDirectory = nil
+            directoryError = nil
+            directoryLoading = true
+        }
         do {
             let result = try await bridge.getFavoriteDirectories(sessionId: sessionId)
             guard directoryRequest == request else { return }
-            favoriteDirectories = result.directories
-            if let pinned = result.sessionDirectory, !favoriteDirectories.contains(pinned) { favoriteDirectories.append(pinned) }
-            hostWorkingDirectory = result.current
-            sessionWorkingDirectory = result.sessionDirectory
+            var directories = result.directories
+            if let pinned = result.sessionDirectory, !directories.contains(pinned) { directories.append(pinned) }
+            if favoriteDirectories != directories { favoriteDirectories = directories }
+            if hostWorkingDirectory != result.current { hostWorkingDirectory = result.current }
+            if sessionWorkingDirectory != result.sessionDirectory { sessionWorkingDirectory = result.sessionDirectory }
         } catch {
             guard directoryRequest == request else { return }
+            // A host that stopped answering offers nothing to choose from.
+            if sameChat {
+                favoriteDirectories = []
+                sessionWorkingDirectory = nil
+                hostWorkingDirectory = nil
+            }
             directoryError = error.localizedDescription
         }
-        directoryLoading = false
+        if directoryLoading { directoryLoading = false }
     }
 
     private func formatLozengeModel(name: String, provider: String) -> String {

@@ -93,7 +93,7 @@ public struct CodexFastModeMenu: View {
             .help(state.detail)
             .accessibilityIdentifier("Codex.fastMode")
             if !state.supported || settings.error != nil {
-                Text(settings.error ?? state.detail).font(.ripul(.caption))
+                Text(settings.error ?? state.detail).ripulText().font(.ripul(.caption))
             }
         }
     }

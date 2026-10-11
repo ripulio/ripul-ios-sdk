@@ -69,7 +69,7 @@ public struct CodexAccountSwitcherSheet: View {
     }
     public var body: some View {
         NavigationStack {
-            List { CodexAccountSection(machineId: machineId, machineName: machineName, direct: direct, bridge: bridge) }
+            List { CodexAccountSection(machineId: machineId, machineName: machineName, direct: direct, bridge: bridge) }.ripulThemedList()
                 .navigationTitle("Codex accounts")
                 #if os(iOS)
                 .navigationBarTitleDisplayMode(.inline)
@@ -157,7 +157,7 @@ struct CodexAccountSection: View {
                 Text("One account is used by all Codex chats on this Mac, including VS Code. Your conversations stay available when you switch.")
                     .fixedSize(horizontal: false, vertical: true)
             }
-        } }
+        } }.ripulThemedListRows()
         .task(id: refreshToken) {
             guard isOnline else { return }
             while !Task.isCancelled {
@@ -178,8 +178,8 @@ struct CodexAccountSection: View {
     @ViewBuilder private func operationRows(_ operation: CodexAccountOperation) -> some View {
         Group {
             if operation.status == "signingIn", let code = operation.userCode {
-                Text("Sign in on your phone").font(.ripul(.headline))
-                Text(code).font(.ripul(.title2, family: .code).weight(.semibold)).textSelection(.enabled)
+                Text("Sign in on your phone").ripulText().font(.ripul(.headline))
+                Text(code).ripulText().font(.ripul(.title2, family: .code).weight(.semibold)).textSelection(.enabled)
                     .uiKitIdentifier("CodexAccounts.code")
                 Text("Copy the code, open OpenAI, and sign in to the account you want to add.").font(.ripul(.subheadline)).foregroundStyle(.ripul(.textSecondary))
                 Button(copied ? "Code copied — open OpenAI" : "Copy code and open OpenAI") { openSignIn(operation) }
@@ -238,7 +238,7 @@ public struct CodexAccountsSettingsScreen: View {
                     direct: machine.meta?["connection"] == "direct", bridge: bridge,
                     isOnline: machine.isOnline, refreshToken: refreshToken)
             }
-        }
+        }.ripulThemedList()
         .navigationTitle("Codex accounts")
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)

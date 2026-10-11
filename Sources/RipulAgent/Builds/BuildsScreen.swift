@@ -51,7 +51,7 @@ public struct RipulBuildsScreen<ExtraSections: View>: View {
                     // Saying "no builds" when the fetch failed would be a lie,
                     // and the kind that reads as "nothing was ever published".
                     Text("Showing the last build list that loaded, which may be out of date.")
-                } }
+                } }.ripulThemedListRows()
             }
 
             ForEach(store.feed?.channels ?? []) { channel in
@@ -62,9 +62,9 @@ public struct RipulBuildsScreen<ExtraSections: View>: View {
                 Section {
                     Text("No builds have been published yet.")
                         .foregroundStyle(.ripul(.textSecondary))
-                }
+                }.ripulThemedListRows()
             }
-        }
+        }.ripulThemedList()
         .navigationTitle("Builds")
         .refreshable {
             async let feed: Void = store.refresh()
@@ -103,7 +103,7 @@ public struct RipulBuildsScreen<ExtraSections: View>: View {
             if store.ownChannel == nil && store.feed != nil {
                 Text("No published channel matches this app's bundle id (\(RipulBuildFeedStore.runningBundleId)), so there is nothing to compare against.")
             }
-        } }
+        } }.ripulThemedListRows()
     }
 
     /// The running build, decoded to a date, with the exact stamp kept beneath
@@ -178,17 +178,17 @@ public struct RipulBuildsScreen<ExtraSections: View>: View {
             } else {
                 Text("Bundle \(channel.bundleId) — installs alongside this app as a separate icon.")
             }
-        } }
+        } }.ripulThemedListRows()
     }
 
     @ViewBuilder
     private func buildRow(_ build: RipulBuild, in channel: RipulBuildChannel) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .firstTextBaseline) {
-                Text(RipulBuildNumber.display(build.build))
+                Text(RipulBuildNumber.display(build.build)).ripulText()
                     .font(.ripul(.body))
                 if isRunning(build, in: channel) {
-                    Text("RUNNING")
+                    Text("RUNNING").ripulText()
                         .font(.ripul(.caption2, weight: .bold))
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)

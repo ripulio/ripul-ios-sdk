@@ -242,7 +242,7 @@ public struct ConnectionDiagnosisSheet: View {
                         Image(systemName: headlineSymbol)
                             .font(.ripulIcon(.title2))
                             .foregroundStyle(.ripul(.warning))
-                        Text(diag.summary)
+                        Text(diag.summary).ripulText()
                             .font(.ripul(.headline))
                             .fixedSize(horizontal: false, vertical: true)
                     }

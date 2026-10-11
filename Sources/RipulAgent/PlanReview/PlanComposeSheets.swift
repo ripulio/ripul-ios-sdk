@@ -49,7 +49,7 @@ struct PlanCommentSheet: View {
                         }
                     }
                     .uiKitIdentifier("PlanCommentSheet.anchorPicker")
-                }
+                }.ripulThemedListRows()
 
                 Section {
                     Picker("Severity", selection: $severity) {
@@ -65,15 +65,15 @@ struct PlanCommentSheet: View {
                     Text(severity == .blocking
                          ? "Holds the plan open until it is resolved or declined."
                          : "Recorded, but does not hold the plan open.")
-                } }
+                } }.ripulThemedListRows()
 
                 Section(themed: "Comment") {
                     TextField("What needs to change, and why", text: $body_, axis: .vertical)
                         .lineLimit(4...12)
                         .focused($bodyFocused)
                         .uiKitIdentifier("PlanCommentSheet.bodyField")
-                }
-            }
+                }.ripulThemedListRows()
+            }.ripulThemedList()
             .navigationTitle("New comment")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
@@ -134,7 +134,7 @@ struct PlanTaskSheet: View {
                         Text(sourceComment.body)
                             .font(.ripul(.callout))
                             .foregroundStyle(.ripul(.textSecondary))
-                    }
+                    }.ripulThemedListRows()
                 }
                 Section {
                     TextField("What needs doing", text: $title, axis: .vertical)
@@ -145,8 +145,8 @@ struct PlanTaskSheet: View {
                         .uiKitIdentifier("PlanTaskSheet.ownerField")
                 } footer: { RipulSectionFooter {
                     Text("Marking a task done does not close the comment it came from — the reviewer who raised it decides that.")
-                } }
-            }
+                } }.ripulThemedListRows()
+            }.ripulThemedList()
             .navigationTitle("New task")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)

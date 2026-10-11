@@ -35,9 +35,25 @@ public struct RemoteMachine: Identifiable, Codable, Equatable {
     }()
 
     public var isOnline: Bool {
-        guard let date = Self.lastSeenFormatter.date(from: lastSeenAt) else { return false }
+        guard let date = Self.lastSeen(lastSeenAt) else { return false }
         return Date().timeIntervalSince(date) < 300 // 5 minute TTL
     }
+
+    /// `lastSeenAt` as a date, remembered by its text. The session list asks
+    /// every Mac whether it is online for every row it builds, and parsing the
+    /// same few strings each time was 7.5% of the main thread during a tab
+    /// switch (simulator, 131 rows, 11 October 2026).
+    private static func lastSeen(_ text: String) -> Date? {
+        lastSeenLock.lock()
+        defer { lastSeenLock.unlock() }
+        if let known = lastSeenDates[text] { return known }
+        let date = lastSeenFormatter.date(from: text)
+        if lastSeenDates.count >= 256 { lastSeenDates.removeAll(keepingCapacity: true) }
+        lastSeenDates[text] = date
+        return date
+    }
+    private nonisolated(unsafe) static var lastSeenDates: [String: Date?] = [:]
+    private static let lastSeenLock = NSLock()
 
     /// True when this row IS the machine this app is running on.
     ///

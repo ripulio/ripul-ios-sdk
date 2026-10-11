@@ -499,7 +499,7 @@ public struct UnifiedSessionRow: View {
 
                 // Unread replies use a bold title alongside the envelope.
                 HStack(spacing: 6) {
-                    Text(session.title)
+                    Text(session.title).ripulText()
                         .font(titleFont)
                         .lineLimit(titleLineLimit)
                         .truncationMode(.tail)

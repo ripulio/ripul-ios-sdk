@@ -65,7 +65,7 @@ struct MacroEditScreen: View {
                         .uiKitIdentifier("MacroEditScreen.nameField")
                     TextField("Description (what the agent reads)", text: $descriptionText, axis: .vertical)
                         .uiKitIdentifier("MacroEditScreen.descriptionField")
-                }
+                }.ripulThemedListRows()
 
                 if !derivedParameters.isEmpty {
                     Section(themed: "Parameters (used when replaying)") {
@@ -80,7 +80,7 @@ struct MacroEditScreen: View {
                             .autocorrectionDisabled()
                             .uiKitIdentifier("MacroEditScreen.param.\(parameter.name)")
                         }
-                    }
+                    }.ripulThemedListRows()
                 }
 
                 Section {
@@ -126,7 +126,7 @@ struct MacroEditScreen: View {
                     Text("Steps")
                 } } footer: { RipulSectionFooter {
                     Text("Drag to reorder. Swipe right to insert a wait after a step. Tap a step to edit it.")
-                } }
+                } }.ripulThemedListRows()
 
                 Section {
                     Button {
@@ -153,7 +153,7 @@ struct MacroEditScreen: View {
                     }
                     .disabled(steps.isEmpty || isReplayBusy || isSaving)
                     .uiKitIdentifier("MacroEditScreen.replayButton")
-                }
+                }.ripulThemedListRows()
 
                 if let outcome {
                     Section {
@@ -165,9 +165,9 @@ struct MacroEditScreen: View {
                         )
                         .foregroundStyle(outcome.success ? .ripul(.success) : .ripul(.danger))
                         .font(.ripul(.subheadline, weight: .medium))
-                    }
+                    }.ripulThemedListRows()
                 }
-            }
+            }.ripulThemedList()
             .navigationTitle("Edit \(macro.name)")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -434,7 +434,7 @@ private struct MacroStepEditSheet: View {
             Form {
                 Section(themed: "Label") {
                     TextField("Shown in the step list and logs", text: $label)
-                }
+                }.ripulThemedListRows()
 
                 if step.kind != .pause {
                     Section(themed: "Selector (all optional — every given predicate must match)") {
@@ -448,26 +448,26 @@ private struct MacroStepEditSheet: View {
                         TextField("nth (0-based, when several match)", text: $nthText)
                             .keyboardType(.numberPad)
                         TextField("within — anchor text", text: $withinText).autocorrectionDisabled()
-                    }
+                    }.ripulThemedListRows()
                 }
 
                 switch step.kind {
                 case .setValue:
                     Section(themed: "Value ({{name}} = filled at call time)") {
                         TextField("e.g. 09:00, 2026-08-02 09:00, on, 2", text: $payloadText)
-                    }
+                    }.ripulThemedListRows()
                 case .type:
                     Section(themed: "Text to type ({{name}} = filled at call time)") {
                         TextField("Text", text: $payloadText, axis: .vertical)
                         Toggle("Append instead of replace", isOn: $append)
-                    }
+                    }.ripulThemedListRows()
                 case .scroll:
                     Section(themed: "Scroll") {
                         Picker("Direction", selection: $direction) {
                             ForEach(["up", "down", "left", "right"], id: \.self) { Text($0).tag($0) }
                         }
                         TextField("Amount (0.1–2.0)", text: $amountText).keyboardType(.decimalPad)
-                    }
+                    }.ripulThemedListRows()
                 case .wait:
                     Section(themed: "Wait") {
                         Picker("Until it is", selection: $state) {
@@ -475,15 +475,15 @@ private struct MacroStepEditSheet: View {
                             Text("gone").tag("gone")
                         }
                         TextField("Timeout (seconds)", text: $timeoutText).keyboardType(.numberPad)
-                    }
+                    }.ripulThemedListRows()
                 case .pause:
                     Section(themed: "Pause") {
                         TextField("Seconds", text: $secondsText).keyboardType(.decimalPad)
-                    }
+                    }.ripulThemedListRows()
                 case .tap:
                     EmptyView()
                 }
-            }
+            }.ripulThemedList()
             .navigationTitle("Edit step")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -568,16 +568,16 @@ private struct MacroInsertWaitSheet: View {
                             .keyboardType(.numberPad)
                     } footer: { RipulSectionFooter {
                         Text("The step resolves as soon as an element containing this text is \(mode == .appear ? "visible" : "gone"); it fails after the timeout.")
-                    } }
+                    } }.ripulThemedListRows()
                 case .pause:
                     Section {
                         TextField("Seconds", text: $secondsText)
                             .keyboardType(.decimalPad)
                     } footer: { RipulSectionFooter {
                         Text("Always succeeds after this long — settle time for animations and transitions.")
-                    } }
+                    } }.ripulThemedListRows()
                 }
-            }
+            }.ripulThemedList()
             .navigationTitle("Insert wait")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

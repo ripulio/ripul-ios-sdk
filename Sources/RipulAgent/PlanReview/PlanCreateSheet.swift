@@ -62,7 +62,7 @@ public struct PlanCreateSheet: View {
                     } else {
                         Text("Creates a plan document with Problem, Approach and Open questions sections.")
                     }
-                } }
+                } }.ripulThemedListRows()
 
                 Section {
                     TextField(
@@ -74,7 +74,7 @@ public struct PlanCreateSheet: View {
                     .uiKitIdentifier("PlanCreateSheet.problemField")
                 } footer: { RipulSectionFooter {
                     Text("Seeds the Problem section. An agent drafts the Approach and Open questions from it — you review, it writes.")
-                } }
+                } }.ripulThemedListRows()
 
                 Section {
                     Button {
@@ -86,8 +86,8 @@ public struct PlanCreateSheet: View {
                     }
                     .disabled(trimmed.isEmpty || working)
                     .uiKitIdentifier("PlanCreateSheet.createAndDraft")
-                }
-            }
+                }.ripulThemedListRows()
+            }.ripulThemedList()
             .navigationTitle("New plan")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)

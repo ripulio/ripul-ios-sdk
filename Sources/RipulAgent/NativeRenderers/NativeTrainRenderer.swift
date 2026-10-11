@@ -186,9 +186,9 @@ public extension Notification.Name {
     @ViewBuilder private func clock(_ train: NativeTrainSnapshot) -> some View {
       if let since = train.since {
         // The system counts it up; nothing here redraws each second.
-        Text(since, style: .timer).multilineTextAlignment(.trailing)
+        Text(since, style: .timer).ripulText().multilineTextAlignment(.trailing)
       } else if let elapsed = train.elapsed {
-        Text(NativeTrainSnapshot.elapsedText(elapsed))
+        Text(NativeTrainSnapshot.elapsedText(elapsed)).ripulText()
       }
     }
 

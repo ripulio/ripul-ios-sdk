@@ -8,7 +8,7 @@ to each such text itself, by one of two routes that share this file:
 
   the plug-in   the generated file carries the lines found here, and a `Text` made on one
                 of them is given the theme's text colour when it is made; nothing is edited
-  migrate       `ripul-theme migrate --text` writes `.foregroundStyle(.ripul(.text))` after
+  migrate       `ripul-theme migrate --text` writes `.ripulText()` after
                 each, and `ripul-theme check --text` counts those still without it
 
 A text is left alone, by both routes, when the system or the app colours it:
@@ -41,9 +41,9 @@ CONTEXTS = {"toolbar", "tabItem", "navigationTitle", "alert", "confirmationDialo
             "accessibilityAction", "accessibilityRepresentation", "searchSuggestions", "refreshable"}
 CLOSURE_LABELS = {"header", "footer", "label", "prompt", "actions", "message", "description", "currentValueLabel",
                   "minimumValueLabel", "maximumValueLabel", "onIncrement", "onDecrement"}
-COLOURING = {"foregroundStyle", "foregroundColor"}
+COLOURING = {"foregroundStyle", "foregroundColor", "ripulText"}
 KEYWORDS = {"if", "else", "for", "while", "switch", "do", "guard", "catch", "in", "return", "where", "case", "default"}
-ADDED = ".foregroundStyle(.ripul(.text))"
+ADDED = ".ripulText()"
 
 
 def chain_after(f, i):
@@ -411,7 +411,8 @@ def list_sites(f):
         end = call_end(f, m.end() - 1)
         added = ROWS_ADDED if m.group(1) == "Section" else LIST_ADDED
         names, _ = chain_after(f, end)
-        if added[1:-2] in names:
+        # One that sets its own ground or rows keeps them; one already done is left.
+        if {"ripulThemedList", "ripulThemedListRows", "scrollContentBackground", "listRowBackground"}.intersection(names):
             continue
         found.append((end, added))
     return found

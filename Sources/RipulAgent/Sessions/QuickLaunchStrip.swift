@@ -31,7 +31,8 @@ struct QuickLaunchStrip: View {
     /// Resolved shortcuts, in user order. Resolution happens in the parent —
     /// the view that owns the `RipulSessionCache` — matching how every other
     /// cache-derived value reaches `MachineRowExpandable`.
-    @Environment(\.createNewChat) private var createNewChat
+    @Environment(\.newChatAction) private var newChatAction
+    private var createNewChat: ((String?) -> Void)? { newChatAction.map { action in { action($0) } } }
     let targets: [QuickLaunchTarget]
     /// Destination for CLI launches. Nil ⇒ CLI circles are omitted.
     let machine: RemoteMachine?

@@ -189,7 +189,7 @@ class Tools(unittest.TestCase):
         self.assertIn("5 texts with no colour of their own", self.run_tool("check", "--text", "App/Page.swift").stdout)
         self.run_tool("migrate", "--text", "--lists", "App/Page.swift")
         text = path.read_text()
-        self.assertIn('Text("bare").foregroundStyle(.ripul(.text))\n                .font(.ripul(.headline))', text)
+        self.assertIn('Text("bare").ripulText()\n                .font(.ripul(.headline))', text)
         self.assertIn('Text("in a button") }', text)
         self.assertIn("}.ripulThemedList()", text)
         self.assertIn("header: { Text(\"head\") }.ripulThemedListRows()", text)
@@ -199,7 +199,7 @@ class Tools(unittest.TestCase):
         before = path.read_text()
         self.run_tool("migrate", "--text", "--lists", "App/Page.swift")
         self.assertEqual(path.read_text(), before)
-        self.assertEqual(theme_rewrite.skeleton('Text("bare").foregroundStyle(.ripul(.text))'), theme_rewrite.skeleton('Text("bare")'))
+        self.assertEqual(theme_rewrite.skeleton('Text("bare").ripulText()'), theme_rewrite.skeleton('Text("bare")'))
         self.assertEqual(theme_rewrite.skeleton("}.ripulThemedList()"), theme_rewrite.skeleton("}"))
 
     def test_labels_and_accent_buttons_are_found_for_the_plug_in(self):
@@ -239,8 +239,8 @@ class Tools(unittest.TestCase):
         self.run_tool("migrate", "--text", "App/More.swift")
         after = path.read_text()
         self.assertIn('Label("Dogs welcome", systemImage: "pawprint")\n', after)
-        self.assertIn('Text(verbatim: "exact").foregroundStyle(.ripul(.text))', after)
-        self.assertIn('Text(paragraph.markdown).foregroundStyle(.ripul(.text))', after)
+        self.assertIn('Text(verbatim: "exact").ripulText()', after)
+        self.assertIn('Text(paragraph.markdown).ripulText()', after)
 
     def test_the_build_phase_writes_only_in_debug(self):
         import os

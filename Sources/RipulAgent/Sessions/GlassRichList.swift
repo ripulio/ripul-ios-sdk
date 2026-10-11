@@ -371,7 +371,7 @@ public struct GlassRichList<Item: Identifiable, Row: View, Swipe: View, RowMenu:
                     .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                         if !isSelecting { swipe(item) }
                     }
-                    .contextMenu { MenuIcons { if !isSelecting { rowMenu(item) } }}
+                    .contextMenu { MenuIcons { if !isSelecting { DeferredRowMenu { rowMenu(item) } } }}
                     .modifier(RowDrag(
                         payload: isSelecting ? nil : dragging?.payload(item),
                         enabled: dragging != nil && !isSelecting,
@@ -479,7 +479,7 @@ public struct GlassRichList<Item: Identifiable, Row: View, Swipe: View, RowMenu:
                             onTap(item)
                         }
                     }
-                    .contextMenu { MenuIcons { if !isSelecting { rowMenu(item) } }}
+                    .contextMenu { MenuIcons { if !isSelecting { DeferredRowMenu { rowMenu(item) } } }}
 
                 if item.id != items.last?.id {
                     Divider().padding(.leading, 16)
@@ -601,4 +601,13 @@ private struct ListDropDelegate: DropDelegate {
     }
     func dropExited(info: DropInfo) { exited() }
     func performDrop(info: DropInfo) -> Bool { dropped(info.location, info.itemProviders(for: listDropTypes)) }
+}
+
+/// A row's menu, built when SwiftUI asks for the menu and not when it builds
+/// the row. Written inline, the menu's whole content was constructed for every
+/// row on every pass of the list: a quarter of the main thread's time during a
+/// tab switch with 131 rows (simulator, 11 October 2026).
+private struct DeferredRowMenu<Menu: View>: View {
+    @ViewBuilder let build: () -> Menu
+    var body: some View { build() }
 }

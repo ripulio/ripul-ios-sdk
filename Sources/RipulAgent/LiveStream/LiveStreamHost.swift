@@ -1090,7 +1090,7 @@ struct LiveStreamIndicatorPill: View {
             if model.isOpen {
                 HStack(spacing: 8) {
                     Circle().fill(Color.ripul(.danger)).frame(width: 8, height: 8)
-                    Text(model.text)
+                    Text(model.text).ripulText()
                         .font(.ripul(.footnote, weight: .semibold))
                         .lineLimit(1)
                     Button("Stop") { model.onStop() }
@@ -1107,7 +1107,7 @@ struct LiveStreamIndicatorPill: View {
                 Button { model.open() } label: {
                     HStack(spacing: 4) {
                         Circle().fill(Color.ripul(.danger)).frame(width: 6, height: 6)
-                        Text("Live").font(.ripul(.caption2, weight: .semibold))
+                        Text("Live").ripulText().font(.ripul(.caption2, weight: .semibold))
                     }
                     .padding(.horizontal, 8)
                     .padding(.vertical, 3)

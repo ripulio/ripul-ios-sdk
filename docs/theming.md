@@ -80,6 +80,11 @@ Rules:
 - `.rounded` and `.serif` designs have no accessor. The two `.rounded` sites
   are exempt by name (`// theme-exempt: rounded design`).
 - View-level `.fontWeight()`, `.bold()` and `.italic()` are left alone.
+- `Text("…").ripulText()` gives a text with no colour of its own the theme's `text`
+  colour once a theme names one, and until then leaves it exactly as it is.
+  `ripul-theme migrate --text` writes it. `.ripulThemedList()` on a list or form
+  and `.ripulThemedListRows()` on a section do the same for the theme's surfaces
+  (`migrate --lists`).
 - `View.ripulTextStyle(.eyebrow)` applies a role's font and, when a theme sets
   them, its tracking and capitals. With no theme it is `.font(.ripul(role))`.
   A call site that writes `.textCase(.uppercase)` today keeps it.
@@ -843,6 +848,46 @@ sans did.
 **The display role is read in one place:** the four onboarding titles
 (`OnboardingView.swift`). `ripulTextStyle(.eyebrow)` is used nowhere yet, so
 the eyebrow's tracking shows nowhere.
+
+## The paper and navy document (a trial)
+
+`theme/ripul-theme-paper.json` is the brand document plus the website's
+grounds: its warm paper in light and its navy in dark, with ink text. Chosen
+as the others are (`-ripul.theme.document ripul-theme-paper`, or
+`ripul://theme?name=ripul-theme-paper`; `ripul://theme?name=ripul-theme` goes
+back), in a Debug build only. It is not the default. The values are the
+website's own (`website/public/css/site.css`).
+
+| It sets, beside what the brand document sets | Light | Dark |
+|---|---|---|
+| `ripul.canvas` and `ripul.surfaceSunken` (the page, and the ground behind cards and rows) | paper `#f8f4ec` | `#1b1d2e` |
+| `ripul.surface` (cards and grouped rows) | `#fffdf9` | `#262940` |
+| `ripul.text` | ink `#23253a` | `#f8f4ec` |
+| `ripul.textSecondary` | `#5b5e73` | the ink at 74 per cent |
+| `ripul.textTertiary` | `#8b8d9c` | the ink at 50 per cent |
+| `ripul.separator` | the ink at 12 per cent | the light ink at 14 per cent |
+
+Contrast, computed from those values: the ink on the paper is 13.7 to 1 in
+light and 15.2 in dark, and on a card 14.8 and 13.0. Secondary text on the
+paper is 5.8 and 8.8. Tertiary on the paper is 3.0 in light, which is the
+website's own faint ink and under 4.5; 4.8 in dark. `onAccent` on the teal is
+5.9 and 6.5.
+
+**What carries it** (11 October 2026):
+
+- A window's root draws the canvas behind a screen with no ground of its own
+  (`ripulThemeRoot(window: true)`).
+- Every grouped list and form in the first-party scope has
+  `.ripulThemedList()`, and each section `.ripulThemedListRows()`.
+- Every text with no colour of its own has `.ripulText()`.
+- Each of the three leaves its view untouched until a theme names the colour
+  it reads, so the default document and the brand document draw as before.
+- The chat: the web maps `canvas`, `surface`, `text`, `textSecondary` and
+  `separator` into its palette (`firstPartyTheme.ts`, with a test under this
+  document), and the web view is transparent over the native ground.
+
+What it does not reach is listed in `docs/plans/theme-aware-codebase.md`,
+under the task that made it.
 
 ## The View Explorer
 

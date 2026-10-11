@@ -196,9 +196,9 @@ struct NativeToolStripContent: View {
                                             if let status = tool.status { ToolTaskStatus(status: status) }
                                             Image(systemName: tool.symbol ?? ToolIconMap.symbol(for: tool.rendererName ?? "tool"))
                                                 .foregroundStyle(.ripul(.textSecondary))
-                                            Text(tool.label).lineLimit(1).frame(maxWidth: tool.status == nil ? nil : 240)
+                                            Text(tool.label).ripulText().lineLimit(1).frame(maxWidth: tool.status == nil ? nil : 240)
                                             if tool.count > 1 {
-                                                Text("\(tool.count)")
+                                                Text("\(tool.count)").ripulText()
                                                     .font(.ripul(.caption2, weight: .semibold))
                                                     .monospacedDigit()
                                                     .padding(.horizontal, 5).padding(.vertical, 2)

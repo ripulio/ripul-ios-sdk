@@ -29,7 +29,7 @@ public struct ClaudeAccountSwitcherSheet: View {
 
     public var body: some View {
         NavigationStack {
-            List { ClaudeAccountSection(machine: machine, bridge: bridge, onSwitched: onSwitched) }
+            List { ClaudeAccountSection(machine: machine, bridge: bridge, onSwitched: onSwitched) }.ripulThemedList()
                 .navigationTitle("Claude accounts")
                 #if os(iOS)
                 .navigationBarTitleDisplayMode(.inline)
@@ -107,7 +107,7 @@ struct ClaudeAccountSection: View {
                 Text("New sessions use the selected account. Running sessions switch after their current reply.")
                     .fixedSize(horizontal: false, vertical: true)
             }
-        } }
+        } }.ripulThemedListRows()
         .task(id: refreshToken) {
             repeat {
                 await refresh()

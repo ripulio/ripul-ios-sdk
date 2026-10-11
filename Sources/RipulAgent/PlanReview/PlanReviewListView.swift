@@ -551,7 +551,7 @@ public struct PlanReviewListView: View {
             }
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(entry.title).font(.ripul(.body)).lineLimit(2)
+                Text(entry.title).ripulText().font(.ripul(.body)).lineLimit(2)
                 if isRunning(entry) {
                     Text("Agent running…")
                         .font(.ripul(.caption))

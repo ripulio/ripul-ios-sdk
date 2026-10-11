@@ -60,13 +60,13 @@ struct RipulModelDiscoverySheet: View {
             if let errorMessage {
                 Section {
                     Text(errorMessage).foregroundStyle(.ripul(.danger)).font(.ripul(.callout))
-                }
+                }.ripulThemedListRows()
             }
             if result.newModels.isEmpty {
                 Section {
                     Text("Nothing new — every gateway model is already in the catalog.")
                         .foregroundStyle(.ripul(.textSecondary))
-                }
+                }.ripulThemedListRows()
             } else {
                 Section {
                     ForEach(result.newModels) { m in
@@ -105,7 +105,7 @@ struct RipulModelDiscoverySheet: View {
                     Text("New on the gateway")
                 } } footer: { RipulSectionFooter {
                     Text("Imported models arrive disabled, for review before anyone can pick them.")
-                } }
+                } }.ripulThemedListRows()
             }
             Section {
                 Text("\(result.totalGatewayModels) on the gateway · \(result.existingMatches.count) already in the catalog")
@@ -113,8 +113,8 @@ struct RipulModelDiscoverySheet: View {
                     .foregroundStyle(.ripul(.textSecondary))
                     .frame(maxWidth: .infinity, alignment: .center)
                     .listRowBackground(Color.clear)
-            }
-        }
+            }.ripulThemedListRows()
+        }.ripulThemedList()
     }
 
     private func failure(_ message: String, retry: @escaping () -> Void) -> some View {
@@ -222,7 +222,7 @@ struct RipulModelCostVerifySheet: View {
             if let errorMessage {
                 Section {
                     Text(errorMessage).foregroundStyle(.ripul(.danger)).font(.ripul(.callout))
-                }
+                }.ripulThemedListRows()
             }
             if result.discrepancies.isEmpty {
                 Section {
@@ -231,7 +231,7 @@ struct RipulModelCostVerifySheet: View {
                         systemImage: "checkmark.circle"
                     )
                     .foregroundStyle(.ripul(.textSecondary))
-                }
+                }.ripulThemedListRows()
             } else {
                 Section {
                     ForEach(result.discrepancies) { d in
@@ -264,9 +264,9 @@ struct RipulModelCostVerifySheet: View {
                     Text("Prices that differ")
                 } } footer: { RipulSectionFooter {
                     Text("Applying sets the catalog price to the gateway's current value.")
-                } }
+                } }.ripulThemedListRows()
             }
-        }
+        }.ripulThemedList()
     }
 
     private func run() async {

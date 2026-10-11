@@ -37,8 +37,8 @@ public struct RemoteFolderRootsView: View {
                 Text("Start browsing from")
             } } footer: { RipulSectionFooter {
                 Text("Navigate into a folder, then tap \(actionTitle) at the top.")
-            } }
-        }
+            } }.ripulThemedListRows()
+        }.ripulThemedList()
     }
 
     private func rootRow(icon: String, title: String, subtitle: String) -> some View {
@@ -47,7 +47,7 @@ public struct RemoteFolderRootsView: View {
                 .foregroundStyle(.ripul(.info))
                 .frame(width: 28)
             VStack(alignment: .leading, spacing: 2) {
-                Text(title).font(.ripul(.body)).fontWeight(.medium)
+                Text(title).ripulText().font(.ripul(.body)).fontWeight(.medium)
                 Text(subtitle).font(.ripul(.caption2, family: .code)).foregroundStyle(.ripul(.textSecondary))
             }
         }
@@ -111,7 +111,7 @@ public struct RemoteFolderBrowserView: View {
                                 Image(systemName: "folder.fill")
                                     .foregroundStyle(.ripul(.info))
                                     .frame(width: 24)
-                                Text((folder.path as NSString).lastPathComponent)
+                                Text((folder.path as NSString).lastPathComponent).ripulText()
                                     .font(.ripul(.body))
                                     .lineLimit(1)
                             }
@@ -132,8 +132,8 @@ public struct RemoteFolderBrowserView: View {
                 Text(resolvedPath.isEmpty ? path : resolvedPath)
                     .font(.ripul(.caption2, family: .code))
                     .textCase(nil)
-            } }
-        }
+            } }.ripulThemedListRows()
+        }.ripulThemedList()
         .navigationTitle(displayTitle)
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)

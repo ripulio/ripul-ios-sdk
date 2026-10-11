@@ -32,7 +32,7 @@ struct MoveChatSheet: View {
                 } header: { RipulSectionHeader {
                     Text("From \(state.sourceName) to \(state.targetName)")
                         .uiKitIdentifier("MoveChatSheet.progress.route")
-                } }
+                } }.ripulThemedListRows()
 
                 Section {
                     ForEach(steps, id: \.self) { step in
@@ -44,13 +44,13 @@ struct MoveChatSheet: View {
                         }
                         .uiKitIdentifier("MoveChatSheet.steps.row")
                     }
-                }
+                }.ripulThemedListRows()
 
                 if case .failed(let message, _) = state.outcome {
                     Section {
                         Label {
                             VStack(alignment: .leading, spacing: 6) {
-                                Text(message)
+                                Text(message).ripulText()
                                     .textSelection(.enabled)
                                 if let consequence = state.failureConsequence {
                                     Text(consequence)
@@ -64,7 +64,7 @@ struct MoveChatSheet: View {
                         .uiKitIdentifier("MoveChatSheet.result.failure")
                     } header: { RipulSectionHeader {
                         Text("The move didn't finish")
-                    } }
+                    } }.ripulThemedListRows()
                 }
 
                 if case .moved(let notes) = state.outcome, !notes.isEmpty {
@@ -73,9 +73,9 @@ struct MoveChatSheet: View {
                             Label(note, systemImage: "info.circle")
                                 .uiKitIdentifier("MoveChatSheet.result.note")
                         }
-                    }
+                    }.ripulThemedListRows()
                 }
-            }
+            }.ripulThemedList()
             .navigationTitle(navigationTitle)
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)

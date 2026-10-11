@@ -175,12 +175,12 @@ struct SimulatorPreviewPanel: View {
                         } else {
                             if let error = state.error {
                                 VStack(spacing: 8) {
-                                    Text(error).font(.ripul(.caption)).multilineTextAlignment(.center)
+                                    Text(error).ripulText().font(.ripul(.caption)).multilineTextAlignment(.center)
                                     Button("Retry") { state.retry() }.buttonStyle(.bordered)
                                 }.padding(8).padding(.top, 44).frame(maxWidth: .infinity, maxHeight: .infinity)
                             } else if !state.windows.isEmpty {
                                 VStack(spacing: 8) {
-                                    Text("Several simulators may match.").font(.ripul(.caption)).multilineTextAlignment(.center)
+                                    Text("Several simulators may match.").ripulText().font(.ripul(.caption)).multilineTextAlignment(.center)
                                     Menu("Choose window") { MenuIcons {
                                         ForEach(Array(state.windows.enumerated()), id: \.element.id) { index, window in
                                             Button("\(window.title) · Window \(index + 1)") { state.choose(window) }
