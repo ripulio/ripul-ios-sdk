@@ -178,6 +178,10 @@ public final class RipulSessionListModel {
     /// into `UnifiedSession.build` so rows render tag lozenges.
     @ObservationIgnored private var sessionTagsByKey: [String: [String]] = [:]
     @ObservationIgnored private var recentlyArchivedIds: Set<String> = []
+    /// Where the person has put chats in the list: a chat's metadata id to the
+    /// id of the chat it is kept under, or "" for by itself. Observed, so the
+    /// list re-lays itself the moment one changes. See `SessionFamilies`.
+    public private(set) var sessionPlacements: [String: String] = [:]
     /// Machines whose latest scan was a real answer, not a failure. Their lists
     /// are authoritative, so a tab for one of their chats that the list no
     /// longer includes is a chat archived or deleted elsewhere, not a missing
@@ -629,7 +633,14 @@ public final class RipulSessionListModel {
 
         // Refresh the tag map up front so the per-machine rebuilds below already
         // carry lozenges. Cheap (one authed request) and failure-tolerant.
-        sessionTagsByKey = await bridge.getSessionTags()
+        // The same request brings where the person has put each chat. A web
+        // build without it still gives the tags, and placements stay as they were.
+        if let facts = await bridge.getSessionListFacts() {
+            sessionTagsByKey = facts.tags
+            if sessionPlacements != facts.placedUnder { sessionPlacements = facts.placedUnder }
+        } else {
+            sessionTagsByKey = await bridge.getSessionTags()
+        }
 
         var onlineMachines = machines.filter { $0.isOnline && !$0.isDisabled(cache: cache) }
         let disabledCount = machines.filter { $0.isDisabled(cache: cache) }.count
@@ -1055,6 +1066,29 @@ public final class RipulSessionListModel {
                 return
             }
             await loadRemoteSessions()
+        }
+    }
+
+    // MARK: - Placing a chat under another
+
+    /// Keep a chat under another in the list, by the person's choice. `parent`
+    /// nil with `byItself` takes it out from under whatever it is under;
+    /// nil without forgets the choice, which puts a chat an agent started back
+    /// under its starter. Shown at once, and put back if the save fails.
+    func placeSession(_ session: UnifiedSession, under parent: UnifiedSession?, byItself: Bool = false) {
+        guard dataSource == nil else { return }
+        let key = session.metadataKey
+        let value: String? = parent.map(\.metadataKey) ?? (byItself ? "" : nil)
+        let before = sessionPlacements[key]
+        guard before != value else { return }
+        sessionPlacements[key] = value
+
+        Task {
+            guard await bridge.setSessionPlacement(sessionId: key, under: value) else {
+                sessionPlacements[key] = before
+                openSessionError = "Could not move “\(session.title)”. It is back where it was."
+                return
+            }
         }
     }
 
@@ -1513,11 +1547,22 @@ public final class RipulSessionListModel {
             let (success, error) = await bridge.restoreArchivedSession(machineId: machine.machineId, sessionId: session.id)
             if success {
                 archivedSessions.removeAll { $0.id == session.id }
+                listAgain(session)
                 await loadRemoteSessions()
             } else {
                 openSessionError = error ?? "Restore failed."
             }
         }
+    }
+
+    /// A restored chat goes back in the list. Archiving marks a chat so a scan
+    /// already on its way cannot bring its row back, and nothing took the mark
+    /// off: a chat archived and restored in one run of the app stayed out of
+    /// this device's list until the next launch (seen 11 October 2026).
+    private func listAgain(_ session: AgentBridge.ArchivedSessionInfo) {
+        // `claude-cli:<uuid>`; the mark is under the row's id and every other name the row had.
+        let uuid = session.id.split(separator: ":", maxSplits: 1).last.map(String.init) ?? session.id
+        recentlyArchivedIds = recentlyArchivedIds.filter { !$0.contains(uuid) }
     }
 
     /// Restore several archives one after another: a chat and the chats it
@@ -1539,6 +1584,7 @@ public final class RipulSessionListModel {
                 let (success, error) = await bridge.restoreArchivedSession(machineId: machine.machineId, sessionId: session.id)
                 if success {
                     archivedSessions.removeAll { $0.id == session.id && $0.machineId == session.machineId }
+                    listAgain(session)
                 } else {
                     failures.append("\(session.displayName): \(error ?? "restore failed")")
                 }

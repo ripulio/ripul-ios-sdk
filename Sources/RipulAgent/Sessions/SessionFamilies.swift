@@ -1,6 +1,11 @@
 import SwiftUI
 
-/// Chats an agent started, placed under the chat that started them.
+/// Chats kept under another chat: the ones an agent started, under the chat
+/// that started them, and the ones a person put there by hand.
+///
+/// A person's own choice comes first. It can put any chat under any other (a
+/// chat used as a container for a piece of work), and it can take a started
+/// chat out from under its starter.
 ///
 /// The list is otherwise one row a chat, most recent first, so an agent and
 /// the agents it started drifted apart as each did its own work, and a started
@@ -46,6 +51,8 @@ struct SessionFamilies: Equatable {
     /// By the id of each chat that has started others, at any depth: every
     /// chat under it, in family order. What goes with it when it is archived.
     let under: [String: [UnifiedSession]]
+    /// By the id of each chat that sits under another: that chat.
+    let above: [String: UnifiedSession]
     /// Started chats in the same folder as the chat they sit under. The row
     /// above already names it, so only a chat working somewhere else says where.
     let sharesFolder: Set<String>
@@ -64,6 +71,8 @@ struct SessionFamilies: Equatable {
     ///   - folds: False shows every row, as a search must: a match may be a folded chat.
     ///   - recency: A row's place in time; larger is more recent. Called once a row.
     ///   - mustShow: A started chat that may not be folded away. Called once a started chat.
+    ///   - placedUnder: Where the person has put a chat: the key of the chat it is under,
+    ///     "" for by itself, nil when they have made no choice. Called once a row.
     static func arrange(
         _ sessions: [UnifiedSession],
         open: Set<String> = [],
@@ -71,20 +80,33 @@ struct SessionFamilies: Equatable {
         folds foldsFamilies: Bool = true,
         isPinned: (UnifiedSession) -> Bool = { _ in false },
         recency: (UnifiedSession) -> Int,
-        mustShow: (UnifiedSession) -> Bool = { _ in false }
+        mustShow: (UnifiedSession) -> Bool = { _ in false },
+        placedUnder: (UnifiedSession) -> String? = { _ in nil }
     ) -> SessionFamilies {
         let pinned = sessions.map(isPinned)
         let ownRecency = sessions.map(recency)
 
-        // Who is under whom. Only a list with a started chat pays for the index.
+        // Who is under whom. Only a list with a started or a placed chat pays for the index.
         var parent = [Int?](repeating: nil, count: sessions.count)
-        if sessions.contains(where: { $0.startedBy != nil }) {
+        let chosen = sessions.map(placedUnder)
+        if chosen.contains(where: { $0 != nil }) || sessions.contains(where: { $0.startedBy != nil }) {
             // A chat moved between Macs leaves its id on both, so an id can name several rows.
             var rowsByKey: [String: [Int]] = [:]
             for (index, session) in sessions.enumerated() {
-                for key in [session.id] + session.matchKeys where rowsByKey[key]?.last != index { rowsByKey[key, default: []].append(index) }
+                for key in [session.id, session.metadataKey] + session.matchKeys where rowsByKey[key]?.last != index {
+                    rowsByKey[key, default: []].append(index)
+                }
             }
             for (index, session) in sessions.enumerated() {
+                // The person's choice comes first, and is theirs across Macs:
+                // a chat they named, or by itself. A chat they named that is
+                // not in the list leaves this one by itself too.
+                if let under = chosen[index] {
+                    guard !under.isEmpty else { continue }
+                    parent[index] = [under, UnifiedSession.canonicalKey(under)].lazy
+                        .compactMap { rowsByKey[$0]?.first { $0 != index } }.first
+                    continue
+                }
                 guard let starter = session.startedBy else { continue }
                 // An id means something on the Mac that issued it and nothing on
                 // another: the starter is looked for on this chat's own Mac, or,
@@ -157,6 +179,7 @@ struct SessionFamilies: Equatable {
         var folds: [String: Fold] = [:]
         var headsById: [String: Head] = [:]
         var under: [String: [UnifiedSession]] = [:]
+        var above: [String: UnifiedSession] = [:]
         var sharesFolder: Set<String> = []
         var sharesBranch: Set<String> = []
         all.reserveCapacity(sessions.count)
@@ -194,6 +217,7 @@ struct SessionFamilies: Equatable {
             }
             var count = 0
             for child in started {
+                above[sessions[child].id] = session
                 if sessions[child].projectName == session.projectName {
                     sharesFolder.insert(sessions[child].id)
                     if sessions[child].gitBranch == session.gitBranch { sharesBranch.insert(sessions[child].id) }
@@ -214,7 +238,7 @@ struct SessionFamilies: Equatable {
         for head in heads { place(head, level: 0, shown: true) }
 
         return SessionFamilies(all: all, visible: visible, depth: depth, folds: folds, heads: headsById, under: under,
-                               sharesFolder: sharesFolder, sharesBranch: sharesBranch)
+                               above: above, sharesFolder: sharesFolder, sharesBranch: sharesBranch)
     }
 }
 
@@ -266,7 +290,7 @@ struct SessionFamilyFoldButton: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(fold.isOpen ? "Show fewer started chats" : "Show \(fold.count) more started chats")
+        .accessibilityLabel(fold.isOpen ? "Show fewer chats under it" : "Show \(fold.count) more chats under it")
         .uiKitIdentifier("GlassSessionsList.sessions.familyFold")
     }
 }

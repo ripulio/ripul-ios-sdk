@@ -114,6 +114,12 @@ public struct GlassSessionsList: View {
     let onMoveUnifiedSession: (UnifiedSession, RemoteMachine) -> Void
     let onBatchArchive: ([UnifiedSession]) -> Void
     let onBatchDelete: ([UnifiedSession]) -> Void
+    /// Where the person has put chats: a chat's metadata id to the id of the
+    /// chat it is kept under, or "" for by itself.
+    var placements: [String: String] = [:]
+    /// Keep a chat under another (the second argument), take it out to stand
+    /// by itself (nil and true), or forget the choice (nil and false).
+    var onPlaceSession: (UnifiedSession, UnifiedSession?, Bool) -> Void = { _, _, _ in }
     /// Keys of the chats shared with a team on a team's Mac.
     var teamSharedKeys: Set<String> = []
     /// Nil unless the chat is on a Mac a team shares.
@@ -198,6 +204,8 @@ public struct GlassSessionsList: View {
     @State private var presentedPlan: (content: String, fileName: String)? = nil
     /// Session whose tags are being edited (drives the tags editor sheet).
     @State private var taggingSession: UnifiedSession? = nil
+    /// The chat the person is choosing a place for; see `PutUnderSheet`.
+    @State private var placingSession: UnifiedSession? = nil
     #if DEBUG
     /// The outcome of a "Make Cold" row action, shown once (developer builds only).
     @State private var makeColdResult: String? = nil
@@ -229,6 +237,8 @@ public struct GlassSessionsList: View {
         onMoveUnifiedSession: @escaping (UnifiedSession, RemoteMachine) -> Void,
         onBatchArchive: @escaping ([UnifiedSession]) -> Void,
         onBatchDelete: @escaping ([UnifiedSession]) -> Void,
+        placements: [String: String] = [:],
+        onPlaceSession: @escaping (UnifiedSession, UnifiedSession?, Bool) -> Void = { _, _, _ in },
         teamSharedKeys: Set<String> = [],
         teamSharing: @escaping (UnifiedSession) -> TeamChatSharing? = { _ in nil },
         onSetTeamShared: @escaping (UnifiedSession, Bool) -> Void = { _, _ in },
@@ -276,6 +286,8 @@ public struct GlassSessionsList: View {
         self.onMoveUnifiedSession = onMoveUnifiedSession
         self.onBatchArchive = onBatchArchive
         self.onBatchDelete = onBatchDelete
+        self.placements = placements
+        self.onPlaceSession = onPlaceSession
         self.teamSharedKeys = teamSharedKeys
         self.teamSharing = teamSharing
         self.onSetTeamShared = onSetTeamShared
@@ -593,7 +605,7 @@ public struct GlassSessionsList: View {
                         }
                     },
                     rowMenu: { session in
-                        sessionContextMenu(session)
+                        sessionContextMenu(session, families: families)
                     }
                 )
                 .modifier(SessionsScrollClearance(actionBarHeight: hasBatchSelection ? actionBarHeight : 0))
@@ -631,7 +643,7 @@ public struct GlassSessionsList: View {
     /// component: thinking mode, move-to-machine and remove-from-Ripul mean
     /// nothing to a plan.
     @ViewBuilder
-    private func sessionContextMenu(_ session: UnifiedSession) -> some View {
+    private func sessionContextMenu(_ session: UnifiedSession, families: SessionFamilies) -> some View {
         if supportsMultipleWindows, let open = workspace?.openWindow {
             Button("Open in New Window", systemImage: "rectangle.on.rectangle") { open(session.id) }
                 .accessibilityIdentifier("Workspace.openSessionWindow")
@@ -689,6 +701,32 @@ public struct GlassSessionsList: View {
             Label("Tags…", systemImage: "tag")
         }
         .uiKitIdentifier("GlassSessionsList.contextMenu.tagsButton")
+        // Any chat can be kept under any other: a chat used as a container.
+        if !session.isSharedGuest {
+            Button {
+                placingSession = session
+            } label: {
+                Label("Put Under…", systemImage: "arrow.turn.down.right")
+            }
+            .uiKitIdentifier("GlassSessionsList.contextMenu.putUnderButton")
+            if let parent = families.above[session.id] {
+                Button {
+                    // By itself is a choice of its own: it is what takes a chat
+                    // an agent started out from under its starter.
+                    onPlaceSession(session, nil, true)
+                } label: {
+                    Label("Take Out From Under “\(parent.title)”", systemImage: "arrow.up.left")
+                }
+                .uiKitIdentifier("GlassSessionsList.contextMenu.takeOutButton")
+            } else if placement(of: session) != nil, let starter = session.startedBy?.title {
+                Button {
+                    onPlaceSession(session, nil, false)
+                } label: {
+                    Label("Put Back Under “\(starter)”", systemImage: "arrow.uturn.backward")
+                }
+                .uiKitIdentifier("GlassSessionsList.contextMenu.putBackButton")
+            }
+        }
         // On a team's Mac a chat is private until whoever started it shares it.
         if let team = teamSharing(session), team.canChange {
             Button {
@@ -1044,8 +1082,25 @@ public struct GlassSessionsList: View {
             folds: !isSearching && !activeGroupFilter && activeProjectFilter == nil && activeTagFilter == nil,
             isPinned: { sessionStore.isPinned(anyOf: $0.readStateKeys) },
             recency: sortBucket(for:),
-            mustShow: { sessionStore.isWorkingOrAsking($0) }
+            mustShow: { sessionStore.isWorkingOrAsking($0) },
+            placedUnder: placement(of:)
         )
+    }
+
+    /// Where the person has put a chat, under any of the names it goes by: the
+    /// key of the chat it is under, "" for by itself, nil for no choice.
+    private func placement(of session: UnifiedSession) -> String? {
+        guard !placements.isEmpty else { return nil }
+        for key in [session.metadataKey, session.id] + session.matchKeys {
+            if let under = placements[key] ?? placements[UnifiedSession.canonicalKey(key)] { return under }
+        }
+        return nil
+    }
+
+    /// Every chat laid out, whatever a search or a filter is showing: what is
+    /// under a chat is the same whichever of them match.
+    private var everyFamily: SessionFamilies {
+        SessionFamilies.arrange(unifiedSessions, folds: false, recency: { _ in 0 }, placedUnder: placement(of:))
     }
 
     /// The sessions the header's filters and the search leave, in no order.
@@ -1391,8 +1446,7 @@ public struct GlassSessionsList: View {
     private func archive(_ session: UnifiedSession) {
         // Every chat, not what a search or filter leaves: a started chat that
         // does not match is still this chat's.
-        let layout = SessionFamilies.arrange(unifiedSessions, folds: false, recency: { _ in 0 })
-        let started = (layout.under[session.id] ?? []).filter { !$0.isSharedGuest }
+        let started = (everyFamily.under[session.id] ?? []).filter { !$0.isSharedGuest }
         guard !started.isEmpty else { return onArchiveUnifiedSession(session) }
         archivingFamily = ArchivingFamily(session: session, started: started,
                                           working: started.filter { sessionStore.isRunning($0) }.count)
@@ -1407,7 +1461,7 @@ public struct GlassSessionsList: View {
             presenting: archivingFamily
         ) { family in
             let count = family.started.count
-            Button("Archive With Its \(count) Started Chat\(count == 1 ? "" : "s")", role: .destructive) {
+            Button("Archive With the \(count) Chat\(count == 1 ? "" : "s") Under It", role: .destructive) {
                 // The started chats first, deepest first, so the chat itself is the last to go.
                 onBatchArchive(family.started.reversed() + [family.session])
             }
@@ -1415,7 +1469,7 @@ public struct GlassSessionsList: View {
             Button("Cancel", role: .cancel) {}
         } message: { family in
             let count = family.started.count
-            Text("It started \(count) chat\(count == 1 ? " that is" : "s that are") still in the list."
+            Text("\(count) chat\(count == 1 ? " is" : "s are") under it in the list."
                  + (family.working == 0 ? "" : " \(family.working) of them \(family.working == 1 ? "is" : "are") working."))
         }
         .confirmationDialog("Archive \(selectedSessionIds.count) sessions?", isPresented: $showBatchArchiveConfirm, titleVisibility: .visible) {
@@ -1454,6 +1508,18 @@ public struct GlassSessionsList: View {
         )) {
             if let plan = presentedPlan {
                 PlanSheetView(content: plan.content, fileName: plan.fileName)
+            }
+        }
+        .ripulSheet(item: $placingSession) { session in
+            // Not itself, and nothing under it: that would make a ring of them.
+            let below = Set((everyFamily.under[session.id] ?? []).map(\.id))
+            PutUnderSheet(
+                session: session,
+                candidates: unifiedSessions
+                    .filter { $0.id != session.id && !below.contains($0.id) && !$0.isSharedGuest }
+                    .sorted { $0.lastUsed > $1.lastUsed }
+            ) { parent in
+                onPlaceSession(session, parent, false)
             }
         }
         .ripulSheet(item: $taggingSession) { session in

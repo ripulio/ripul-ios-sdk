@@ -3024,6 +3024,31 @@ public final class AgentBridge: NSObject {
         return out
     }
 
+    /// Tags and placements for the whole list in one request: the tags a row
+    /// shows, and the chat each one is kept under by the person's own choice
+    /// ("" is "by itself"). Nil when the web app has no such call (a build
+    /// before it) or could not read them, so the caller keeps what it had.
+    public func getSessionListFacts() async -> (tags: [String: [String]], placedUnder: [String: String])? {
+        let reply = await callPage("__ripulGetSessionListFacts", [], .ifMissing("null"))
+        guard let dict = reply.dictionary else { return nil }
+        var tags: [String: [String]] = [:]
+        for (key, value) in dict["tags"] as? [String: Any] ?? [:] {
+            if let list = value as? [Any] { tags[key] = list.compactMap { $0 as? String } }
+        }
+        var placedUnder: [String: String] = [:]
+        for (key, value) in dict["placedUnder"] as? [String: Any] ?? [:] {
+            if let under = value as? String { placedUnder[key] = under }
+        }
+        return (tags, placedUnder)
+    }
+
+    /// Keep a chat under another in the session list. `under` is that chat's
+    /// metadata id, "" for by itself, nil to forget the choice. Returns true on success.
+    @discardableResult
+    public func setSessionPlacement(sessionId: String, under: String?) async -> Bool {
+        await callPage("__ripulSetSessionPlacement", [sessionId, under], .ifMissing("{ok:false}")).dictionary?["ok"] as? Bool ?? false
+    }
+
     /// Every id a group chat (one with another person in it) may be listed
     /// under — drives the session list's Group Chats filter. Nil when the web
     /// app couldn't read the roster, so the caller keeps its last answer.

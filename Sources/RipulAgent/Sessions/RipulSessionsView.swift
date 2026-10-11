@@ -356,6 +356,8 @@ public struct RipulSessionsView: View {
             onMoveUnifiedSession: { session, target in model.moveSession(session, to: target) },
             onBatchArchive: { sessions in model.batchArchiveSessions(sessions) },
             onBatchDelete: { sessions in model.batchDeleteSessions(sessions) },
+            placements: model.sessionPlacements,
+            onPlaceSession: { session, parent, byItself in model.placeSession(session, under: parent, byItself: byItself) },
             teamSharedKeys: model.teamSharedKeys,
             teamSharing: { session in model.teamSharing(for: session) },
             onSetTeamShared: { session, shared in model.setTeamShared(shared, session: session) },

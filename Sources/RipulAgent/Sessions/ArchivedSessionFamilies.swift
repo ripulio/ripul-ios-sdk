@@ -27,7 +27,9 @@ public struct ArchivedSessionFamilies {
     /// An archive's id is only its own Mac's: a chat moved between Macs can be archived on both.
     private static func key(_ row: Archived) -> String { "\(row.machineId ?? "")|\(row.id)" }
 
-    public static func arrange(_ archived: [Archived]) -> ArchivedSessionFamilies {
+    /// - Parameter placements: Where the person has put chats, as the session
+    ///   list has it: a chat's metadata id to the id of the chat it is under.
+    public static func arrange(_ archived: [Archived], placements: [String: String] = [:]) -> ArchivedSessionFamilies {
         var rowByKey: [String: Archived] = [:]
         for row in archived where rowByKey[key(row)] == nil { rowByKey[key(row)] = row }
         // The session list's own layout, so a starter is found the same way:
@@ -41,7 +43,10 @@ public struct ArchivedSessionFamilies {
                 machineId: row.machineId, matchKeys: [row.id, "cli_\(uuid)", uuid], startedBy: row.startedBy,
                 ripulSession: nil)
         }
-        let layout = SessionFamilies.arrange(sessions, folds: false, recency: { Int($0.lastUsed.timeIntervalSince1970) })
+        let layout = SessionFamilies.arrange(
+            sessions, folds: false, recency: { Int($0.lastUsed.timeIntervalSince1970) },
+            // A chat's metadata is keyed by its bare id, which is among the names the row goes by.
+            placedUnder: { session in placements.isEmpty ? nil : session.matchKeys.lazy.compactMap { placements[$0] }.first })
         return ArchivedSessionFamilies(
             rows: layout.all.compactMap { rowByKey[$0.id] },
             depthByKey: layout.depth,

@@ -366,7 +366,7 @@ public struct UnifiedSessionRow: View {
                     .font(.ripulIcon(.caption, weight: .medium))
                     .foregroundStyle(.ripul(.textTertiary))
                     .frame(width: CGFloat(familyDepth) * 14, alignment: .trailing)
-                    .accessibilityLabel("Started by the chat above")
+                    .accessibilityLabel("Under the chat above")
                     .uiKitIdentifier("UnifiedSessionRow.familyConnector")
             }
 
@@ -516,7 +516,7 @@ public struct UnifiedSessionRow: View {
                             .padding(.vertical, 2)
                             .background(Capsule().fill(tint.opacity(0.14)))
                             .fixedSize()
-                            .accessibilityLabel("\(startedChats) started \(startedChats == 1 ? "chat" : "chats") put away")
+                            .accessibilityLabel("\(startedChats) \(startedChats == 1 ? "chat" : "chats") under it put away")
                             .uiKitIdentifier("UnifiedSessionRow.startedChatsCount")
                     }
                 }
@@ -706,7 +706,7 @@ public struct UnifiedSessionRow: View {
                 RunningIndicatorSymbol(systemName: runningIndicatorIcon)
                     .accessibilityElement()
                     .accessibilityLabel(ownRunning ? "Running"
-                        : "\(startedRunning) started \(startedRunning == 1 ? "chat" : "chats") running")
+                        : "\(startedRunning) \(startedRunning == 1 ? "chat" : "chats") under it running")
                     .transition(.opacity)
                     .uiKitIdentifier("UnifiedSessionRow.phaseIndicator.running")
             }
@@ -829,7 +829,7 @@ private struct StartedChatsToggle: ViewModifier {
                     .contentShape(Rectangle().inset(by: -10))
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("\(isClosed ? "Show" : "Hide") \(count) started \(count == 1 ? "chat" : "chats")")
+            .accessibilityLabel("\(isClosed ? "Show" : "Hide") \(count) \(count == 1 ? "chat" : "chats") under it")
             .uiKitIdentifier("UnifiedSessionRow.startedChatsToggle")
         } else {
             content

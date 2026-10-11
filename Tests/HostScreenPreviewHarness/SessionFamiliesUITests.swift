@@ -27,7 +27,7 @@ final class SessionFamiliesUITests: XCTestCase {
                 "Design alignment", "Theme: chat panels", "Check the bubble colours for contrast", "Theme: session rows", "Theme: tool sheets",
                 "Theme: settings screens", "Tool panel renders", "Thermals", "Port the parser to the new grammar",
             ])
-            let marks = app.images.matching(NSPredicate(format: "label == %@", "Started by the chat above"))
+            let marks = app.images.matching(NSPredicate(format: "label == %@", "Under the chat above"))
             XCTAssertEqual(marks.count, 5, "One mark for each started chat that is shown")
             // A started chat sits further in than its starter, and one it started further still.
             let lead = app.staticTexts["Design alignment"].frame.minX
@@ -52,13 +52,13 @@ final class SessionFamiliesUITests: XCTestCase {
             }
             XCTAssertTrue(mark("Running").waitForExistence(timeout: 3))
             XCTAssertTrue(isOnRow(mark("Running"), of: "Check the bubble colours for contrast"))
-            XCTAssertFalse(mark("1 started chat running").exists)
+            XCTAssertFalse(mark("1 chat under it running").exists)
             // The head last spoke 95 minutes ago, and says so while the chats it started say when they did.
             XCTAssertTrue(isOnRow(app.staticTexts["1h"], of: "Design alignment"))
             let closed = XCTAttachment(screenshot: app.screenshot())
             closed.name = "Session families folded \(light ? "light" : "dark")"; closed.lifetime = .keepAlways; add(closed)
 
-            app.buttons["Show 2 more started chats"].tap()
+            app.buttons["Show 2 more chats under it"].tap()
             XCTAssertTrue(app.staticTexts["Theme: browser"].waitForExistence(timeout: 3))
             XCTAssertEqual(Array(shown().prefix(8)), [
                 "Design alignment", "Theme: chat panels", "Check the bubble colours for contrast", "Theme: session rows", "Theme: tool sheets",
@@ -66,18 +66,18 @@ final class SessionFamiliesUITests: XCTestCase {
             ])
             let opened = XCTAttachment(screenshot: app.screenshot())
             opened.name = "Session families open \(light ? "light" : "dark")"; opened.lifetime = .keepAlways; add(opened)
-            app.buttons["Show fewer started chats"].tap()
-            XCTAssertTrue(app.buttons["Show 2 more started chats"].waitForExistence(timeout: 3))
+            app.buttons["Show fewer chats under it"].tap()
+            XCTAssertTrue(app.buttons["Show 2 more chats under it"].waitForExistence(timeout: 3))
             XCTAssertFalse(app.staticTexts["Theme: browser"].exists)
 
             // The icon of the chat at the head of the family puts its started chats away, and brings them back.
-            app.buttons["Hide 7 started chats"].tap()
-            XCTAssertTrue(app.buttons["Show 7 started chats"].waitForExistence(timeout: 3))
+            app.buttons["Hide 7 chats under it"].tap()
+            XCTAssertTrue(app.buttons["Show 7 chats under it"].waitForExistence(timeout: 3))
             XCTAssertEqual(shown(), ["Design alignment", "Tool panel renders", "Thermals", "Port the parser to the new grammar"])
-            XCTAssertTrue(app.staticTexts["7 started chats put away"].exists, "The head says how many it holds")
+            XCTAssertTrue(app.staticTexts["7 chats under it put away"].exists, "The head says how many it holds")
             // Its row is gone, so the head carries the running mark for it.
-            XCTAssertTrue(mark("1 started chat running").waitForExistence(timeout: 3), "A head with its chats put away says one of them is working")
-            XCTAssertTrue(isOnRow(mark("1 started chat running"), of: "Design alignment"))
+            XCTAssertTrue(mark("1 chat under it running").waitForExistence(timeout: 3), "A head with its chats put away says one of them is working")
+            XCTAssertTrue(isOnRow(mark("1 chat under it running"), of: "Design alignment"))
             XCTAssertFalse(mark("Running").exists)
             // Its time is now the family's: a chat under it spoke a minute ago, so no row says an hour.
             XCTAssertFalse(app.staticTexts["1h"].exists, "A head with its chats put away shows when the family was last active")
@@ -86,11 +86,11 @@ final class SessionFamiliesUITests: XCTestCase {
             XCTAssertEqual(marks.count, 0)
             let away = XCTAttachment(screenshot: app.screenshot())
             away.name = "Session families put away \(light ? "light" : "dark")"; away.lifetime = .keepAlways; add(away)
-            app.buttons["Show 7 started chats"].tap()
+            app.buttons["Show 7 chats under it"].tap()
             XCTAssertTrue(app.staticTexts["Theme: chat panels"].waitForExistence(timeout: 3))
             XCTAssertEqual(shown().count, 9)
             XCTAssertTrue(mark("Running").waitForExistence(timeout: 3), "Brought back, the chat says so itself again")
-            XCTAssertFalse(mark("1 started chat running").exists)
+            XCTAssertFalse(mark("1 chat under it running").exists)
             XCTAssertTrue(isOnRow(app.staticTexts["1h"], of: "Design alignment"), "And the head's time is its own again")
             app.terminate()
         }

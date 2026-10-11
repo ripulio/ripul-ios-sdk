@@ -21,12 +21,14 @@ final class SessionFamiliesTests: XCTestCase {
             ripulSession: nil)
     }
 
+    /// - Parameter placed: Where the person has put chats: a chat's name to the name of the chat it is under, or "" for by itself.
     private func arrange(_ sessions: [UnifiedSession], open: Set<String> = [], closed: Set<String> = [], folds: Bool = true,
-                         pinned: Set<String> = [], working: Set<String> = []) -> SessionFamilies {
+                         pinned: Set<String> = [], working: Set<String> = [], placed: [String: String] = [:]) -> SessionFamilies {
         SessionFamilies.arrange(sessions, open: open, closed: closed, folds: folds,
                                 isPinned: { pinned.contains($0.title) },
                                 recency: { Int($0.lastUsed.timeIntervalSince1970 / 30) },
-                                mustShow: { working.contains($0.title) })
+                                mustShow: { working.contains($0.title) },
+                                placedUnder: { placed[$0.title] })
     }
 
     func testChatsNobodyStartedKeepTheListsOwnOrder() {
@@ -117,6 +119,44 @@ final class SessionFamiliesTests: XCTestCase {
         XCTAssertEqual(arrange(sessions, closed: ["claude-cli:lead"], folds: false).visible.count, 5)
     }
 
+    func testAPersonCanPutAnyChatUnderAnyOther() {
+        // "work" is a chat used as a container: nobody started the chats put under it.
+        let sessions = [
+            chat("work", minutesAgo: 500, machine: "machine-studio"), chat("notes", minutesAgo: 5, machine: "machine-studio"),
+            // On another Mac: a person's choice is theirs wherever the chat is.
+            chat("research", minutesAgo: 40, machine: "machine-macbook"),
+            chat("lead", minutesAgo: 100), chat("started", minutesAgo: 20, startedBy: "lead"), chat("moved", minutesAgo: 30, startedBy: "lead"),
+            chat("freed", minutesAgo: 60, startedBy: "lead"), chat("other", minutesAgo: 90),
+        ]
+        let layout = arrange(sessions, placed: ["notes": "work", "research": "work", "moved": "work", "freed": ""])
+        // The container moves with its newest chat; a chat moved out of a family sits by itself.
+        XCTAssertEqual(layout.visible.map(\.title), ["work", "notes", "moved", "research", "lead", "started", "freed", "other"])
+        XCTAssertEqual(layout.depth, ["claude-cli:notes": 1, "claude-cli:moved": 1, "claude-cli:research": 1, "claude-cli:started": 1])
+        XCTAssertEqual(layout.under["claude-cli:work"]?.map(\.title), ["notes", "moved", "research"])
+        XCTAssertEqual(layout.under["claude-cli:lead"]?.map(\.title), ["started"], "A chat the person moved is no longer under its starter")
+        XCTAssertEqual(layout.above["claude-cli:moved"]?.title, "work")
+        XCTAssertNil(layout.above["claude-cli:freed"], "By itself is a choice: it takes a started chat out from under its starter")
+        XCTAssertEqual(layout.heads["claude-cli:work"]?.started, 3)
+
+        // Put away, the container speaks for what is in it, as a starter does.
+        XCTAssertEqual(arrange(sessions, closed: ["claude-cli:work"], placed: ["notes": "work", "research": "work"])
+            .heads["claude-cli:work"]?.putAway.map(\.title), ["notes", "research"])
+    }
+
+    func testAChatPutUnderOneThatIsNotInTheListStandsByItself() {
+        // The container is archived or filtered out. The choice still holds: it does not fall back under its starter.
+        let layout = arrange([chat("lead", minutesAgo: 9), chat("moved", minutesAgo: 1, startedBy: "lead")], placed: ["moved": "gone"])
+        XCTAssertEqual(layout.visible.map(\.title), ["moved", "lead"])
+        XCTAssertTrue(layout.depth.isEmpty)
+    }
+
+    func testChatsPutUnderEachOtherAreStillAllShownOnce() {
+        let layout = arrange([chat("a", minutesAgo: 2), chat("b", minutesAgo: 1), chat("self", minutesAgo: 3)],
+                             placed: ["a": "b", "b": "a", "self": "self"])
+        XCTAssertEqual(Set(layout.visible.map(\.title)), ["a", "b", "self"])
+        XCTAssertEqual(layout.visible.count, 3)
+    }
+
     func testEveryChatThatHasStartedOthersKnowsTheChatsUnderIt() {
         let layout = arrange([
             chat("lead", minutesAgo: 100), chat("a", minutesAgo: 1, startedBy: "lead"), chat("b", minutesAgo: 2, startedBy: "lead"),
@@ -154,6 +194,12 @@ final class SessionFamiliesTests: XCTestCase {
         XCTAssertEqual(layout.under(rows[1]).map(\.displayName), ["under panels"])
         XCTAssertTrue(layout.under(rows[5]).isEmpty)
         XCTAssertEqual(layout.rows.last?.startedBy?.title, "A live chat", "A chat whose starter is not archived can still say whose it is")
+
+        // What the person put under a chat is kept with it in the archive as well.
+        let placed = ArchivedSessionFamilies.arrange([archived("container", daysAgo: 8), archived("loose", daysAgo: 1, machine: "machine-macbook")],
+                                                     placements: ["loose": "container"])
+        XCTAssertEqual(placed.rows.map(\.displayName), ["container", "loose"])
+        XCTAssertEqual(placed.under(placed.rows[0]).map(\.displayName), ["loose"])
 
         // The same id archived on two Macs is two rows, each with its own.
         let twice = ArchivedSessionFamilies.arrange([archived("design", daysAgo: 1), archived("design", daysAgo: 2, machine: "machine-macbook"),

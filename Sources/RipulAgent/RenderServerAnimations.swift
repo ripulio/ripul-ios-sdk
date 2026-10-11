@@ -98,9 +98,9 @@ private let turnLoopFramesPerSecond: Float = 10
 /// half the speed). It only runs while the list can be seen.
 private let listIndicatorFramesPerSecond: Float = 15
 
-/// The shimmer on waiting text: smooth, and only for its first few seconds.
+/// The shimmer on waiting text: a smooth sweep, then a rest, for as long as it waits.
 private let shimmerFramesPerSecond: Float = 30
-private let shimmerSeconds: CFTimeInterval = 6
+private let shimmerEvery: TimeInterval = 5
 
 /// Gives a loop its frame limit: the shipped one, or the one being tried
 /// (`PerfSwitch.loopFramesPerSecond`).
@@ -213,6 +213,9 @@ private final class PulseStrokeLayerView: PlatformLayerView {
 private final class ShimmerBandLayerView: PlatformLayerView {
     let gradient = CAGradientLayer()
     var duration: CFTimeInterval = 2
+    private var width: CGFloat = 0
+    /// Whether the text has had its first sweep since it could last be seen.
+    private var started = false
 
     override func setUpLayer() {
         gradient.startPoint = CGPoint(x: 0, y: 0.5)
@@ -220,42 +223,53 @@ private final class ShimmerBandLayerView: PlatformLayerView {
         gradient.locations = [0.40, 0.50, 0.60]
         hostLayer.addSublayer(gradient)
         hostLayer.masksToBounds = true
+        // One sweep every few seconds for as long as the text waits, each a
+        // single animation that ends: between sweeps nothing is moving and the
+        // render server draws nothing. A band moving across text needs 30
+        // frames a second to look smooth, and running without a break at that
+        // rate cost two and a half times what the glow does. Sweeping only for
+        // the first six seconds, which this replaced, read as the shimmer
+        // having gone (Peter, 11 October 2026).
+        let timer = Timer(timeInterval: shimmerEvery, repeats: true) { [weak self] timer in
+            MainActor.assumeIsolated {
+                guard let self else { timer.invalidate(); return }
+                self.sweepOnce()
+            }
+        }
+        timer.tolerance = 0.5
+        RunLoop.main.add(timer, forMode: .common)
     }
 
     override func layoutLayer() {
         let bounds = hostLayer.bounds
         guard bounds.width > 0 else { return }
-        let width = bounds.width
+        width = bounds.width
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        // Band is 4x the text width; its highlight crosses the text once per loop.
+        // Band is 4x the text width; its highlight crosses the text once per sweep
+        // and rests off the text, to its left.
         gradient.bounds = CGRect(x: 0, y: 0, width: width * 4, height: bounds.height)
         gradient.anchorPoint = CGPoint(x: 0, y: 0.5)
         gradient.position = CGPoint(x: -3 * width, y: bounds.midY)
         CATransaction.commit()
-        gradient.removeAnimation(forKey: "sweep")
-        guard canBeDrawn, !PerfSwitch.loopsAreOff else { return }
-        // A few sweeps when the text appears, then it rests in its base colour
-        // (the band's resting place is off the text). A band moving across text
-        // needs 30 frames a second to look smooth, which costs the render
-        // server two and a half times what the glow does at 10, and the text is
-        // there for the whole of a turn: so it is smooth while it says "a turn
-        // has started" and still after that (Peter, 8 October 2026).
-        let now = CACurrentMediaTime()
-        if firstShownAt == nil { firstShownAt = now }
-        let left = shimmerSeconds - (now - (firstShownAt ?? now))
-        guard left >= duration / 2 else { return }
+        guard canBeDrawn else {
+            gradient.removeAnimation(forKey: "sweep")
+            started = false
+            return
+        }
+        // The first sweep comes as the text appears, not at the timer's next
+        // turn. A layout pass leaves a sweep that is under way alone.
+        if !started { started = true; sweepOnce() }
+    }
+
+    private func sweepOnce() {
+        guard width > 0, canBeDrawn, !PerfSwitch.loopsAreOff, gradient.animation(forKey: "sweep") == nil else { return }
         let sweep = CABasicAnimation(keyPath: "position.x")
         sweep.fromValue = -3 * width
         sweep.toValue = 0
         sweep.duration = duration
-        sweep.repeatCount = Float((left / duration).rounded())
         gradient.add(paced(sweep, shipped: shimmerFramesPerSecond), forKey: "sweep")
     }
-
-    /// When this text first could be seen: the sweeps are counted from then,
-    /// so a layout pass or a moment off screen does not start them again.
-    private var firstShownAt: CFTimeInterval?
 }
 
 // MARK: - Platform plumbing
