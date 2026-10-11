@@ -41,6 +41,36 @@
       "sha": "3d78dd490fcc9f5d6c9f70ef1f889009848ab1c5",
       "subject": "Plan log: the host-burden task's notes and its close",
       "timestamp": "2026-10-11T14:56:56.000Z"
+    },
+    {
+      "repo": "ripul",
+      "sha": "795313407279315f48d25959fe92793790c29fd6",
+      "subject": "Theming guide: level 1 must be fit to use in both modes, said again beside the app's own colours",
+      "timestamp": "2026-10-11T14:57:45.000Z"
+    },
+    {
+      "repo": "ripul",
+      "sha": "061fdb6d0835b2cd7860775a4cc92d9230bda21d",
+      "subject": "Theme plug-in: markdown and every other kind of text, a label's title, a prominent button's label and a navigation title's colour, with no edit to the host",
+      "timestamp": "2026-10-11T17:06:11.000Z"
+    },
+    {
+      "repo": "ripul",
+      "sha": "a9c00ac3a59697afa9eb63cc9bda7299309f8971",
+      "subject": "Theming: the page, the skill and the guide for 0.7.175 (markdown, labels, prominent buttons, navigation titles)",
+      "timestamp": "2026-10-11T17:42:31.000Z"
+    },
+    {
+      "repo": "ripul",
+      "sha": "d1f9e286652d6aae6e5faf832039e455ef1ac2a7",
+      "subject": "chore(sdk): stamp ripulSDKVersion 0.7.175",
+      "timestamp": "2026-10-11T17:42:31.000Z"
+    },
+    {
+      "repo": "ripul-ios-sdk",
+      "sha": "d9c6ec2989f960d4b25d7bce1d7162611a25b777",
+      "subject": "Release v0.7.175 — sync from monorepo RipulAgent SDK",
+      "timestamp": "2026-10-11T17:44:41.000Z"
     }
   ],
   "contributors": [
@@ -49,7 +79,7 @@
       "clientType": "web",
       "displayName": "Peter Maude",
       "firstSeenAt": "2026-10-11T13:18:57.499Z",
-      "lastSeenAt": "2026-10-11T14:49:29.301Z"
+      "lastSeenAt": "2026-10-11T17:32:04.630Z"
     }
   ],
   "createdAt": "2026-10-11T13:18:57.510Z",
@@ -73,6 +103,51 @@
       "id": "dep_mv3v4nb5_9elc",
       "target": "ios",
       "timestamp": "2026-10-11T13:32:28.083Z"
+    },
+    {
+      "id": "dep_mv3y6iiz_8b1i",
+      "target": "pages",
+      "timestamp": "2026-10-11T14:57:54.011Z"
+    },
+    {
+      "id": "dep_mv3y6ijv_hdv9",
+      "target": "pages",
+      "timestamp": "2026-10-11T14:57:54.100Z"
+    },
+    {
+      "id": "dep_mv3ye291_p0vh",
+      "target": "ios",
+      "timestamp": "2026-10-11T15:03:48.130Z"
+    },
+    {
+      "id": "dep_mv3ye291_19dy",
+      "target": "ios",
+      "timestamp": "2026-10-11T15:03:48.210Z"
+    },
+    {
+      "id": "dep_mv3ye292_1i9d",
+      "target": "ios",
+      "timestamp": "2026-10-11T15:03:48.496Z"
+    },
+    {
+      "id": "dep_mv3ye36x_k65q",
+      "target": "pages",
+      "timestamp": "2026-10-11T15:03:48.837Z"
+    },
+    {
+      "id": "dep_mv3ye373_ca0x",
+      "target": "ios",
+      "timestamp": "2026-10-11T15:03:48.952Z"
+    },
+    {
+      "id": "dep_mv3ye377_ln9u",
+      "target": "ios",
+      "timestamp": "2026-10-11T15:03:49.036Z"
+    },
+    {
+      "id": "dep_mv3ye3p5_ule9",
+      "target": "pages",
+      "timestamp": "2026-10-11T15:03:49.121Z"
     }
   ],
   "filesEdited": [
@@ -104,11 +179,11 @@
       "group": "web",
       "id": "human-user_3AONWcmlO5RS8dj3lRzQZtYXFxA",
       "kind": "human",
-      "lastSeenAt": "2026-10-11T14:49:29.438Z"
+      "lastSeenAt": "2026-10-11T17:32:05.023Z"
     }
   ],
   "tags": [
     "plan:theme-aware-codebase@mdvaea"
   ],
-  "updatedAt": "2026-10-11T14:57:30.871Z"
+  "updatedAt": "2026-10-11T17:44:50.204Z"
 }
