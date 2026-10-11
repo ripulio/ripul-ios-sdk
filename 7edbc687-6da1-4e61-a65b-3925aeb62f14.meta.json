@@ -1,0 +1,61 @@
+{
+  "commits": [],
+  "contributors": [
+    {
+      "clientId": "web-user_3AONWcmlO5RS8dj3lRzQZtYXFxA",
+      "clientType": "web",
+      "displayName": "Peter Maude",
+      "firstSeenAt": "2026-10-11T10:59:54.086Z",
+      "lastSeenAt": "2026-10-11T10:59:54.086Z"
+    }
+  ],
+  "createdAt": "2026-10-11T10:59:54.144Z",
+  "deployments": [
+    {
+      "id": "dep_mv3pz50x_pbym",
+      "target": "pages",
+      "timestamp": "2026-10-11T11:08:12.970Z"
+    },
+    {
+      "id": "dep_mv3pz73i_6x4i",
+      "target": "pages",
+      "timestamp": "2026-10-11T11:08:15.671Z"
+    }
+  ],
+  "filesEdited": [
+    {
+      "editCount": 2,
+      "fileName": "SKILL.md",
+      "filePath": "/Users/petermaude/Documents/ripul/ripul-ios-sdk/tools/skills/theme-an-app/SKILL.md",
+      "firstSeenAt": "2026-10-11T11:04:00.111Z",
+      "lastSeenAt": "2026-10-11T11:04:00.300Z",
+      "toolName": "Write"
+    },
+    {
+      "editCount": 2,
+      "fileName": "shipping-skills.md",
+      "filePath": "/Users/petermaude/Documents/ripul/docs/plans/shipping-skills.md",
+      "firstSeenAt": "2026-10-11T11:07:11.757Z",
+      "lastSeenAt": "2026-10-11T11:07:11.926Z",
+      "toolName": "Write"
+    }
+  ],
+  "id": "cli_7edbc687-6da1-4e61-a65b-3925aeb62f14",
+  "milestones": [],
+  "modelHistory": [],
+  "notes": [],
+  "participants": [
+    {
+      "displayName": "Peter Maude",
+      "firstSeenAt": "2026-10-11T10:59:54.294Z",
+      "group": "web",
+      "id": "human-user_3AONWcmlO5RS8dj3lRzQZtYXFxA",
+      "kind": "human",
+      "lastSeenAt": "2026-10-11T10:59:54.294Z"
+    }
+  ],
+  "tags": [
+    "plan:theme-aware-codebase@mdvaea"
+  ],
+  "updatedAt": "2026-10-11T11:08:15.671Z"
+}
