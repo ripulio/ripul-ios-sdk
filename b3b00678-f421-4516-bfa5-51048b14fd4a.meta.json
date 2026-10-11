@@ -1,0 +1,96 @@
+{
+  "commits": [
+    {
+      "repo": "ripul",
+      "sha": "d4e017857fb8bee2465e59de607b09d54f0a3f2e",
+      "subject": "Theme: its own product, a host's own colours, and text and lists with no edit to the host",
+      "timestamp": "2026-10-11T13:51:57.000Z"
+    },
+    {
+      "repo": "ripul",
+      "sha": "5c39d4e15fb4f3a971226d0ed38ea924effb0731",
+      "subject": "Theme: a privacy manifest for the theme module, and the page and skill for what a host now does",
+      "timestamp": "2026-10-11T14:14:45.000Z"
+    },
+    {
+      "repo": "ripul",
+      "sha": "e985c8e3b24bbf78134db7bbfbbe22ed6af11fe3",
+      "subject": "chore(sdk): stamp ripulSDKVersion 0.7.174",
+      "timestamp": "2026-10-11T14:16:25.000Z"
+    },
+    {
+      "repo": "ripul-ios-sdk",
+      "sha": "b64edea472aaa5036e809cd306e89a9e80691058",
+      "subject": "Release v0.7.174 — sync from monorepo RipulAgent SDK",
+      "timestamp": "2026-10-11T14:18:31.000Z"
+    }
+  ],
+  "contributors": [
+    {
+      "clientId": "web-user_3AONWcmlO5RS8dj3lRzQZtYXFxA",
+      "clientType": "web",
+      "displayName": "Peter Maude",
+      "firstSeenAt": "2026-10-11T13:18:57.499Z",
+      "lastSeenAt": "2026-10-11T13:18:57.499Z"
+    }
+  ],
+  "createdAt": "2026-10-11T13:18:57.510Z",
+  "deployments": [
+    {
+      "id": "dep_mv3uy7jk_98ug",
+      "target": "ios",
+      "timestamp": "2026-10-11T13:27:27.986Z"
+    },
+    {
+      "id": "dep_mv3uy7si_cb1r",
+      "target": "ios",
+      "timestamp": "2026-10-11T13:27:28.311Z"
+    },
+    {
+      "id": "dep_mv3v4na4_wf8w",
+      "target": "ios",
+      "timestamp": "2026-10-11T13:32:28.008Z"
+    },
+    {
+      "id": "dep_mv3v4nb5_9elc",
+      "target": "ios",
+      "timestamp": "2026-10-11T13:32:28.083Z"
+    }
+  ],
+  "filesEdited": [
+    {
+      "editCount": 2,
+      "fileName": "RipulThemeLists.swift",
+      "filePath": "/Users/petermaude/Documents/ripul/ripul-ios-sdk/Sources/RipulThemeKit/RipulThemeLists.swift",
+      "firstSeenAt": "2026-10-11T13:35:10.140Z",
+      "lastSeenAt": "2026-10-11T13:35:10.232Z",
+      "toolName": "Write"
+    },
+    {
+      "editCount": 2,
+      "fileName": "theme_text.py",
+      "filePath": "/Users/petermaude/Documents/ripul/ripul-ios-sdk/tools/theme_text.py",
+      "firstSeenAt": "2026-10-11T13:42:07.830Z",
+      "lastSeenAt": "2026-10-11T13:42:08.495Z",
+      "toolName": "Write"
+    }
+  ],
+  "id": "cli_b3b00678-f421-4516-bfa5-51048b14fd4a",
+  "milestones": [],
+  "modelHistory": [],
+  "notes": [],
+  "participants": [
+    {
+      "displayName": "Peter Maude",
+      "firstSeenAt": "2026-10-11T13:18:57.606Z",
+      "group": "web",
+      "id": "human-user_3AONWcmlO5RS8dj3lRzQZtYXFxA",
+      "kind": "human",
+      "lastSeenAt": "2026-10-11T13:18:57.606Z"
+    }
+  ],
+  "tags": [
+    "plan:theme-aware-codebase@mdvaea"
+  ],
+  "updatedAt": "2026-10-11T14:18:38.354Z"
+}
