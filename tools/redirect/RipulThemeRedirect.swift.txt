@@ -9,9 +9,11 @@
 // To leave a part out, add its flag to the target's Swift compilation conditions:
 //   RIPUL_THEME_NO_ROOT     keep SwiftUI's WindowGroup; put `.ripulThemeRoot()` on your root yourself
 //   RIPUL_THEME_NO_STYLES   keep SwiftUI's foregroundStyle; the hierarchy styles stay the system's
+//   RIPUL_THEME_NO_LISTS    keep SwiftUI's List, Form and Section; lists stay the system's
+//   RIPUL_THEME_NO_TEXT     keep SwiftUI's Text initialisers; text with no colour stays the system's
 
 import SwiftUI
-import RipulAgent
+import RipulThemeKit
 #if canImport(UIKit)
 import UIKit
 #endif
@@ -64,6 +66,10 @@ extension Color {
     static var primary: Color { RipulThemeRedirect.color(.text) }
     static var secondary: Color { RipulThemeRedirect.color(.textSecondary) }
 
+    /// A colour of your asset catalogue is a role of the asset's name: a theme document
+    /// that names it under `roles` changes it, and until one does it is the asset.
+    init(_ name: String, bundle: Bundle? = nil) { self = RipulThemeRedirect.color(named: name, bundle: bundle) }
+
     #if canImport(UIKit)
     init(_ color: UIColor) { self = RipulThemeRedirect.color(color) }
     init(uiColor: UIColor) { self = RipulThemeRedirect.color(uiColor) }
@@ -90,6 +96,148 @@ extension View {
 extension Text {
     func foregroundStyle(_ style: HierarchicalShapeStyle) -> Text {
         RipulThemeRedirect.foregroundStyle(self, style)
+    }
+}
+#endif
+
+// MARK: Text with no colour of its own
+
+#if !RIPUL_THEME_NO_TEXT
+/// The lines of this target on which a text has no colour of its own: none in its chain
+/// of modifiers, none from a view round it, and not a control's label. Read from the
+/// source on every build, so a new text is here without anyone adding it.
+private let ripulThemeRedirectBareText: [String: Set<UInt>] = {
+    let lines: [String: [UInt]] = [/*BARE-TEXT*/:]
+    let module = String(#fileID.prefix { $0 != "/" }) + "/"
+    return Dictionary(uniqueKeysWithValues: lines.map { (module + $0.key, Set($0.value)) })
+}()
+
+// A text made on one of those lines is given the theme's text colour when a theme names
+// one. `#fileID` and `#line` are the call site's. With no theme each is SwiftUI's own text.
+extension Text {
+    init(_ key: LocalizedStringKey, ripulFile: String = #fileID, ripulLine: UInt = #line) {
+        self = RipulThemeRedirect.text(key) { ripulThemeRedirectBareText[ripulFile]?.contains(ripulLine) == true }
+    }
+
+    // Disfavoured as SwiftUI's own string form is, so a literal stays a localised key.
+    @_disfavoredOverload
+    init(_ content: String, ripulFile: String = #fileID, ripulLine: UInt = #line) {
+        self = RipulThemeRedirect.text(verbatim: content) { ripulThemeRedirectBareText[ripulFile]?.contains(ripulLine) == true }
+    }
+}
+#endif
+
+// MARK: Lists
+
+#if !RIPUL_THEME_NO_LISTS
+/// SwiftUI's `List`, its ground, rows and separators in the theme's surfaces once a theme
+/// names them. With no theme it sets the system's own values.
+struct List<SelectionValue: Hashable, Content: View>: View {
+    private enum Selection {
+        case none
+        case one(Binding<SelectionValue?>?)
+        case many(Binding<Set<SelectionValue>>?)
+    }
+    private let selection: Selection
+    private let content: Content
+
+    init(@ViewBuilder content: () -> Content) where SelectionValue == Never {
+        selection = .none
+        self.content = content()
+    }
+
+    init(selection: Binding<SelectionValue?>?, @ViewBuilder content: () -> Content) {
+        self.selection = .one(selection)
+        self.content = content()
+    }
+
+    init(selection: Binding<Set<SelectionValue>>?, @ViewBuilder content: () -> Content) {
+        self.selection = .many(selection)
+        self.content = content()
+    }
+
+    init<Data: RandomAccessCollection, RowContent: View>(_ data: Data, @ViewBuilder rowContent: @escaping (Data.Element) -> RowContent)
+    where Content == ForEach<Data, Data.Element.ID, RowContent>, Data.Element: Identifiable, SelectionValue == Never {
+        selection = .none
+        content = ForEach(data, content: rowContent)
+    }
+
+    init<Data: RandomAccessCollection, ID: Hashable, RowContent: View>(_ data: Data, id: KeyPath<Data.Element, ID>, @ViewBuilder rowContent: @escaping (Data.Element) -> RowContent)
+    where Content == ForEach<Data, ID, RowContent>, SelectionValue == Never {
+        selection = .none
+        content = ForEach(data, id: id, content: rowContent)
+    }
+
+    init<Data: RandomAccessCollection, RowContent: View>(_ data: Data, selection: Binding<SelectionValue?>?, @ViewBuilder rowContent: @escaping (Data.Element) -> RowContent)
+    where Content == ForEach<Data, Data.Element.ID, RowContent>, Data.Element: Identifiable {
+        self.selection = .one(selection)
+        content = ForEach(data, content: rowContent)
+    }
+
+    init<Data: RandomAccessCollection, RowContent: View>(_ data: Data, selection: Binding<Set<SelectionValue>>?, @ViewBuilder rowContent: @escaping (Data.Element) -> RowContent)
+    where Content == ForEach<Data, Data.Element.ID, RowContent>, Data.Element: Identifiable {
+        self.selection = .many(selection)
+        content = ForEach(data, content: rowContent)
+    }
+
+    var body: some View {
+        switch selection {
+        case .none: RipulThemeRedirect.list(SwiftUI.List { RipulThemeRedirect.rows(content) })
+        case .one(let selected): RipulThemeRedirect.list(SwiftUI.List(selection: selected) { RipulThemeRedirect.rows(content) })
+        case .many(let selected): RipulThemeRedirect.list(SwiftUI.List(selection: selected) { RipulThemeRedirect.rows(content) })
+        }
+    }
+}
+
+/// SwiftUI's `Form`, themed as a list is.
+struct Form<Content: View>: View {
+    private let content: Content
+
+    init(@ViewBuilder content: () -> Content) { self.content = content() }
+
+    var body: some View { RipulThemeRedirect.list(SwiftUI.Form { RipulThemeRedirect.rows(content) }) }
+}
+
+/// SwiftUI's `Section`, its header and footer in the theme's family and secondary colour.
+struct Section<Parent: View, Content: View, Footer: View>: View {
+    private let parent: Parent?
+    private let content: Content
+    private let footer: Footer?
+
+    init(@ViewBuilder content: () -> Content, @ViewBuilder header: () -> Parent, @ViewBuilder footer: () -> Footer) {
+        parent = header(); self.content = content(); self.footer = footer()
+    }
+
+    init(@ViewBuilder content: () -> Content, @ViewBuilder header: () -> Parent) where Footer == EmptyView {
+        parent = header(); self.content = content(); footer = nil
+    }
+
+    init(@ViewBuilder content: () -> Content, @ViewBuilder footer: () -> Footer) where Parent == EmptyView {
+        parent = nil; self.content = content(); self.footer = footer()
+    }
+
+    init(@ViewBuilder content: () -> Content) where Parent == EmptyView, Footer == EmptyView {
+        parent = nil; self.content = content(); footer = nil
+    }
+
+    init(_ title: LocalizedStringKey, @ViewBuilder content: () -> Content) where Parent == Text, Footer == EmptyView {
+        parent = Text(title); self.content = content(); footer = nil
+    }
+
+    init<S: StringProtocol>(_ title: S, @ViewBuilder content: () -> Content) where Parent == Text, Footer == EmptyView {
+        parent = Text(title); self.content = content(); footer = nil
+    }
+
+    var body: some View {
+        if let parent, let footer {
+            SwiftUI.Section { content } header: { RipulThemeRedirect.sectionHeader(parent) } footer: { RipulThemeRedirect.sectionFooter(footer) }
+        } else if let parent {
+            SwiftUI.Section { content } header: { RipulThemeRedirect.sectionHeader(parent) }
+        } else if let footer {
+            SwiftUI.Section { content } footer: { RipulThemeRedirect.sectionFooter(footer) }
+        } else {
+            SwiftUI.Section { content }
+        }
     }
 }
 #endif

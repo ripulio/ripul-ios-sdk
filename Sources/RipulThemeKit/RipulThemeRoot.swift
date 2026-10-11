@@ -76,6 +76,27 @@ private struct RipulThemeLinks: ViewModifier {
 }
 
 #if os(iOS)
+private struct RipulThemeVersionKey: EnvironmentKey {
+    static let defaultValue = 0
+}
+
+public extension EnvironmentValues {
+    /// Monotonic counter bumped at every island root (see `refreshesOnThemeChange()` /
+    /// `ripulThemedHostingController`) each time the host posts `.ripulThemeDidChange`.
+    ///
+    /// THE GENERIC LIVE-THEME CONTRACT for theme-aware components: declare
+    ///     @Environment(\.ripulThemeVersion) private var themeVersion
+    /// and read it at the TOP of body (`let _ = themeVersion`) BEFORE reading theme values
+    /// (`Theme.current…`, resolved styles, tokens). Environment invalidation then re-invokes
+    /// THAT body on every theme change, so the theme read re-runs — at any depth below the
+    /// island root, with no per-view notification plumbing. Reading the key is what registers
+    /// the dependency; declaring the property alone does nothing.
+    var ripulThemeVersion: Int {
+        get { self[RipulThemeVersionKey.self] }
+        set { self[RipulThemeVersionKey.self] = newValue }
+    }
+}
+
 /// Keeps the older contract alive below a root: views that read `ripulThemeVersion`
 /// (see `refreshesOnThemeChange()`) are invalidated by the same change.
 private struct RipulThemeLegacyRefresh: ViewModifier {

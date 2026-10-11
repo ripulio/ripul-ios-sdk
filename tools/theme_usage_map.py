@@ -57,13 +57,16 @@ import re
 import sys
 
 import os
+import theme_roles
 
 SDK = pathlib.Path(__file__).resolve().parents[1]
 SDK_SOURCES = SDK / "Sources" / "RipulAgent"
-SKIP_DIRS = {"ThemeCore", ".git", ".build", ".swiftpm", "build", "DerivedData", "Pods", "Carthage",
+SKIP_DIRS = {"ThemeCore", "RipulThemeKit", ".git", ".build", ".swiftpm", "build", "DerivedData", "Pods", "Carthage",
              "SourcePackages", "node_modules", "checkouts"}
 # The SDK's own two modifiers that name an element. A host's wrappers of them are found.
 STAMPS = ("uiKitIdentifier", "accessibilityIdentifier")
+# True while the files being read are an unedited host's, themed by the plug-in.
+REDIRECTED = {"on": False}
 
 COLOUR_ROLES = {"accent", "onAccent", "canvas", "surface", "surfaceSunken", "text", "textSecondary",
                 "textTertiary", "textQuaternary", "separator", "success", "warning", "danger", "info", "neutral"}
@@ -542,12 +545,20 @@ def scan_file(f: File, stamps=STAMPS):
         mm = re.match(r"\s*\.(\w+)", text)
         if mm and mm.group(1) in COLOUR_ROLES:
             add(pos, {"k": "colour", "role": mm.group(1), "form": owner or "style"})
+        elif mm and mm.group(1) in theme_roles.ROLES:
+            # A role the app declared for itself, by the name a theme document gives it.
+            add(pos, {"k": "colour", "role": theme_roles.ROLES[mm.group(1)]["name"], "form": owner or "style"})
         elif mm and mm.group(1) in TEXT_ROLES:
             token = {"k": "type", "role": mm.group(1)}
             weight_family(text, token)
             add(pos, token)
         else:
             add(pos, {"k": "dynamic"})
+
+    if REDIRECTED["on"]:
+        # Under the plug-in an asset colour is a role of the asset's own name.
+        for m in re.finditer(r"\bColor\(\s*\"([^\"]+)\"\s*\)", f.src):
+            add(m.start(), {"k": "colour", "role": m.group(1), "form": "Color"})
 
     for m in re.finditer(r"\.ripulIcon\(", code):
         text = args_text(f, m.end() - 1)
@@ -608,6 +619,9 @@ def build(roots, base=None, redirect=False):
     left it, so `.font(.body)` is the `body` role here as it is when the app runs. Line
     numbers are the source's own: the migration never adds or removes a line."""
     base = pathlib.Path(base or os.getcwd()).resolve()
+    theme_roles.load([(base / r) if not pathlib.Path(r).is_absolute() else pathlib.Path(r) for r in roots
+                      if SDK_SOURCES != pathlib.Path(r)])
+    REDIRECTED["on"] = bool(redirect)
     read = []
     seen = set()
     for root in roots:

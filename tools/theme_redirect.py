@@ -92,6 +92,26 @@ def declarations(text: str):
     return found
 
 
+# A use of `List`, `Form` or `Section` that the generated one does not have: the host's
+# files then keep SwiftUI's for that name, and the build log says so.
+UNCOVERED = {
+    "List": re.compile(r"\bList\s*\(\s*\$|\bList\s*\([^{]*\b(?:children|editActions)\s*:|\bList\s*<"),
+    "Form": re.compile(r"\bForm\s*[(<]"),
+    "Section": re.compile(r"\bSection\s*\([^{]*\bisExpanded\s*:|\bSection\s*<|\bTable\s*[({]"),
+}
+
+
+def uncovered(texts):
+    """The names among List, Form and Section that some file uses in a form not covered."""
+    found = set()
+    for text in texts:
+        code = "\n".join(strip(line) for line in text.split("\n"))
+        for name, pattern in UNCOVERED.items():
+            if pattern.search(code):
+                found.add(name)
+    return found
+
+
 USAGE_MARK = "/*USAGE-MAP*/"
 
 
@@ -114,6 +134,23 @@ def usage_map(sources) -> str:
         return ""
 
 
+TEXT_MARK = "[/*BARE-TEXT*/:]"
+
+
+def bare_text(sources) -> str:
+    """The lines on which a text has no colour of its own, as a Swift dictionary literal."""
+    try:
+        import theme_text
+        table = theme_text.site_table([p for p in sources if p.name != "RipulThemeRedirect.swift"])
+    except Exception as error:  # an aid to the theme: it never stops a build
+        print(f"warning: ripul-theme redirect: no list of texts: {error}", file=sys.stderr)
+        table = {}
+    if not table:
+        return "[:]"
+    rows = [f'        "{name}": [{", ".join(str(n) for n in lines)}],' for name, lines in sorted(table.items()) if '"' not in name]
+    return "[\n" + "\n".join(rows) + "\n    ]"
+
+
 def swift_files(roots):
     for root in roots:
         root = pathlib.Path(root)
@@ -129,7 +166,7 @@ def swift_files(roots):
 def generate(sources, template: str = None):
     """The file's text, and what was left out: [(key, the host's file)]."""
     template = template if template is not None else TEMPLATE.read_text()
-    mine = {}
+    mine, texts = {}, []
     for path in sources:
         if path.name == "RipulThemeRedirect.swift":
             continue
@@ -137,8 +174,11 @@ def generate(sources, template: str = None):
             text = path.read_text(errors="replace")
         except OSError:
             continue
+        texts.append(text)
         for key, _ in declarations(text):
             mine.setdefault(key, path.name)
+    for name in uncovered(texts):
+        mine.setdefault(name, "a use it does not cover")
     lines = template.split("\n")
     drop, left = set(), []
     for key, index in declarations(template):
@@ -154,7 +194,7 @@ def generate(sources, template: str = None):
                     break
         drop.update(range(index, end + 1))
     out = [line for i, line in enumerate(lines) if i not in drop]
-    out = "\n".join(out).replace(USAGE_MARK, usage_map(sources)).split("\n")
+    out = "\n".join(out).replace(USAGE_MARK, usage_map(sources)).replace(TEXT_MARK, bare_text(sources)).split("\n")
     if left:
         note = ["", "// Left out, because this target declares its own:"]
         note += [f"//   {key.replace('static ', '')}  ({name})" for key, name in sorted(set(left))]
@@ -180,7 +220,11 @@ def main(argv) -> int:
     if not target.exists() or target.read_text() != text:
         target.write_text(text)
     for key, name in sorted(set(left)):
-        print(f"ripul-theme redirect: {key.replace('static ', '')} is declared in {name}; the host's own is kept")
+        if key in UNCOVERED:
+            print(f"ripul-theme redirect: {key} is used in a form the generated {key} does not have; SwiftUI's is kept, "
+                  f"and those stay the system's under a theme")
+        else:
+            print(f"ripul-theme redirect: {key.replace('static ', '')} is declared in {name}; the host's own is kept")
     return 0
 
 

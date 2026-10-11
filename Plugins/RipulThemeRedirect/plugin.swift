@@ -3,7 +3,7 @@ import PackagePlugin
 
 // The theme for a host that changes no source: one Swift file generated into the build
 // folder and compiled into the host's own module (docs/theming-for-hosts.md, "With no
-// change to your source"). What the file does is in `ThemeCore/RipulThemeRedirect.swift`;
+// change to your source"). What the file does is in `Sources/RipulThemeKit/RipulThemeRedirect.swift`;
 // what is written is decided by `tools/theme_redirect.py`, which leaves out any name the
 // target already declares for itself.
 
@@ -33,7 +33,8 @@ private func redirect(sources: [Path], into work: Path) throws -> Command {
         displayName: "Ripul theme: redirect SwiftUI's fonts and colours to the theme",
         executable: Path("/usr/bin/python3"),
         arguments: [tools.appending("ripul-theme").string, "redirect", "--out", output.string, "--sources", list.string],
-        inputFiles: sources + [list, tools.appending("theme_redirect.py"), tools.appending(subpath: "redirect/RipulThemeRedirect.swift.txt")],
+        inputFiles: sources + [list, tools.appending(subpath: "redirect/RipulThemeRedirect.swift.txt")]
+            + ["theme_redirect.py", "theme_text.py", "theme_roles.py", "theme_usage_map.py", "theme_rewrite.py"].map { tools.appending($0) },
         outputFiles: [output])
 }
 

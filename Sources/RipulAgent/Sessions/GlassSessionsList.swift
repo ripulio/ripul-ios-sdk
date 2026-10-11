@@ -608,6 +608,17 @@ public struct GlassSessionsList: View {
                         sessionContextMenu(session, families: families)
                     }
                 )
+                // A chat dropped on another goes under it: Put Under…, by hand.
+                .draggableRows(
+                    payload: { session in
+                        cloudFeatures && !session.isSharedGuest ? SessionFamilies.dragPayload(for: session) : nil
+                    },
+                    canDrop: { carried, target in canDrop(carried, on: target) },
+                    onDrop: { carried, target in
+                        guard let id = SessionFamilies.draggedSessionId(carried),
+                              let dragged = unifiedSessions.first(where: { $0.id == id }) else { return }
+                        onPlaceSession(dragged, target, false)
+                    })
                 .modifier(SessionsScrollClearance(actionBarHeight: hasBatchSelection ? actionBarHeight : 0))
             }
         }
@@ -1095,6 +1106,14 @@ public struct GlassSessionsList: View {
             if let under = placements[key] ?? placements[UnifiedSession.canonicalKey(key)] { return under }
         }
         return nil
+    }
+
+    /// Whether the chat a drag carries may go under this one: a chat of this
+    /// list, not this one itself, and not one this one is already under.
+    private func canDrop(_ carried: String, on target: UnifiedSession) -> Bool {
+        guard cloudFeatures, !target.isSharedGuest, let id = SessionFamilies.draggedSessionId(carried),
+              unifiedSessions.contains(where: { $0.id == id }) else { return false }
+        return everyFamily.canPlace(id, under: target.id)
     }
 
     /// Every chat laid out, whatever a search or a filter is showing: what is

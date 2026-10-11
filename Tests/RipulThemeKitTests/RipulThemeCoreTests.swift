@@ -1,6 +1,6 @@
 import XCTest
 import SwiftUI
-@testable import RipulAgent
+@testable import RipulThemeKit
 
 /// The base theme: the proof that the default theme is today's look exactly (each
 /// accessor IS the system value it replaces), and that a document changes it.
@@ -450,3 +450,81 @@ final class RipulThemeEngineBaseTests: XCTestCase {
 }
 
 #endif
+
+// MARK: - A host's own roles
+
+final class RipulHostRoleTests: XCTestCase {
+    override func tearDown() {
+        RipulTheme.resetToDefaults()
+        super.tearDown()
+    }
+
+    func testTheFifteenAreUnchangedByTheOpenType() {
+        XCTAssertEqual(RipulColorRole.allCases.count, 15)
+        XCTAssertEqual(RipulColorRole.allCases.map(\.rawValue).prefix(3), ["accent", "onAccent", "canvas"])
+        XCTAssertEqual(RipulColorRole.accent.tokenName, "ripul.accent")
+        XCTAssertEqual(RipulColorRole.text.defaultReference, "system:label")
+        XCTAssertEqual(RipulColorRole(rawValue: "surface"), .surface)
+        XCTAssertTrue(RipulColorRole.allCases.allSatisfy { RipulTheme.isDefault($0) && $0.isBase })
+    }
+
+    func testAHostRoleIsItsDefaultUntilADocumentNamesIt() throws {
+        let cream = RipulColorRole("test.cream", default: "#F4EBDD", dark: "#2A2418")
+        XCTAssertFalse(cream.isBase)
+        XCTAssertEqual(cream.tokenName, "test.cream")
+        XCTAssertTrue(RipulTheme.isDefault(cream))
+        XCTAssertEqual(RipulTheme.color(cream), RipulColorValue(light: RipulColorLiteral("#F4EBDD")!, dark: RipulColorLiteral("#2A2418")))
+        XCTAssertEqual(RipulColorRole(rawValue: "test.cream"), cream)
+
+        try RipulTheme.adopt(documentData: Data(##"{"palette":{"sand":{"light":"#112233","dark":"#445566"}},"roles":{"test.cream":"sand"}}"##.utf8))
+        XCTAssertFalse(RipulTheme.isDefault(cream))
+        XCTAssertEqual(RipulTheme.color(cream), RipulColorValue(light: RipulColorLiteral("#112233")!, dark: RipulColorLiteral("#445566")))
+        // The fifteen are untouched by a document that names only the host's role.
+        XCTAssertTrue(RipulColorRole.allCases.allSatisfy { RipulTheme.isDefault($0) })
+
+        RipulTheme.resetToDefaults()
+        XCTAssertTrue(RipulTheme.isDefault(cream))
+    }
+
+    func testAHostRoleDeclaredAfterTheDocumentWasAdoptedStillTakesIt() throws {
+        try RipulTheme.adopt(documentData: Data(##"{"roles":{"test.late":"#ABCDEF"}}"##.utf8))
+        let late = RipulColorRole("test.late", default: "#000000")
+        XCTAssertEqual(RipulTheme.color(late), RipulColorValue(light: RipulColorLiteral("#ABCDEF")!))
+        XCTAssertFalse(RipulTheme.isDefault(late))
+    }
+
+    func testAnAssetRoleIsNamedForItsAssetAndDefaultsToIt() {
+        let navy = RipulColorRole(asset: "TestBrandNavy")
+        XCTAssertEqual(navy.rawValue, "TestBrandNavy")
+        XCTAssertEqual(RipulTheme.color(navy).assetName, "TestBrandNavy")
+        XCTAssertEqual(navy.defaultReference, "asset:TestBrandNavy")
+        XCTAssertEqual(Color.ripul(navy), Color("TestBrandNavy")) // theme-mapping: a test of the accessor itself
+    }
+
+    func testARoleMayPointAtAHostRoleAndABaseRole() throws {
+        let brand = RipulColorRole("test.brand", default: "#010203")
+        try RipulTheme.adopt(documentData: Data(##"{"roles":{"accent":"test.brand","test.brand":"#0A0B0C","test.other":"ripul.accent"}}"##.utf8))
+        XCTAssertEqual(RipulTheme.color(.accent), RipulColorValue(light: RipulColorLiteral("#0A0B0C")!))
+        XCTAssertEqual(RipulTheme.color(RipulColorRole("test.other", default: "#FFFFFF")), RipulTheme.color(brand))
+    }
+
+    func testARolesValueMayBeAPairWrittenInPlace() throws {
+        let navy = RipulColorRole("test.pair", default: "#000000")
+        try RipulTheme.adopt(documentData: Data(##"{"roles":{"test.pair":{"light":"#24386B","dark":"#5B78C4"},"ripul.separator":{"light":"#010101"}}}"##.utf8))
+        XCTAssertEqual(RipulTheme.color(navy), RipulColorValue(light: RipulColorLiteral("#24386B")!, dark: RipulColorLiteral("#5B78C4")))
+        XCTAssertEqual(RipulTheme.color(.separator), RipulColorValue(light: RipulColorLiteral("#010101")!))
+    }
+
+    func testAHostRoleCannotTakeOneOfTheFifteensNames() {
+        _ = RipulColorRole("accent", default: "#FF0000")
+        XCTAssertTrue(RipulColorRole(rawValue: "accent")!.isBase)
+        XCTAssertEqual(RipulTheme.color(.accent).systemName, "tint")
+    }
+
+    func testTheRedirectLeavesAnAssetColourAloneUntilADocumentNamesIt() throws {
+        XCTAssertEqual(RipulThemeRedirect.color(named: "TestRedirectNavy", bundle: nil), Color("TestRedirectNavy"))
+        try RipulTheme.adopt(documentData: Data(##"{"roles":{"TestRedirectNavy":"#123456"}}"##.utf8))
+        XCTAssertNotEqual(RipulThemeRedirect.color(named: "TestRedirectNavy", bundle: nil), Color("TestRedirectNavy"))
+        XCTAssertEqual(RipulThemeRedirect.color(named: "TestRedirectNavy", bundle: nil), Color.ripul(RipulColorRole(asset: "TestRedirectNavy"))) // theme-mapping: a test of the accessor itself
+    }
+}

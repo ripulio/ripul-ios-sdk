@@ -143,6 +143,23 @@ final class SessionFamiliesTests: XCTestCase {
             .heads["claude-cli:work"]?.putAway.map(\.title), ["notes", "research"])
     }
 
+    func testAChatMayNotGoUnderItselfOrUnderAChatThatIsUnderIt() {
+        let layout = arrange([
+            chat("lead", minutesAgo: 100), chat("a", minutesAgo: 1, startedBy: "lead"), chat("under a", minutesAgo: 3, startedBy: "a"),
+            chat("other", minutesAgo: 50),
+        ])
+        XCTAssertTrue(layout.canPlace("claude-cli:other", under: "claude-cli:lead"))
+        XCTAssertTrue(layout.canPlace("claude-cli:under a", under: "claude-cli:other"), "A chat can leave its family for another")
+        XCTAssertTrue(layout.canPlace("claude-cli:a", under: "claude-cli:other"))
+        XCTAssertFalse(layout.canPlace("claude-cli:lead", under: "claude-cli:lead"))
+        XCTAssertFalse(layout.canPlace("claude-cli:lead", under: "claude-cli:under a"), "That would make a ring of them")
+        XCTAssertFalse(layout.canPlace("claude-cli:a", under: "claude-cli:under a"))
+        // What a dragged row carries names its chat, and nothing else is taken for one.
+        let carried = SessionFamilies.dragPayload(for: chat("lead", minutesAgo: 1))
+        XCTAssertEqual(SessionFamilies.draggedSessionId(carried), "claude-cli:lead")
+        XCTAssertNil(SessionFamilies.draggedSessionId("some text dragged in from another app"))
+    }
+
     func testAChatPutUnderOneThatIsNotInTheListStandsByItself() {
         // The container is archived or filtered out. The choice still holds: it does not fall back under its starter.
         let layout = arrange([chat("lead", minutesAgo: 9), chat("moved", minutesAgo: 1, startedBy: "lead")], placed: ["moved": "gone"])

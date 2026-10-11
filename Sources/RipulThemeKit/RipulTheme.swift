@@ -23,57 +23,122 @@ extension Notification.Name {
     public static let ripulThemeDidChange = Notification.Name("ripulThemeDidChange")
 }
 
-/// A colour role of the base vocabulary. Named for the job, never for the value.
-public enum RipulColorRole: String, CaseIterable, Sendable {
-    case accent, onAccent
-    case canvas, surface, surfaceSunken
-    case text, textSecondary, textTertiary, textQuaternary
-    case separator
-    case success, warning, danger, info, neutral
-
-    /// The name in a theme document and in the View Explorer: `ripul.accent`.
-    public var tokenName: String { RipulTheme.prefix + rawValue }
-
+/// A colour role: a name a theme document gives a colour to, with the colour it is when
+/// no document names it. Named for the job, never for the value.
+///
+/// The SDK's own fifteen are the static members below (`.accent`, `.text` …), each with
+/// the system colour it replaces as its default. A host adds its own the same way, once,
+/// with the colour it uses today as the default, so that nothing changes until a theme
+/// names the role:
+///
+///     extension RipulColorRole {
+///         static let navy = RipulColorRole(asset: "BrandNavy")                    // an asset colour
+///         static let cream = RipulColorRole("cream", default: "#F4EBDD", dark: "#2A2418")
+///     }
+///     .foregroundStyle(.ripul(.navy))        // the same accessors as the fifteen
+///
+/// and in the document, under `roles`, by its name: `"BrandNavy": "navy"`.
+/// Two roles are the same role when their names are equal.
+public struct RipulColorRole: Hashable, RawRepresentable, CaseIterable, Sendable {
+    /// The name in a theme document: `accent`, or a host's own `BrandNavy`.
+    public let rawValue: String
     /// What the role resolves to when no document says otherwise: today's look.
-    public var defaultReference: String {
-        switch self {
-        case .accent: return "system:tint"
-        case .onAccent: return "#FFFFFF"
-        case .canvas: return "system:systemBackground"
-        case .surface: return "system:secondarySystemGroupedBackground"
-        case .surfaceSunken: return "system:systemGroupedBackground"
-        case .text: return "system:label"
-        case .textSecondary: return "system:secondaryLabel"
-        case .textTertiary: return "system:tertiaryLabel"
-        case .textQuaternary: return "system:quaternaryLabel"
-        case .separator: return "system:separator"
-        case .success: return "system:systemGreen"
-        case .warning: return "system:systemOrange"
-        case .danger: return "system:systemRed"
-        case .info: return "system:systemBlue"
-        case .neutral: return "system:systemGray"
-        }
+    public let defaultValue: RipulColorValue
+    /// A label for editors.
+    public let label: String
+    /// True for the SDK's own fifteen.
+    public let isBase: Bool
+
+    private init(base name: String, _ reference: String, _ label: String) {
+        self.rawValue = name
+        self.defaultValue = RipulColorValue(light: RipulColorLiteral(reference)!)
+        self.label = label
+        self.isBase = true
     }
 
-    /// A label for editors.
-    public var label: String {
-        switch self {
-        case .accent: return "Accent"
-        case .onAccent: return "On accent"
-        case .canvas: return "Canvas"
-        case .surface: return "Surface"
-        case .surfaceSunken: return "Sunken surface"
-        case .text: return "Text"
-        case .textSecondary: return "Secondary text"
-        case .textTertiary: return "Tertiary text"
-        case .textQuaternary: return "Quaternary text"
-        case .separator: return "Separator"
-        case .success: return "Success"
-        case .warning: return "Warning"
-        case .danger: return "Danger"
-        case .info: return "Information"
-        case .neutral: return "Neutral"
+    /// A host's own role, with the colour it is today.
+    /// - Parameters:
+    ///   - name: the name in a theme document's `roles`. Not one of the SDK's fifteen.
+    ///   - default: `#RRGGBB`, `#RRGGBBAA`, `system:<name>` or `asset:<name>`.
+    ///   - dark: the dark value, when it differs and `default` is not already a colour
+    ///     that follows the appearance.
+    public init(_ name: String, default light: String, dark: String? = nil, label: String? = nil) {
+        self.rawValue = name
+        // A default that cannot be read is a programming error: it would silently be black.
+        let value = RipulColorLiteral(light).map { RipulColorValue(light: $0, dark: dark.flatMap(RipulColorLiteral.init)) }
+        assert(value != nil, "RipulColorRole(\"\(name)\"): the default \"\(light)\" is not a colour")
+        self.defaultValue = value ?? RipulColorValue(light: .system("label"))
+        self.label = label ?? name
+        self.isBase = false
+        RipulColorRole.declare(self)
+    }
+
+    /// A host's own role whose colour today is a named colour of its asset catalogue. The
+    /// role's name is the asset's, so a document names it as the app does.
+    public init(asset name: String, label: String? = nil) {
+        self.init(name, default: "asset:" + name, label: label)
+    }
+
+    /// The role of that name: one of the fifteen, or a host's own once it has been declared.
+    public init?(rawValue: String) {
+        if let base = RipulColorRole.baseByName[rawValue] { self = base; return }
+        RipulColorRole.lock.lock(); defer { RipulColorRole.lock.unlock() }
+        guard let declared = RipulColorRole.declared[rawValue] else { return nil }
+        self = declared
+    }
+
+    public static func == (a: RipulColorRole, b: RipulColorRole) -> Bool { a.rawValue == b.rawValue }
+    public func hash(into hasher: inout Hasher) { hasher.combine(rawValue) }
+
+    /// The name in the View Explorer: `ripul.accent` for one of the fifteen, and a host's
+    /// own role by its own name.
+    public var tokenName: String { isBase ? RipulTheme.prefix + rawValue : rawValue }
+
+    /// The default as a document would write it, for a role whose default is one value.
+    public var defaultReference: String { defaultValue.light.reference }
+
+    public static let accent = RipulColorRole(base: "accent", "system:tint", "Accent")
+    public static let onAccent = RipulColorRole(base: "onAccent", "#FFFFFF", "On accent")
+    public static let canvas = RipulColorRole(base: "canvas", "system:systemBackground", "Canvas")
+    public static let surface = RipulColorRole(base: "surface", "system:secondarySystemGroupedBackground", "Surface")
+    public static let surfaceSunken = RipulColorRole(base: "surfaceSunken", "system:systemGroupedBackground", "Sunken surface")
+    public static let text = RipulColorRole(base: "text", "system:label", "Text")
+    public static let textSecondary = RipulColorRole(base: "textSecondary", "system:secondaryLabel", "Secondary text")
+    public static let textTertiary = RipulColorRole(base: "textTertiary", "system:tertiaryLabel", "Tertiary text")
+    public static let textQuaternary = RipulColorRole(base: "textQuaternary", "system:quaternaryLabel", "Quaternary text")
+    public static let separator = RipulColorRole(base: "separator", "system:separator", "Separator")
+    public static let success = RipulColorRole(base: "success", "system:systemGreen", "Success")
+    public static let warning = RipulColorRole(base: "warning", "system:systemOrange", "Warning")
+    public static let danger = RipulColorRole(base: "danger", "system:systemRed", "Danger")
+    public static let info = RipulColorRole(base: "info", "system:systemBlue", "Information")
+    public static let neutral = RipulColorRole(base: "neutral", "system:systemGray", "Neutral")
+
+    /// The SDK's own fifteen, in their order. A host's roles are in `hostRoles`.
+    public static let allCases: [RipulColorRole] = [
+        .accent, .onAccent, .canvas, .surface, .surfaceSunken, .text, .textSecondary, .textTertiary,
+        .textQuaternary, .separator, .success, .warning, .danger, .info, .neutral,
+    ]
+
+    /// The host's own roles declared so far, in name order. A role is declared when its
+    /// `static let` is first read, so this is complete only once the app has drawn with each.
+    public static var hostRoles: [RipulColorRole] {
+        lock.lock(); defer { lock.unlock() }
+        return declared.values.sorted { $0.rawValue < $1.rawValue }
+    }
+
+    private static let baseByName: [String: RipulColorRole] = Dictionary(uniqueKeysWithValues: allCases.map { ($0.rawValue, $0) })
+    private static let lock = NSLock()
+    private static var declared: [String: RipulColorRole] = [:]
+
+    /// The first declaration of a name is kept, and one of the fifteen's names is never
+    /// taken: such a role reads what the document says of the SDK's, with its own default.
+    private static func declare(_ role: RipulColorRole) {
+        guard baseByName[role.rawValue] == nil else {
+            NSLog("[RipulTheme] a host role is named %@, which is one of the SDK's own roles", role.rawValue)
+            return
         }
+        lock.lock(); defer { lock.unlock() }
+        if declared[role.rawValue] == nil { declared[role.rawValue] = role }
     }
 }
 
@@ -82,10 +147,19 @@ public enum RipulColorLiteral: Equatable, Sendable {
     /// `system:label`. Live: it follows light, dark and increased contrast.
     case system(String)
     case rgba(red: Double, green: Double, blue: Double, alpha: Double)
+    /// `asset:BrandNavy`: a named colour of the app's asset catalogue. Live, like a system
+    /// colour. For the default of a host's own role; a document writes values.
+    case asset(String)
 
-    /// Parse `system:<name>`, `#RRGGBB`, `#RRGGBBAA` (the `#` optional). nil for anything else.
+    /// Parse `system:<name>`, `asset:<name>`, `#RRGGBB`, `#RRGGBBAA` (the `#` optional). nil
+    /// for anything else.
     public init?(_ string: String) {
         let s = string.trimmingCharacters(in: .whitespacesAndNewlines)
+        if s.hasPrefix("asset:") {
+            let name = String(s.dropFirst(6))
+            guard !name.isEmpty else { return nil }
+            self = .asset(name); return
+        }
         if s.hasPrefix("system:") {
             let name = String(s.dropFirst(7))
             guard RipulTheme.systemColorNames.contains(name) else { return nil }
@@ -100,6 +174,20 @@ public enum RipulColorLiteral: Equatable, Sendable {
     }
 }
 
+extension RipulColorLiteral {
+    /// The literal as a document writes it.
+    public var reference: String {
+        switch self {
+        case .system(let name): return "system:" + name
+        case .asset(let name): return "asset:" + name
+        case .rgba(let r, let g, let b, let a):
+            let byte = { (v: Double) in Int((max(0, min(1, v)) * 255).rounded()) }
+            let hex = String(format: "#%02X%02X%02X", byte(r), byte(g), byte(b))
+            return a < 0.999 ? hex + String(format: "%02X", byte(a)) : hex
+        }
+    }
+}
+
 /// A resolved colour: a light value and, when the theme gives one, a different dark value.
 public struct RipulColorValue: Equatable, Sendable {
     public var light: RipulColorLiteral
@@ -109,6 +197,12 @@ public struct RipulColorValue: Equatable, Sendable {
     /// The system colour's name when this is one system colour for both appearances.
     public var systemName: String? {
         guard case .system(let name) = light, dark == nil || dark == light else { return nil }
+        return name
+    }
+
+    /// The asset's name when this is one asset colour for both appearances.
+    public var assetName: String? {
+        guard case .asset(let name) = light, dark == nil || dark == light else { return nil }
         return name
     }
 }
@@ -250,24 +344,43 @@ public enum RipulTheme {
     /// Everything the accessors read, resolved once per theme change and never mutated:
     /// an accessor runs in every row of a list and may be called off the main thread.
     final class Table: @unchecked Sendable {
-        let colors: [RipulColorRole: RipulColorValue]
-        let defaults: Set<RipulColorRole>
         let typography: RipulTypography
+        private let palette: [String: RipulColorValue]
+        private let references: [String: String]
+        /// The fifteen, resolved when the table is made.
+        private let base: [RipulColorRole: (value: RipulColorValue, isDefault: Bool)]
+        /// A host's own roles, each resolved when first asked for: a host declares a role
+        /// by reading it, which may be after the document was adopted.
+        private let hostLock = NSLock()
+        private var host: [String: (value: RipulColorValue, isDefault: Bool)] = [:]
 
         init(palette: [String: RipulColorValue] = [:], references: [String: String] = [:],
              typography: RipulTypography = RipulTypography()) {
-            var colors: [RipulColorRole: RipulColorValue] = [:]
-            var defaults: Set<RipulColorRole> = []
-            for role in RipulColorRole.allCases {
-                let fallback = RipulColorValue(light: RipulColorLiteral(role.defaultReference)!)
-                let value = Table.resolve(reference: references[role.rawValue] ?? role.defaultReference,
-                                          seen: [role.rawValue], palette: palette, references: references) ?? fallback
-                colors[role] = value
-                if value == fallback { defaults.insert(role) }
-            }
-            self.colors = colors
-            self.defaults = defaults
+            self.palette = palette
+            self.references = references
             self.typography = typography
+            var base: [RipulColorRole: (value: RipulColorValue, isDefault: Bool)] = [:]
+            for role in RipulColorRole.allCases {
+                base[role] = Table.resolve(role, palette: palette, references: references)
+            }
+            self.base = base
+        }
+
+        func entry(_ role: RipulColorRole) -> (value: RipulColorValue, isDefault: Bool) {
+            if let known = base[role] { return known }
+            hostLock.lock(); defer { hostLock.unlock() }
+            if let known = host[role.rawValue] { return known }
+            let made = Table.resolve(role, palette: palette, references: references)
+            host[role.rawValue] = made
+            return made
+        }
+
+        private static func resolve(_ role: RipulColorRole, palette: [String: RipulColorValue],
+                                    references: [String: String]) -> (value: RipulColorValue, isDefault: Bool) {
+            let fallback = role.defaultValue
+            guard let reference = references[role.rawValue] else { return (fallback, true) }
+            let value = resolve(reference: reference, seen: [role.rawValue], palette: palette, references: references) ?? fallback
+            return (value, value == fallback)
         }
 
         /// A reference is, tried in this order: a palette name, another role (followed until
@@ -278,8 +391,8 @@ public enum RipulTheme {
             let name = raw.hasPrefix(RipulTheme.prefix) ? String(raw.dropFirst(RipulTheme.prefix.count)) : raw
             if let role = RipulColorRole(rawValue: name) {
                 guard !seen.contains(name) else { return nil }
-                return resolve(reference: references[name] ?? role.defaultReference, seen: seen.union([name]),
-                               palette: palette, references: references)
+                guard let next = references[name] else { return role.defaultValue }
+                return resolve(reference: next, seen: seen.union([name]), palette: palette, references: references)
             }
             return RipulColorLiteral(raw).map { RipulColorValue(light: $0) }
         }
@@ -333,7 +446,8 @@ public enum RipulTheme {
     /// the reserved key `ripul`, that object is the SDK's part and the rest is the host's
     /// business; otherwise the document itself is the SDK's part (Ripul's own file).
     /// The part holds `palette`, `roles` and `typography`. A role may be written
-    /// `accent` or `ripul.accent`.
+    /// `accent` or `ripul.accent`; a host's own role by its own name. A role's value is
+    /// a palette name, another role, a colour string, or a light and dark pair.
     ///
     /// Anything unreadable inside it falls back to that role's default. A document that
     /// is not an object, or has a newer `schema`, throws and changes nothing.
@@ -364,8 +478,15 @@ public enum RipulTheme {
         }
         var references: [String: String] = [:]
         for (name, raw) in part["roles"] as? [String: Any] ?? [:] {
-            guard let reference = raw as? String else { continue }
-            references[name.hasPrefix(prefix) ? String(name.dropFirst(prefix.count)) : name] = reference
+            let role = name.hasPrefix(prefix) ? String(name.dropFirst(prefix.count)) : name
+            if let reference = raw as? String {
+                references[role] = reference
+            } else if let value = colorValue(fromJSON: raw) {
+                // A light and dark pair written in place: a palette entry nothing else names.
+                let entry = "\u{0}" + role
+                palette[entry] = value
+                references[role] = entry
+            }
         }
         var typography = RipulTypography()
         if let section = part[typographyKey], JSONSerialization.isValidJSONObject(section),
@@ -400,15 +521,15 @@ public enum RipulTheme {
 
     /// True for `ripul.accent` and the rest of the base vocabulary.
     public static func isBaseRole(_ name: String) -> Bool {
-        name.hasPrefix(prefix) && RipulColorRole(rawValue: String(name.dropFirst(prefix.count))) != nil
+        name.hasPrefix(prefix) && RipulColorRole(rawValue: String(name.dropFirst(prefix.count)))?.isBase == true
     }
 
     /// The role's colour in the live theme. Total: a reference that leads nowhere, or
     /// round in a circle, gives the role's default.
-    public static func color(_ role: RipulColorRole) -> RipulColorValue { table.colors[role]! }
+    public static func color(_ role: RipulColorRole) -> RipulColorValue { table.entry(role).value }
 
     /// True when the role resolves to exactly what it would with no theme at all.
-    public static func isDefault(_ role: RipulColorRole) -> Bool { table.defaults.contains(role) }
+    public static func isDefault(_ role: RipulColorRole) -> Bool { table.entry(role).isDefault }
 
     // MARK: type resolution
 

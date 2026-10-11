@@ -1,6 +1,44 @@
 import XCTest
 
 final class SessionFamiliesUITests: XCTestCase {
+    func testAChatDraggedOntoAnotherGoesUnderIt() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--session-families-ui-tests", "--light-appearance"]
+        app.launch()
+        let dragged = app.staticTexts["Thermals"], target = app.staticTexts["Tool panel renders"]
+        XCTAssertTrue(dragged.waitForExistence(timeout: 5))
+        XCTAssertEqual(dragged.frame.minX, target.frame.minX, "Two chats by themselves start level")
+        let marks = app.images.matching(NSPredicate(format: "label == %@", "Under the chat above"))
+        let before = marks.count
+
+        // The system's drag: a long press lifts the row, and it is let go over the other.
+        dragged.press(forDuration: 1.0, thenDragTo: target, withVelocity: .slow, thenHoldForDuration: 0.8)
+        let under = NSPredicate { _, _ in app.staticTexts["Thermals"].frame.minX > app.staticTexts["Tool panel renders"].frame.minX }
+        wait(for: [XCTNSPredicateExpectation(predicate: under, object: nil)], timeout: 5)
+        XCTAssertEqual(marks.count, before + 1, "It gets the mark of a chat under another")
+        XCTAssertGreaterThan(app.staticTexts["Thermals"].frame.minY, app.staticTexts["Tool panel renders"].frame.minY)
+        XCTAssertTrue(app.buttons["Hide 1 chat under it"].exists, "And the chat it was dropped on is the head of a family")
+        let dropped = XCTAttachment(screenshot: app.screenshot())
+        dropped.name = "Session families after a drag"; dropped.lifetime = .keepAlways; add(dropped)
+
+        // The surface that took the drop is gone with the drag: the list takes a tap again.
+        app.buttons["Hide 1 chat under it"].tap()
+        XCTAssertTrue(app.buttons["Show 1 chat under it"].waitForExistence(timeout: 3), "A drop surface left over the list would swallow this tap")
+        app.buttons["Show 1 chat under it"].tap()
+        XCTAssertTrue(app.buttons["Hide 1 chat under it"].waitForExistence(timeout: 3))
+
+        // A chat cannot be dropped on one that is under it: nothing moves.
+        let order = { ["Tool panel renders", "Thermals"].map { app.staticTexts[$0].frame.minX } }
+        let was = order()
+        app.staticTexts["Tool panel renders"].press(forDuration: 1.0, thenDragTo: app.staticTexts["Thermals"], withVelocity: .slow, thenHoldForDuration: 0.8)
+        XCTAssertEqual(order(), was)
+        // And a drag that is refused leaves the list as usable as one that is taken.
+        app.buttons["Hide 1 chat under it"].tap()
+        XCTAssertTrue(app.buttons["Show 1 chat under it"].waitForExistence(timeout: 3))
+        app.terminate()
+    }
+
     func testStartedChatsSitUnderTheirStarterAndFoldBehindOneControl() {
         continueAfterFailure = false
         let every = [

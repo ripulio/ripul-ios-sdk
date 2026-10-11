@@ -242,6 +242,25 @@ struct SessionFamilies: Equatable {
     }
 }
 
+extension SessionFamilies {
+    /// Whether one chat may be put under another: not under itself, and not
+    /// under a chat that is under it, which would make a ring of them.
+    func canPlace(_ id: String, under target: String) -> Bool {
+        id != target && !(under[id]?.contains { $0.id == target } ?? false)
+    }
+
+    /// What a session row carries when it is dragged. A prefix of our own, so
+    /// text dragged in from elsewhere is not taken for a chat.
+    static func dragPayload(for session: UnifiedSession) -> String { dragPrefix + session.id }
+
+    /// The id of the chat a drag carries, or nil for anything else.
+    static func draggedSessionId(_ payload: String) -> String? {
+        payload.hasPrefix(dragPrefix) ? String(payload.dropFirst(dragPrefix.count)) : nil
+    }
+
+    private static let dragPrefix = "ripul-session:"
+}
+
 extension SessionListStore {
     /// Whether a chat is mid-turn, as far as this device can tell. One open
     /// here as a tab has a live phase. One that is not has only what its own

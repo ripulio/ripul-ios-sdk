@@ -8,6 +8,8 @@ each counted line is in docs/theming-for-hosts.md and docs/theming.md.
   ripul-theme check <file or dir>...     those files
   ripul-theme check --baseline <file>    fail only when a count is above the one kept in <file>
   ripul-theme check --baseline <file> --update    lower the kept counts to today's
+  ripul-theme check --text               also count each text with no colour of its own (what `migrate --text` would
+                                         add to; an app themed by the plug-in does not need it)
 
 With no baseline it prints every counted line and exits 1 while any is left, so a finished
 app can run it in its build. With a baseline it exits 1 only when a count has risen: an app
@@ -18,6 +20,8 @@ Counted, per line, comments stripped:
   colour     Color.red, .foregroundStyle(.orange), UIColor.systemBackground, Color(red:...), .cgColor of those
   hierarchy  .primary/.secondary/.tertiary/.quaternary as a style, Color.primary, Color.secondary
   stored     an accessor's result kept in a `static let`: it would never follow a theme change
+  colour     also `Color("BrandNavy")` where the app has declared a role for that asset
+             (`RipulColorRole(asset: "BrandNavy")`): the direct read goes round the theme
 
 Counted apart, never failing: the system form (`.ripul(system: ...)`), and exempt lines.
 
@@ -114,6 +118,9 @@ ACCESSOR_ARGUMENT = re.compile(r"\.ripul(?:Icon)?\((?:[^()]|\([^()]*\))*\)")
 
 
 def count_line(code: str):
+    # A role's own declaration is not a use: `static let navy = RipulColorRole(asset: "BrandNavy")`.
+    if "RipulColorRole(" in code:
+        return {c: 0 for c in CATEGORIES}
     stored = len(STORED.findall(code))
     # What is inside an accessor's parentheses is a token name, not a colour: `.ripul(system: .black)`.
     code = ACCESSOR_ARGUMENT.sub(".ripul()", code)
@@ -134,9 +141,13 @@ def count_line(code: str):
     if FONT_TYPED.search(compared):
         styles.update(m.start() for m in BARE_STYLE.finditer(compared))
     styles.update(m.start() + m.group(0).index(".") for m in RETURN_STYLE.finditer(compared))
+    # An asset colour read directly where the app has declared a role for it.
+    import theme_roles
+    round_a_role = sum(len(theme_roles.asset_use(entry["asset"]).findall(code))
+                       for entry in theme_roles.ROLES.values() if entry["asset"]) if '"' in code else 0
     counts = {
         "font": sum(len(p.findall(code)) for p in FONT) + len(styles),
-        "colour": sum(len(p.findall(code)) for p in COLOUR) + len(CANVAS_COLOUR.findall(code)),
+        "colour": sum(len(p.findall(code)) for p in COLOUR) + len(CANVAS_COLOUR.findall(code)) + round_a_role,
         "hierarchy": sum(len(p.findall(code)) for p in HIERARCHY) + len(CANVAS_HIERARCHY.findall(code)),
         "stored": stored,
     }
@@ -259,6 +270,8 @@ def main(argv) -> int:
     update = "--update" in argv
     quiet = "--quiet" in argv
     targets = [a for a in argv if not a.startswith("--")] or ["."]
+    import theme_roles
+    theme_roles.load(targets)
     now = {c: 0 for c in CATEGORIES + ("system", "exempt")}
     count = 0
     for file in swift_files(targets):
@@ -269,10 +282,22 @@ def main(argv) -> int:
         if not quiet and not (baseline and not update and baseline.exists()):
             for number, text, categories in entry["lines"]:
                 print(f"{file}:{number}: [{','.join(categories)}] {text}")
-    total = sum(now[c] for c in CATEGORIES)
+    bare = None
+    if "--text" in argv:
+        # Texts with no colour of their own: under a theme each stays the system's colour.
+        import theme_text
+        bare = 0
+        for path, (f, sites) in theme_text.analyse(theme_text.swift_files(targets)).items():
+            bare += len(sites)
+            if not quiet and baseline is None:
+                for start, _ in sites:
+                    number = f.line(start)
+                    print(f"{path}:{number}: [text] {f.src[f.starts[number - 1]:].split(chr(10), 1)[0].strip()}")
+    total = sum(now[c] for c in CATEGORIES) + (bare or 0)
     summary = (f"ripul-theme check: {total} direct fonts and colours in {count} files "
                f"({now['font']} font, {now['colour']} colour, {now['hierarchy']} hierarchy, {now['stored']} stored); "
-               f"{now['system']} in the system form, {now['exempt']} exempt")
+               f"{now['system']} in the system form, {now['exempt']} exempt"
+               + (f"; {bare} texts with no colour of their own" if bare is not None else ""))
     if baseline is None:
         print(summary)
         if total:

@@ -99,6 +99,109 @@ class Tools(unittest.TestCase):
         self.assertEqual(risen.returncode, 1)
         self.assertIn("above the baseline of 0", risen.stdout)
 
+    def test_a_role_the_app_declares_is_known_to_every_tool(self):
+        (self.folder / "App" / "Brand.swift").write_text(
+            'import SwiftUI\n'
+            'extension RipulColorRole {\n'
+            '    static let navy = RipulColorRole(asset: "BrandNavy")\n'
+            '    static let cream = RipulColorRole("cream", default: "#F4EBDD", dark: "#2A2418")\n'
+            '}\n'
+            'struct Sign: View {\n'
+            '    var body: some View {\n'
+            '        Text("Sandsend").foregroundStyle(Color("BrandNavy")).identified("sign.name")\n'
+            '        Text("Retreats").foregroundStyle(.ripul(.cream)).identified("sign.kind")\n'
+            '    }\n'
+            '}\n')
+        # The asset read directly goes round the role: counted, and the declaration is not.
+        check = self.run_tool("check", "App/Brand.swift")
+        self.assertEqual(check.returncode, 1)
+        self.assertIn("1 colour", check.stdout)
+        self.assertIn('Color("BrandNavy")', check.stdout)
+        self.assertNotIn("static let navy", check.stdout)
+        # migrate writes the role's accessor in its place, and then nothing is counted.
+        self.assertIn("Brand.swift: 1 line", self.run_tool("migrate", "App/Brand.swift").stdout)
+        text = (self.folder / "App" / "Brand.swift").read_text()
+        self.assertIn(".foregroundStyle(Color.ripul(.navy))", text)
+        self.assertEqual(self.run_tool("check", "App/Brand.swift").returncode, 0)
+        # The map names each by what a theme document calls it: the asset's name, the role's name.
+        result, _ = theme_usage_map.build(["App"], self.folder)
+        roles = {i: [t.get("role") for site in result["elements"][i] for t in site["tokens"]] for i in ("sign.name", "sign.kind")}
+        self.assertEqual(roles, {"sign.name": ["BrandNavy"], "sign.kind": ["cream"]})
+        # The lint reads the asset and the accessor as one value.
+        import theme_roles
+        theme_roles.load([self.folder / "App"])
+        self.assertEqual(theme_rewrite.skeleton('.fill(Color("BrandNavy"))'), theme_rewrite.skeleton(".fill(Color.ripul(.navy))"))
+        self.assertNotEqual(theme_rewrite.skeleton('.fill(Color("BrandNavy"))'), theme_rewrite.skeleton(".fill(Color.ripul(.cream))"))
+        theme_roles.ROLES.clear()
+
+    def test_under_the_plug_in_an_asset_colour_is_a_role_of_its_own_name(self):
+        (self.folder / "App" / "Sign.swift").write_text(
+            'import SwiftUI\nstruct Sign: View {\n    var body: some View {\n'
+            '        Text("Sandsend").foregroundStyle(Color("BrandNavy")).identified("sign.name")\n    }\n}\n')
+        result, _ = theme_usage_map.build(["App"], self.folder, redirect=True)
+        tokens = [t for site in result["elements"]["sign.name"] for t in site["tokens"]]
+        self.assertEqual([(t["k"], t["role"]) for t in tokens], [("colour", "BrandNavy")])
+        theme_usage_map.REDIRECTED["on"] = False
+
+    def test_bare_texts_are_found_and_coloured_ones_left(self):
+        import theme_text
+        (self.folder / "App" / "Page.swift").write_text(
+            'import SwiftUI\n'
+            'struct Page: View {\n'
+            '    var body: some View {\n'
+            '        VStack {\n'
+            '            Text("bare")\n'                                             # 5: found
+            '                .font(.headline)\n'
+            '            Text("grey").foregroundStyle(.secondary)\n'                 # 7: has a colour
+            '            Button("Go") {}\n'
+            '            Button { } label: { Text("in a button") }\n'                # 9: a control's label
+            '            Button { } label: {\n'
+            '                Text("plain button")\n'                                 # 11: found, the style is plain
+            '            }\n'
+            '            .buttonStyle(.plain)\n'
+            '            HStack {\n'
+            '                Text("white")\n'                                        # 15: the stack colours it
+            '            }\n'
+            '            .foregroundStyle(.white)\n'
+            '            Badge()\n'
+            '            Mark().foregroundStyle(.red)\n'
+            '            List {\n'
+            '                Section { Text("row") } header: { Text("head") }\n'     # 21: mixed, in the map but not a whole line
+            '                NavigationLink(value: 1) {\n'
+            '                    Text("list link")\n'                                # 23: found, a row of a list
+            '                }\n'
+            '            }\n'
+            '        }\n'
+            '        .navigationTitle(Text("title"))\n'                             # 27: an argument
+            '    }\n'
+            '}\n'
+            'struct Badge: View { var body: some View {\n'
+            '    Text("badge")\n'                                                   # 31: found
+            '} }\n'
+            'struct Mark: View { var body: some View {\n'
+            '    Text("mark")\n'                                                    # 34: coloured where it is used
+            '} }\n')
+        path = self.folder / "App" / "Page.swift"
+        f, sites = theme_text.analyse([path])[path]
+        self.assertEqual([f.line(a) for a, _ in sites], [5, 11, 21, 23, 31])
+        self.assertEqual(theme_text.whole_lines(f, sites), [5, 11, 23, 31])
+        # check --text counts them; migrate --text writes the line; then none is left.
+        self.assertIn("5 texts with no colour of their own", self.run_tool("check", "--text", "App/Page.swift").stdout)
+        self.run_tool("migrate", "--text", "--lists", "App/Page.swift")
+        text = path.read_text()
+        self.assertIn('Text("bare").foregroundStyle(.ripul(.text))\n                .font(.ripul(.headline))', text)
+        self.assertIn('Text("in a button") }', text)
+        self.assertIn("}.ripulThemedList()", text)
+        self.assertIn("header: { Text(\"head\") }.ripulThemedListRows()", text)
+        self.assertIn("import RipulThemeKit", text)
+        self.assertIn("0 texts with no colour of their own", self.run_tool("check", "--text", "App/Page.swift").stdout)
+        # A second run adds nothing, and the lint reads what was added as no change of value.
+        before = path.read_text()
+        self.run_tool("migrate", "--text", "--lists", "App/Page.swift")
+        self.assertEqual(path.read_text(), before)
+        self.assertEqual(theme_rewrite.skeleton('Text("bare").foregroundStyle(.ripul(.text))'), theme_rewrite.skeleton('Text("bare")'))
+        self.assertEqual(theme_rewrite.skeleton("}.ripulThemedList()"), theme_rewrite.skeleton("}"))
+
     def test_the_build_phase_writes_only_in_debug(self):
         import os
         out = self.folder / "Products" / "App.app"
@@ -179,6 +282,25 @@ class Redirect(unittest.TestCase):
                      "static var red: Color", "struct WindowGroup<Content: View>: Scene",
                      "func foregroundStyle(_ style: HierarchicalShapeStyle)"):
             self.assertIn(name, text)
+
+    def test_lists_are_generated_and_left_out_where_a_use_is_not_covered(self):
+        text, left = self.generate("import SwiftUI\nstruct A: View { var body: some View { List { Section(\"T\") { Text(\"a\") } } } }\n")
+        self.assertEqual(left, [])
+        bare = self.generate("import SwiftUI\nstruct A: View { var body: some View { Text(\"a\") } }\n")[0]
+        self.assertTrue('"Stay.swift": [2],' in bare)
+        for name in ("struct List<SelectionValue: Hashable, Content: View>: View", "struct Form<Content: View>: View",
+                     "init(_ key: LocalizedStringKey, ripulFile: String = #fileID, ripulLine: UInt = #line)",
+                     "struct Section<Parent: View, Content: View, Footer: View>: View",
+                     "init(_ name: String, bundle: Bundle? = nil)"):
+            self.assertIn(name, text)
+        # A binding to the data, and a section that folds, are forms the generated ones lack.
+        text, left = self.generate("import SwiftUI\nstruct A: View { @State var items: [Int] = []\n"
+                                   "  var body: some View { List($items, id: \\.self) { _ in Section(\"T\", isExpanded: .constant(true)) { Form { } } } } }\n")
+        self.assertEqual(sorted(k for k, _ in left), ["List", "Section"])
+        self.assertNotIn("struct List<", text)
+        self.assertNotIn("struct Section<", text)
+        self.assertIn("struct Form<Content: View>: View", text)
+        self.assertEqual(text.count("{"), text.count("}"))
 
     def test_a_name_the_host_declares_is_left_out_and_the_rest_stay(self):
         text, left = self.generate(UNEDITED)

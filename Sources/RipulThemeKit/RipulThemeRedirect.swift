@@ -117,6 +117,15 @@ public enum RipulThemeRedirect {
     /// `Color.red` and the other named colours that are a role.
     public static func color(_ role: RipulColorRole) -> Color { Color.ripul(role) }
 
+    /// `Color("BrandNavy")`: a colour of the app's own asset catalogue is a role of the
+    /// asset's name, whose default is the asset. A theme document that names the role
+    /// (`"roles": { "BrandNavy": … }`) changes it; until one does, the asset itself.
+    public static func color(named name: String, bundle: Bundle?) -> Color {
+        guard bundle == nil || bundle == .main else { return Color(name, bundle: bundle) }
+        let role = RipulColorRole(asset: name)
+        return RipulTheme.isDefault(role) ? Color(name, bundle: bundle) : Color.ripul(role)
+    }
+
     #if canImport(UIKit)
     /// `Color(.systemGroupedBackground)`, `Color(uiColor: .label)`: the role the system
     /// colour is the default of, and the colour itself for any other.
@@ -172,6 +181,25 @@ public enum RipulThemeRedirect {
         String(reflecting: HierarchicalShapeStyle.quaternary): .textQuaternary,
     ]
 
+    // MARK: text with no colour of its own
+
+    /// `Text("…")` in the host's source. On a line where the build found a text with no
+    /// colour of its own (`tools/theme_text.py`), the text is given the theme's `text`
+    /// colour as it is made. Anywhere else, and with no theme, it is the text itself.
+    public static func text(_ key: LocalizedStringKey, isBare: () -> Bool) -> Text {
+        themed(Text(key), isBare)
+    }
+
+    /// `Text(name)`, a text made from a string.
+    public static func text(verbatim content: String, isBare: () -> Bool) -> Text {
+        themed(Text(content), isBare)
+    }
+
+    private static func themed(_ text: Text, _ isBare: () -> Bool) -> Text {
+        guard !RipulTheme.isDefault(.text), isBare() else { return text }
+        return text.foregroundStyle(RipulColorStyle(role: .text))
+    }
+
     // MARK: the root
 
     /// The View Explorer's map of the host's own tokens, as the generated file carries it
@@ -180,7 +208,7 @@ public enum RipulThemeRedirect {
         lock.lock(); usageMapJSON = json; lock.unlock()
     }
 
-    static var usageMap: RipulThemeUsageMap? {
+    package static var usageMap: RipulThemeUsageMap? {
         lock.lock(); let json = usageMapJSON; lock.unlock()
         return json.isEmpty ? nil : RipulThemeUsageMap(data: Data(json.utf8))
     }

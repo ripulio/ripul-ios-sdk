@@ -1,7 +1,7 @@
 # A theme for your app
 
-This page is for an app that links the RipulAgent package and wants its own
-fonts and colours to come from a theme: one JSON document, light and dark,
+This page is for an app that links the RipulAgent package, or only its theme
+product `RipulThemeKit`, and wants its own fonts and colours to come from a theme: one JSON document, light and dark,
 switchable while the app runs. It starts from "add the package" and is in the
 order to do the work. The full contract, with every measurement behind a rule
 here, is [theming.md](theming.md); you should not need it to get through this
@@ -40,14 +40,16 @@ only by naming it.
 There are two ways to adopt the theme. The numbered steps below are the first:
 you move your call sites to tokens, with a command that does most of it. This
 section is the second: you change settings and add files, and no line of your
-Swift changes. It is in the package from release 0.7.172, and it has been
+Swift changes. It is in the package from release 0.7.172, and from 0.7.174 it
+also reaches text with no colour, lists and your own colours. It has been
 measured on one app. It is where to start: the numbered steps are for an app
 that wants what this does not reach.
 
 What you do:
 
 1. Add the package to the app target, as in step 1 below, without the root
-   line.
+   line. An app that wants the theme and nothing else links the product
+   `RipulThemeKit` in place of `RipulAgent`: see "Shipping only the theme".
 2. Put your theme document and font files in the bundle (steps 2 and 3).
 3. Switch on the package's build-tool plug-in, `RipulThemeRedirect`, for the app
    target: in Xcode, the target's Build Phases, "Run Build Tool Plug-ins", add
@@ -71,8 +73,9 @@ several, name one with the Info.plist key `RipulTheme`.
 **How it works.** On every build the plug-in writes one Swift file into the
 build folder, and Xcode compiles it into your app's own module. The file
 declares SwiftUI's names again: `Font.body` and the other text styles,
-`Font.system(size:)`, `Color.red`, `Color(.systemBackground)`,
-`.foregroundStyle(.secondary)`, `WindowGroup`. Inside your module your
+`Font.system(size:)`, `Color.red`, `Color(.systemBackground)`, `Color("Name")`,
+`.foregroundStyle(.secondary)`, `Text("…")`, `List`, `Form`, `Section`,
+`WindowGroup`. Inside your module your
 declaration of a name is chosen over SwiftUI's, so your existing `.font(.body)`
 calls the generated one, which is one call into the SDK. With no theme each
 returns exactly what SwiftUI's would have. Nothing is added to your repository.
@@ -89,18 +92,45 @@ returns exactly what SwiftUI's would have. Nothing is added to your repository.
 | `.foregroundStyle(.secondary)` and the other hierarchy styles | the text roles |
 | `Color(.systemBackground)`, `Color(.systemGroupedBackground)`, `Color(.secondarySystemGroupedBackground)` | `canvas`, `surfaceSunken`, `surface` |
 | `Color.red`, `.foregroundStyle(.orange)`, green, blue, gray | `danger`, `warning`, `success`, `info`, `neutral` |
+| `Color("BrandNavy")`, a colour of your asset catalogue | a role of that name, once a document names it (step 2, "Your own colours") |
+| a `Text` with no colour of its own | the `text` role. The build reads your source for each such text and the generated file carries their lines, so a new text is themed without anyone adding it |
+| `List { … }`, `Form { … }` | the ground in `surfaceSunken`, the rows in `surface`, the separators in `separator` |
+| `Section("Title") { … }`, `Section { … } header: { … } footer: { … }` | the header and footer in the text family and in `textSecondary` |
 | `WindowGroup { … }` | the theme root, with no line written: the accent, the body font for text with none, navigation titles, tab bar labels |
 | identified elements | the View Explorer names their tokens (Debug builds), with no build phase |
 
-**What it does not reach.** These stay the system's under a theme, where the
-migration command or a line of yours would have reached them:
+**Which texts count as having no colour.** One that has no `foregroundStyle`
+or `foregroundColor` in its own chain of modifiers, none on a view round it in
+the same file, and is not coloured by the system: not inside a `Button`,
+`Link`, `Menu`, `Picker`, a toolbar, an alert, a section's header or footer, a
+`LabeledContent` or an empty state. A button or link with
+`.buttonStyle(.plain)`, and a navigation link that is a row of a list, leave
+their label the text colour, so a text there counts. A view of your own that
+is coloured where it is used (`Wordmark().foregroundStyle(.white)`, or inside
+a stack that has a colour, or as an unstyled button's label) is followed
+across files: its texts are left alone. To see the list:
+`ripul-theme check --text <your source folder>`.
 
-- text with no colour of its own, as in "What it leaves for you", 1;
-- lists, section headers and empty states, as in 2 and 3;
+**What it does not reach.** These stay the system's under a theme:
+
+- a text made any other way than `Text("…")` or `Text(aString)`:
+  `Text(verbatim:)`, a date or a number with a format, an `AttributedString`,
+  `Text(a) + Text(b)`, a `Label("Title", systemImage:)`'s title, a
+  `TextField`'s text;
+- a text coloured through something the build cannot see: a view kept in a
+  property and coloured where the property is used, a `ViewModifier` or a
+  style of your own that colours its content. Such a text is themed where it
+  took the container's colour before. Look at each screen under the theme;
+- a `List`, `Form` or `Section` written in a form the generated one lacks
+  (`List($items)`, `children:`, `Section(isExpanded:)`, a `Table`): the build
+  log names it and SwiftUI's own is used for that name in the whole target;
+- a row's swipe actions and selection highlight, which stay the system's, and
+  a `Section` inside a `Picker` or a `Menu`, whose header takes the family;
 - a prominent button's label (`onAccent`);
 - a hierarchy style given to `fill`, `stroke` or `background`, and one passed
   through a variable of a generic type;
-- a colour of your own (`Color("BrandNavy")`), and white and black;
+- white and black, and a colour of your own that is not read as
+  `Color("Name")` (step 2, "Your own colours");
 - UIKit code (`UIFont.preferredFont`, `UIColor.label`);
 - a `Label`'s icon, which takes its size from the label's font as before.
 
@@ -115,16 +145,99 @@ migration command or a line of yours would have reached them:
 - `WindowGroup(for:)` and a UIKit app delegate are not covered: put
   `.ripulThemeRoot()` on the root yourself and add `RIPUL_THEME_NO_ROOT` to the
   target's Swift compilation conditions. `RIPUL_THEME_NO_STYLES` leaves
-  `foregroundStyle` alone.
+  `foregroundStyle` alone, `RIPUL_THEME_NO_TEXT` leaves `Text`, and
+  `RIPUL_THEME_NO_LISTS` leaves `List`, `Form` and `Section`.
+- A `List`, `Form` or `Section` in your own files is the generated type, not
+  SwiftUI's. Used as a view it behaves as SwiftUI's does; a line that names
+  the type (`let list: List<Never, Text>`) must say `SwiftUI.List`.
+- The lines of your bare texts are read when the app is built. A text on a
+  line that also holds a coloured text is left alone: put each on its own line.
 - A font or colour kept in a `static let` is read once and does not follow a
   switch while the app runs.
 - The rule this rests on, that a module's own declaration is preferred to an
   imported one of the same name and type, is how the Swift compiler behaves
   (measured with Swift 6.4, Xcode 27.1, in Swift 5 and Swift 6 language
-  modes). The language's documentation does not promise it.
+  modes). The language's documentation does not promise it. `Text` leans on
+  a second such behaviour: of two initialisers that both fit, the one whose
+  first parameter is the closer match is chosen, and SwiftUI's string form is
+  marked as the one to avoid, so the generated one is marked the same way
+  (`@_disfavoredOverload`, an attribute the compiler has and does not
+  document).
 
 The two ways mix: a file you have migrated calls the accessors directly, and
 the rest goes through the generated file.
+
+## Shipping only the theme
+
+The package has two library products. `RipulAgent` is the whole SDK: the
+developer console, the View Explorer, the agent. `RipulThemeKit` is the theme
+alone: the roles, the accessors, the root, the document loader, font
+registration, the picker and what the plug-in's generated file calls. It has
+no dependencies. `RipulAgent` contains it and passes it on, so a file that
+imports `RipulAgent` needs nothing else. It is in the package from 0.7.174.
+
+Measured on one app (a guide of 16 Swift files, Release, for a device, the
+theme by the plug-in, unsigned):
+
+| The app links | Executable | App folder |
+|---|---|---|
+| `RipulAgent` | 64,952,304 bytes | 77,448 KB |
+| `RipulThemeKit` only | 2,358,480 bytes | 15,956 KB |
+| both, with `RipulAgent` left out of Release (below) | 4,782,512 bytes | 18,696 KB |
+
+The same app with no package at all is not in the table: its photos, fonts and
+own code are about 15.5 MB of the app folder in every row.
+
+**An app that wants only the theme** links `RipulThemeKit`. In an XcodeGen
+`project.yml`:
+
+```yaml
+    dependencies:
+      - package: RipulAgent
+        product: RipulThemeKit
+```
+
+In Xcode: the target's General tab, Frameworks and Libraries, add
+`RipulThemeKit` and remove `RipulAgent`. Source that calls the accessors
+imports `RipulThemeKit`.
+
+**An app that also has the developer console in its Debug builds** links
+both, and leaves the whole SDK's code out of Release with one build setting:
+
+```yaml
+    dependencies:
+      - package: RipulAgent
+        product: RipulThemeKit
+      - package: RipulAgent
+        product: RipulAgent
+    settings:
+      configs:
+        Release:
+          EXCLUDED_SOURCE_FILE_NAMES: "RipulAgent.o"
+```
+
+Everything of yours that uses `RipulAgent` must then be inside `#if DEBUG`, or
+the Release build fails to link, naming what it could not find. The setting
+is Xcode's own. It leaves out the SDK's object file. The SDK's three
+dependencies are still linked and two small resource bundles still copied
+(372 KB), which is the difference between the last two rows. Writing
+`"RipulAgent*"` drops those bundles too, and with them the theme's own privacy
+manifest: do not.
+
+**What a store build then holds** (measured: a Release archive of that app
+with both products and the setting above, exported with a development
+signature, nothing uploaded): the app's own code and files; the theme module;
+and three resource bundles, of which `RipulAgent_RipulThemeKit.bundle` holds
+the theme's privacy manifest and the other two (`RipulAgent_RipulAgent`,
+`HighlightSwift_HighlightSwift`, 372 KB together) are the SDK's own, unused
+without its code. An app that links `RipulThemeKit` alone has only the first.
+The manifest declares the one reason-required API the theme uses,
+`UserDefaults`, where the person's choice of theme is kept (reason CA92.1).
+Nothing of the developer tools is in the binary (no string of theirs is
+found in it), and the check for private Apple functions is clean: the theme
+module uses none. The archived executable was 2,074,704 bytes, the app
+16,108 KB and the IPA 13.1 MB. Not run: an export signed for the App Store, an
+upload, and App Store Connect's own validation.
 
 ## 1. Add the package and name your theme
 
@@ -212,7 +325,7 @@ Every key is optional, and an absent key is today's look. Start with
   | `separator` | `separator` | hairlines |
   | `success`, `warning`, `danger`, `info`, `neutral` | green, orange, red, blue, grey | state |
 
-  The set is closed: a document cannot add a role (see the end).
+  An app adds roles of its own to these: see "Your own colours" below.
 - **`typography.families`** names the three families, `text`, `display` and
   `code`. Each is a font family you bundle, or one of `system`,
   `system-serif`, `system-rounded`, `system-monospaced`.
@@ -231,6 +344,58 @@ then not empty, and the plain system look (`RipulTheme.systemThemeName`) is
 not the look it had.
 
 Check a dark value against its background yourself: nothing checks contrast.
+
+### Your own colours
+
+An app has a few colours that are its brand and are none of the fifteen: a navy
+that is not the accent, a cream. Each becomes a role of your own, with the
+colour it is today as its default, so nothing changes until a theme names it.
+
+**With the plug-in, nothing to write.** `Color("BrandNavy")`, a colour of your
+asset catalogue, is a role named `BrandNavy`. Name it in the document:
+
+```json
+  "roles": {
+    "ripul.accent": "navy",
+    "BrandNavy": { "light": "#24386b", "dark": "#5b78c4" }
+  }
+```
+
+A role's value is a palette name, another role, a colour string, or (for a role
+of your own or one of the fifteen alike) a light and dark pair written in place.
+Until a document names `BrandNavy`, `Color("BrandNavy")` is the asset, itself.
+Not reached this way: `UIColor(named:)`, a colour from another bundle, and the
+generated symbol form `Color(.brandNavy)`.
+
+**In source you have migrated, declare the role once** and read it with the
+same accessors as the fifteen:
+
+```swift
+extension RipulColorRole {
+    static let navy = RipulColorRole(asset: "BrandNavy")                          // named for its asset
+    static let cream = RipulColorRole("cream", default: "#F4EBDD", dark: "#2A2418")
+}
+
+Text("Sandsend").foregroundStyle(.ripul(.navy))
+Rectangle().fill(Color.ripul(.cream))
+view.backgroundColor = .ripul(.navy)
+RipulTheme.isDefault(.navy)        // true until a theme names it
+```
+
+A default is `#RRGGBB`, `#RRGGBBAA`, `system:<name>` or `asset:<name>`. The
+tools read the declarations: `migrate` rewrites `Color("BrandNavy")` to
+`Color.ripul(.navy)`, `lint` takes the two as one value, `check` counts a
+`Color("BrandNavy")` that goes round a declared role, and the View Explorer
+names the role with its value and whether the document set it.
+
+- A role's name in the document is the name you gave it (`BrandNavy`, `cream`).
+  The fifteen keep theirs, and a role of yours cannot take one of them.
+- Do not keep the colour in a `static let` (`static let navy = Color("BrandNavy")`
+  is read once and does not follow a switch while the app runs). Keep the role
+  in one, as above, and read the colour where it is used.
+- A role is known to the SDK from the first time the app reads it. A document
+  may point one role at another of yours only once it has been read; point
+  both at a palette name instead.
 
 ## 3. Fonts
 
@@ -268,8 +433,9 @@ $RIPUL_THEME migrate --named <your source folder>             # change it
 ```
 
 Every rewrite is to the token whose default is the value it replaces, so
-nothing moves on screen. It adds no import: each file it rewrote needs
-`import RipulAgent`, or the app one `@_exported import RipulAgent`. It rewrites:
+nothing moves on screen. It adds `import RipulThemeKit` to each file it left
+calling an accessor, unless the file imports it or `RipulAgent` already or the
+app has one `@_exported import` of either. It rewrites:
 
 | You wrote | It writes |
 |---|---|
@@ -285,6 +451,17 @@ nothing moves on screen. It adds no import: each file it rewrote needs
 | `.buttonStyle(.glassProminent)` | `.ripulGlassProminentButtonStyle()`, likewise |
 | with `--named`: `Color.red`, `.foregroundStyle(.orange)` | `Color.ripul(.danger)`, `.foregroundStyle(.ripul(.warning))` |
 | with `--named`: `.white`, `.black`, `.yellow` and the other hues | the system form, `.ripul(system: .white)` |
+| with `--text`: a `Text` with no colour of its own | `Text("…").foregroundStyle(.ripul(.text))`, on the same line |
+| with `--lists`: a `List` or a `Form`, and each `Section` | `.ripulThemedList()` after it, and `.ripulThemedListRows()` after each section |
+| `Color("BrandNavy")`, where you declared a role for that asset | `Color.ripul(.navy)` |
+
+`--text` and `--lists` write into your source what the plug-in does with no
+edit, by the same reading of the source: the texts are the ones described
+under "Which texts count as having no colour". Run them together:
+
+```bash
+$RIPUL_THEME migrate --named --text --lists <your source folder>
+```
 
 Then see what is left, and check the change:
 
@@ -303,35 +480,36 @@ moved value.
 These need a person, because each is a decision or something the SDK does not
 yet do for you.
 
-1. **Text with no colour of its own.** A `Text` that never had a colour is
-   drawn in the system's label colour, not the theme's `text`. Give it
-   `.foregroundStyle(.ripul(.text))`. It must go on the text itself. On the
-   root, or on a container, it changes what `.secondary` draws and recolours
-   the labels of bordered and prominent buttons, links in a list and section
-   headers, even under the default document (measured). Until the SDK finds
-   a way, this is one line a text, and a new `Text` without it stays the
-   system's colour silently.
-2. **Lists.** A grouped list's ground, rows and separators stay the system's
-   under a theme. Set them where you want them themed:
-   `.scrollContentBackground(.hidden)` and `.background(.ripul(.surfaceSunken))`
-   on the list, `.listRowBackground(Color.ripul(.surface))` on a section or a
-   row (on the list itself it does nothing), `.listRowSeparatorTint(Color.ripul(.separator))`.
-   Compare a screenshot under the default document afterwards: these have not
-   been measured as identical by the SDK.
+1. **Text with no colour of its own** is done by `--text`, and kept done by
+   `check --text` in your build, which counts a text without the line. The
+   line must be on the text itself. On the root, or on a container, a text
+   colour changes what `.secondary` draws and recolours the labels of
+   bordered and prominent buttons, links in a list and section headers, even
+   under the default document (measured three times, the last on iOS 27.1
+   with both the one-colour and the three-colour form). What is left for
+   you: a text the command could not tell was coloured from another file.
+   Under the system look such a text changes colour, so the comparison of
+   step 8 finds it; take the line off.
+2. **Lists** are done by `--lists`. A row that is not inside a `Section`
+   needs `.ripulThemedListRows()` written on it, or on the `ForEach` that
+   makes the rows: the list's own modifier cannot reach its rows from
+   outside (measured). With no theme each modifier sets the system's own
+   value, and the screens are the same pixel for pixel (measured on two
+   lists, light and dark).
 3. **Section headers and empty states.** `Section("Title")` becomes
    `Section(themed: "Title")`, a custom header `RipulSectionHeader { … }`, and
    `ContentUnavailableView("T", systemImage: "i")` becomes
    `ContentUnavailableView(themed: "T", systemImage: "i")`. Without these a
    header loses its weight under a themed family. Not inside a menu, a picker
-   or a toolbar. A header takes the family and keeps the system's colour.
+   or a toolbar. A header takes the family, and the theme's `textSecondary`
+   once a theme names it.
 4. **A white or a blue that meant something.** `--named` writes the system
    form for white. Where the white sits on an accent fill, write
    `.ripul(.onAccent)`. Where a blue was the app's own colour and not a
    notice, write `.ripul(accentOr: .info)`: the accent once a theme names one.
-5. **A colour of your own that is not one of the fifteen roles.** There is no
-   place for it in the document yet. Keep it in your code, and if it should
-   give way to the theme, read `RipulTheme.isDefault(.accent)` where it is
-   used: `RipulTheme.isDefault(.accent) ? myNavy : Color.ripul(.accent)`.
+5. **A colour of your own that is not one of the fifteen roles.** Declare it
+   as a role of your own ("Your own colours", in step 2) and run `migrate`
+   again: it rewrites each `Color("BrandNavy")` to the role you declared.
 6. **Fonts the command could not place:** a fixed size on a view that is
    neither a `Text` nor an `Image`, a font held in a property
    (`var titleFont: Font { .caption }` becomes `.ripul(.caption)`), `.rounded`
@@ -469,17 +647,31 @@ and the lists and text colours of step 4 are the usual rest.
 
 ## Not built
 
-Each of these is a decision the SDK has not taken yet. Until it is, the cost
-is yours, as described above.
-
-- **A theme layer on its own.** The theme is part of `RipulAgent`: an app that
-  wants only the theme links the whole package, in Release too.
-- **Your own roles in the document.** The fifteen are all there are.
-- **Text colour without a line a text.**
-- **Lists themed from the root.**
 - **Editing a theme in the app.** A look is tried by loading a document.
+- **A font feature in the document** (lining figures, for one), and the colour
+  of a large navigation title.
 - The widgets and other extensions of an app are not themed unless they link
   the package and install the theme themselves.
+
+## What was tried and is not used
+
+So that nobody tries them again without a reason:
+
+- **A text colour on the root or a container.** Recolours controls and
+  changes `.secondary`; see step 4.
+- **Replacing UIKit's colour getters** (`UIColor.label`,
+  `systemGroupedBackground`, `separator`) while a theme is in use. Measured
+  on iOS 27.1: a SwiftUI `Text` outside a list does not read `UIColor.label`,
+  so text is not reached; a list's ground and separators are, but its rows
+  are not (they use a colour with no public getter), a change of theme while
+  the app runs leaves grounds and separators on the old colours, and an
+  alert's message darkens. Not used.
+- **UIKit's appearance settings and the root's own modifiers for a list.**
+  `UICollectionView.appearance()` does not reach a SwiftUI list;
+  `.scrollContentBackground(.hidden)`, `.listRowBackground` and
+  `.listRowSeparatorTint` set on the root reach nothing below it.
+- **Setting each visible cell's background from outside.** Works until a cell
+  is reused or pressed. Not used.
 
 ## The API in one place
 
@@ -492,6 +684,7 @@ RipulTheme.handleThemeLink(_:)           RipulThemePicker(_:systemTitle:)
 RipulTheme.adopt(documentData:)          // a document from anywhere else, such as your server
 RipulTheme.resetToDefaults()
 RipulTheme.color(.accent)   RipulTheme.isDefault(.accent)
+RipulColorRole(asset: "BrandNavy")   RipulColorRole("cream", default: "#F4EBDD", dark: "#2A2418")   // roles of your own
 
 Font.ripul(.body)   Font.ripul(.title, weight: .bold, family: .display)   Font.ripul(size: 14)
 Font.ripulIcon(.title2)   Font.ripulIcon(size: 18)
@@ -501,4 +694,5 @@ Color.ripul(.danger)              // where a Color is required
 .ripul(accentOr: .info)
 UIColor.ripul(.canvas)   UIFont.ripul(.caption)
 .ripulTextStyle(.eyebrow)   .ripulProminentButtonStyle()   .ripulGlassProminentButtonStyle()   Section(themed:)   ContentUnavailableView(themed:)
+.ripulThemedList()   .ripulThemedListRows()   .ripulSectionHeader()   .ripulSectionFooter()
 ```

@@ -1,6 +1,6 @@
 import XCTest
 import CoreText
-@testable import RipulAgent
+@testable import RipulThemeKit
 
 /// A theme by name: what a host gets for naming one document in its bundle.
 final class RipulThemeLibraryTests: XCTestCase {

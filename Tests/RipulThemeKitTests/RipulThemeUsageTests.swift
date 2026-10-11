@@ -1,5 +1,5 @@
 import XCTest
-@testable import RipulAgent
+@testable import RipulThemeKit
 
 /// The theme usage map: an identifier gives the tokens its source names, each resolved
 /// against the live theme, and an identifier the map does not know gives nothing.

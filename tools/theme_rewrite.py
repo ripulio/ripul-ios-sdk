@@ -12,6 +12,8 @@ and still shows in `ripul-theme check`.
   ripul-theme migrate --dry-run <file or directory>...   show what would change
   ripul-theme migrate --icons <file or directory>...     only move role fonts on an Image to ripulIcon
   ripul-theme migrate --named <file or directory>...     also the named colours, by the closed table
+  ripul-theme migrate --text <file or directory>...      also `.foregroundStyle(.ripul(.text))` on each text with no colour of its own
+  ripul-theme migrate --lists <file or directory>...     also `.ripulThemedList()` on each list and form, `.ripulThemedListRows()` on each section
   ripul-theme lint [<git range>] [-- <path>...]
         the mapping lint: read a migration diff (default: the working tree against
         HEAD) and accept a replacement only if the token's default is the very
@@ -66,7 +68,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
 STYLES = r"largeTitle|title[23]?|headline|subheadline|body|callout|footnote|caption2?"
 HIERARCHY = {"primary": "text", "secondary": "textSecondary", "tertiary": "textTertiary", "quaternary": "textQuaternary"}
-SKIPPED = ("/CmsRender/", "/ThemeCore/")
+SKIPPED = ("/CmsRender/", "/ThemeCore/", "/RipulThemeKit/")
 
 # A chain of simple calls after the style: .weight(.semibold).monospacedDigit()
 CHAIN = r"(?:\.[A-Za-z]+\((?:[^()]|\([^()]*\))*\))*"
@@ -168,6 +170,15 @@ def icon_fonts(lines, index, code):
     return ROLE_FONT.sub(lambda m: f".font(.ripulIcon({m.group(1)})" if on_an_image(lines, index, m.start()) else m.group(0), code)
 
 
+def host_roles(code):
+    """`Color("BrandNavy")` to the role the app declared for that asset: `Color.ripul(.navy)`."""
+    import theme_roles
+    for member, entry in theme_roles.ROLES.items():
+        if entry["asset"] and '"' in code:
+            code = theme_roles.asset_use(entry["asset"]).sub(f"Color.ripul(.{member})", code)
+    return code
+
+
 def rewrite(text, icons_only=False, named=False):
     lines = text.split("\n")
     changed = 0
@@ -220,6 +231,7 @@ def rewrite(text, icons_only=False, named=False):
         if named:
             code = NAMED_COLOR.sub(lambda m: f"Color.ripul({named_colour(m.group(1))})", code)
             code = NAMED_ARG.sub(lambda m: f".{m.group(1)}(.ripul({named_colour(m.group(2))})", code)
+        code = host_roles(code)
         if code != original:
             lines[index] = code + slashes + comment
             changed += 1
@@ -320,6 +332,9 @@ CONTROL_IDENTITIES = [
     (re.compile(r"\.ripul(?:EmptyStateTitle|EmptyStateDescription|SectionHeader|SectionFooter)\(\)"), ""),
     # The accent once a theme names one; with no theme, the role it replaced.
     (re.compile(r"\.ripul\(\s*accentOr:\s*\.(\w+)\s*\)"), r".ripul(.\1)"),
+    # What `migrate --text` and `--lists` write: with no theme, the text's own colour and the list's own look.
+    (re.compile(r"(?<=\))\.foregroundStyle\(\.ripul\(\.text\)\)"), ""),
+    (re.compile(r"\.ripulThemedList(?:Rows)?\(\)"), ""),
     # Not a token: the notification's name.
     (re.compile(r"\.ripulThemeDidChange\b"), ".themeDidChange"),
 ]
@@ -333,6 +348,12 @@ def control_identities(code):
 
 def skeleton(code):
     code = control_identities(code)
+    # A role the app declared for itself: the asset it is by default, and the accessor
+    # in either form, are one value.
+    import theme_roles
+    if theme_roles.ROLES:
+        code = host_roles(code)
+        code = re.sub(r"(?:\bColor)?\.ripul\(\s*\.(" + theme_roles.members_pattern() + r")\s*\)", lambda m: role("host:" + m.group(1)), code)
     if TYPED_COLOR.search(code):
         # On a line whose type is Color, a bare `.ripul(.textSecondary)` is the Color form.
         code = re.sub(r"(?<![\w)\]])\.ripul\(\s*\.(text\w*)\s*\)", lambda m: role("C:" + m.group(1)), code)
@@ -419,6 +440,8 @@ def lint(arguments):
         arguments, paths = arguments[:cut], arguments[cut + 1:]
     revision = arguments[0] if arguments else "HEAD"
     import subprocess
+    import theme_roles
+    theme_roles.load(["."])
     diff = subprocess.run(["git", "diff", "-U0", "--no-color", revision, "--", *(paths or ["*.swift"])],
                           capture_output=True, text=True, check=True).stdout
     problems, checked, file, removed, added, line = [], 0, "", [], [], 0
@@ -426,7 +449,7 @@ def lint(arguments):
     def flush():
         nonlocal checked
         # The accessors' own implementation is not a call site (the check does not count it either).
-        if "/ThemeCore/" in file:
+        if "/ThemeCore/" in file or "/RipulThemeKit/" in file:
             return
         # A line whose only `.ripul` is a control modifier holds no token: nothing to pair.
         touched = [a for a in added if ".ripul" in control_identities(a[1])]
@@ -485,6 +508,8 @@ def main(argv) -> int:
         print(__doc__)
         return 2
     total = 0
+    import theme_roles
+    theme_roles.load(targets)
     for target in targets:
         path = pathlib.Path(target)
         files = sorted(path.rglob("*.swift")) if path.is_dir() else [path]
@@ -506,7 +531,82 @@ def main(argv) -> int:
             else:
                 file.write_text(new, encoding="utf-8")
     print(f"ripul-theme migrate: {total} lines {'would change' if dry else 'changed'}")
+    if "--text" in argv or "--lists" in argv:
+        structure(targets, dry, text="--text" in argv, lists="--lists" in argv)
+    if not dry:
+        add_imports(targets)
     return 0
+
+
+def structure(targets, dry, text, lists):
+    """`--text`: the theme's text colour on each text that has no colour of its own.
+    `--lists`: the theme's surfaces on each list, form and section. Both are what the
+    plug-in does with no edit; here they are written into the source. On the line they
+    belong to, so no line is added."""
+    import theme_text
+    files = theme_text.swift_files(targets)
+    texts = lists_added = 0
+    if lists:
+        for path in files:
+            f = theme_text.read(path)
+            if f is None:
+                continue
+            new, count = theme_text.add_lists(f)
+            if count:
+                lists_added += count
+                print(f"{path}: {count} list{'s' if count != 1 else ''} and section{'s' if count != 1 else ''}")
+                if not dry:
+                    pathlib.Path(path).write_text(new, encoding="utf-8")
+        print(f"ripul-theme migrate --lists: {lists_added} lists, forms and sections {'would be' if dry else ''} given the theme's surfaces")
+    if text:
+        for path, (f, sites) in theme_text.analyse(files).items():
+            if not sites:
+                continue
+            texts += len(sites)
+            print(f"{path}: {len(sites)} text{'s' if len(sites) != 1 else ''} with no colour")
+            if dry:
+                for start, _ in sites:
+                    print(f"  {f.line(start)}: {f.src[f.starts[f.line(start) - 1]:].split(chr(10), 1)[0].strip()}")
+            else:
+                pathlib.Path(path).write_text(theme_text.add_colour(f, sites), encoding="utf-8")
+        print(f"ripul-theme migrate --text: {texts} texts {'would be' if dry else ''} given the theme's text colour. "
+              "A text inside a view of your own that another file colours, or uses as a button's label, cannot be told "
+              "apart: compare the screens under the system look.")
+
+
+IMPORT = re.compile(r"(?m)^\s*(?:@\w+\s+)?import\s+(\w+)")
+
+
+def add_imports(targets):
+    """`import RipulThemeKit` in each file that calls an accessor and imports neither it nor
+    the whole SDK. Not when the app has one `@_exported import` of either."""
+    import theme_text
+    files = [pathlib.Path(p) for p in theme_text.swift_files(targets)]
+    sources = {}
+    for path in files:
+        try:
+            sources[path] = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+    if any(re.search(r"@_exported\s+import\s+(?:RipulAgent|RipulThemeKit)\b", text) for text in sources.values()):
+        return
+    added = 0
+    for path, text in sources.items():
+        if "/Sources/RipulAgent/" in path.as_posix() or any(part in path.as_posix() for part in SKIPPED):
+            continue   # the SDK's own module has it already
+        if not re.search(r"\.ripul(?:Icon|ThemedList|ThemedListRows|TextStyle|ProminentButtonStyle|GlassProminentButtonStyle|ThemeRoot)?\(|\(themed:", text):
+            continue
+        modules = IMPORT.findall(text)
+        if "RipulAgent" in modules or "RipulThemeKit" in modules:
+            continue
+        last = None
+        for m in IMPORT.finditer(text):
+            last = m
+        at = text.index("\n", last.end()) + 1 if last else 0
+        path.write_text(text[:at] + "import RipulThemeKit\n" + text[at:], encoding="utf-8")
+        added += 1
+    if added:
+        print(f"ripul-theme migrate: `import RipulThemeKit` added to {added} file{'s' if added != 1 else ''}")
 
 
 if __name__ == "__main__":

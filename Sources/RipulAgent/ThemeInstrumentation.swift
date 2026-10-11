@@ -108,30 +108,10 @@ public enum RipulThemeInstrumentation {
 // MARK: - Theme-change broadcast + live refresh
 
 // `Notification.Name.ripulThemeDidChange` — posted by the host's theme engine whenever the
-// live theme changes — is declared in ThemeCore/RipulTheme.swift, which compiles on macOS.
+// live theme changes — is declared in RipulThemeKit/RipulTheme.swift, which compiles on macOS.
 
-@available(iOS 14.0, *)
-private struct RipulThemeVersionKey: EnvironmentKey {
-    static let defaultValue = 0
-}
-
-@available(iOS 14.0, *)
-public extension EnvironmentValues {
-    /// Monotonic counter bumped at every island root (see `refreshesOnThemeChange()` /
-    /// `ripulThemedHostingController`) each time the host posts `.ripulThemeDidChange`.
-    ///
-    /// THE GENERIC LIVE-THEME CONTRACT for theme-aware components: declare
-    ///     @Environment(\.ripulThemeVersion) private var themeVersion
-    /// and read it at the TOP of body (`let _ = themeVersion`) BEFORE reading theme values
-    /// (`Theme.current…`, resolved styles, tokens). Environment invalidation then re-invokes
-    /// THAT body on every theme change, so the theme read re-runs — at any depth below the
-    /// island root, with no per-view notification plumbing. Reading the key is what registers
-    /// the dependency; declaring the property alone does nothing.
-    var ripulThemeVersion: Int {
-        get { self[RipulThemeVersionKey.self] }
-        set { self[RipulThemeVersionKey.self] = newValue }
-    }
-}
+// The `ripulThemeVersion` environment value is declared beside the theme root, in the
+// RipulThemeKit module (RipulThemeRoot.swift), which sets it.
 
 @available(iOS 14.0, *)
 private struct RipulThemeRefreshModifier: ViewModifier {

@@ -7,6 +7,8 @@ struct SessionFamiliesHarness: View {
     @State private var store = SessionListStore()
     @State private var open: Set<String> = []
     @State private var closed: Set<String> = []
+    /// Where a row was dropped: a chat's id to the id of the chat it was dropped on.
+    @State private var placed: [String: String] = [:]
 
     private static let now = Date()
     /// - Parameter running: Mid-turn on its Mac and not open on this device, as a chat an agent has just started is.
@@ -46,7 +48,10 @@ struct SessionFamiliesHarness: View {
         // The list's own reading of the store for what may not be folded away.
         let families = SessionFamilies.arrange(
             Self.sessions, open: open, closed: closed, recency: { Int($0.lastUsed.timeIntervalSince1970 / 30) },
-            mustShow: { store.isWorkingOrAsking($0) })
+            mustShow: { store.isWorkingOrAsking($0) },
+            placedUnder: { placed[$0.id] })
+        // Every chat, whatever is folded: what is under a chat does not depend on what is showing.
+        let every = SessionFamilies.arrange(Self.sessions, folds: false, recency: { _ in 0 }, placedUnder: { placed[$0.id] })
         NavigationStack {
             GlassRichList(
                 items: families.visible, emptyState: nil, identifierPrefix: "SessionFamiliesHarness",
@@ -74,6 +79,15 @@ struct SessionFamiliesHarness: View {
                 },
                 swipe: { _ in EmptyView() },
                 rowMenu: { _ in EmptyView() })
+            // The list's own wiring: a chat dropped on another goes under it.
+            .draggableRows(
+                payload: { SessionFamilies.dragPayload(for: $0) },
+                canDrop: { carried, target in
+                    SessionFamilies.draggedSessionId(carried).map { every.canPlace($0, under: target.id) } ?? false
+                },
+                onDrop: { carried, target in
+                    if let id = SessionFamilies.draggedSessionId(carried) { placed[id] = target.id }
+                })
             .navigationTitle("Sessions")
         }
     }

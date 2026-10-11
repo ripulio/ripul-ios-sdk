@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 // MARK: - Row activity
 
@@ -183,6 +184,58 @@ public struct GlassRichList<Item: Identifiable, Row: View, Swipe: View, RowMenu:
     private let row: (Item) -> Row
     private let swipe: (Item) -> Swipe
     private let rowMenu: (Item) -> RowMenu
+    /// Set by `draggableRows`: nil for a list whose rows stay where they are.
+    private var dragging: RowDragging?
+
+    /// What a list needs to let one row be dropped on another.
+    struct RowDragging {
+        /// What a row carries when it is picked up, or nil for one that stays put.
+        let payload: (Item) -> String?
+        /// Whether what is carried may be dropped on this row.
+        let canDrop: (String, Item) -> Bool
+        let onDrop: (String, Item) -> Void
+    }
+
+    /// The row a drag is over now.
+    @State private var dropTargetId: Item.ID?
+    /// What the drag in hand carries, when it began in this list. A drag from
+    /// another window has none, and is checked when it is dropped.
+    @State private var draggedPayload: String?
+    /// A row of this list is being dragged, from the moment it is picked up
+    /// until the drag ends, dropped or not. For that long the rows say where
+    /// they are and the drop surface is over the list.
+    @State private var isDragging = false
+    /// Where the list and its rows are on screen while a drag is over them.
+    @State private var dropGeometry = DropGeometry()
+
+    /// Where things are, for finding the row under a drag. A class, so that
+    /// writing a frame as the list scrolls redraws nothing.
+    private final class DropGeometry {
+        var listOrigin: CGPoint = .zero
+        var rows: [Item.ID: CGRect] = [:]
+        /// A row is in the air. Kept here as well as in `isDragging` because a
+        /// row is asked what it carries before the view has been drawn again.
+        var inTheAir = false
+    }
+
+    /// The drag is over: the drop surface comes off the list. Reached three
+    /// ways, because none of them is certain alone. A drop that is taken says
+    /// so. A drag let go of anywhere else is known by what it carried being
+    /// released, which was seen to come late, or not at all, after a drop. And
+    /// a surface that is somehow still there takes itself off at a touch.
+    private func endDrag() {
+        dropGeometry.inTheAir = false
+        if isDragging { isDragging = false }
+        if dropTargetId != nil { dropTargetId = nil }
+        if draggedPayload != nil { draggedPayload = nil }
+    }
+
+    /// The row under a point of the list, as the drop delegate gives it.
+    private func row(at location: CGPoint) -> Item? {
+        let point = CGPoint(x: dropGeometry.listOrigin.x + location.x, y: dropGeometry.listOrigin.y + location.y)
+        guard let id = dropGeometry.rows.first(where: { $0.value.contains(point) })?.key else { return nil }
+        return items.first { $0.id == id }
+    }
 
     /// Optimistic active-row override: set on tap so the highlight snaps to
     /// intent rather than waiting for the owner's async confirmation. Cleared
@@ -227,6 +280,34 @@ public struct GlassRichList<Item: Identifiable, Row: View, Swipe: View, RowMenu:
         self.row = row
         self.swipe = swipe
         self.rowMenu = rowMenu
+    }
+
+    /// Lets a row be picked up and dropped on another row of the list.
+    ///
+    /// It is the system's drag and drop, the one a long press and a move start
+    /// on a phone and a click and a move start on a Mac, so it lives beside a
+    /// row's tap, swipe and menu without a gesture of its own in the row. Not
+    /// offered while rows are being selected: there a row's whole job is the tick.
+    ///
+    /// - Parameters:
+    ///   - payload: What a row carries, or nil for a row that cannot be picked up.
+    ///   - canDrop: Whether what is carried may be dropped on a row. A row it
+    ///     may not be dropped on does not light up.
+    ///   - onDrop: What was carried, and the row it was dropped on.
+    public func draggableRows(
+        payload: @escaping (Item) -> String?,
+        canDrop: @escaping (String, Item) -> Bool = { _, _ in true },
+        onDrop: @escaping (String, Item) -> Void
+    ) -> GlassRichList {
+        var list = self
+        list.dragging = RowDragging(payload: payload, canDrop: canDrop, onDrop: onDrop)
+        return list
+    }
+
+    /// Whether the drag over this row may be dropped on it.
+    private func takesDrop(_ item: Item) -> Bool {
+        guard let dragging, !isSelecting, dropTargetId == item.id else { return false }
+        return draggedPayload.map { dragging.canDrop($0, item) } ?? true
     }
 
     public var body: some View {
@@ -291,6 +372,34 @@ public struct GlassRichList<Item: Identifiable, Row: View, Swipe: View, RowMenu:
                         if !isSelecting { swipe(item) }
                     }
                     .contextMenu { MenuIcons { if !isSelecting { rowMenu(item) } }}
+                    .modifier(RowDrag(
+                        payload: isSelecting ? nil : dragging?.payload(item),
+                        enabled: dragging != nil && !isSelecting,
+                        pickedUp: { carried in
+                            // One row is in the air at a time. As it passes over
+                            // other rows the system asks them what they carry
+                            // too (seen 11 October 2026: the answer of the row
+                            // it was held over replaced what was being carried,
+                            // and the drop was refused as a chat under itself).
+                            guard !dropGeometry.inTheAir else { return false }
+                            dropGeometry.inTheAir = true
+                            draggedPayload = carried
+                            isDragging = true
+                            return true
+                        },
+                        ended: { endDrag() }))
+                    // Only while a row is being dragged: a row that says where
+                    // it is on every frame of a scroll would cost the scroll.
+                    .background {
+                        if isDragging {
+                            GeometryReader { geometry in
+                                Color.clear
+                                    .onAppear { dropGeometry.rows[item.id] = geometry.frame(in: .global) }
+                                    .onChange(of: geometry.frame(in: .global)) { _, frame in dropGeometry.rows[item.id] = frame }
+                                    .onDisappear { dropGeometry.rows[item.id] = nil }
+                            }
+                        }
+                    }
                     .listRowBackground(background(for: item))
                     .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
             }
@@ -309,6 +418,43 @@ public struct GlassRichList<Item: Identifiable, Row: View, Swipe: View, RowMenu:
         .refreshable {
             if let onRefresh { await onRefresh() }
         }
+        .overlay {
+            // The drop surface. A `List` takes a drag for itself and offers it
+            // to nothing: not to a row (found for the tool collections screen,
+            // and again here), and not to a drop target on the list as a
+            // whole, which was tried on 11 October 2026 and never called. A
+            // plain view over the list is offered it. It is only there while
+            // a row of this list is in the air, so it never takes a touch
+            // meant for the list.
+            if isDragging, dragging != nil {
+                ListDropSurface(delegate: dropDelegate, origin: { dropGeometry.listOrigin = $0 },
+                                touched: { endDrag() })
+            }
+        }
+    }
+
+    private var dropDelegate: ListDropDelegate {
+        ListDropDelegate(
+            moved: { location in
+                let target = row(at: location)
+                if dropTargetId != target?.id { dropTargetId = target?.id }
+                guard let target, let dragging else { return false }
+                return draggedPayload.map { dragging.canDrop($0, target) } ?? true
+            },
+            exited: { dropTargetId = nil },
+            dropped: { location, providers in
+                let target = row(at: location)
+                endDrag()
+                guard let target, let dragging,
+                      let provider = providers.first(where: { $0.canLoadObject(ofClass: NSString.self) }) else { return false }
+                _ = provider.loadObject(ofClass: NSString.self) { carried, _ in
+                    guard let carried = carried as? String else { return }
+                    Task { @MainActor in
+                        if dragging.canDrop(carried, target) { dragging.onDrop(carried, target) }
+                    }
+                }
+                return true
+            })
     }
 
     /// Rows stacked by hand, for a container that is already scrolling.
@@ -351,6 +497,10 @@ public struct GlassRichList<Item: Identifiable, Row: View, Swipe: View, RowMenu:
         if isSelecting && selectedIds.contains(item.id) {
             return Color.accentColor.opacity(0.08)
         }
+        // Where what is being dragged would land.
+        if takesDrop(item) {
+            return Color.accentColor.opacity(0.28)
+        }
         // The optimistic pick wins over the confirmed one so the highlight
         // snaps on tap instead of waiting for the round-trip.
         if optimisticActiveId == item.id || (optimisticActiveId == nil && isActive(item)) {
@@ -363,4 +513,92 @@ public struct GlassRichList<Item: Identifiable, Row: View, Swipe: View, RowMenu:
         case .idle: return Color.clear
         }
     }
+}
+
+/// A list row that can be picked up.
+///
+/// Applied to every row of a list that drags or to none of it, so a row's
+/// identity does not change with what it carries.
+@available(iOS 17.0, macOS 14.0, *)
+private struct RowDrag: ViewModifier {
+    /// What this row carries, or nil when it cannot be picked up.
+    let payload: String?
+    let enabled: Bool
+    /// A row was picked up. False when another row is already in the air,
+    /// and this one is to give the system nothing to add to it.
+    let pickedUp: (String) -> Bool
+    /// The drag is over, whether it was dropped or let go of.
+    let ended: () -> Void
+
+    func body(content: Content) -> some View {
+        if enabled {
+            content.onDrag {
+                // Called as the row is picked up. A row that cannot be picked
+                // up gives the system nothing to carry, and nothing is dragged.
+                guard let payload, pickedUp(payload) else { return NSItemProvider() }
+                let carried = DragEndItemProvider(object: payload as NSString)
+                carried.onEnd = ended
+                return carried
+            }
+        } else {
+            content
+        }
+    }
+}
+
+/// What a dragged row carries, which says when the drag is over.
+///
+/// SwiftUI says when a drag begins and never when it ends. The system keeps
+/// what is carried for exactly as long as the drag lasts, dropped or let go
+/// of, so its release is the end of the drag.
+private final class DragEndItemProvider: NSItemProvider, @unchecked Sendable {
+    var onEnd: (() -> Void)?
+
+    deinit {
+        guard let onEnd else { return }
+        DispatchQueue.main.async(execute: onEnd)
+    }
+}
+
+/// `NSItemProvider(object: NSString)` registers `public.utf8-plain-text`, and a
+/// drop has matched by the exact type and not by what it conforms to (found
+/// for the tool collections screen), so all three are named.
+private let listDropTypes: [UTType] = [.utf8PlainText, .plainText, .text]
+
+/// The invisible surface over a list that takes a drop for it.
+@available(iOS 17.0, macOS 14.0, *)
+private struct ListDropSurface: View {
+    let delegate: ListDropDelegate
+    /// The list's place on screen, to turn a point of the surface into one a row can be found by.
+    let origin: (CGPoint) -> Void
+    /// A finger came down on the surface. While a row is in the air the finger
+    /// belongs to the drag and never reaches this, so a touch here means the
+    /// drag is over and the surface was left behind.
+    let touched: () -> Void
+
+    var body: some View {
+        GeometryReader { geometry in
+            Color.clear
+                .contentShape(Rectangle())
+                .onAppear { origin(geometry.frame(in: .global).origin) }
+                .onChange(of: geometry.frame(in: .global).origin) { _, point in origin(point) }
+                .onDrop(of: listDropTypes, delegate: delegate)
+                .simultaneousGesture(DragGesture(minimumDistance: 0).onChanged { _ in touched() })
+        }
+    }
+}
+
+@available(iOS 17.0, macOS 14.0, *)
+private struct ListDropDelegate: DropDelegate {
+    /// Whether the row under this point of the list takes what is carried.
+    let moved: (CGPoint) -> Bool
+    let exited: () -> Void
+    let dropped: (CGPoint, [NSItemProvider]) -> Bool
+
+    func validateDrop(info: DropInfo) -> Bool { info.hasItemsConforming(to: listDropTypes) }
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        DropProposal(operation: moved(info.location) ? .move : .forbidden)
+    }
+    func dropExited(info: DropInfo) { exited() }
+    func performDrop(info: DropInfo) -> Bool { dropped(info.location, info.itemProviders(for: listDropTypes)) }
 }

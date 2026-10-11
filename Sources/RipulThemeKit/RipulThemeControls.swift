@@ -97,10 +97,16 @@ extension RipulTheme {
 
 extension View {
     /// On the content of a section's `header:` in a grouped list or form.
-    public func ripulSectionHeader() -> some View { modifier(RipulThemedFamilyFont(role: .headline, weight: nil)) }
+    /// Under a theme that names `textSecondary` it is drawn in it too: the system's grey
+    /// is what a header has otherwise.
+    public func ripulSectionHeader() -> some View {
+        modifier(RipulThemedFamilyFont(role: .headline, weight: nil)).modifier(RipulThemedSystemGrey())
+    }
 
     /// On the content of a section's `footer:` in a grouped list or form.
-    public func ripulSectionFooter() -> some View { modifier(RipulThemedFamilyFont(role: .footnote, weight: nil)) }
+    public func ripulSectionFooter() -> some View {
+        modifier(RipulThemedFamilyFont(role: .footnote, weight: nil)).modifier(RipulThemedSystemGrey())
+    }
 
     /// On the title text of a `ContentUnavailableView`.
     public func ripulEmptyStateTitle() -> some View { modifier(RipulThemedFamilyFont(role: .title3, weight: .bold)) }
@@ -119,6 +125,19 @@ private struct RipulThemedFamilyFont: ViewModifier {
             content.font(.ripul(role, weight: weight))
         } else {
             content
+        }
+    }
+}
+
+/// Text the system draws in its own grey (a section's header and footer), in the theme's
+/// `textSecondary` once a theme names it. Left alone until then.
+private struct RipulThemedSystemGrey: ViewModifier {
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if RipulTheme.isDefault(.textSecondary) {
+            content
+        } else {
+            content.foregroundStyle(.ripul(.textSecondary))
         }
     }
 }

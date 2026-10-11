@@ -13,11 +13,13 @@ repository's paths. This file is the full contract behind it.
 
 Nothing in this file is pending. Where a thing is not built, it says so.
 
-The code is in `Sources/RipulAgent/ThemeCore/` (compiling on iOS and macOS).
+The code is the `RipulThemeKit` module, in `Sources/RipulThemeKit/` (compiling on iOS and macOS, with no
+dependencies; `RipulAgent` re-exports it, and a host may link it alone). Until 11 October 2026 it was the
+folder `Sources/RipulAgent/ThemeCore/`.
 The tools are in `tools/` and travel with the package: `tools/ripul-theme`
 with `migrate`, `check`, `lint` and `usage-map`. The commands below under
 `ripul-native-app/scripts/` are this repository's own wrappers of them, which
-add its file layout, its streams and their baselines. The tests are `Tests/RipulAgentTests/RipulThemeCoreTests.swift`.
+add its file layout, its streams and their baselines. The tests are `Tests/RipulThemeKitTests/`.
 
 ## The one idea
 
@@ -756,7 +758,7 @@ Streams by path: `F` the foundation's five files; `S1` `Sessions/`; `S2`,
 `S3`, `S4` the SDK's top-level files A to M, N to S, T to Z; `S5` the SDK's
 other subdirectories; `A1`, `A2`, `A3` `ripul-native-app/iOS` A to L, M to R,
 S to Z; `A4` `Shared/` and `Browser/`. Not counted: `CmsRender/`,
-`ThemeCore/`, the theme editor's screens (`Theme*.swift`,
+`Sources/RipulThemeKit/`, the theme editor's screens (`Theme*.swift`,
 `Element*Screens.swift`), the View Explorer overlay (`RipulViewExplorer.swift`,
 `ViewInspectorOverlay.swift`), `iOS/CarPlay/`, the widgets, the Mac host,
 `Sources/RipulCommands/`, and any branch that compiles only for macOS

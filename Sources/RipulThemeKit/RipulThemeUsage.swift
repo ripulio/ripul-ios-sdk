@@ -177,6 +177,7 @@ extension RipulTheme {
         func one(_ literal: RipulColorLiteral) -> String {
             switch literal {
             case .system(let name): return "system:" + name
+            case .asset(let name): return "the asset colour " + name
             case .rgba(let r, let g, let b, let a):
                 let byte = { (v: Double) in Int((max(0, min(1, v)) * 255).rounded()) }
                 let hex = String(format: "#%02X%02X%02X", byte(r), byte(g), byte(b))
@@ -188,7 +189,7 @@ extension RipulTheme {
     }
 
     /// True when the document in use says something about this type role or its family.
-    static func typeOrigin(role: RipulTextRole?, family: RipulFontFamily) -> String {
+    package static func typeOrigin(role: RipulTextRole?, family: RipulFontFamily) -> String {
         let typography = table.typography
         let familyThemed = typography.families[family.rawValue].map { $0 != family.defaultFace } ?? false
         let roleThemed = role.flatMap { typography.roles[$0.rawValue] }.map { !$0.isEmpty } ?? false
@@ -233,7 +234,13 @@ extension RipulTheme {
 
         switch token.kind {
         case .colour:
-            guard let role = token.name.flatMap(RipulColorRole.init(rawValue:)) else { return [] }
+            guard let name = token.name else { return [] }
+            // A role of the host's own is known once the app has read it. Named in the
+            // source and not read yet, its default is not known here.
+            guard let role = RipulColorRole(rawValue: name) else {
+                return [RipulThemeUsageLine(property: property("Colour"), token: name, value: "a colour role of the app's own",
+                                            origin: "not read by the app yet", colour: nil)]
+            }
             if let drawn = drawnByControl(role, token: token, property: property("Colour")) { return [drawn] }
             guard token.accentOr else { return [colourLine(role, as: "Colour")] }
             // The accent once a theme names one, and until then the role it was.
@@ -388,7 +395,7 @@ extension RipulTheme {
         }
     }
 
-    static func number(_ value: CGFloat) -> String {
+    package static func number(_ value: CGFloat) -> String {
         value == value.rounded() ? String(Int(value)) : String(format: "%.1f", Double(value))
     }
 }

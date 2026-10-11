@@ -5,13 +5,14 @@ description: Give a SwiftUI iPhone or iPad app its own fonts and colours, light 
 
 # Giving an app a theme
 
-A theme here is one JSON document: colours for light and dark, three font families, and sizes and weights. The RipulAgent Swift package reads it and the app's own screens follow it. This is the procedure for doing that in someone's repository. Follow it in order. It needs RipulAgent 0.7.172 or later.
+A theme here is one JSON document: colours for light and dark, three font families, and sizes and weights. The RipulAgent Swift package reads it and the app's own screens follow it. This is the procedure for doing that in someone's repository. Follow it in order. It needs RipulAgent 0.7.174 or later: that release is the first whose level 1 reaches text, lists and the app's own colours, and the first with the theme as a product of its own.
 
 Three rules hold throughout:
 
 - **With no theme document the app must look exactly as it did.** Every step below keeps that, and you prove it with screenshots before you call the work done.
 - **Start with the level that changes no source.** Go further only where the person asks for more.
 - **The tools read text, not Swift.** What they write and what they count is a draft. A build and a screenshot are the proof.
+- **A question nobody answers is not a reason to stop.** The person may be away. Where a step says to ask, ask once; if no answer comes, take the choice that is easiest to undo, make it in a commit of its own, go on, and list it in the ledger as a decision still open. The one place to stop without an answer is the end of level 1 (step 6): by then the app is themed.
 
 ## 1. Find out what the app is
 
@@ -23,6 +24,8 @@ Read the repository's instructions for agents and its project files before anyth
 - **How a screen is opened without tapping**: launch arguments, deep links, previews. You will need this for screenshots.
 
 If the person asked only what a theme would reach, do step 3 and stop: change nothing and report.
+
+**Check that your session can do the work**, before you measure anything. It has to write inside `.git` (try `git switch -c theme`, step 2), fetch a package from github.com, and run `xcodebuild` and a simulator. A sandboxed session often can do none of these: Codex in its workspace sandbox cannot write `.git` or reach the network. If one fails, say at once which, and that the chat needs full access (in Ripul, the Codex settings have a Permission Mode, and "Full access" is the one that allows Xcode builds), and stop there. Do not hand back an audit as if it were the work.
 
 ## 2. Work on a branch
 
@@ -39,7 +42,7 @@ ripul-theme check <source folder>                      # every font and colour w
 ripul-theme migrate --dry-run --named <source folder>  # the lines level 3 would rewrite
 ```
 
-Then count by search what no level reaches without a decision: `Text(` with no colour of its own, `List` and `Form`, the app's own colours (`Color("…")`, an asset catalogue, a `Brand` type), and UIKit code. Report these beside the tool's counts.
+Add `--text` to `check` to list each `Text` with no colour of its own, as level 1 will read them. Then count by search what no level reaches without a decision: the app's own colours that are not written `Color("Name")` (a `Color(red:…)`, a generated `Color(.brandNavy)`), a `List` written `List($items)` or with `children:`, a `Section(isExpanded:)`, and UIKit code. Report these beside the tool's counts.
 
 **Take the baseline screenshots.** Build the untouched app and capture every screen you can open, in light and in dark (`xcrun simctl ui <simulator> appearance dark`). Fix the clock first (`xcrun simctl status_bar <simulator> override --time 9:41`). Wait for each screen to finish drawing before capturing it. **Capture the whole set twice, and compare the two sets with each other first.** Two captures of one untouched build are not the same picture: on iOS 26 and later the glass tab bar, a glass toolbar button, the home indicator and the Dynamic Island differ from one capture to the next, and an animated screen always does. On one app a third of the screens differed between two captures of the same build. So record, for each screen, where the two sets differ (the box that holds the differing pixels), not only whether they do. Later, a difference inside one of those boxes is the system's, and a difference anywhere in the app's own content is yours.
 
@@ -47,9 +50,9 @@ A Mac has no image library for this by itself: make a Python virtual environment
 
 ## 4. Level 1: a theme with no change to the source
 
-The package has a build-tool plug-in, `RipulThemeRedirect`. On each build it writes one Swift file into the build folder, and that file is compiled into the app. It declares SwiftUI's own names again (`Font.body`, `Color(.systemBackground)`, `.foregroundStyle(.secondary)`, `WindowGroup`), each as one call into the package, so the app's existing code follows the theme. No Swift file of the app changes.
+The package has a build-tool plug-in, `RipulThemeRedirect`. On each build it writes one Swift file into the build folder, and that file is compiled into the app. It declares SwiftUI's own names again (`Font.body`, `Color(.systemBackground)`, `Color("Name")`, `.foregroundStyle(.secondary)`, `Text`, `List`, `Form`, `Section`, `WindowGroup`), each as one call into the package, so the app's existing code follows the theme. No Swift file of the app changes.
 
-1. **Add or move the package** to 0.7.172 or later: `https://github.com/ripulio/ripul-ios-sdk`, product `RipulAgent`, on the app target.
+1. **Add or move the package** to 0.7.174 or later, `https://github.com/ripulio/ripul-ios-sdk`, on the app target. **Which product:** an app that does not link the package yet, and was asked only for a theme, links `RipulThemeKit`, the theme alone (about 2 MB of a shipping app). Do not give it `RipulAgent`, the whole SDK with its developer console (about 60 MB), unless the person asks for the console. An app that links `RipulAgent` already keeps it; if everything of the app's that uses it is inside `#if DEBUG`, say that the SDK can be left out of the shipping app with one build setting, and where: `docs/theming-for-hosts.md`, "Shipping only the theme".
 2. **Switch the plug-in on for the app target.** In an XcodeGen `project.yml`, under the target:
 
    ```yaml
@@ -58,9 +61,18 @@ The package has a build-tool plug-in, `RipulThemeRedirect`. On each build it wri
            package: RipulAgent      # the name the package has under `packages:`
    ```
 
-   In a hand-kept Xcode project it is the target's Build Phases, "Run Build Tool Plug-ins": ask the person to add it there, since a project file edited by hand is easy to break. In a Swift package it is `plugins: [.plugin(name: "RipulThemeRedirect", package: "ripul-ios-sdk")]` on the target (this compiles; it has not been run in a real package host).
+   In a hand-kept Xcode project (a `.xcodeproj` in git, no generator), make both changes of steps 1 and 2 in `project.pbxproj` yourself, in a commit of their own. Do not ask a person to click: it is six objects, and a build proves them. Where the `xcodeproj` Ruby gem is installed (`gem list xcodeproj`), write them with it; otherwise edit the text, giving each new object a 24-character hexadecimal id that the file does not use. The project gains:
+
+   - one `XCRemoteSwiftPackageReference`, with `repositoryURL = "https://github.com/ripulio/ripul-ios-sdk";` and `requirement = { kind = upToNextMinorVersion; minimumVersion = 0.7.174; };`, listed in the project object's `packageReferences`;
+   - two `XCSwiftPackageProductDependency` objects, each with `package =` that reference: one with `productName = RipulThemeKit;` (or `RipulAgent`, by step 1), one with `productName = "plugin:RipulThemeRedirect";`;
+   - the first of them in the app target's `packageProductDependencies`, and in a `PBXBuildFile` (`productRef =` it) listed in the target's Frameworks build phase. A target with no `PBXFrameworksBuildPhase` needs one made and added to its `buildPhases`;
+   - one `PBXTargetDependency` with `productRef =` the plug-in's object, listed in the target's `dependencies`. This is what Xcode shows as Build Phases, "Run Build Tool Plug-ins".
+
+   Then `xcodebuild -list -project <project>` must still read the project, and the build of step 4 must pass. Commit the `Package.resolved` the build writes inside the project, if the repository keeps one or has none to compare with.
+
+   In a Swift package it is `plugins: [.plugin(name: "RipulThemeRedirect", package: "ripul-ios-sdk")]` on the target (this compiles; it has not been run in a real package host).
 3. **Allow the plug-in to run.** Xcode refuses a package's plug-in until it is trusted, and the build fails with the one line `Validate plug-in “RipulThemeRedirect” in package “ripul-ios-sdk”`. On the command line add `-skipPackagePluginValidation` to every `xcodebuild` call, and add it to the repository's build scripts and written commands too, or the next agent meets the same failure. In Xcode itself the person is asked once, "Trust & Enable".
-4. **Build with no theme document yet**, and take the screenshots again. Compare them with both baseline sets pixel for pixel, by decoding the pictures and counting the pixels that differ, never by eye. They must match, apart from the places your two baseline sets showed to differ by themselves. Capture a screen again before you believe a new difference in the status bar or the tab bar. If the build fails with "invalid redeclaration" or "ambiguous use", the app declares a name the generated file also declares; the header of the generated file names two flags that leave a part out (`RIPUL_THEME_NO_ROOT`, `RIPUL_THEME_NO_STYLES`). `docs/theming-for-hosts.md` in the package checkout, "What can go wrong", has the rest.
+4. **Build with no theme document yet**, and take the screenshots again. Compare them with both baseline sets pixel for pixel, by decoding the pictures and counting the pixels that differ, never by eye. They must match, apart from the places your two baseline sets showed to differ by themselves. Capture a screen again before you believe a new difference in the status bar or the tab bar. If the build fails with "invalid redeclaration" or "ambiguous use", the app declares a name the generated file also declares; the header of the generated file names the flags that leave a part out (`RIPUL_THEME_NO_ROOT`, `RIPUL_THEME_NO_STYLES`, `RIPUL_THEME_NO_TEXT`, `RIPUL_THEME_NO_LISTS`). Read the build log for lines that begin `ripul-theme redirect:`: each names something the generated file left to SwiftUI, such as a `List` written in a form it does not have. `docs/theming-for-hosts.md` in the package checkout, "What can go wrong", has the rest.
 
 ## 5. Write the theme document
 
@@ -69,7 +81,8 @@ Ask what the look should follow if the person has not said: a website, a brand f
 - **From a website:** fetch its stylesheets and read the page background, the text colour, the accent (links and buttons), the card and panel colours, and the font families for headings and for text. Report the values you took and where each came from.
 - **Write `<name>.json`** in a folder the app bundles (the bundle's top level, or a folder named `Theme` or `Themes`). The keys, the fifteen colour roles and what each is for are in `docs/theming-for-hosts.md`, "Write the document". Start from `{ "schema": 1, "name": "…" }`, which changes nothing, and add to it.
 - **Light and dark are both yours to write.** A source that has only a light look gives you no dark values: derive them, say that you derived them, and check each dark text colour against its background yourself. Nothing checks contrast. The pair most often wrong is `onAccent` on a pale dark-mode accent.
-- **Check the app's own fixed colours against your grounds, in both modes.** Level 1 does not reach a colour the app names itself (an asset colour, a `Brand` type). A button filled with the app's own navy disappears on a dark ground of the same navy. Find those colours in step 3, and choose a ground they can be seen on, or tell the person that level 2 is needed for them.
+- **Check the app's own colours against your grounds, in both modes, and name them in the document where they need to change.** A colour the app reads as `Color("BrandNavy")` from its asset catalogue is a role named `BrandNavy`: under `roles`, `"BrandNavy": { "light": "#24386b", "dark": "#5b78c4" }` changes it, and until a document names it it is the asset. A button filled with the app's own navy disappears on a dark ground of the same navy: give that role a dark value that can be seen. A colour kept in a `static let` takes the theme at launch and does not follow a switch while the app runs; say so. A colour written any other way (`Color(red:…)`, a generated `Color(.brandNavy)`) is not reached without an edit: choose a ground it can be seen on, or tell the person that level 2 is needed for it.
+- **Make sure the file reaches the bundle.** A project that lists its files one by one (most hand-kept ones) does not bundle a file because it is in the folder: add the document, and later each font file, to the app target's resources in the project file. Then look inside the built `.app` for them. A theme that does nothing is most often a document that was never copied.
 - **With one theme document in the bundle, it is the app's theme** at the next launch. With more than one, name one with the Info.plist key `RipulTheme`, or the app stays on the system look and says so in its log.
 
 **Fonts.** A font may be bundled only if its licence allows embedding in an app. Fonts served by Adobe Fonts, and most fonts a foundry sells for the web, do not allow it. When the brand's font cannot be bundled, say so, propose the nearest font that can (the SIL Open Font Licence allows it), and ask the person once. If no answer comes, do not leave the app on the system's fonts: bundle the font you proposed in a commit of its own, so that it can be dropped, and list it in the ledger as a decision still open. Put the `.ttf` or `.otf` files in the bundle (top level, or a folder named `Fonts`), each font's licence file beside it, and a short note of where each file came from. Write no registration code and no Info.plist entry: the package registers the files a document names. The name in the document is the font's family name ("Source Sans 3"), not its file name. Prefer a variable font: a file with one weight draws that weight whatever is asked.
@@ -78,42 +91,45 @@ Ask what the look should follow if the person has not said: a website, a brand f
 
 ## 6. Say what level 1 did not reach, and ask
 
-Level 1 reaches: text styles and fixed sizes, a serif or monospaced design, hierarchy styles in `foregroundStyle`, the system background colours, the named state colours (red, orange, green, blue, grey), the accent, navigation titles and tab labels.
+Level 1 reaches: text styles and fixed sizes, a serif or monospaced design, hierarchy styles in `foregroundStyle`, text with no colour of its own, lists, forms and their sections, the system background colours, the named state colours (red, orange, green, blue, grey), the app's own asset colours that the document names, the accent, navigation titles and tab labels.
 
 It does not reach, and you should name each with the screens where it shows:
 
-- **text with no colour of its own**, which stays the system's black or white on the theme's ground;
-- **lists and forms**: their ground, rows and header colour;
-- **the app's own colours** (an asset colour, a `Brand` type), and white and black;
+- **text the build could not tell was bare**: a text made with `Text(verbatim:)`, a date or number format or `+`, a `Label`'s title, and a text inside a view of the app's own that is kept in a property and coloured where it is used. These stay the system's black or white on the theme's ground;
+- **text that took a container's or a control's colour before and now takes the theme's**, where the build could not see that from the source. Look at every themed screen for text that turned the theme's ink on a photo, a filled button or a coloured panel. `ripul-theme check --text <source folder>` lists the lines it themes;
+- **a list, form or section the build log named** as left to SwiftUI;
+- **the app's own colours not written `Color("Name")`**, and white and black;
 - a prominent button's label, a hierarchy style given to `fill`, `stroke` or `background`, and UIKit code.
 
 **Stop here and ask.** Show the themed screenshots, list what was not reached, and ask which the person wants: stop at level 1; fix the few places that matter (level 2); or adapt the whole source (level 3). Do not go on unasked.
 
 ## 7. Level 2: a few lines where it matters
 
-Each is a small edit in the app's source, in a file that imports `RipulAgent`. The forms are in `docs/theming-for-hosts.md`, "What it leaves for you". The three that matter most:
+Each is a small edit in the app's source, in a file that imports `RipulThemeKit` (or `RipulAgent`, which contains it). The forms are in `docs/theming-for-hosts.md`, "What it leaves for you" and "Your own colours". The ones that matter most:
 
-- **A text colour:** `.foregroundStyle(.ripul(.text))` on the `Text` itself. Never on a container or the root: there it recolours the labels of buttons, list links and section headers.
-- **A list:** `.scrollContentBackground(.hidden)` and `.background(.ripul(.surfaceSunken))` on the list, and `.listRowBackground(Color.ripul(.surface))` on each section or row. On the list itself the row background does nothing.
-- **The app's own colour:** ask. Either it stays fixed, or it gives way to the theme: `RipulTheme.isDefault(.accent) ? myNavy : Color.ripul(.accent)`, read where it is used. A theme document cannot name a colour outside the fifteen roles.
+- **A text level 1 missed:** `.foregroundStyle(.ripul(.text))` on the `Text` itself. Never on a container or the root: there it recolours the labels of buttons, list links and section headers.
+- **A text level 1 themed that should have kept a container's colour:** give the text that colour itself, or put it on a line with a coloured text.
+- **A list level 1 left to SwiftUI:** `.ripulThemedList()` on the list, and `.ripulThemedListRows()` on each section or row. On the list itself a row background does nothing.
+- **The app's own colour that is not an asset colour:** declare it as a role with today's value as the default, `static let navy = RipulColorRole("navy", default: "#24386b")` in an `extension RipulColorRole`, read it as `.ripul(.navy)`, and name `navy` under `roles` in the document.
 
 ## 8. Level 3: adapt the source
 
 Only when asked. It rewrites call sites to explicit accessors (`.font(.ripul(.body))`), so the source says it is themed and a check can keep it so. The two levels mix a file at a time: a migrated file calls the accessors, and the rest still goes through the plug-in.
 
 ```bash
-ripul-theme migrate --dry-run --named <source folder>   # read this first
-ripul-theme migrate --named <source folder>
-ripul-theme check <source folder>                       # what is left; exit 1 while any is
+ripul-theme migrate --dry-run --named --text --lists <source folder>   # read this first
+ripul-theme migrate --named --text --lists <source folder>
+ripul-theme check --text <source folder>                # what is left; exit 1 while any is
 ripul-theme lint                                        # did each replacement keep its value?
 ```
 
 What the tool does not do, each measured on a real app:
 
-- **It adds no `import RipulAgent`.** Every file it rewrote needs one, or one `@_exported import RipulAgent` in the app's main file.
+- **`--text` and `--lists` write what level 1 does with no edit**, by the same reading of the source: a text colour on each text with none, and the list modifiers. A text it could not tell was coloured from another file changes colour under the system look, so step 9 finds it: take the line off that text. A list row outside any `Section` needs `.ripulThemedListRows()` written on it.
+- **It writes `import RipulThemeKit`** in each file it left calling an accessor, unless the app has one `@_exported import` of it or of `RipulAgent`.
 - **It does not follow the app's own font helper** (`static func serif(…) -> Font`), and with `--named` it leaves `.black.opacity(…)` inside a gradient or a shadow. `check` lists each.
 - **`lint` reports a line you added by hand** (a root line, a list modifier) as "the hunk adds and removes different numbers of lines". That is the lint not knowing the line, not a moved value.
-- **A zero from `check` is not proof.** It cannot see a bare `.orange` passed to an unlabelled parameter, or a new `Text` with no colour.
+- **A zero from `check` is not proof.** It cannot see a bare `.orange` passed to an unlabelled parameter. A new `Text` with no colour is counted only with `--text`.
 
 Finish what `check` lists by the tables in `docs/theming-for-hosts.md` ("Move the call sites" and "What it leaves for you"). A colour that is data (a category's, a chart's, a shade over a photo) takes `// theme-exempt: <reason>` on its line and stays.
 
@@ -141,6 +157,7 @@ Do not merge. Report, with each line marked measured or reasoned:
 ## Limits to say out loud
 
 - Level 1 rests on how the Swift compiler chooses between two declarations of one name, measured with Swift 6.4 and Xcode 27.1 and not promised by the language. If a compiler changes it, the likely result is a compile error in the app's files, and the cure is to switch the plug-in off.
-- The theme is part of the whole package: an app that wants only the theme links all of it, in Release too.
-- A theme document cannot add a colour role, ask for a font feature such as lining figures, or colour a large navigation title or a section header.
+- Level 1 themes a text by the line it is written on, read from the source at build time. A text whose colour came from somewhere the source does not show on that line's file is themed all the same.
+- An app that links only `RipulThemeKit` has no developer console and no View Explorer.
+- A theme document cannot ask for a font feature such as lining figures, or colour a large navigation title.
 - If you are running inside Ripul (you have a `ripul_guide` tool), read its `devices` and `trains` guides before you install a build on a phone or use a simulator another agent may hold.

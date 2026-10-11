@@ -90,6 +90,8 @@ public struct AgentWebView: NSViewRepresentable {
         config.userContentController.add(coordinator, name: "agentNetwork")
         config.userContentController.add(coordinator, name: "agentStartup")
         config.userContentController.add(coordinator, name: "curtainLowered")
+        AgentStorageReset(baseHost: configuration.baseURL.host, standalone: configuration.standalone, bridge: bridge)
+            .install(in: config.userContentController)
 
         // Inject font-face declarations for any requested font families
         if let families = configuration.fontFamilies, !families.isEmpty {
@@ -489,6 +491,8 @@ private struct AgentWebViewRepresentable: UIViewControllerRepresentable {
         config.userContentController.add(context.coordinator, name: "agentNetwork")
         config.userContentController.add(context.coordinator, name: "agentStartup")
         config.userContentController.add(context.coordinator, name: "curtainLowered")
+        AgentStorageReset(baseHost: configuration.baseURL.host, standalone: configuration.standalone, bridge: bridge)
+            .install(in: config.userContentController)
         #if targetEnvironment(macCatalyst)
         // The user content controller keeps the handler alive.
         CatalystClipboardBridge(baseHost: configuration.baseURL.host, standalone: configuration.standalone)

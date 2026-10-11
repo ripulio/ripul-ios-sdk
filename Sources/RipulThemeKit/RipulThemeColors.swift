@@ -1,10 +1,10 @@
 import SwiftUI
 #if canImport(UIKit)
 import UIKit
-typealias RipulPlatformColor = UIColor
+package typealias RipulPlatformColor = UIColor
 #elseif canImport(AppKit)
 import AppKit
-typealias RipulPlatformColor = NSColor
+package typealias RipulPlatformColor = NSColor
 #endif
 
 // MARK: - Colours a view can use
@@ -110,6 +110,8 @@ extension RipulTheme {
 
     static func swiftUIColor(_ value: RipulColorValue) -> Color {
         if let name = value.systemName, let known = swiftUISystemColor(name) { return known }
+        // What the host wrote before: `Color("BrandNavy")`.
+        if let asset = value.assetName { return Color(asset) }
         return Color(platformColor(value))
     }
 
@@ -139,7 +141,7 @@ extension RipulTheme {
 
     /// The platform colour for a resolved value. A system colour is returned as the
     /// system's own object; a light and dark pair as one dynamic colour.
-    static func platformColor(_ value: RipulColorValue) -> RipulPlatformColor {
+    package static func platformColor(_ value: RipulColorValue) -> RipulPlatformColor {
         guard let dark = value.dark, dark != value.light else { return platformColor(value.light) }
         let light = value.light
         #if canImport(UIKit)
@@ -149,12 +151,15 @@ extension RipulTheme {
         #endif
     }
 
-    static func platformColor(_ literal: RipulColorLiteral) -> RipulPlatformColor {
+    package static func platformColor(_ literal: RipulColorLiteral) -> RipulPlatformColor {
         switch literal {
         case .rgba(let r, let g, let b, let a):
             return RipulPlatformColor(red: CGFloat(r), green: CGFloat(g), blue: CGFloat(b), alpha: CGFloat(a))
         case .system(let name):
             return systemPlatformColor(name)
+        case .asset(let name):
+            // A name the catalogue does not hold is drawn as nothing, as SwiftUI draws it.
+            return RipulPlatformColor(named: name) ?? .clear
         }
     }
 

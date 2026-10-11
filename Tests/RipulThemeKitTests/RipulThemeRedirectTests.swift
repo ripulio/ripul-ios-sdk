@@ -1,6 +1,6 @@
 import XCTest
 import SwiftUI
-@testable import RipulAgent
+@testable import RipulThemeKit
 
 /// The redirect a host's unedited source goes through (the `RipulThemeRedirect` plug-in):
 /// with no theme every function returns the value SwiftUI's own would have, itself, and a
@@ -81,5 +81,33 @@ final class RipulThemeRedirectTests: XCTestCase {
                        Font.ripul(size: 22, weight: .medium, family: .display))
         // The text family is not named, so plain text styles are still SwiftUI's own.
         XCTAssertEqual(RipulThemeRedirect.font(.body), Font.body)
+    }
+}
+
+// MARK: - Text with no colour of its own
+
+final class RipulThemeRedirectTextTests: XCTestCase {
+    override func tearDown() {
+        RipulTheme.resetToDefaults()
+        super.tearDown()
+    }
+
+    func testWithNoThemeATextIsItselfAndTheTableIsNotRead() {
+        var asked = false
+        XCTAssertEqual(RipulThemeRedirect.text("Hello") { asked = true; return true }, Text("Hello"))
+        XCTAssertEqual(RipulThemeRedirect.text(verbatim: "Hello") { asked = true; return true }, Text(verbatim: "Hello"))
+        XCTAssertFalse(asked)
+    }
+
+    func testUnderAThemedTextColourOnlyABareTextTakesIt() throws {
+        try RipulTheme.adopt(documentData: Data(##"{"roles":{"text":"#1C2540"}}"##.utf8))
+        XCTAssertEqual(RipulThemeRedirect.text("Hello") { false }, Text("Hello"))
+        XCTAssertNotEqual(RipulThemeRedirect.text("Hello") { true }, Text("Hello"))
+        XCTAssertNotEqual(RipulThemeRedirect.text(verbatim: "Hello") { true }, Text(verbatim: "Hello"))
+    }
+
+    func testAThemeThatNamesNoTextColourLeavesTextAlone() throws {
+        try RipulTheme.adopt(documentData: Data(##"{"roles":{"accent":"#24386B"}}"##.utf8))
+        XCTAssertEqual(RipulThemeRedirect.text("Hello") { true }, Text("Hello"))
     }
 }
