@@ -39,6 +39,7 @@ public struct TouchTool: NativeTool {
 
     @MainActor
     public func execute(args: [String: Any]) async throws -> Any {
+        try SecureInputProtection.check()
         #if canImport(UIKit)
         if let refusal = LiveStreamHost.shared.relayRefusal(args) {
             return ["success": false, "error": refusal]

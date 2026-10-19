@@ -104,9 +104,15 @@ public final class RipulWorkspaceStorage {
         }
         return ids.compactMap { id in
             guard let stored = stored[id],
-                  let encoded = stored["data"], let mediaType = stored["mediaType"],
-                  let data = Data(base64Encoded: encoded), let thumbnail = PlatformImage(data: data) else { return nil }
-            return NativeImageAttachment(id: id, mediaType: mediaType, data: encoded, thumbnail: thumbnail)
+                  let encoded = stored["data"], let mediaType = stored["mediaType"] else { return nil }
+            let name = stored["name"]
+            // A file other than a photo has no picture: its chip shows a symbol.
+            guard mediaType.hasPrefix("image/") else {
+                return NativeImageAttachment(id: id, mediaType: mediaType, data: encoded,
+                                             thumbnail: FileAttachmentHelper.thumbnail(for: mediaType, name: name), name: name)
+            }
+            guard let data = Data(base64Encoded: encoded), let thumbnail = PlatformImage(data: data) else { return nil }
+            return NativeImageAttachment(id: id, mediaType: mediaType, data: encoded, thumbnail: thumbnail, name: name)
         }
     }
 

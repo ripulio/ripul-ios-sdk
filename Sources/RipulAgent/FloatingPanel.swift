@@ -66,6 +66,8 @@ public struct RipulFloatingPanel<Content: View>: View {
     private let aspectRatio: CGFloat?
     private let contentInsets: UIEdgeInsets
     private let avoidsKeyboard: Bool
+    private let movesFromTopStrip: CGFloat?
+    private let keepsTrailingEdge: Bool
     private let content: (CGSize) -> Content
 
     /// Live size during a resize drag. nil until the persisted value is read.
@@ -73,6 +75,11 @@ public struct RipulFloatingPanel<Content: View>: View {
 
     /// `aspectRatio` locks width/height during resizing. `contentInsets` reserves
     /// room for surrounding chrome; `avoidsKeyboard` keeps the panel above it.
+    /// `movesFromTopStrip` is for content that takes touches itself (a live
+    /// screen): the panel is then moved only from that many points at its top.
+    /// `keepsTrailingEdge` holds the panel's right edge still when its content
+    /// changes width by itself, so a panel minimised from a button at its
+    /// top-right shrinks into that button, and grows back out of it.
     public init(storageKey: String,
                 defaultSize: CGSize,
                 minSize: CGSize = CGSize(width: 220, height: 180),
@@ -82,6 +89,8 @@ public struct RipulFloatingPanel<Content: View>: View {
                 aspectRatio: CGFloat? = nil,
                 contentInsets: UIEdgeInsets = .zero,
                 avoidsKeyboard: Bool = false,
+                movesFromTopStrip: CGFloat? = nil,
+                keepsTrailingEdge: Bool = false,
                 @ViewBuilder content: @escaping (CGSize) -> Content) {
         self.storageKey = storageKey
         self.defaultSize = defaultSize
@@ -92,6 +101,8 @@ public struct RipulFloatingPanel<Content: View>: View {
         self.aspectRatio = aspectRatio
         self.contentInsets = contentInsets
         self.avoidsKeyboard = avoidsKeyboard
+        self.movesFromTopStrip = movesFromTopStrip
+        self.keepsTrailingEdge = keepsTrailingEdge
         self.content = content
     }
 
@@ -113,6 +124,8 @@ public struct RipulFloatingPanel<Content: View>: View {
             aspectRatio: aspectRatio,
             contentInsets: contentInsets,
             avoidsKeyboard: avoidsKeyboard,
+            movesFromTopStrip: movesFromTopStrip,
+            keepsTrailingEdge: keepsTrailingEdge,
             onResize: { liveSize = $0 },
             onResizeEnded: { persist($0) }
         )
@@ -131,6 +144,85 @@ public struct RipulFloatingPanel<Content: View>: View {
     }
 }
 
+// MARK: - Minimising into the top-right button
+
+/// A preview panel that minimises into a round button at its top-right
+/// corner, where its minimise button is, and expands back out of it. Use with
+/// `RipulFloatingPanel(keepsTrailingEdge: true)`.
+///
+/// Nothing changes size while it animates. Animating the panel's frame from
+/// its full size down to the button's, inside a panel that UIKit was resizing
+/// and moving, threw the picture up and to the right by half its size for the
+/// first frames (recorded 14 October 2026), and so did the frame animation
+/// alone. So the picture scales toward its top-right corner and fades as the
+/// button fades in, and only then does the panel take the button's size;
+/// expanding, the panel takes its full size first, under the button, and the
+/// picture grows out of the corner.
+@available(iOS 17.0, *)
+struct FloatingPanelCollapse<Panel: View, Minimised: View>: View {
+    let collapsed: Bool
+    let expanded: CGSize
+    let button: CGFloat
+    let animation: Animation?
+    let panel: () -> Panel
+    let minimised: () -> Minimised
+    /// What is drawn, and what size the panel takes. They start as the panel
+    /// is, so the first change after it appears is sequenced like the rest.
+    @State private var drawn: Bool
+    @State private var held: Bool
+
+    init(collapsed: Bool, expanded: CGSize, button: CGFloat = 56, animation: Animation?,
+         @ViewBuilder panel: @escaping () -> Panel, @ViewBuilder minimised: @escaping () -> Minimised) {
+        self.collapsed = collapsed
+        self.expanded = expanded
+        self.button = button
+        self.animation = animation
+        self.panel = panel
+        self.minimised = minimised
+        _drawn = State(initialValue: collapsed)
+        _held = State(initialValue: collapsed)
+    }
+
+    /// How long the picture takes to settle into the button.
+    static var settle: Duration { .milliseconds(450) }
+
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            if !held {
+                panel()
+                    .scaleEffect(drawn ? button / max(expanded.width, button) : 1, anchor: .topTrailing)
+                    .opacity(drawn ? 0 : 1)
+                    .allowsHitTesting(!drawn)
+                    .accessibilityHidden(drawn)
+            }
+            minimised()
+                .scaleEffect(drawn ? 1 : 0.5)
+                .opacity(drawn ? 1 : 0)
+                .allowsHitTesting(drawn)
+                .accessibilityHidden(!drawn)
+        }
+        .animation(animation, value: drawn)
+        .frame(width: held ? button : expanded.width, height: held ? button : expanded.height, alignment: .topTrailing)
+        .onChange(of: collapsed) { _, now in
+            guard animation != nil else { self.drawn = now; self.held = now; return }
+            if now {
+                self.drawn = true
+                Task { @MainActor in
+                    try? await Task.sleep(for: Self.settle)
+                    if self.drawn { self.held = true }
+                }
+            } else {
+                self.held = false
+                Task { @MainActor in
+                    // The panel has taken its full size, keeping its right edge, by the next frame.
+                    try? await Task.sleep(for: .milliseconds(34))
+                    if !self.held { self.drawn = false }
+                }
+            }
+        }
+    }
+}
+
 // MARK: - Representable
 
 @available(iOS 16.0, *)
@@ -146,6 +238,8 @@ private struct FloatingPanelHost<Content: View>: UIViewControllerRepresentable {
     let aspectRatio: CGFloat?
     let contentInsets: UIEdgeInsets
     let avoidsKeyboard: Bool
+    let movesFromTopStrip: CGFloat?
+    let keepsTrailingEdge: Bool
     let onResize: (CGSize) -> Void
     let onResizeEnded: (CGSize) -> Void
 
@@ -168,6 +262,8 @@ private struct FloatingPanelHost<Content: View>: UIViewControllerRepresentable {
     }
 
     func updateUIViewController(_ vc: RipulFloatingPanelController<Content>, context: Context) {
+        vc.movesFromTopStrip = movesFromTopStrip
+        vc.keepsTrailingEdge = keepsTrailingEdge
         vc.update(content: content,
                   size: size,
                   showsResizeGrip: showsResizeGrip,
@@ -272,6 +368,12 @@ final class RipulFloatingPanelController<Content: View>: UIViewController, UIGes
     private var hasRestoredPosition = false
     private var isDragging = false
     private var isResizing = false
+    /// Content that takes touches leaves the panel to be moved from its top strip only.
+    var movesFromTopStrip: CGFloat?
+    /// The right edge stays put when the content changes width by itself.
+    var keepsTrailingEdge = false
+    /// The panel's width at the last layout, to see the content change it.
+    private var laidOutWidth: CGFloat = 0
 
     init(content: Content,
          size: CGSize,
@@ -371,7 +473,12 @@ final class RipulFloatingPanelController<Content: View>: UIViewController, UIGes
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
-        guard panelView.bounds.width > 0 else { return }
+        let width = panelView.bounds.width
+        guard width > 0 else { return }
+        // Read before the gesture guard, so a resize's own growth is never
+        // taken for the content changing width.
+        let widthBefore = laidOutWidth
+        laidOutWidth = width
         // Never re-position under an active gesture: during a resize this is
         // feedback loop #2, and during a move the pan already owns the transform.
         guard !isDragging, !isResizing else { return }
@@ -385,7 +492,9 @@ final class RipulFloatingPanelController<Content: View>: UIViewController, UIGes
         } else {
             // Rotation / content-size change (e.g. unfolding near an edge):
             // re-clamp so the panel can never be stranded in a safe area.
-            proposed = CGPoint(x: panelView.transform.tx, y: panelView.transform.ty)
+            var x = panelView.transform.tx
+            if keepsTrailingEdge, widthBefore > 0, widthBefore != width { x += widthBefore - width }
+            proposed = CGPoint(x: x, y: panelView.transform.ty)
         }
         applyPosition(clampedTranslation(proposed))
     }
@@ -529,8 +638,10 @@ final class RipulFloatingPanelController<Content: View>: UIViewController, UIGes
     /// The grip owns its corner: reject move-pan touches that land on it, so dragging
     /// the corner resizes rather than repositioning.
     func gestureRecognizer(_ g: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
-        guard !grip.isHidden else { return true }
-        return !grip.frame.contains(touch.location(in: panelView))
+        let point = touch.location(in: panelView)
+        if !grip.isHidden, grip.frame.contains(point) { return false }
+        if let strip = movesFromTopStrip { return point.y <= strip }
+        return true
     }
 }
 #endif

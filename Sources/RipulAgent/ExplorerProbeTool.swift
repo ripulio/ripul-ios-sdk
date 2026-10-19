@@ -41,20 +41,25 @@ public struct ExplorerProbeTool: NativeTool {
 
     public init() {}
 
+    @MainActor
     public func execute(args: [String: Any]) async throws -> Any {
+        let privacyEpoch = SecureInputProtection.epoch
+        try SecureInputProtection.check()
         #if canImport(UIKit)
         let fire = args["fire"] as? Bool ?? false
         if args["x"] == nil && args["y"] == nil {
             guard !fire else {
                 return ["success": false, "error": "fire requires both x and y; reading the current selection never presses it"]
             }
-            return await Task { @MainActor () -> Any in
+            return try await Task { @MainActor () async throws -> Any in
+                try SecureInputProtection.check(since: privacyEpoch)
                 guard let live = ViewInspectorController.live,
                       let window = live.window, !window.isHidden, window.alpha > 0.01,
                       !live.isHidden else {
                     return ["success": true, "isOpen": false, "hasSelection": false]
                 }
                 await live.session?.readWebSelection()
+                try SecureInputProtection.check(since: privacyEpoch)
                 return live.selectionSnapshot()
             }.value
         }
@@ -78,13 +83,15 @@ public struct ExplorerProbeTool: NativeTool {
             try? await Task.sleep(nanoseconds: 400_000_000)
         }
 
-        return await Task { @MainActor () -> Any in
+        return try await Task { @MainActor () async throws -> Any in
+            try SecureInputProtection.check(since: privacyEpoch)
             guard let live = ViewInspectorController.live, live.window != nil else {
                 return ["success": false,
                         "error": "The View Explorer could not be opened (needs iOS 16+ and a foreground scene)."]
             }
             _ = live.probe(atWindowPoint: CGPoint(x: x, y: y), fire: false)
             await live.session?.waitForPick()
+            try SecureInputProtection.check(since: privacyEpoch)
             var result = live.selectionSnapshot()
             if fire {
                 if let session = live.session, session.web != nil {
@@ -94,6 +101,7 @@ public struct ExplorerProbeTool: NativeTool {
                 }
             }
             if opened { result["openedExplorer"] = true }
+            try SecureInputProtection.check(since: privacyEpoch)
             return result
         }.value
         #else

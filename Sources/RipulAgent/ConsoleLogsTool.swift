@@ -12,7 +12,8 @@ public struct ConsoleLogsTool: NativeTool {
         .number("since", "Only return logs after this timestamp (epoch ms)"),
         .number("until", "Only return logs at or before this timestamp (epoch ms) — with since, reads a past window"),
         .number("limit", "Max number of log entries to return (default 50, max 500)"),
-        .bool("includeStack", "Include stack traces for error entries")
+        .bool("includeStack", "Include stack traces for error entries"),
+        .bool("includeCrashHistory", "Also return the last 20 persisted WebKit terminations and their system-log evidence, including from earlier app launches")
     )
 
     let bridge: AgentBridge
@@ -72,6 +73,23 @@ public struct ConsoleLogsTool: NativeTool {
             return dict
         }
 
-        return ["logs": logs, "count": logs.count, "total": allEntries.count]
+        var result: [String: Any] = ["logs": logs, "count": logs.count, "total": allEntries.count]
+        if args["includeCrashHistory"] as? Bool == true {
+            result["webViewCrashes"] = try Self.crashHistory(bridge.crashEvents)
+        }
+        return result
+    }
+
+    static func crashHistory(_ events: [WebViewCrashEvent]) throws -> [[String: Any]] {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let data = try encoder.encode(Array(events.suffix(20)))
+        var records = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] ?? []
+        for index in records.indices {
+            if let url = records[index]["url"] as? String {
+                records[index]["url"] = WebViewLogRedaction.text(url, limit: 300)
+            }
+        }
+        return records
     }
 }

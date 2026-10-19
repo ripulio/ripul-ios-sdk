@@ -811,6 +811,17 @@ public final class RipulSessionListModel {
         // Don't overwrite good data with empty API responses — a transient
         // server-side gap (host past registry TTL) would wipe list AND cache.
         guard !fetched.isEmpty else {
+            // Keep only this account's own Macs. A Mac shared through a team
+            // is not this account's to remember: an empty answer is exactly
+            // what a member removed from the team gets, and keeping it showed
+            // them the owner's Mac for good, failing with machine-not-found
+            // when they started a chat on it (16 October 2026).
+            let own = machines.filter { $0.shared != true }
+            if own.count != machines.count {
+                log("loadMachinesFromAPI: empty response — dropping \(machines.count - own.count) shared machines")
+                machines = own
+                RemoteMachine.saveToCache(own, cache: cache)
+            }
             log("loadMachinesFromAPI: empty response — keeping existing \(machines.count) machines")
             // An account with no reachable machine has just had that
             // confirmed. Rows built from the tab list before this answer
@@ -862,6 +873,11 @@ public final class RipulSessionListModel {
         // Repeated taps on the same request are harmless. A DIFFERENT row is
         // new intent, not a duplicate: cancel the old continuation immediately.
         guard openingUnifiedSessionId != session.id else { return }
+        // Opening the chat is reading it, so a mention in it is done with.
+        // The tab's host chat id too: a saved row may not carry it.
+        let own = Set(session.readStateKeys)
+        let hosts = bridge.sessions.filter { own.contains($0.id) || own.contains($0.sourceChatId) }.compactMap(\.hostChatId)
+        PendingQuestionStore.shared.clearMentions(anyOf: session.attentionKeys + hosts)
         sessionOpenTask?.cancel()
         let requestID = UUID()
         sessionOpenRequestID = requestID
@@ -2101,16 +2117,9 @@ public final class RipulSessionListModel {
             }
             if match == nil { match = localByKey[updated[i].id] }
             let matchChanged = match?.id != updated[i].ripulSession?.id
-            // A local name may only overwrite a scan-derived title when it is a
-            // REAL title — source "cli" (JSONL custom-title) or "user" (a Ripul
-            // rename awaiting round-trip). Source "auto" is a descriptor name or
-            // a date fallback: no better than the scan's answer, and letting it
-            // win is what made rows alternate between the two, since this path
-            // and `build` fire on different triggers and kept overwriting each
-            // other. A row with no scan row behind it (an orphan local) has no
-            // competing source, so it always accepts its tab's name.
-            let localTitleIsReal = match?.displayNameSource.map { $0 == "cli" || $0 == "user" } ?? true
-            let mayRetitle = localTitleIsReal || !updated[i].titleFromScan
+            let replyAuthorChanged = match?.latestReplyAuthorName != updated[i].ripulSession?.latestReplyAuthorName
+                || match?.typingNames != updated[i].ripulSession?.typingNames
+            let mayRetitle = updated[i].acceptsLocalTitle(match)
             let nameChanged = match != nil && mayRetitle && match?.displayName != updated[i].title
             // A row with no scan behind it has its tab as the ONLY source of
             // provider and model. A share-link guest's tab learns its model
@@ -2118,7 +2127,7 @@ public final class RipulSessionListModel {
             // row must follow the tab when those move — carrying the old nil
             // across verbatim is what kept the default icon until relaunch.
             let tabFactsChanged = match.map { updated[i].tabFactsDiffer(from: $0) } ?? false
-            if matchChanged || nameChanged || tabFactsChanged {
+            if matchChanged || replyAuthorChanged || nameChanged || tabFactsChanged {
                 // Carry every other field across verbatim. This path knows
                 // about tabs and nothing else — re-deriving the row from its
                 // parts here is how `model` (and project path, tags and

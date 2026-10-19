@@ -71,6 +71,8 @@ Hands-free conversations default to sending when the transcript ends with
 **Send command**, followed by a brief pause. Other pauses keep the microphone
 listening. The closing phrase is removed from the message; manual Send remains
 available. An explicitly saved **Detect pauses automatically** choice is preserved.
+Closing phrases also accept **send** or **sending**, optionally one word, then
+**command** or **request**: for example, **Sending the command** or **Send a request**.
 The gear button in both the full-screen conversation and compact panel opens
 Voice settings directly, including **Send messages**, recognition and delivery.
 Opening settings pauses the conversation without discarding the transcript;

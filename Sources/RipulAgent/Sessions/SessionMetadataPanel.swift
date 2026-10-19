@@ -24,6 +24,7 @@ public struct SessionMetadataPanel: View {
 
     // Section expansion
     @State private var milestonesExpanded = true
+    @State private var shortcutsExpanded = true
     @State private var messagesExpanded = true
     @State private var messagesSearch = ""
     @State private var filesExpanded = true
@@ -51,6 +52,7 @@ public struct SessionMetadataPanel: View {
             VStack(spacing: 12) {
                 // First, since "where am I?" is the question a long chat raises.
                 milestonesSection
+                shortcutsSection
                 descriptionSection
                 messagesSection
                 modelSection
@@ -150,6 +152,9 @@ public struct SessionMetadataPanel: View {
         Task {
             if let updated = await bridge.patchSessionMetadata(sessionId: sessionId, patch: patch) {
                 metadata = updated
+                if patch.keys.contains(where: { $0.hasSuffix("Shortcut") || $0 == "removeShortcutId" }) {
+                    NotificationCenter.default.post(name: .ripulChatShortcutsChanged, object: nil)
+                }
             }
         }
     }
@@ -164,6 +169,19 @@ public struct SessionMetadataPanel: View {
                 story: metadata?.story,
                 latestAnchor: anchors.last,
                 isExpanded: $milestonesExpanded,
+                patch: patch
+            )
+        }
+    }
+
+    // MARK: - Shortcuts
+
+    @ViewBuilder
+    private var shortcutsSection: some View {
+        if let metadata {
+            SessionShortcutsSection(
+                shortcuts: metadata.shortcuts,
+                isExpanded: $shortcutsExpanded,
                 patch: patch
             )
         }

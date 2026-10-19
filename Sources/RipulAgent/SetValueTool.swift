@@ -38,28 +38,28 @@ public struct SetValueTool: NativeTool {
 
     public init() {}
 
+    @MainActor
     public func execute(args: [String: Any]) async throws -> Any {
+        try SecureInputProtection.check()
         #if canImport(UIKit)
         guard let value = args["value"] as? String else {
             return ["success": false, "error": "value is required"]
         }
-        return await MainActor.run { () -> Any in
-            let target: ScreenElementFinder.Match
-            let matchCount: Int
-            switch ScreenElementFinder.resolveTarget(args: args) {
-            case .failure(let error): return error
-            case .target(let m, let count): target = m; matchCount = count
-            }
-            let outcome = ScreenActuationEngine.performSetValue(on: target.view, value: value)
-            var result: [String: Any] = ["success": outcome.success,
-                                         "matched": matchCount,
-                                         "element": ScreenElementFinder.describe(target),
-                                         "trace": outcome.trace]
-            if let via = outcome.via { result["via"] = via }
-            if let set = outcome.activatedLabel { result["set"] = set }
-            if let error = outcome.error { result["error"] = error }
-            return result
+        let target: ScreenElementFinder.Match
+        let matchCount: Int
+        switch ScreenElementFinder.resolveTarget(args: args) {
+        case .failure(let error): return error
+        case .target(let m, let count): target = m; matchCount = count
         }
+        let outcome = ScreenActuationEngine.performSetValue(on: target.view, value: value)
+        var result: [String: Any] = ["success": outcome.success,
+                                     "matched": matchCount,
+                                     "element": ScreenElementFinder.describe(target),
+                                     "trace": outcome.trace]
+        if let via = outcome.via { result["via"] = via }
+        if let set = outcome.activatedLabel { result["set"] = set }
+        if let error = outcome.error { result["error"] = error }
+        return result
         #else
         return ["success": false, "error": "set_value requires UIKit"]
         #endif

@@ -76,6 +76,10 @@ public final class RipulInviteManager: ObservableObject {
     /// What the panel shows: pushed invitations the inbox has not listed yet,
     /// then the inbox as last read. Written only by `publish()`.
     @Published public private(set) var invites: [RipulShareInvite] = []
+    /// Invitations to join a team (and so its shared Macs), read with the chat
+    /// invites. The Mac app has no push, and the Teams screen was reachable
+    /// only from one, so without this an invitee on a Mac never saw theirs.
+    @Published public private(set) var teamInvites: [RipulTeamInvite] = []
     // Diagnostics and a re-entrancy guard, not UI: nothing renders them, and
     // publishing them re-rendered every observer (the session list, the SDK
     // console's RipulAgentScreen) twice per 20s poll, changed or not.
@@ -272,6 +276,7 @@ public final class RipulInviteManager: ObservableObject {
         let currentAccount = accountProvider?()
         if accountId != currentAccount {
             listed = []
+            teamInvites = []
             accountId = currentAccount
             publish()
         }
@@ -279,6 +284,7 @@ public final class RipulInviteManager: ObservableObject {
         guard !isLoading else { refreshQueued = true; return }
         isLoading = true
         let outcome = await readInbox(for: currentAccount)
+        if outcome == .listed { await readTeamInvites(for: currentAccount) }
         isLoading = false
         switch outcome {
         case .listed:
@@ -351,6 +357,34 @@ public final class RipulInviteManager: ObservableObject {
         }
     }
 
+    private func teamsClient() async -> RipulTeamsClient? {
+        guard let token = await requestToken() else { return nil }
+        return RipulTeamsClient(baseURL: baseURL, tokenProvider: { token })
+    }
+
+    /// A failed read keeps what was shown: an invitation does not vanish
+    /// because one read did not answer.
+    private func readTeamInvites(for currentAccount: String?) async {
+        guard let client = await teamsClient(),
+              let fetched = try? await client.myInvites(),
+              accountProvider?() == currentAccount, !Task.isCancelled else { return }
+        if teamInvites != fetched { teamInvites = fetched }
+    }
+
+    /// Join the team. Its shared Macs appear in the machine list on its next read.
+    public func acceptTeamInvite(_ invite: RipulTeamInvite) async throws {
+        guard let client = await teamsClient() else { throw URLError(.userAuthenticationRequired) }
+        try await client.acceptInvite(invite.id)
+        teamInvites.removeAll { $0.id == invite.id }
+        NotificationCenter.default.post(name: .ripulChatMembershipChanged, object: nil)
+    }
+
+    public func declineTeamInvite(_ invite: RipulTeamInvite) async throws {
+        guard let client = await teamsClient() else { throw URLError(.userAuthenticationRequired) }
+        try await client.declineInvite(invite.id)
+        teamInvites.removeAll { $0.id == invite.id }
+    }
+
     /// Dismiss (or mark accepted) an invite.
     public func dismissInvite(_ invite: RipulShareInvite) async {
         guard let authToken = await requestToken() else { return }
@@ -394,6 +428,7 @@ public final class RipulInviteManager: ObservableObject {
 
             if status >= 200, status < 300 {
                 addRecentEmail(email)
+                NotificationCenter.default.post(name: .ripulChatMembershipChanged, object: nil)
                 return (true, nil)
             } else {
                 return (false, serverError(data, fallback: "Failed (status \(status))"))
@@ -432,6 +467,7 @@ public final class RipulInviteManager: ObservableObject {
     public func removeMember(_ member: RipulChatMember, shareToken: String) async throws {
         let userId = String(member.id.dropFirst("human-".count))
         _ = try await membershipRequest(path: "relay/share/\(shareToken)/members/\(userId)", method: "DELETE")
+        NotificationCenter.default.post(name: .ripulChatMembershipChanged, object: nil)
     }
 
     public func leaveChat(_ invite: RipulShareInvite) async throws {

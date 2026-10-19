@@ -2,6 +2,38 @@ import XCTest
 @testable import RipulAgent
 
 final class NativeToolRendererTests: XCTestCase {
+    func testNarrativePolicyPreservesLiteralFieldsAndRejectsUnsafeLinks() throws {
+        XCTAssertTrue(NativeToolNarrative.isProse("## Done\n**All checks passed**"))
+        XCTAssertFalse(NativeToolNarrative.isProse("# shell comment", hasSyntax: true))
+        XCTAssertFalse(NativeToolNarrative.isProse("a_b_c", enabled: false))
+        XCTAssertFalse(NativeToolNarrative.isProse("\u{001B}[31merror"))
+        for field in ["guide", "unexpectedField", "details", "payload"] {
+            XCTAssertTrue(NativeToolNarrative.isProse("# Trains\n\n**Ready**", field: field))
+        }
+        for field in ["path", "stdout", "code", "command"] {
+            XCTAssertFalse(NativeToolNarrative.isProse("# literal", field: field))
+        }
+        for value in ["cli_a_b_c", "/tmp/a file.md", "https://example.com/a_b_c"] {
+            XCTAssertFalse(NativeToolNarrative.isProse(value))
+        }
+        for link in ["https://example.com", "ripul://file/a", "file:///tmp/test.swift", "/tmp/test.swift"] {
+            XCTAssertTrue(NativeToolNarrative.allowsLink(try XCTUnwrap(URL(string: link))))
+        }
+        for link in ["javascript:alert(1)", "data:text/html,hello", "vbscript:hello"] {
+            XCTAssertFalse(NativeToolNarrative.allowsLink(try XCTUnwrap(URL(string: link))))
+        }
+    }
+
+    func testNarrativeExpandsUnknownNestedFieldsWithoutReinterpretingSource() throws {
+        let value = ToolValue.parse(##"{"embeddedToolResult":{"status":"success","result":"{\"guide\":\"# Trains\\n\\n**Ready**\"}"},"source":"{\"unexpected\":\"# Literal code\"}","items":["cli_a_b_c",{"unfamiliar":"**Formatted**"}]}"##)
+        let object = try XCTUnwrap(NativeToolNarrative.expanded(value).objectValue)
+        let result = try XCTUnwrap(object["embeddedToolResult"]?.objectValue?["result"]?.objectValue)
+        XCTAssertEqual(result["guide"]?.stringValue, "# Trains\n\n**Ready**")
+        XCTAssertNotNil(object["source"]?.stringValue, "Explicit source must not be parsed into prose fields")
+        XCTAssertEqual(object["items"]?.toolArray?.first, .string("cli_a_b_c"))
+        XCTAssertEqual(object["items"]?.toolArray?.last?.objectValue?["unfamiliar"], .string("**Formatted**"))
+    }
+
     func testConsoleNamesRouteWithoutCanonicalRendererMetadata() {
         for name in ["host_console_logs", "device_console_logs", "console_logs",
                      "mcp_ripul_tools_host_console_logs", "mcp__ripul_tools_host_console_logs",

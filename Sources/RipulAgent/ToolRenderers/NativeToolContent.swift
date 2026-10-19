@@ -1,10 +1,51 @@
 import Foundation
 
+/// Prose needs no field-name registration. Explicit source/data fields and
+/// dedicated code syntax keep their literal meaning throughout nested output.
+enum NativeToolNarrative {
+    private static let literalFields: Set<String> = ["code", "source", "sourcecode", "script", "command", "cmd", "expression", "patch", "diff",
+        "stdout", "stderr", "stack", "stacktrace", "html", "css", "sql", "query", "regex", "pattern",
+        "path", "filepath", "filename", "directory", "url", "uri"]
+
+    static func isLiteralField(_ field: String?) -> Bool {
+        literalFields.contains((field ?? "").replacingOccurrences(of: "[_-]", with: "", options: .regularExpression).lowercased())
+    }
+
+    static func isProse(_ text: String, field: String? = nil, enabled: Bool = true, hasSyntax: Bool = false) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard enabled, !hasSyntax, !isLiteralField(field), !trimmed.isEmpty, !text.contains("\u{001B}") else { return false }
+        if trimmed.range(of: #"^[\p{L}\p{N}_./:@%+=\\-]+$"#, options: .regularExpression) != nil { return false }
+        if !trimmed.contains("\n"), trimmed.range(of: #"^(?:/|~/|\.\.?/|[A-Za-z]:[\\/]|[a-z][a-z0-9+.-]*://)"#, options: [.regularExpression, .caseInsensitive]) != nil { return false }
+        return true
+    }
+
+    /// Decode structured JSON strings anywhere in a result, preserving literal
+    /// fields and bounding malformed/deep transport wrappers.
+    static func expanded(_ value: CmsJSON, field: String? = nil, depth: Int = 0) -> CmsJSON {
+        guard depth < 12, !isLiteralField(field) else { return value }
+        switch value {
+        case .string(let text):
+            let parsed = ToolValue.parse(text)
+            guard parsed.objectValue != nil || parsed.toolArray != nil else { return value }
+            return expanded(parsed, field: field, depth: depth + 1)
+        case .object(let object):
+            return .object(Dictionary(uniqueKeysWithValues: object.map { key, item in (key, expanded(item, field: key, depth: depth + 1)) }))
+        case .array(let items): return .array(items.map { expanded($0, field: field, depth: depth + 1) })
+        default: return value
+        }
+    }
+
+    static func allowsLink(_ url: URL) -> Bool {
+        guard let scheme = url.scheme?.lowercased() else { return true }
+        return ["https", "http", "mailto", "tel", "file", "ripul"].contains(scheme)
+    }
+}
+
 /// The native counterpart of the web field/result renderer registries. The
 /// bridge supplies the web normalizer's canonical name; aliases here also cover
 /// CLI-native tools that intentionally keep their own names in the web stream.
 enum NativeToolRendererKind: String {
-    case terminal, read, write, edit, patch, grep, glob, logs, evaluate, todos, web, agent, agentComms, agentList, http, tools, host, image, fields
+    case terminal, read, write, edit, patch, grep, glob, logs, evaluate, todos, web, agent, agentComms, agentList, http, tools, host, image, secureConnection, fields
 
     static func resolve(_ toolName: String) -> Self {
         let name = toolName.replacingOccurrences(of: "^functions[._]+", with: "", options: .regularExpression)
@@ -28,6 +69,7 @@ enum NativeToolRendererKind: String {
         case "httprequest", "http_request": return .http
         case "iphone_inspect", "agentdiscovery", "device_list_targets": return .tools
         case "host_get_host_status": return .host
+        case "request_integration", "request_integration_key", "request_integration_access": return .secureConnection
         case "capturepagescreenshot", "queryscreenshot", "take_screenshot", "screenshot": return .image
         default: return .fields
         }
@@ -143,6 +185,10 @@ struct NativeToolSummary {
             heading = description ?? "Capture screenshot"
             detail = path
             symbol = "camera"
+        case .secureConnection:
+            heading = first("name") ?? "Connect securely"
+            detail = "Private API key entry"
+            symbol = "lock.shield"
         case .fields:
             heading = description ?? ToolDisplayName.format(call.toolName)
             detail = args.keys.sorted().lazy.compactMap { key -> String? in

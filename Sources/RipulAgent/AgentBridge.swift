@@ -1,5 +1,6 @@
 import Combine
 import Observation
+import SwiftUI
 import Foundation
 import Network
 import WebKit
@@ -566,6 +567,12 @@ public final class AgentBridge: NSObject {
     /// Flipped rarely (a settings toggle), so plain @Published is fine.
     public var nativeChatScrollerEnabled = false
 
+    /// The chat's page is out of sight while its web view stays in the window:
+    /// the session list slid over it. WebKit goes on drawing a page there, so
+    /// the page is told and pauses its spinners (`setPageOutOfSight`). Plain,
+    /// not published: nothing native redraws for it.
+    public internal(set) var pageOutOfSight = false
+
     /// Navigation + model-display state on a leaf store so writes don't fire
     /// bridge.objectWillChange and re-render the WKWebView host or list containers.
     public let navigationStore = NavigationStore()
@@ -662,6 +669,7 @@ public final class AgentBridge: NSObject {
 
     func resetLifecycleState() {
         pendingActiveSourceChatId = nil
+        conversationTypingLabels = [:]
         stopStatusPolling()
         chatTurnPhases = [:]
         sessionList.sessionPhases = [:]
@@ -984,6 +992,36 @@ public final class AgentBridge: NSObject {
     public var chatInputLayout: String?
     public private(set) var conversationModeSwitchers: [String: Bool] = [:]
     public private(set) var conversationModes: [String: String] = [:]
+    /// A projection of the room's expiring activity, never persisted in native.
+    public private(set) var conversationTypingLabels: [String: String] = [:]
+
+    public func conversationTypingLabel(for chatId: String?) -> String {
+        guard let chatId else { return "" }
+        return conversationTypingLabels[chatId] ?? ""
+    }
+    @ObservationIgnored private var typingChatID: String?
+    @ObservationIgnored private var typingPublishedAt: Date = .distantPast
+
+    /// Throttle before crossing WebKit. Only activity, never the draft, leaves native.
+    public func setComposerTyping(active: Bool) {
+        let chatID = currentSourceChatId
+        if let previous = typingChatID, !active || previous != chatID {
+            publishComposerTyping(chatID: previous, active: false)
+            typingChatID = nil
+        }
+        guard active, let chatID else { return }
+        if typingChatID == chatID && Date().timeIntervalSince(typingPublishedAt) < 2 { return }
+        typingChatID = chatID
+        typingPublishedAt = Date()
+        publishComposerTyping(chatID: chatID, active: true)
+    }
+
+    private func publishComposerTyping(chatID: String, active: Bool) {
+        guard let data = try? JSONSerialization.data(withJSONObject: [chatID, active]),
+              let args = String(data: data, encoding: .utf8) else { return }
+        evaluateJavaScript("void window.__ripulSetTyping?.(...\(args));")
+    }
+
     /// Pending quoted replies per chat, mirrored from the web transcript.
     public private(set) var replyTargets: [String: RipulReplyTarget] = [:]
 
@@ -1049,10 +1087,14 @@ public final class AgentBridge: NSObject {
     public var pendingFileView: FileViewRequest?
     /// Tool-call inspection updates stay off the bridge's own publisher.
     private var nativeToolUIFeatures: [String] {
+        let conversationFeatures = BundledAgentRuntime.isEnabled ? [] : ["nativeConversationTyping"]
         #if os(iOS)
-        return ["toolCallDetails", "nativeToolStrip"] + defaultToolActions.features + (toolStripAnchor == nil ? [] : ["nativeToolStripAnchor", "nativeToolStripRows"]) + (nativeEmbeds == nil ? [] : nativeEmbedRenderers.features)
+        var features = ["toolCallDetails", "nativeToolStrip"] + defaultToolActions.features + conversationFeatures
+        // The agent reaching for a simulator opens its picture here (showSimulatorPreview).
+        if #available(iOS 26.0, *) { features.append("simulatorPreview:auto") }
+        return features + (toolStripAnchor == nil ? [] : ["nativeToolStripAnchor", "nativeToolStripRows"]) + (nativeEmbeds == nil ? [] : nativeEmbedRenderers.features)
         #else
-        return ["toolCallDetails", "nativeToolStrip"]
+        return ["toolCallDetails", "nativeToolStrip"] + conversationFeatures
         #endif
     }
     public let toolCallDetails = ToolCallDetailsStore()
@@ -1075,6 +1117,24 @@ public final class AgentBridge: NSObject {
     }()
     #if os(iOS)
     let simulatorPreview = SimulatorPreviewState()
+
+    /// Live video of a simulator on a Mac that takes the person's fingers, for the
+    /// Simulator picture-in-picture's Control: (UDID, Mac) to a view. Set by a host
+    /// app that has a screen viewer (the Ripul app); without it the panel is a picture.
+    public var simulatorLiveContent: ((String, String) -> AnyView)?
+
+    /// The web app saw this chat's agent reach for a simulator on its Mac: one
+    /// it borrowed from Trainyard, or one a tool call named. Opens the picture
+    /// as the browser preview opens for a browser tool.
+    @available(iOS 26.0, *)
+    func showSimulatorPreview(_ request: [String: Any]) {
+        guard let chatId = request["chatId"] as? String, chatId == currentSourceChatId,
+              let machineId = request["machineId"] as? String, !machineId.isEmpty,
+              let target = request["target"], let data = try? JSONSerialization.data(withJSONObject: target),
+              let simulator = try? JSONDecoder().decode(SimulatorTarget.self, from: data),
+              UUID(uuidString: simulator.udid) != nil else { return }
+        simulatorPreview.open(simulator, machineId: machineId, chatId: chatId, automatic: request["automatic"] as? Bool ?? true)
+    }
     let browserPreview = BrowserPreviewState()
     public private(set) var browserPreviewAvailable = false
 
@@ -1695,6 +1755,11 @@ public final class AgentBridge: NSObject {
                mode == "agent" || mode == "group", conversationModes[chatId] != mode {
                 conversationModes[chatId] = mode
             }
+        case "conversation:typing":
+            if let chatId = dict["chatId"] as? String, let label = dict["label"] as? String,
+               conversationTypingLabel(for: chatId) != label {
+                conversationTypingLabels[chatId] = label.isEmpty ? nil : label
+            }
         case "composer:replyTarget":
             handleReplyTarget(dict)
         case "composer:actions":
@@ -1786,8 +1851,13 @@ public final class AgentBridge: NSObject {
             #endif
         case "link:open":
             if let urlString = dict["url"] as? String, let url = URL(string: urlString) {
+                if RipulSecureConnection.open(url) { return }
                 NSLog("[AgentBridge] Link open — url: %@", urlString)
-                linkOpenDelegate?.agentBridge(self, didRequestOpenLink: url)
+                if url.scheme == "ripul", url.host == "open-chat" {
+                    NotificationCenter.default.post(name: .ripulOpenAppURL, object: url)
+                } else {
+                    linkOpenDelegate?.agentBridge(self, didRequestOpenLink: url)
+                }
             }
         case "nativeEmbed:update", "nativeEmbed:anchor", "nativeEmbed:clear":
             #if os(iOS)
@@ -1803,6 +1873,10 @@ public final class AgentBridge: NSObject {
             if let ownerId = dict["ownerId"] as? String { toolStrip.clear(ownerId: ownerId) }
         case "toolDefaultAction:perform":
             defaultToolActions.perform(dict)
+        case "simulatorPreview:show":
+            #if os(iOS)
+            if #available(iOS 26.0, *) { showSimulatorPreview(dict) }
+            #endif
         case "toolStripRow:update":
             #if os(iOS)
             toolStripRows?.receive(dict)
@@ -2063,26 +2137,36 @@ public final class AgentBridge: NSObject {
         setIfChanged(\.messageSubmissionError, nil)
         guard attachedWebView != nil else { return false }
         let contextSession = currentSourceChatId
+        let historyTitle = sessions.first { $0.sourceChatId == contextSession }?.displayName ?? "Chat"
         let contextAttachments = composerContexts.attachments(for: contextSession)
         let combinedImages = RipulContextAttachment.images(imageAttachments, attachments: contextAttachments)
         // Images, addressees and modality (e.g. "voice") are positional. An
         // absent one goes as `undefined`, so the others keep their places.
         let absent: Any? = Self.undefinedArgument
-        let reply = await callPage("__ripulSubmitMessage", [
+        // The id lets the page say afterwards what became of this send, and
+        // makes a repeat of it safe: see AgentBridge+MessageSubmission.swift.
+        let submissionId = Self.makeSubmissionId()
+        let arguments: [Any?] = [
             RipulContextAttachment.message(text, attachments: contextAttachments),
             combinedImages.isEmpty ? absent : combinedImages,
             addressedTo?.isEmpty == false ? addressedTo : absent,
             modality.map { $0 as Any } ?? absent,
-        ], .orElse("{ success: false }"))
-        if let error = reply.error {
-            messageSubmissionError = error.localizedDescription
+            submissionId,
+        ]
+        var answer = await attemptSubmission(arguments)
+        switch answer {
+        case .accepted, .refused: break
+        default: answer = await settleSubmission(answer, id: submissionId) { await self.attemptSubmission(arguments) }
+        }
+        guard answer == .accepted else {
+            if case .refused(let reason) = answer { messageSubmissionError = reason }
             return false
         }
-        guard let dict = reply.dictionary else { return false }
-        let success = dict["success"] as? Bool ?? false
-        if !success { messageSubmissionError = dict["error"] as? String }
-        if success { composerContexts.didSend(contextAttachments, session: contextSession) }
-        return success
+        MessageHistory.shared.record(RipulContextAttachment.message(text, attachments: contextAttachments),
+            chatID: contextSession, chatTitle: historyTitle, attachments: combinedImages,
+            modality: modality ?? "keyboard")
+        composerContexts.didSend(contextAttachments, session: contextSession)
+        return true
     }
 
     public func refreshComposerActions(chatId: String) async {
@@ -2106,6 +2190,7 @@ public final class AgentBridge: NSObject {
     public func submitComposerAction(chatId: String, action: String, text: String,
                                      imageAttachments: [[String: String]]?) async -> String? {
         guard attachedWebView != nil, currentSourceChatId == chatId else { return "The active chat changed." }
+        let historyTitle = sessions.first { $0.sourceChatId == chatId }?.displayName ?? "Chat"
         let contextAttachments = composerContexts.attachments(for: chatId)
         let input: [String: Any] = [
             "text": RipulContextAttachment.message(text, attachments: contextAttachments),
@@ -2117,6 +2202,10 @@ public final class AgentBridge: NSObject {
         guard reply.succeeded else {
             return reply.dictionary?["error"] as? String ?? "Message delivery was not confirmed."
         }
+        MessageHistory.shared.record(RipulContextAttachment.message(text, attachments: contextAttachments),
+            chatID: chatId, chatTitle: historyTitle,
+            attachments: RipulContextAttachment.images(imageAttachments, attachments: contextAttachments),
+            modality: MessageHistory.shared.composerModality)
         composerContexts.didSend(contextAttachments, session: chatId)
         return nil
     }
@@ -2330,51 +2419,7 @@ public final class AgentBridge: NSObject {
             if !filtered.isEmpty {
                 // Only update if changed to avoid unnecessary SwiftUI re-renders
                 if self.sessions != filtered {
-                    // Detect CLI session renames and propagate to JSONL files.
-                    // Only fire for displayNames that came from CLI history or
-                    // an explicit user rename ("cli" / "user"). Auto-generated
-                    // values ("auto" — descriptor in-memory or date fallback)
-                    // would write themselves back to the JSONL as a
-                    // `custom-title`, locking out Claude's own ai-title.
-                    let oldByID = Dictionary(self.sessions.map { ($0.id, $0) }, uniquingKeysWith: { _, new in new })
-                    let isInitialLoad = oldByID.isEmpty
-                    // Only real renames earn a line. This previously appended
-                    // every CLI session with old→new on every refresh, even when
-                    // nothing changed: ~10KB per line, ~3MB/day, and it pushed
-                    // the signals that matter clean out of the window.
-                    var renameNotes: [String] = []
-                    var skipAuto = 0
-                    var initialSync = 0
-                    for session in filtered {
-                        // claude-cli only: onCliSessionRenamed is wired to
-                        // ClaudeCliServer, the sole server with a title-write
-                        // endpoint. Codex sessions would misfire into the wrong
-                        // store (failed lookup + pointless retry).
-                        if session.provider == "claude-cli" {
-                            let oldName = oldByID[session.id]?.displayName ?? "(new)"
-                            // Older hosts don't send displayNameSource — treat as "user" for back-compat.
-                            let source = session.displayNameSource ?? "user"
-                            let isAuthoritative = source == "cli" || source == "user"
-                            if !isAuthoritative {
-                                skipAuto += 1
-                            } else if isInitialLoad {
-                                // Sync all CLI session names on first load so reconnects pick up renames
-                                initialSync += 1
-                                self.onCliSessionRenamed?(session.sourceChatId, session.displayName, session.displayNameRenamedAt)
-                            } else if let old = oldByID[session.id], old.displayName != session.displayName {
-                                renameNotes.append("[\(session.sourceChatId): '\(oldName)'→'\(session.displayName)' src=\(source) RENAME_DETECTED]")
-                                self.onCliSessionRenamed?(session.sourceChatId, session.displayName, session.displayNameRenamedAt)
-                            }
-                        }
-                    }
-                    if self.sessions.count != filtered.count || !renameNotes.isEmpty || initialSync > 0 {
-                        var renameLog = "[AgentBridge] sessions changed (\(self.sessions.count)→\(filtered.count))"
-                        if initialSync > 0 || skipAuto > 0 {
-                            renameLog += " initialSync=\(initialSync) skipAuto=\(skipAuto)"
-                        }
-                        if !renameNotes.isEmpty { renameLog += " " + renameNotes.joined(separator: " ") }
-                        Self.debugLog(renameLog)
-                    }
+                    // Session lists are observations. Explicit rename RPCs own persistence.
                     self.sessions = filtered
                     ChatSession.saveToCache(filtered)
                 }
@@ -3301,19 +3346,15 @@ public final class AgentBridge: NSObject {
 
     /// Rename a chat session. Updates both web storage and local state.
     /// Rename a session via a direct JS round-trip call.
-    /// Updates local state only after the web app confirms persistence.
+    /// Updates local state after the web app accepts a durable rename intent.
     public func renameSession(id: String, sourceChatId: String, displayName: String) {
         guard attachedWebView != nil else { return }
-        // Optimistically update local state immediately for UI responsiveness
-        if let index = sessions.firstIndex(where: { $0.id == id }) {
-            sessions[index].displayName = displayName
-        }
         Task { @MainActor in
             let reply = await callPage("__ripulRenameSession", [sourceChatId, displayName, id],
                                        .orElse("{ success: false }"), caller: "renameSession")
-            guard reply.error == nil else { return }
+            guard reply.error == nil else { self.setIfChanged(\.lastSessionsError, reply.error?.localizedDescription); return }
             guard reply.succeeded, let confirmedName = reply.dictionary?["displayName"] as? String else {
-                NSLog("[AgentBridge] renameSession: web did not confirm, result: %@", String(describing: reply.value))
+                self.setIfChanged(\.lastSessionsError, reply.dictionary?["error"] as? String ?? "The title could not be saved")
                 return
             }
             // Web mints the rename-event stamp; carry it into the JSONL
@@ -3325,15 +3366,12 @@ public final class AgentBridge: NSObject {
                 // matches: each element write publishes the whole array.
                 var confirmed = sessions[index]
                 confirmed.displayName = confirmedName
+                confirmed.displayNameSource = "user"
                 confirmed.displayNameRenamedAt = confirmedRenamedAt ?? confirmed.displayNameRenamedAt
                 if confirmed != sessions[index] { sessions[index] = confirmed }
             }
             NSLog("[AgentBridge] renameSession confirmed: %@", confirmedName)
-            // Propagate to CLI session file if this is a CLI-provider session
-            if let session = self.sessions.first(where: { $0.id == id }),
-               session.provider == "claude-cli" {
-                self.onCliSessionRenamed?(sourceChatId, confirmedName, confirmedRenamedAt)
-            }
+
         }
     }
 
@@ -3497,6 +3535,13 @@ public final class AgentBridge: NSObject {
         let requestId = message["requestId"] as? String ?? UUID().uuidString
         let toolName = message["toolName"] as? String ?? ""
         let args = message["args"] as? [String: Any] ?? [:]
+        let privacyEpoch = SecureInputProtection.epoch
+        guard !SecureInputProtection.isActive else {
+            send(["type": "\(messagePrefix)mcp:error", "version": protocolVersion,
+                  "timestamp": currentTimestamp(), "requestId": requestId,
+                  "error": SecureInputProtection.message])
+            return
+        }
 
         if let argsData = try? JSONSerialization.data(withJSONObject: args, options: .fragmentsAllowed),
            let argsJSON = String(data: argsData, encoding: .utf8) {
@@ -3539,7 +3584,9 @@ public final class AgentBridge: NSObject {
 
         Task { @MainActor in
             do {
+                try SecureInputProtection.check(since: privacyEpoch)
                 let result = try await tool.execute(args: args)
+                try SecureInputProtection.check(since: privacyEpoch)
                 NSLog("[AgentBridge] Tool %@ succeeded", toolName)
 
                 // Validate that the result is JSON-serializable before sending.
@@ -3567,13 +3614,15 @@ public final class AgentBridge: NSObject {
                 if absorbed { envelope["absorbed"] = true }
                 self.send(envelope)
             } catch {
-                NSLog("[AgentBridge] Tool %@ failed: %@", toolName, error.localizedDescription)
+                let failure = SecureInputProtection.isActive || SecureInputProtection.epoch != privacyEpoch
+                    ? SecureInputProtection.message : error.localizedDescription
+                NSLog("[AgentBridge] Tool %@ failed: %@", toolName, failure)
                 self.send([
                     "type": "\(messagePrefix)mcp:error",
                     "version": protocolVersion,
                     "timestamp": self.currentTimestamp(),
                     "requestId": requestId,
-                    "error": error.localizedDescription,
+                    "error": failure,
                 ])
             }
         }
@@ -4026,34 +4075,6 @@ public final class AgentBridge: NSObject {
             // user renames; "auto" values (descriptor in-memory or date
             // fallback) must NOT round-trip into the JSONL.
             if self.sessions != filtered {
-                let oldByID = Dictionary(self.sessions.map { ($0.id, $0) }, uniquingKeysWith: { _, new in new })
-                let isInitialLoad = oldByID.isEmpty
-                // SKIP_AUTO and INITIAL_SYNC are the steady state for ~95 CLI
-                // sessions on every refresh — narrating each one produced 6.8k
-                // lines / 1.1MB a day and buried the signals that matter. Count
-                // them; only an actual rename earns its own line.
-                var skipAuto = 0
-                var initialSync = 0
-                for session in filtered {
-                    // claude-cli only — see the matching gate in the
-                    // sessions-changed path above.
-                    if session.provider == "claude-cli" {
-                        let source = session.displayNameSource ?? "user"
-                        let isAuthoritative = source == "cli" || source == "user"
-                        if !isAuthoritative {
-                            skipAuto += 1
-                        } else if isInitialLoad {
-                            initialSync += 1
-                            self.onCliSessionRenamed?(session.sourceChatId, session.displayName, session.displayNameRenamedAt)
-                        } else if let old = oldByID[session.id], old.displayName != session.displayName {
-                            Self.debugLog("[AgentBridge] handleSessionsListResponse: CLI rename detected '\(old.displayName)' → '\(session.displayName)' src=\(source) (sourceChatId=\(session.sourceChatId))")
-                            self.onCliSessionRenamed?(session.sourceChatId, session.displayName, session.displayNameRenamedAt)
-                        }
-                    }
-                }
-                if initialSync > 0 {
-                    Self.debugLog("[AgentBridge] handleSessionsListResponse: initialSync=\(initialSync) skipAuto=\(skipAuto)")
-                }
                 // Publish only on change, like the pull path. An unconditional
                 // assignment re-fired every `$sessions` sink on every push and
                 // re-ran the unified rebuild for nothing.

@@ -10,6 +10,8 @@ public extension Notification.Name {
     /// Any view in the hierarchy can trigger it — the `.ripulDevTools()` modifier
     /// listens and presents the sheet (iOS) or floating window (macOS).
     static let ripulShowDevTools = Notification.Name("ripulShowDevTools")
+    /// A chat's shortcuts were changed from its metadata panel; the title lozenge re-reads them.
+    static let ripulChatShortcutsChanged = Notification.Name("ripulChatShortcutsChanged")
 }
 
 @available(iOS 16.0, macOS 13.0, *)

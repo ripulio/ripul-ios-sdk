@@ -184,6 +184,8 @@ final class LiveStreamHost {
     // MARK: Offer
 
     func offer(_ args: [String: Any]) async -> [String: Any] {
+        guard !SecureInputProtection.isActive else { return ["success": false, "error": SecureInputProtection.message] }
+        let privacyEpoch = SecureInputProtection.epoch
         guard UIApplication.shared.applicationState == .active else {
             return ["success": false, "error": "The app isn't in the foreground"]
         }
@@ -220,6 +222,10 @@ final class LiveStreamHost {
             return ["success": false, "error": "Couldn't listen for a direct connection: \(error.localizedDescription)"]
         }
         // Another offer may have landed while this one was starting.
+        guard !SecureInputProtection.isActive, SecureInputProtection.epoch == privacyEpoch else {
+            listener.cancel()
+            return ["success": false, "error": SecureInputProtection.message]
+        }
         guard session == nil else {
             listener.cancel()
             return ["success": false, "error": "This app is already being viewed from \(viewerName)"]
@@ -278,6 +284,7 @@ final class LiveStreamHost {
     /// stops here, leaving the channel to the caller. Returns why not, or nil.
     func beginSupport(channel: LiveStreamChannel, supporter: String,
                       ended: @escaping (SupportEnding) -> Void) -> String? {
+        guard !SecureInputProtection.isActive else { return SecureInputProtection.message }
         guard UIApplication.shared.applicationState == .active else { return "The app isn't in the foreground" }
         // A developer's Live View gives way to the customer's own request.
         if session != nil { end("Replaced by a support session") }
@@ -436,6 +443,7 @@ final class LiveStreamHost {
     private var isBusy: Bool { stillFrames < 5 || Date().timeIntervalSince(lastTouch) < 1.5 }
 
     private func tick(on channel: LiveStreamChannel) {
+        guard !SecureInputProtection.isActive else { return }
         if let stalled = encoder, stalled.stalledFor > Self.encoderPatience {
             // It took a picture and gives none back: the next kind, or give up.
             guard let next = stalled.kind.next else {
@@ -860,12 +868,21 @@ final class LiveStreamHost {
         indicator.hide()
     }
 
+    func pauseForSecureInput() {
+        relayViewer = nil
+        relayWatch?.cancel()
+        relayWatch = nil
+        end("Private key entry is open")
+        indicator.hide()
+    }
+
     // MARK: Relay viewers
 
     /// For `screen_frame` and `touch`: nil to go ahead, or why not. Calls
     /// marked purpose "liveview" come from a viewer (agents' calls don't):
     /// they keep the pill up, and are turned away after Stop.
     func relayRefusal(_ args: [String: Any]) -> String? {
+        if SecureInputProtection.isActive { return SecureInputProtection.message }
         guard args["purpose"] as? String == "liveview" else { return nil }
         if isStopped { return Self.stoppedMessage }
         let name = String((args["viewer"] as? String ?? "Live View").prefix(60))

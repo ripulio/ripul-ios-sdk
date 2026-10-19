@@ -8,6 +8,7 @@ public struct ScreenAuditTool: NativeTool {
     public let inputSchema = ToolSchema.object()
 
     @MainActor public func execute(args: [String: Any]) async throws -> Any {
+        try SecureInputProtection.check()
         guard let root = ScreenAudit.screenRoot() else {
             return ["success": false, "error": "No host screen available"]
         }

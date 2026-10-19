@@ -105,11 +105,16 @@ struct QuickLaunchPickerButton: View {
                     .fixedSize()
                     .padding(.horizontal, 14)
                     .frame(height: 32)
+                    // A plain-style button hit-tests only the label's drawn
+                    // pixels, so a tap on the pill's padding missed it and
+                    // fell through to the machine row, toggling it instead.
+                    .contentShape(Capsule())
             } else {
                 Image(systemName: "ellipsis")
                     .font(.ripulIcon(size: 13, weight: .semibold))
                     .foregroundStyle(.ripul(.textSecondary))
                     .frame(width: 32, height: 32)
+                    .contentShape(Circle())
             }
         }
         .modifier(QuickLaunchTriggerGlass(labelled: labelled))

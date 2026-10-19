@@ -221,6 +221,14 @@ final class NativeToolStripAnchorController {
                 MainThreadSampler.count("strip.upgrade")
                 if attachment.upgradeToSlotView(geometry: g, frame: Self.stripFrame) { return }
             }
+            #if DEBUG
+            // Still on the scroller, where it follows reports a frame late: say what was in the way.
+            guard !Task.isCancelled, let self, self.enabled, let attachment = self.attachment, attachment.isMounted,
+                  !attachment.ridesSlotView, let g = self.slotGeometry else { return }
+            MainThreadSampler.count("strip.upgradeGaveUp")
+            NSLog("[SLOT] toolStrip %@ stays on the scroller: %@", self.accessibilityGroupId ?? "-",
+                  attachment.describeMissingSlotView(geometry: g))
+            #endif
         }
     }
 

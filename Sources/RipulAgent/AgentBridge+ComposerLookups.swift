@@ -46,8 +46,9 @@ extension AgentBridge {
     /// Query the chat's participant catalog (agents, plus humans in the future).
     /// Used by the native @people picker in NativeChatInput.
     /// Returns an array of dictionaries with `id`, `name`, `group`, and `kind`.
-    public func queryParticipants() async -> [[String: Any]] {
-        let reply = await callPage("__ripulQueryParticipants", [], .orElse("{ participants: [] }"))
+    /// Names the chat when the caller must not follow a change of the active one.
+    public func queryParticipants(chatId: String? = nil) async -> [[String: Any]] {
+        let reply = await callPage("__ripulQueryParticipants", chatId.map { [$0] } ?? [], .orElse("{ participants: [] }"))
         return reply.dictionary?["participants"] as? [[String: Any]] ?? []
     }
 
@@ -58,7 +59,10 @@ extension AgentBridge {
         let reply = await callPage("__ripulInviteToSession", [email], .orElse("{ success: false, error: 'Invitations unavailable' }"))
         if let reason = reply.failure(detached: "The chat isn't ready yet") { return reason }
         guard let dict = reply.dictionary else { return "Unexpected response" }
-        if dict["success"] as? Bool == true { return nil }
+        if dict["success"] as? Bool == true {
+            NotificationCenter.default.post(name: .ripulChatMembershipChanged, object: nil)
+            return nil
+        }
         return dict["error"] as? String ?? "Invitation failed"
     }
 

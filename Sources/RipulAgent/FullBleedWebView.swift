@@ -6,6 +6,51 @@ import WebKit
 /// (100vh, 100%) fills the entire frame including the home indicator region.
 /// The native chat input overlay handles bottom spacing instead.
 class FullBleedWebView: WKWebView {
+    var onReplySelectionError: ((String) -> Void)?
+
+    override func buildMenu(with builder: any UIMenuBuilder) {
+        super.buildMenu(with: builder)
+        guard builder.system == .context else { return }
+        // Resolve only when the system presents the menu, without observing
+        // every selection change. The web restricts this to one chat bubble.
+        let selection = UIDeferredMenuElement.uncached { [weak self] completion in
+            Task { @MainActor in
+                guard let self else { completion([]); return }
+                do {
+                    let value = try await self.callAsyncJavaScript("""
+                        return window.__ripulCaptureSelectionReply
+                            ? await window.__ripulCaptureSelectionReply() : null;
+                        """, arguments: [:], in: nil, in: .page)
+                    guard let reply = value as? [String: Any] else { completion([]); return }
+                    let action = UIAction(title: "Quote in reply", image: UIImage(systemName: "arrowshape.turn.up.left")) { [weak self] _ in
+                        self?.quoteSelection(reply)
+                    }
+                    completion([action])
+                } catch {
+                    completion([])
+                }
+            }
+        }
+        builder.insertChild(UIMenu(title: "", options: .displayInline, children: [selection]), atStartOfMenu: .root)
+    }
+
+    private func quoteSelection(_ reply: [String: Any]) {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                let value = try await self.callAsyncJavaScript("""
+                    return await window.__ripulQuoteSelectionReply(reply);
+                    """, arguments: ["reply": reply], in: nil, in: .page)
+                let result = value as? [String: Any]
+                if result?["success"] as? Bool != true {
+                    self.onReplySelectionError?(result?["error"] as? String ?? "Select the passage again and try quoting it.")
+                }
+            } catch {
+                self.onReplySelectionError?("The quote could not be added. Select the passage again and try quoting it.")
+            }
+        }
+    }
+
     private let observedScrollPans = NSHashTable<UIPanGestureRecognizer>.weakObjects()
     private var scrollDirections: [ObjectIdentifier: String] = [:]
 

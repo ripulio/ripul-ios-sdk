@@ -29,18 +29,39 @@ public struct ExpandedChatTitleContent: View {
         }
     }
 
+    /// A key shortcut of the chat, shown with its title in the expanded pill.
+    public struct Shortcut: Identifiable, Equatable {
+        public let id: String
+        public let title: String
+        public let symbol: String
+        public let url: URL
+
+        public init(id: String, title: String, symbol: String, url: URL) {
+            self.id = id
+            self.title = title
+            self.symbol = symbol
+            self.url = url
+        }
+    }
+
     var metadata: [MetadataRow]
+    var shortcuts: [Shortcut]
+    var onOpenShortcut: (URL) -> Void
     var onPreviousUserMessage: () -> Void
     var onNextUserMessage: () -> Void
     var onScrollToBottom: () -> Void
 
     public init(
         metadata: [MetadataRow],
+        shortcuts: [Shortcut] = [],
+        onOpenShortcut: @escaping (URL) -> Void = { _ in },
         onPreviousUserMessage: @escaping () -> Void,
         onNextUserMessage: @escaping () -> Void,
         onScrollToBottom: @escaping () -> Void
     ) {
         self.metadata = metadata
+        self.shortcuts = shortcuts
+        self.onOpenShortcut = onOpenShortcut
         self.onPreviousUserMessage = onPreviousUserMessage
         self.onNextUserMessage = onNextUserMessage
         self.onScrollToBottom = onScrollToBottom
@@ -50,6 +71,9 @@ public struct ExpandedChatTitleContent: View {
         VStack(alignment: .leading, spacing: 8) {
             if !metadata.isEmpty {
                 metadataBlock
+            }
+            if !shortcuts.isEmpty {
+                shortcutsBlock
             }
             controlsRow
         }
@@ -74,6 +98,39 @@ public struct ExpandedChatTitleContent: View {
                         .lineLimit(1)
                 }
                 .uiKitIdentifier("ExpandedChatTitleContent.metadataRow.\(row.icon)")
+            }
+        }
+    }
+
+    /// One full-width capsule per key shortcut, with its title.
+    private var shortcutsBlock: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            ForEach(shortcuts) { shortcut in
+                Button {
+                    onOpenShortcut(shortcut.url)
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: shortcut.symbol)
+                            .font(.ripulIcon(size: 11, weight: .semibold))
+                            .frame(width: 14, alignment: .center)
+                        Text(shortcut.title)
+                            .font(.ripul(.caption, weight: .medium))
+                            .lineLimit(1)
+                        Spacer(minLength: 0)
+                        Image(systemName: "arrow.up.right")
+                            .font(.ripulIcon(size: 9, weight: .semibold))
+                            .foregroundStyle(.ripul(.textSecondary))
+                    }
+                    .foregroundStyle(.ripul(.text))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .frame(maxWidth: .infinity)
+                    .contentShape(Capsule())
+                    // Flat, not glass, for the reason the controls give below.
+                    .background(.fill.tertiary, in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .uiKitIdentifier("ExpandedChatTitleContent.shortcut")
             }
         }
     }

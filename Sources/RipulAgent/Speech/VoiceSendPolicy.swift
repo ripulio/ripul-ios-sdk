@@ -9,6 +9,8 @@ public enum VoiceSendMode: String, CaseIterable, Sendable {
 /// activity. A recognizer stall alone must not count as the command's pause.
 enum VoiceSendPolicy {
     static let commandPause: TimeInterval = 0.7
+    /// "Send" or "sending", optionally one word, then "command" or "request".
+    /// The optional word accommodates "a", "the", "this", etc.
     /// Recognizers mishear the phrase ("same command", "sent command") and
     /// split or join it ("Send. Command.", "sendcommand"). Near-homophones of
     /// "send" with singular "command" count anywhere. Looser forms that occur
@@ -18,7 +20,8 @@ enum VoiceSendPolicy {
         pattern: #"""
         (?ix)
         (?:
-          (?<![\p{L}\p{N}_]) (?:send|sent|sand) [\s\p{P}]* (?:command|comand|commend)
+          (?<![\p{L}\p{N}_]) send(?:ing)? [\s\p{P}]+ (?:[\p{L}\p{M}\p{N}_]+ [\s\p{P}]+)? (?:command|request)
+        | (?<![\p{L}\p{N}_]) (?:send|sent|sand) [\s\p{P}]* (?:command|comand|commend)
         | (?<=[.!?,;:…]\s{0,3}) (?:send|sent|sand|same|said) [\s\p{P}]+ (?:command|comand|commend|comment)s?
         )
         [\s\p{P}]*$

@@ -21,12 +21,14 @@ public enum RipulOpenSessionRequest {
 
     /// The `UnifiedSession.id` waiting to be opened.
     public static var pendingSessionId: String?
+    public static var pendingMachineId: String?
 
     /// The rescan chasing a request whose chat isn't listed yet.
     static var rescan: (id: String, task: Task<Void, Never>)?
 
-    public static func open(sessionId: String) {
+    public static func open(sessionId: String, machineId: String? = nil) {
         pendingSessionId = sessionId
+        pendingMachineId = machineId
         opening = (sessionId, .now)
         NotificationCenter.default.post(name: notification, object: nil)
     }

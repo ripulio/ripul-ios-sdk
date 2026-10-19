@@ -470,6 +470,15 @@ final class BridgePageCallGoldenTests: XCTestCase {
     // MARK: - The run
 
     func testEveryPageCallMatchesTheRecord() async throws {
+        // A send names itself and waits for a page that went away. Here the id
+        // is fixed and nothing is waited for; MessageSubmissionRecoveryTests
+        // covers the waiting.
+        let submission = (AgentBridge.makeSubmissionId, AgentBridge.submissionPagePatience, AgentBridge.submissionPendingPatience)
+        AgentBridge.makeSubmissionId = { "send-1" }
+        AgentBridge.submissionPagePatience = 0
+        AgentBridge.submissionPendingPatience = 0
+        defer { (AgentBridge.makeSubmissionId, AgentBridge.submissionPagePatience, AgentBridge.submissionPendingPatience) = submission }
+
         let environment = ProcessInfo.processInfo.environment
         let wanted = environment["RIPUL_BRIDGE_PROBES"]?.split(separator: ",").map(String.init) ?? []
         let chosen = wanted.isEmpty ? Self.probes : Self.probes.filter { probe in wanted.contains { probe.name.contains($0) } }

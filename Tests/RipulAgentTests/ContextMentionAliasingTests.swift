@@ -7,6 +7,16 @@ import XCTest
 /// with its own regex, and a mention that survives display but not the round
 /// trip fails silently as a missing `<context>` block.
 final class ContextMentionAliasingTests: XCTestCase {
+    func testChatsWithIdenticalTitlesRoundTripIndependently() {
+        let first = "[context: ripul.chats/YWJj | Keyboard behaviour]"
+        let second = "[context: ripul.chats/ZGVm | Keyboard behaviour]"
+        var aliases: [String: String] = [:]
+        let input = "Compare \(first) and \(second)"
+        let collapsed = ContextMentionAliasing.collapse(input, into: &aliases)
+        XCTAssertEqual(aliases.count, 2)
+        XCTAssertTrue(collapsed.contains("(2)"))
+        XCTAssertEqual(ContextMentionAliasing.expand(collapsed, using: aliases), input)
+    }
 
     /// A real token off the repo.branches provider — base64url payload, no
     /// padding, label after the pipe.

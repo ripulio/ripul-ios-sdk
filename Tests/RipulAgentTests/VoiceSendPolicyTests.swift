@@ -57,8 +57,10 @@ final class VoiceSendPolicyTests: XCTestCase {
     func testTheClosingPhraseStillEndsACommandAndSooner() {
         // An explicit end needs no repeat. The text comes back whole; the
         // phrase is dropped where the sentence is sent.
-        XCTAssertEqual(run("go back to my chats. Send command.", unchanged: 0.7, repeats: 0),
-                       "go back to my chats. Send command.")
+        for phrase in ["Send command", "Sending the command", "Send my request", "Sending request"] {
+            let text = "go back to my chats. \(phrase)."
+            XCTAssertEqual(run(text, unchanged: 0.7, repeats: 0), text)
+        }
         XCTAssertNil(run("go back to my chats", unchanged: 0.7, repeats: 0))
     }
 
@@ -89,10 +91,33 @@ final class VoiceSendPolicyTests: XCTestCase {
 
     func testClosingPhraseToleratesCaseWhitespaceAndRecognitionPunctuation() {
         for text in ["Check the logs. Send command.", "Check the logs. SEND COMMAND!",
-                     "Check the logs. send, command…", "Check the logs. Send\ncommand  "] {
+                     "Check the logs. send, command…", "Check the logs. Send\ncommand  ",
+                     "Check the logs. SENDING THE COMMAND!", "Check the logs. Send, this request…",
+                     "Check the logs. Sending\nmy\trequest  "] {
             XCTAssertEqual(command(text), "Check the logs.", text)
         }
         XCTAssertEqual(command("Check café logs 🦊. Send command."), "Check café logs 🦊.")
+    }
+
+    func testSendAndSendingAllowOneOptionalWordBeforeCommandOrRequest() {
+        for phrase in ["send command", "send a command", "send the command", "send this command",
+                       "sending command", "sending a command", "sending the command", "sending my command",
+                       "send request", "send a request", "send the request", "send this request",
+                       "sending request", "sending a request", "sending the request", "sending my request",
+                       "send another command", "sending another request"] {
+            XCTAssertEqual(command("Check the logs \(phrase)."), "Check the logs", phrase)
+            XCTAssertNil(command(phrase), "A phrase alone must not send: \(phrase)")
+        }
+    }
+
+    func testExpandedPhrasesRequireWholeWordsAndAtMostOneInterveningWord() {
+        for phrase in ["send the next command", "sending one more request", "send a new request",
+                       "resend the command", "resending the request", "unsend a request",
+                       "sender the command", "sendable request", "sendthe command", "sendingthe request",
+                       "send the commands", "sending the requests", "send the commander",
+                       "send the requester", "send the command later", "sending the request now"] {
+            XCTAssertNil(command("Check the logs. \(phrase)."), phrase)
+        }
     }
 
     func testOnlyWholeClosingWordsMatch() {
@@ -125,6 +150,9 @@ final class VoiceSendPolicyTests: XCTestCase {
     func testClosingPhraseIsRemovedButEarlierMentionsStay() {
         XCTAssertEqual(command("Explain the send command option. Send command."),
                        "Explain the send command option.")
+        XCTAssertEqual(command("Explain sending the command and send a request. Sending the request."),
+                       "Explain sending the command and send a request.")
+        XCTAssertNil(command("Explain sending the command and send a request within a sentence."))
     }
 
     func testCommandAloneCannotSubmitAnEmptyMessage() {
@@ -134,9 +162,12 @@ final class VoiceSendPolicyTests: XCTestCase {
     }
 
     func testShortGapAndFreshTranscriptBothHaveToSettle() {
-        XCTAssertNil(command("Hello send command", quiet: 0.69, idle: 2))
-        XCTAssertNil(command("Hello send command", quiet: 2, idle: 0.69))
-        XCTAssertEqual(command("Hello send command", quiet: 0.7, idle: 0.7), "Hello")
+        for phrase in ["send command", "sending the command", "send my request", "sending request"] {
+            XCTAssertNil(command("Hello \(phrase)", quiet: 0.69, idle: 2), phrase)
+            XCTAssertNil(command("Hello \(phrase)", quiet: 2, idle: 0.69), phrase)
+            XCTAssertNil(command("Hello \(phrase)", quiet: 20, idle: 20, fresh: false), phrase)
+            XCTAssertEqual(command("Hello \(phrase)", quiet: 0.7, idle: 0.7), "Hello", phrase)
+        }
     }
 
     func testContinuedSpeechAndRevisedTranscriptsCancelPendingSend() {

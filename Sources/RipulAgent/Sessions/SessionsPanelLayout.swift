@@ -84,6 +84,9 @@ struct SessionsScrollBoundsReader: UIViewRepresentable {
     let bottomBar: CGRect?
     var gap: CGFloat = SessionsPanelLayout.bottomGap
     let onChange: (CGFloat) -> Void
+    /// Read here, not by the views that use the inset, so covering and
+    /// uncovering the session list updates this reader alone.
+    @Environment(\.ripulSessionListCanBeSeen) private var listCanBeSeen
 
     func makeUIView(context: Context) -> ReaderView {
         let view = ReaderView()
@@ -95,6 +98,7 @@ struct SessionsScrollBoundsReader: UIViewRepresentable {
         view.bottomBar = bottomBar
         view.gap = gap
         view.onChange = onChange
+        view.holds = !listCanBeSeen
         view.scheduleReport()
     }
 
@@ -102,6 +106,13 @@ struct SessionsScrollBoundsReader: UIViewRepresentable {
         var bottomBar: CGRect?
         var gap: CGFloat = SessionsPanelLayout.bottomGap
         var onChange: ((CGFloat) -> Void)?
+        /// A chat covers the session list: keep the inset it was laid out
+        /// with. With the keyboard up over that chat, the strip under the
+        /// home indicator counts as the keyboard's, so the list's bottom moved
+        /// 34pt as the keyboard rose and back as it fell, and each report
+        /// redrew the whole list behind the chat (19 October 2026). The first
+        /// inset still goes through, and uncovering the list reports again.
+        var holds = false
         private var scheduled = false
         private var lastInset: CGFloat?
 
@@ -142,7 +153,7 @@ struct SessionsScrollBoundsReader: UIViewRepresentable {
                     safeBottom: window.bounds.maxY - window.safeAreaInsets.bottom,
                     bottomBar: self.bottomBar, gap: self.gap
                 )
-                guard inset != self.lastInset else { return }
+                guard inset != self.lastInset, !self.holds || self.lastInset == nil else { return }
                 self.lastInset = inset
                 self.onChange?(inset)
             }

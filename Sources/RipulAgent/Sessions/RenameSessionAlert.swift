@@ -21,13 +21,16 @@ public struct RenameSessionAlert: ViewModifier {
             .alert("Rename Session", isPresented: Binding(
                 get: { renamingSession != nil },
                 set: { if !$0 { renamingSession = nil } }
-            )) {
+            ), presenting: renamingSession) { session in
                 TextField("Session name", text: $renameText)
                     .uiKitIdentifier("RenameSessionAlert.textField")
                 Button("Cancel", role: .cancel) { renamingSession = nil }
                 Button("Rename") {
                     let trimmed = renameText.trimmingCharacters(in: .whitespaces)
-                    if let session = renamingSession, !trimmed.isEmpty {
+                    // SwiftUI may dismiss the alert (clearing the binding)
+                    // before running this action. Use the presented session,
+                    // not the mutable selection that dismissal just cleared.
+                    if !trimmed.isEmpty {
                         bridge.renameSession(
                             id: session.id,
                             sourceChatId: session.sourceChatId,
@@ -36,7 +39,7 @@ public struct RenameSessionAlert: ViewModifier {
                     }
                     renamingSession = nil
                 }
-            } message: {
+            } message: { _ in
                 Text("Enter a new name for this session.")
             }
     }

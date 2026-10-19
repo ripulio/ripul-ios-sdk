@@ -316,6 +316,7 @@ public enum RipulViewExplorer {
     /// the user chooses Advanced.
     @discardableResult
     public static func present(in window: UIWindow? = nil, recording: Bool = false, bridge: AgentBridge? = nil) -> Bool {
+        guard !SecureInputProtection.isActive else { return false }
         guard let requested = window ?? RipulChrome.appWindow(),
               let scene = requested.windowScene,
               let target = canInspect(requested) ? requested : RipulChrome.appWindow(in: scene)

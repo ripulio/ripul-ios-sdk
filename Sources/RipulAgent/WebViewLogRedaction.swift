@@ -10,6 +10,10 @@ enum WebViewLogRedaction {
 
     static func url(_ url: URL?, limit: Int = 300) -> String {
         guard let raw = url?.absoluteString else { return "nil" }
+        return text(raw, limit: limit)
+    }
+
+    static func text(_ raw: String, limit: Int) -> String {
         let redacted = secretParameter.stringByReplacingMatches(
             in: raw, range: NSRange(raw.startIndex..., in: raw), withTemplate: "$1$2<redacted>")
         return redacted.count > limit ? String(redacted.prefix(limit)) + "…(\(redacted.count) chars)" : redacted

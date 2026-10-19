@@ -49,6 +49,7 @@ public struct InspectScreenTool: NativeTool {
 
     @MainActor
     public func execute(args: [String: Any]) async throws -> Any {
+        try SecureInputProtection.check()
         #if canImport(UIKit)
         let includeScreenshot = args["includeScreenshot"] as? Bool ?? false
         let includeHidden = args["includeHidden"] as? Bool ?? false

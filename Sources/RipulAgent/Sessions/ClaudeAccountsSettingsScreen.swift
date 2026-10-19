@@ -6,6 +6,7 @@ public struct ClaudeAccountsSettingsScreen: View {
     @State private var machines: [RemoteMachine] = []
     @State private var loading = true
     @State private var refreshToken = UUID()
+    @State private var signIn: ClaudeAccountSignInRequest?
 
     public init(bridge: AgentBridge) { self.bridge = bridge }
 
@@ -17,7 +18,9 @@ public struct ClaudeAccountsSettingsScreen: View {
                 NoPairedMacView("See and switch the Claude accounts on your Mac.")
             }
             ForEach(machines) { machine in
-                ClaudeAccountSection(machine: machine, bridge: bridge, refreshToken: refreshToken)
+                ClaudeAccountSection(machine: machine, bridge: bridge,
+                    onSignIn: { signIn = ClaudeAccountSignInRequest(machine: machine, profile: $0) },
+                    refreshToken: refreshToken)
             }
         }.ripulThemedList()
         .navigationTitle("Claude accounts")
@@ -26,6 +29,11 @@ public struct ClaudeAccountsSettingsScreen: View {
         #endif
         .task { await load() }
         .refreshable { await load(); refreshToken = UUID() }
+        .ripulSheet(item: $signIn, onDismiss: { refreshToken = UUID() }) { request in
+            HostSignInSheet(machine: request.machine, bridge: bridge,
+                profile: request.profile.slug, profileName: request.profile.name,
+                startSignInImmediately: request.profile.loggedIn)
+        }
     }
 
     private func load() async {

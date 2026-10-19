@@ -1,5 +1,10 @@
 import SwiftUI
 import MarkdownUI
+#if os(iOS)
+import UIKit
+#else
+import AppKit
+#endif
 
 // Agent comms: one agent's calls (send, start, wait, archive) and the list of
 // agents. Both lead with who and where things stand. Ids, handles and settings
@@ -118,6 +123,10 @@ struct NativeToolProse: View {
     let text: String
     var collapsedHeight: CGFloat = 132
     var identifier = "NativeTool.prose"
+    /// Adds a Raw button beside Copy. Off unless a caller asks: prose is shown rendered.
+    var rawToggle = false
+    @State private var raw = false
+    @Environment(\.openURL) private var openURL
     @State private var fullHeight: CGFloat = 0
     @State private var expanded = false
     @ScaledMetric private var scale: CGFloat = 1
@@ -130,7 +139,32 @@ struct NativeToolProse: View {
         let overflows = fullHeight > 0 ? fullHeight > limit + 44 * scale : text.count > Int(limit) * 5
         let folded = overflows && !expanded
         VStack(alignment: .leading, spacing: 6) {
-            Markdown(text)
+            HStack(spacing: 12) {
+                Spacer()
+                Button("Copy") {
+                    #if os(iOS)
+                    UIPasteboard.general.string = text
+                    #else
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(text, forType: .string)
+                    #endif
+                }.accessibilityIdentifier("\(identifier).copy")
+                if rawToggle {
+                    Button(raw ? "Rendered" : "Raw") { raw.toggle() }
+                        .accessibilityIdentifier("\(identifier).raw")
+                }
+            }.font(.ripul(.caption))
+            Group {
+                if rawToggle && raw { Text(text).font(.ripul(.callout, family: .code)) }
+                else {
+                    Markdown(text)
+                        .environment(\.openURL, OpenURLAction { url in
+                            guard NativeToolNarrative.allowsLink(url) else { return .discarded }
+                            openURL(url)
+                            return .handled
+                        })
+                }
+            }
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { fullHeight = $0 }

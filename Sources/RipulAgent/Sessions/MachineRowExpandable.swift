@@ -190,6 +190,11 @@ public struct MachineRowExpandable: View {
 
     @State private var showCodexAccounts = false
     @State private var showHostSettings = false
+    @State private var showAlerts = false
+
+    /// What this Mac is warning about (low disk, a missing drive), from its
+    /// registry meta. An offline Mac's last list is stale, so it shows none.
+    private var hostAlerts: [HostAlert] { machine.isOnline ? machine.alerts : [] }
 
     private func refreshHostAuthStatus() {
         guard let hostAuthBridge, machine.isOnline, !isMachineDisabled else { return }
@@ -259,6 +264,10 @@ public struct MachineRowExpandable: View {
             if let hostAuthBridge {
                 RentedMacsClaudeSheet(machine: machine, bridge: hostAuthBridge)
             }
+        }
+        .ripulSheet(isPresented: $showAlerts) { // theme-mapping: a new sheet, nothing is replaced
+            HostAlertsSheet(machineName: machine.displayName, alerts: hostAlerts,
+                            onExecute: onExecuteAction.map { execute in { action in await execute(action, [:]) } })
         }
         .ripulSheet(isPresented: $showHostSettings) {
             if let hostAuthBridge {
@@ -379,6 +388,27 @@ public struct MachineRowExpandable: View {
                 }
 
                 Spacer()
+
+                // The bell: in the header, outside the expanded body, so a
+                // full disk is seen without opening the row. Coloured by the
+                // worst alert. A Button, so the tap opens the alerts rather
+                // than folding the row.
+                if let worst = hostAlerts.first {
+                    Button { showAlerts = true } label: {
+                        HStack(spacing: 3) {
+                            Image(systemName: "bell.badge.fill")
+                                .font(.ripulIcon(.caption)) // theme-mapping: a new control, nothing is replaced
+                            if hostAlerts.count > 1 {
+                                Text("\(hostAlerts.count)")
+                                    .font(.ripul(.caption)) // theme-mapping: a new control, nothing is replaced
+                            }
+                        }
+                        .foregroundStyle(worst.color)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(hostAlerts.count == 1 ? "1 alert" : "\(hostAlerts.count) alerts")
+                    .uiKitIdentifier("MachineRowExpandable.alerts")
+                }
 
                 if isDefault {
                     Image(systemName: "star.fill")
@@ -674,6 +704,20 @@ public struct MachineRowExpandable: View {
             ) {
                 handleRemoteAction(action)
             })
+        }
+
+        // The host has no Node.js, so agents there have no Ripul tools. Said
+        // here because nothing else tells the owner; the fix is on that Mac.
+        if let notice = hostAuthStatus?.toolsNotice {
+            entries.append(MachinePanelEntry(
+                id: "builtin:toolsNotice",
+                icon: "exclamationmark.triangle.fill",
+                label: "Agents here have no Ripul tools",
+                subtitle: notice,
+                tint: Color.ripul(.warning),
+                defaultPlacement: .row,
+                available: true
+            ) {})
         }
 
         // Claude account — phone-driven host sign-in. The label carries live

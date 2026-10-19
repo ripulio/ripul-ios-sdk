@@ -20,7 +20,9 @@ public struct NativeChatView: View {
     }
 
     public var body: some View {
-        scroller
+        scroller.environment(\.openURL, OpenURLAction { url in
+            RipulSecureConnection.open(url) ? .handled : .systemAction
+        })
     }
 
     private var scroller: some View {

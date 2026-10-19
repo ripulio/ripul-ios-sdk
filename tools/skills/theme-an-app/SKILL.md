@@ -7,7 +7,7 @@ description: Give a SwiftUI iPhone or iPad app its own fonts and colours, light 
 
 A theme here is one JSON document: colours for light and dark, three font families, and sizes and weights. The RipulAgent Swift package reads it and the app's own screens follow it. This is the procedure for doing that in someone's repository. Follow it in order. It needs RipulAgent 0.7.176 or later: 0.7.174 is the first whose level 1 reaches text, lists and the app's own colours and the first with the theme as a product of its own, and 0.7.175 adds markdown and every other kind of text, a label's title, a prominent button's label and a navigation title's colour. From 0.7.176 `migrate --text` writes `.ripulText()`, and a window's root draws the theme's canvas behind a screen with no ground of its own.
 
-Three rules hold throughout:
+Four rules hold throughout:
 
 - **With no theme document the app must look exactly as it did.** Every step below keeps that, and you prove it with screenshots before you call the work done.
 - **Start with the level that changes no source.** Go further only where the person asks for more.
@@ -29,7 +29,7 @@ If the person asked only what a theme would reach, do step 3 and stop: change no
 
 ## 2. Work on a branch
 
-Never on the default branch. Make a branch from it (`git switch -c theme`). If the working tree has changes you did not make, say so and ask before going on. Commit as you go, so each level can be kept or dropped by itself.
+Never on the default branch. Make a branch from it (`git switch -c theme`). If the working tree has changes you did not make, say so and ask before going on. Record the starting commit with `git rev-parse HEAD` before any theme edit and keep it in the ledger as `<theme-base>`. Commit as you go, so each level can be kept or dropped by itself.
 
 ## 3. Measure before you touch anything
 
@@ -121,8 +121,10 @@ Only when asked. It rewrites call sites to explicit accessors (`.font(.ripul(.bo
 ripul-theme migrate --dry-run --named --text --lists <source folder>   # read this first
 ripul-theme migrate --named --text --lists <source folder>
 ripul-theme check --text <source folder>                # what is left; exit 1 while any is
-ripul-theme lint                                        # did each replacement keep its value?
+ripul-theme lint <theme-base>                           # compare with the recorded starting commit
 ```
+
+`lint` without a revision compares with `HEAD`: after you commit, it can check zero changes. Always pass the recorded starting commit, including for the final check. A clean working tree is not evidence that the migration preserved values.
 
 What the tool does not do, each measured on a real app:
 
@@ -140,14 +142,14 @@ After the last edit, whatever the level:
 
 1. Launch with `-ripul.theme.document system` (or with no theme document in the bundle) and capture every baseline screen again, light and dark.
 2. Compare with both baseline sets pixel for pixel. A difference must be in a place where your two baseline sets differed from each other. Anything in the app's own content is an edit that changed the app: find it and fix it. Say how many screens matched exactly, and for each of the others where it differs and why you call that the system's.
-3. After level 3, `lint` must have nothing to say about a line the tool wrote.
+3. After level 3, `ripul-theme lint <theme-base>` must have nothing to say about a line the tool wrote; confirm it actually checked the migration.
 4. Build Release once. The View Explorer's map is left out of it, and the theme must still load.
 
 ## 10. Hand back a ledger
 
 Do not merge. Report, with each line marked measured or reasoned:
 
-- the branch, and what `git diff --shortstat <default branch>` reads; how many Swift lines changed (none, after level 1);
+- the branch, the recorded starting commit, and what `git diff --shortstat <theme-base>` reads; how many Swift lines changed (none, after level 1);
 - the files added: the document, each font with its licence and where it came from, any stand-in for a font that could not be bundled;
 - every build command and script that gained `-skipPackagePluginValidation`;
 - what follows the theme and what does not, by kind, with a screenshot for each;

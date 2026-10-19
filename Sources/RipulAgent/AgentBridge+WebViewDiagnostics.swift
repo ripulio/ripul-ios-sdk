@@ -25,6 +25,10 @@ extension AgentBridge {
     /// Called by AgentWebView when the web content process is terminated by the OS.
     /// Records the event, logs it to the bridge console, and reloads.
     public func recordProcessTermination() {
+        recordProcessTermination(reason: nil)
+    }
+
+    func recordProcessTermination(reason: WebKitTerminationReason?) {
         sessionCrashCount += 1
 
         // Capture memory stats at crash time
@@ -38,10 +42,36 @@ extension AgentBridge {
             thermalState: thermal,
             url: attachedWebView?.url?.absoluteString,
             wasConnected: isConnected,
-            crashNumber: sessionCrashCount
+            crashNumber: sessionCrashCount,
+            terminationReason: reason
         )
         crashEvents.append(event)
         persistCrashEvents()
+
+        // Read the app's own WebKit system messages without a device tunnel.
+        // This must neither block recovery nor enumerate the log on the main
+        // thread. Persist by event ID: another crash may arrive before it ends.
+        let incident = event.timestamp
+        let eventID = event.id
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(2))
+            let log = await Task.detached(priority: .utility) {
+                WebKitTerminationLog.read(around: incident)
+            }.value
+            guard let self, let index = self.crashEvents.firstIndex(where: { $0.id == eventID }) else { return }
+            self.crashEvents[index].terminationLog = log
+            self.persistCrashEvents()
+            let number = self.crashEvents[index].crashNumber
+            if let error = log.error {
+                self.handleConsoleLog("[CRASH SYSTEM] #\(number) system log unavailable: \(error)")
+            } else if log.entries.isEmpty {
+                self.handleConsoleLog("[CRASH SYSTEM] #\(number) no matching WebKit system entries; cause remains unknown")
+            } else {
+                for entry in log.entries {
+                    self.handleConsoleLog("[CRASH SYSTEM] #\(number) \(entry.timestamp.ISO8601Format()) [\(entry.category)] \(entry.message)")
+                }
+            }
+        }
 
         // Log to bridge console (visible in Console Logs viewer)
         let msg = String(format:
@@ -51,6 +81,9 @@ extension AgentBridge {
             isConnected ? "connected" : "disconnected"
         )
         handleConsoleLog(msg)
+        if let reason {
+            handleConsoleLog("[CRASH REASON] #\(sessionCrashCount) WebKit=\(reason.label) raw=\(reason.rawValue)")
+        }
 
         // Schedule a post-crash probe once the bridge reconnects
         pendingPostCrashProbe = true

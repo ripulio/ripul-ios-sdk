@@ -182,6 +182,7 @@ struct NativeToolStripContent: View {
                             if store.collapsed {
                                 Button(action: store.expand) {
                                     Label("\(snapshot.tools.reduce(0) { $0 + $1.count }) tool calls", systemImage: "chevron.right")
+                                        .foregroundStyle(.ripul(.accent))
                                 }
                                 .accessibilityHint("Show individual tools")
                                 .accessibilityIdentifier("NativeToolStrip.summary")
@@ -368,12 +369,35 @@ private struct ToolStripButtonFrames: PreferenceKey {
 private struct ToolStripButtonStyle: ViewModifier {
     func body(content: Content) -> some View {
         if #available(iOS 26.0, macOS 26.0, *) {
-            // Glass defaults to a rounded rectangle with Catalyst's Mac idiom.
-            // Request the same capsule on every platform, retaining native sizing.
+            #if targetEnvironment(macCatalyst)
+            // Catalyst's built-in glass button fills with the window accent, even
+            // with Glass.tint(.clear). Draw genuine neutral glass around the label
+            // instead; keep this platform choice separate from the shared theme.
+            content.buttonStyle(ToolStripNeutralGlassStyle())
+            #else
             content.font(.ripul(.caption, weight: .medium)).buttonStyle(.glass)
                 .buttonBorderShape(.capsule).controlSize(.regular)
+            #endif
         } else {
             content.font(.ripul(.caption, weight: .medium)).buttonStyle(.bordered).buttonBorderShape(.capsule)
         }
     }
 }
+
+#if targetEnvironment(macCatalyst)
+@available(iOS 26.0, *)
+private struct ToolStripNeutralGlassStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.ripul(size: 12, weight: .medium))
+            .foregroundStyle(.ripul(.text))
+            .padding(.horizontal, 12)
+            .padding(.vertical, 7)
+            .glassEffect(.regular.interactive(), in: .capsule)
+            .scaleEffect(configuration.isPressed ? 0.98 : 1)
+            // The material stays compact; the whole original row remains tappable.
+            .frame(minHeight: 44)
+            .contentShape(Rectangle())
+    }
+}
+#endif

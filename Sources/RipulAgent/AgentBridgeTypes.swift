@@ -59,19 +59,10 @@ public struct ChatSession: Identifiable, Equatable, Codable {
     /// is currently looking at, since computing this serialises the full action
     /// array. `nil` means "not measured" (either inactive or pre-first-measurement).
     public var sizeBytes: Int?
-    /// Where the `displayName` came from on the web side: "cli" (from CLI history
-    /// or a user rename written through to JSONL), "user" (explicit rename via
-    /// ThreadStorageManager), or "auto" (descriptor in-memory name or date
-    /// fallback). The CLI rename detector ignores changes whose source is "auto"
-    /// to prevent date-fallback strings from leaking into Claude's JSONL as a
-    /// `custom-title`. Older host versions don't send this field; nil is treated
-    /// as "user" for backwards compatibility (preserves prior rename behaviour).
+    /// "cli" or "user" means an explicit manual name; "auto" and nil are
+    /// presentation only. Reading a name never writes it back to a provider.
     public var displayNameSource: String?
-    /// Rename-event timestamp (epoch ms) for displayName when its source is a
-    /// user rename ("cli"). Carried unchanged into `onCliSessionRenamed` so the
-    /// CLI server's stale-stamp guard can reject late echoes — a wire value
-    /// observed here must never be re-stamped as a fresh rename. nil =
-    /// unversioned; unversioned writebacks can't overwrite a versioned title.
+    /// Original user-event stamp, kept across every hop for conflict ordering.
     public var displayNameRenamedAt: Double?
     /// Repo / project folder the session is working in, published over
     /// SessionChannel (`session.facts`). Only carries a value on a tab that
@@ -88,6 +79,18 @@ public struct ChatSession: Identifiable, Equatable, Codable {
     /// property default) so a cache written before this field existed
     /// decodes as nil rather than throwing — see displayNameSource above.
     public var isSharedGuest: Bool?
+    /// Latest human reply's author, omitted when this account spoke last.
+    /// Agent and tool messages do not replace it. Only group rows show it.
+    public var latestReplyAuthorName: String?
+    /// Live room activity only. Deliberately excluded from every persisted cache.
+    public var typingNames: [String] = []
+
+    private enum CodingKeys: String, CodingKey {
+        case id, sourceChatId, displayName, createdAt, remoteMachineName
+        case provider, providerLabel, model, hostChatId, sizeBytes
+        case displayNameSource, displayNameRenamedAt, projectName, gitBranch
+        case isSharedGuest, latestReplyAuthorName
+    }
 
     public init(
         id: String,
@@ -104,7 +107,9 @@ public struct ChatSession: Identifiable, Equatable, Codable {
         displayNameRenamedAt: Double? = nil,
         projectName: String? = nil,
         gitBranch: String? = nil,
-        isSharedGuest: Bool? = nil
+        isSharedGuest: Bool? = nil,
+        latestReplyAuthorName: String? = nil,
+        typingNames: [String] = []
     ) {
         self.id = id
         self.sourceChatId = sourceChatId
@@ -121,6 +126,8 @@ public struct ChatSession: Identifiable, Equatable, Codable {
         self.projectName = projectName
         self.gitBranch = gitBranch
         self.isSharedGuest = isSharedGuest
+        self.latestReplyAuthorName = latestReplyAuthorName
+        self.typingNames = typingNames
     }
 
     /// Navigation seed from a successful creation reply. Keep tab identity and
@@ -169,7 +176,9 @@ public struct ChatSession: Identifiable, Equatable, Codable {
             displayNameRenamedAt: (item["displayNameRenamedAt"] as? NSNumber)?.doubleValue,
             projectName: item["projectName"] as? String,
             gitBranch: item["gitBranch"] as? String,
-            isSharedGuest: item["isSharedGuest"] as? Bool
+            isSharedGuest: item["isSharedGuest"] as? Bool,
+            latestReplyAuthorName: item["latestReplyAuthorName"] as? String,
+            typingNames: item["typingNames"] as? [String] ?? []
         )
     }
 
@@ -386,6 +395,9 @@ public struct RemoteSessionInfo: Identifiable, Equatable, Codable {
     public var creatorUserId: String? = nil
     /// Set when another agent started this chat.
     public var startedBy: SessionStartedBy? = nil
+    public var customTitle: String? = nil
+    public var customTitleRenamedAt: Double? = nil
+    public var aiTitle: String? = nil
 }
 
 /// A todo item owned by the signed-in user, surfaced to the native "Pick to do"
@@ -561,9 +573,12 @@ public struct HostAuthStatusInfo {
     /// Present while a sign-in started by `beginHostAuth` is awaiting a code.
     public let pendingSessionId: String?
     public let error: String?
+    /// Set when agents on that Mac have no Ripul tools, with what to do
+    /// (the host has no Node.js: `HostNodeCheck.swift`). Not about the sign-in.
+    public var toolsNotice: String? = nil
 
     static func from(dict: [String: Any]) -> HostAuthStatusInfo {
-        HostAuthStatusInfo(
+        var info = HostAuthStatusInfo(
             loggedIn: dict["loggedIn"] as? Bool ?? false,
             authMethod: dict["authMethod"] as? String,
             apiProvider: dict["apiProvider"] as? String,
@@ -573,6 +588,8 @@ public struct HostAuthStatusInfo {
             pendingSessionId: dict["pendingSessionId"] as? String,
             error: dict["error"] as? String
         )
+        info.toolsNotice = dict["toolsNotice"] as? String
+        return info
     }
 }
 
@@ -655,6 +672,7 @@ public struct ClaudeAccountsListInfo {
     /// Slug of the machine-global active profile.
     public let active: String
     public let error: String?
+    public var followsDefault: Bool = true
 }
 
 /// Result of a hot swap: which sessions recycled immediately and which switch
@@ -708,6 +726,10 @@ public struct WebViewCrashEvent: Codable, Identifiable {
     public let url: String?
     public let wasConnected: Bool
     public let crashNumber: Int
+    /// nil for old records or while the asynchronous system-log read is pending.
+    public var terminationLog: WebKitTerminationLog? = nil
+    /// Supplied by WebKit in developer builds; nil for the public callback.
+    public var terminationReason: WebKitTerminationReason? = nil
 }
 
 /// Snapshot of web view health from a native-side probe.

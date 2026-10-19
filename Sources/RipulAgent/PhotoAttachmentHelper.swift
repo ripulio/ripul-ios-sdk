@@ -6,6 +6,7 @@ import PhotosUI
 
 #if os(iOS)
 import UIKit
+import UniformTypeIdentifiers
 #elseif os(macOS)
 import AppKit
 #endif
@@ -26,31 +27,18 @@ public enum PhotoAttachmentHelper {
         return result
     }
 
-    #if targetEnvironment(macCatalyst)
-    /// Import an image chosen from the Mac file picker using the same resize
-    /// and encoding settings as Photos attachments. Access ends after reading.
-    static func processImageFile(_ url: URL) throws -> NativeImageAttachment {
-        let hasAccess = url.startAccessingSecurityScopedResource()
-        defer { if hasAccess { url.stopAccessingSecurityScopedResource() } }
-        let data = try Data(contentsOf: url)
-        guard let attachment = makeAttachment(from: data) else {
-            throw CocoaError(.fileReadCorruptFile)
-        }
-        return attachment
-    }
-    #endif
+    /// Max dimension (longest edge) for images. Configurable from the native
+    /// settings screen. 1568px is as much as Claude reads before resizing, so
+    /// small text in a screenshot stays legible. The page uploads the image
+    /// and the relay carries only its link; inline, as when the upload fails
+    /// or in a Mac-local chat, an iPhone screenshot measured 100KB of base64
+    /// at this size (26KB at the old 800px), so four stay under the 1MB limits.
+    public static var maxDimension: CGFloat = 1568
 
-    /// Max dimension (longest edge) for images sent through the relay WebSocket.
-    /// Configurable from the native settings screen. Default 800px produces
-    /// ~40-100KB JPEG base64, well within the Cloudflare DO ~1MB WS limit.
-    /// Claude API auto-resizes above 1568px (2576px for Opus 4.7).
-    public static var maxDimension: CGFloat = 800
+    /// JPEG compression quality (0.0–1.0), as the camera already used.
+    public static var compressionQuality: CGFloat = 0.7
 
-    /// JPEG compression quality (0.0–1.0). Lower values reduce size at the
-    /// cost of detail. Default 0.5 balances relay size and readability.
-    public static var compressionQuality: CGFloat = 0.5
-
-    private static func makeAttachment(from data: Data) -> NativeImageAttachment? {
+    static func makeAttachment(from data: Data) -> NativeImageAttachment? {
         #if os(iOS)
         guard let uiImage = UIImage(data: data) else { return nil }
         return makeAttachment(from: uiImage)
@@ -73,6 +61,47 @@ public enum PhotoAttachmentHelper {
         guard let jpeg = resized.jpegData(compressionQuality: compressionQuality) else { return nil }
         return NativeImageAttachment(id: "img_\(UUID().uuidString)", mediaType: "image/jpeg",
                                      data: jpeg.base64EncodedString(), thumbnail: resized)
+    }
+
+    /// Items dropped on the composer (Finder files, Photos, a browser's
+    /// images) become attachments: images with the same normalization as
+    /// Photos selections, other files by FileAttachmentHelper's rules.
+    /// `refused` says, for each item left out, why.
+    static func process(dropped providers: [NSItemProvider]) async -> (attachments: [NativeImageAttachment], refused: [String]) {
+        var attachments: [NativeImageAttachment] = []
+        var refused: [String] = []
+        for provider in providers {
+            if let data = await loadImageData(provider), let attachment = makeAttachment(from: data) {
+                attachments.append(attachment)
+            } else if let url = await loadFileURL(provider) {
+                do {
+                    attachments.append(try FileAttachmentHelper.attachment(fromFileAt: url))
+                } catch {
+                    refused.append(error.localizedDescription)
+                }
+            } else {
+                refused.append("\(provider.suggestedName ?? "An item") isn't a file or an image.")
+            }
+        }
+        return (attachments, refused)
+    }
+
+    /// The provider's own image representation, if it offers one.
+    private static func loadImageData(_ provider: NSItemProvider) async -> Data? {
+        guard let type = provider.registeredTypeIdentifiers.first(where: { UTType($0)?.conforms(to: .image) == true }) else { return nil }
+        return await withCheckedContinuation { continuation in
+            _ = provider.loadDataRepresentation(forTypeIdentifier: type) { data, _ in
+                continuation.resume(returning: data)
+            }
+        }
+    }
+
+    /// The file a dropped item stands for, when it offers one.
+    private static func loadFileURL(_ provider: NSItemProvider) async -> URL? {
+        guard provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) else { return nil }
+        return await withCheckedContinuation { continuation in
+            _ = provider.loadObject(ofClass: URL.self) { url, _ in continuation.resume(returning: url) }
+        }
     }
 
     /// Public entry point for camera capture path in NativeChatInput.

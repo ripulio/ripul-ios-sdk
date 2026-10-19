@@ -1,7 +1,5 @@
 import SwiftUI
-#if targetEnvironment(macCatalyst)
 import UniformTypeIdentifiers
-#endif
 
 #if os(iOS)
 import UIKit
@@ -24,21 +22,47 @@ public typealias PlatformImage = NSImage
 // MARK: - Image Attachment Model (cross-platform)
 
 /// Model for a native image attachment with a platform-native thumbnail for display.
+/// A photo or a file attached in the composer. Still named for images, like
+/// the page's `imageAttachments` it becomes, though it now carries any file
+/// FileAttachmentHelper accepts.
 public struct NativeImageAttachment: Identifiable {
     public let id: String
     public let mediaType: String
     public let data: String // base64
     public let thumbnail: PlatformImage
+    /// The file's own name, which the agent's copy keeps. A photo has none.
+    public let name: String?
 
-    public init(id: String, mediaType: String, data: String, thumbnail: PlatformImage) {
+    public init(id: String, mediaType: String, data: String, thumbnail: PlatformImage, name: String? = nil) {
         self.id = id
         self.mediaType = mediaType
         self.data = data
         self.thumbnail = thumbnail
+        self.name = name
     }
 
+    static func restore(_ files: [[String: String]]) -> [NativeImageAttachment] {
+        files.compactMap { file in
+            guard let encoded = file["data"], let mediaType = file["mediaType"] else { return nil }
+            let name = file["name"]
+            let thumbnail: PlatformImage
+            if mediaType.hasPrefix("image/"), let data = Data(base64Encoded: encoded), let image = PlatformImage(data: data) {
+                thumbnail = image
+            } else {
+                thumbnail = FileAttachmentHelper.thumbnail(for: mediaType, name: name)
+            }
+            return NativeImageAttachment(id: UUID().uuidString, mediaType: mediaType,
+                data: encoded, thumbnail: thumbnail, name: name)
+        }
+    }
+
+    /// A photo shows as its picture; any other file as a chip with its name.
+    public var isImage: Bool { mediaType.hasPrefix("image/") }
+
     public func toDictionary() -> [String: String] {
-        ["id": id, "mediaType": mediaType, "data": data]
+        var dictionary = ["id": id, "mediaType": mediaType, "data": data]
+        if let name { dictionary["name"] = name }
+        return dictionary
     }
 }
 
@@ -136,6 +160,17 @@ public struct BranchSuggestion: Identifiable {
     }
 }
 
+/// A conversation selected from the composer's Chats section.
+public struct ChatSuggestion: Identifiable {
+    public let id: String
+    public let name: String
+    public let description: String?
+    public let token: String
+    public init(id: String, name: String, description: String? = nil, token: String) {
+        self.id = id; self.name = name; self.description = description; self.token = token
+    }
+}
+
 /// Context mentions serialise to `[context: provider.id/<ref> | Label]`, where
 /// the ref is a base64url payload that routinely runs past 150 characters. The
 /// web composer never shows it — Tiptap renders the mention as a chip node and
@@ -172,11 +207,24 @@ enum ContextMentionAliasing {
             guard labelRange.location != NSNotFound else { continue }
             let label = ns.substring(with: labelRange).trimmingCharacters(in: .whitespaces)
             guard !label.isEmpty else { continue }
-            let aliasText = alias(for: label)
-            aliases[aliasText] = ns.substring(with: match.range)
+            let token = ns.substring(with: match.range)
+            let aliasText = uniqueAlias(for: label, token: token, aliases: aliases)
+            aliases[aliasText] = token
             out.replaceCharacters(in: match.range, with: aliasText)
         }
         return out as String
+    }
+
+    static func uniqueAlias(for label: String, token: String, aliases: [String: String]) -> String {
+        if let existing = aliases.first(where: { $0.value == token })?.key { return existing }
+        let base = alias(for: label)
+        var candidate = base
+        var number = 2
+        while aliases[candidate] != nil {
+            candidate = "\(base) (\(number))"
+            number += 1
+        }
+        return candidate
     }
 
     /// Swap each recorded alias back to its token. An alias the user has edited
@@ -205,6 +253,7 @@ private struct AtClassToggleSpec: Identifiable {
 
     static let all: [AtClassToggleSpec] = [
         AtClassToggleSpec(key: "people", label: "People", icon: "person.fill"),
+        AtClassToggleSpec(key: "chats", label: "Chats", icon: "bubble.left.and.bubble.right"),
         AtClassToggleSpec(key: "repo", label: "Branches", icon: "arrow.triangle.branch"),
         AtClassToggleSpec(key: "files", label: "Files", icon: "doc.text.fill"),
     ]
@@ -245,6 +294,7 @@ public struct NativeChatInput: View {
     let isAgentRunning: Bool
     let isAgentPaused: Bool
     let onSubmit: () -> Void
+    var onTypingChange: ((Bool) -> Void)?
     @ObservedObject var contextStore: RipulComposerContextStore
     var contextSessionID: String?
     var contextOptions: [RipulComposerContext]
@@ -288,6 +338,7 @@ public struct NativeChatInput: View {
     /// Optional callback to fetch repo branch suggestions (the chat's repo).
     /// When provided, the `@` overlay shows a "Branches" section; picking one
     /// inserts its `[context: …]` token, resolved to live branch facts at send.
+    var onQueryChats: ((String) async -> [ChatSuggestion])?
     var onQueryBranches: ((String) async -> [BranchSuggestion])?
     /// Optional callback to fetch teammates not yet in this chat. When provided,
     /// the `@` overlay shows a "Team" section under People; picking one inserts
@@ -324,10 +375,9 @@ public struct NativeChatInput: View {
     @State private var dictationBase = ""
     @State private var microphoneWarning: String?
     @State private var showPhotoPicker = false
-    #if targetEnvironment(macCatalyst)
-    @State private var showImageFilePicker = false
-    @State private var imageFileImportError: String?
-    #endif
+    @State private var showFilePicker = false
+    @State private var attachmentError: String?
+    @State private var dropTargeted = false
     @State private var showCamera = false
     @State private var textHeight: CGFloat = 36
     @State private var fileSuggestions: [FileSuggestion] = []
@@ -336,12 +386,17 @@ public struct NativeChatInput: View {
     /// The character index where the `@` trigger was typed
     @State private var atTriggerIndex: String.Index?
     @State private var showAtSuggestions = false
+    /// The @ list's row the keyboard is on, an index into `atPicks`.
+    @State private var atHighlight = 0
     @State private var allElementSuggestions: [ElementSuggestion] = []
     @State private var elementSuggestions: [ElementSuggestion] = []
     @State private var allParticipantSuggestions: [ParticipantSuggestion] = []
     @State private var participantSuggestions: [ParticipantSuggestion] = []
     @State private var branchSuggestions: [BranchSuggestion] = []
     @State private var allBranchSuggestions: [BranchSuggestion] = []
+    @State private var chatSuggestions: [ChatSuggestion] = []
+    @State private var chatQueryTask: Task<Void, Never>?
+    @State private var chatsLoading = false
     @State private var allTeammateSuggestions: [TeammateSuggestion] = []
     @State private var teammateSuggestions: [TeammateSuggestion] = []
     /// Outcome of the last teammate invitation, shown briefly above the field.
@@ -350,6 +405,7 @@ public struct NativeChatInput: View {
     /// Classes hidden via the toggle chips (persisted in UserDefaults).
     @State private var hiddenClasses: Set<String> = Set(AtClassToggleSpec.all.filter { AtClassToggles.isHidden($0.key) }.map(\.key))
     @State private var showHistorySheet = false
+    @State private var historyDraftAttachments: [NativeImageAttachment] = []
     @State private var showTodoPicker = false
     @State private var showSlashMenu = false
     @State private var slashFilter = ""
@@ -369,6 +425,7 @@ public struct NativeChatInput: View {
         isAgentRunning: Bool = false,
         isAgentPaused: Bool = false,
         onSubmit: @escaping () -> Void,
+        onTypingChange: ((Bool) -> Void)? = nil,
         onSubmitNote: (() -> Void)? = nil,
         conversationMode: String = "agent",
         replyTarget: RipulReplyTarget? = nil,
@@ -392,6 +449,7 @@ public struct NativeChatInput: View {
         onQueryParticipants: (() async -> [ParticipantSuggestion])? = nil,
         onQueryTeammates: (() async -> [TeammateSuggestion])? = nil,
         onInviteTeammate: ((TeammateSuggestion) async -> String?)? = nil,
+        onQueryChats: ((String) async -> [ChatSuggestion])? = nil,
         onQueryBranches: ((String) async -> [BranchSuggestion])? = nil,
         addressedParticipants: Binding<[String]> = .constant([]),
         onFocusChanged: ((Bool) -> Void)? = nil,
@@ -410,6 +468,7 @@ public struct NativeChatInput: View {
         self.isAgentRunning = isAgentRunning
         self.isAgentPaused = isAgentPaused
         self.onSubmit = onSubmit
+        self.onTypingChange = onTypingChange
         self.onSubmitNote = onSubmitNote
         self.conversationMode = conversationMode
         self.replyTarget = replyTarget
@@ -431,6 +490,7 @@ public struct NativeChatInput: View {
         self.onQueryElements = onQueryElements
         self.onPickElement = onPickElement
         self.onQueryParticipants = onQueryParticipants
+        self.onQueryChats = onQueryChats
         self.onQueryBranches = onQueryBranches
         self.onQueryTeammates = onQueryTeammates
         self.onInviteTeammate = onInviteTeammate
@@ -444,6 +504,46 @@ public struct NativeChatInput: View {
         self.contextStore = contextStore ?? RipulComposerContextStore()
         self.contextSessionID = contextSessionID
         self.contextOptions = contextOptions
+    }
+
+    /// Dropped images and files join the attachments, four at a time like
+    /// the picker. Anything that cannot be attached is named in the alert.
+    private func attachDroppedFiles(_ providers: [NSItemProvider]) {
+        guard !providers.isEmpty else { return }
+        guard providers.count <= 4 else {
+            attachmentError = "Drop up to four files or images at a time."
+            return
+        }
+        Task { @MainActor in
+            let (attachments, refused) = await PhotoAttachmentHelper.process(dropped: providers)
+            imageAttachments.append(contentsOf: attachments)
+            if !refused.isEmpty { attachmentError = refused.joined(separator: "\n") }
+        }
+    }
+
+    /// Files chosen in the Files picker: images are resized like photos, and
+    /// anything that cannot be attached is named in the alert.
+    private func attachChosenFiles(_ result: Result<[URL], Error>) {
+        switch result {
+        case .success(let urls):
+            guard urls.count <= 4 else {
+                attachmentError = "Choose up to four files at a time."
+                return
+            }
+            var refused: [String] = []
+            for url in urls {
+                do {
+                    imageAttachments.append(try FileAttachmentHelper.attachment(fromFileAt: url))
+                } catch {
+                    refused.append(error.localizedDescription)
+                }
+            }
+            if !refused.isEmpty { attachmentError = refused.joined(separator: "\n") }
+        case .failure(let error):
+            if (error as NSError).code != NSUserCancelledError {
+                attachmentError = error.localizedDescription
+            }
+        }
     }
 
     private func dismissKeyboard() {
@@ -481,8 +581,10 @@ public struct NativeChatInput: View {
                 try await provider.startTranscription { event in
                     switch event {
                     case .partial(let partial):
+                        messageHistory?.composerModality = "voice"
                         text = dictationBase.isEmpty ? partial : dictationBase + " " + partial
                     case .committed(let segment):
+                        messageHistory?.composerModality = "voice"
                         dictationBase = dictationBase.isEmpty ? segment : dictationBase + " " + segment
                         text = dictationBase
                     case .audioLevel, .connectionReady, .recovery:
@@ -581,6 +683,19 @@ public struct NativeChatInput: View {
             // button style adds a second, rectangular bezel around them.
             .buttonStyle(.plain)
             #endif
+            // Drops on the editor arrive through its paste delegate; this
+            // catches the rest of the composer, and image-only drags.
+            .onDrop(of: [.image, .fileURL], isTargeted: $dropTargeted) { providers in
+                attachDroppedFiles(providers)
+                return true
+            }
+            .overlay {
+                if dropTargeted {
+                    RoundedRectangle(cornerRadius: 22)
+                        .strokeBorder(Color.accentColor, lineWidth: 2)
+                        .allowsHitTesting(false)
+                }
+            }
         }
         .animation(composerChrome == nil ? .easeInOut(duration: 0.15) : nil, value: textHeight)
         .animation(.easeInOut(duration: 0.2), value: imageAttachments.count)
@@ -592,7 +707,11 @@ public struct NativeChatInput: View {
             composerChrome?.setInteraction("input", active: chromeInteraction)
         }
         .onDisappear { composerChrome?.setInteraction("input", active: false) }
+        .onChange(of: contextSessionID) { _ in
+            dismissAtOverlay()
+        }
         .onChange(of: text) { newValue in
+            if newValue.isEmpty { messageHistory?.composerModality = "keyboard" }
             if isDictating && newValue.isEmpty {
                 dictationBase = ""
             }
@@ -608,35 +727,16 @@ public struct NativeChatInput: View {
         }
         .modifier(SpeechInputWarningModifier(message: $microphoneWarning))
         .photosPicker(isPresented: $showPhotoPicker, selection: $selectedPhotos, maxSelectionCount: 4, matching: .images)
-        #if targetEnvironment(macCatalyst)
-        .fileImporter(isPresented: $showImageFilePicker, allowedContentTypes: [.image], allowsMultipleSelection: true) { result in
-            switch result {
-            case .success(let urls):
-                guard urls.count <= 4 else {
-                    imageFileImportError = "Choose up to four images at a time."
-                    return
-                }
-                do {
-                    let attachments = try urls.map { try PhotoAttachmentHelper.processImageFile($0) }
-                    imageAttachments.append(contentsOf: attachments)
-                } catch {
-                    imageFileImportError = error.localizedDescription
-                }
-            case .failure(let error):
-                if (error as NSError).code != NSUserCancelledError {
-                    imageFileImportError = error.localizedDescription
-                }
-            }
-        }
-        .alert("Couldn't attach images", isPresented: Binding(
-            get: { imageFileImportError != nil },
-            set: { if !$0 { imageFileImportError = nil } }
+        .fileImporter(isPresented: $showFilePicker, allowedContentTypes: FileAttachmentHelper.allowedContentTypes,
+                      allowsMultipleSelection: true) { attachChosenFiles($0) }
+        .alert("Couldn't attach", isPresented: Binding(
+            get: { attachmentError != nil },
+            set: { if !$0 { attachmentError = nil } }
         )) {
-            Button("OK", role: .cancel) { imageFileImportError = nil }
+            Button("OK", role: .cancel) { attachmentError = nil }
         } message: {
-            Text(imageFileImportError ?? "")
+            Text(attachmentError ?? "")
         }
-        #endif
         .fullScreenCover(isPresented: $showCamera) {
             CameraPicker { uiImage in
                 let resized = PhotoAttachmentHelper.downsamplePublic(uiImage)
@@ -665,7 +765,7 @@ public struct NativeChatInput: View {
     /// Detect `@` followed by typing and populate a single ranked suggestion list
     /// (participants first, then files, then UI elements).
     private func handleAtDetection(_ value: String) {
-        guard onQueryFiles != nil || onQueryElements != nil || onPickElement != nil || onQueryParticipants != nil || onQueryBranches != nil || onQueryTeammates != nil else { return }
+        guard onQueryFiles != nil || onQueryElements != nil || onPickElement != nil || onQueryParticipants != nil || onQueryBranches != nil || onQueryChats != nil || onQueryTeammates != nil else { return }
 
         guard let atRange = value.range(of: "@", options: .backwards) else {
             dismissAtOverlay()
@@ -682,12 +782,14 @@ public struct NativeChatInput: View {
 
         let afterAt = String(value[atRange.upperBound...])
 
-        if afterAt.contains(" ") {
+        if afterAt.contains("\n") || afterAt.count > 120 || (afterAt.contains(" ") && !showAtSuggestions) || contextAliases.keys.contains(where: { afterAt.hasPrefix(String($0.dropFirst()) + " ") }) {
             dismissAtOverlay()
             return
         }
 
         let wasOpen = showAtSuggestions
+        // New text means new results: the keyboard starts at the top again.
+        atHighlight = 0
         atTriggerIndex = atRange.lowerBound
         showAtSuggestions = true
 
@@ -736,6 +838,21 @@ public struct NativeChatInput: View {
             branchSuggestions = filterBranches(by: afterAt, all: allBranchSuggestions)
             elementSuggestions = filterElements(by: afterAt, all: allElementSuggestions)
         }
+
+        // Re-query the complete catalogue for each search, not just the initial
+        // recent page. Cancellation prevents an old query replacing new results.
+        chatQueryTask?.cancel()
+        if !hiddenClasses.contains("chats"), let queryChats = onQueryChats {
+            chatsLoading = true
+            chatQueryTask = Task {
+                try? await Task.sleep(nanoseconds: 150_000_000)
+                guard !Task.isCancelled else { return }
+                let results = await queryChats(afterAt)
+                guard !Task.isCancelled, showAtSuggestions else { return }
+                chatSuggestions = results
+                chatsLoading = false
+            }
+        } else { chatsLoading = false; chatSuggestions = [] }
 
         // Files: debounced remote query, only when there's text to search for.
         fileQueryTask?.cancel()
@@ -789,6 +906,9 @@ public struct NativeChatInput: View {
         allTeammateSuggestions = []
         branchSuggestions = []
         allBranchSuggestions = []
+        chatSuggestions = []
+        chatsLoading = false
+        chatQueryTask?.cancel()
         atTriggerIndex = nil
         fileQueryTask?.cancel()
     }
@@ -841,12 +961,20 @@ public struct NativeChatInput: View {
         return query.isEmpty || "element".hasPrefix(query) || "pick".hasPrefix(query)
     }
 
+    /// A person's name as an @ token. A mention ends at the first space, so
+    /// "Sandsend Retreats" went out as "@Sandsend Retreats" and only "Sandsend"
+    /// was drawn as the mention. The web composer flattens spaces to `_` and
+    /// the message renderer turns them back (participantMentions.ts).
+    static func mentionToken(_ name: String) -> String {
+        name.split(whereSeparator: \.isWhitespace).joined(separator: "_")
+    }
+
     private func selectParticipantSuggestion(_ suggestion: ParticipantSuggestion) {
         if let triggerIdx = atTriggerIndex {
             let before = String(text[text.startIndex..<triggerIdx])
-            text = before + "@" + suggestion.name + " "
+            text = before + "@" + Self.mentionToken(suggestion.name) + " "
         } else {
-            text += "@" + suggestion.name + " "
+            text += "@" + Self.mentionToken(suggestion.name) + " "
         }
         if !addressedParticipants.contains(suggestion.id) {
             addressedParticipants.append(suggestion.id)
@@ -857,9 +985,9 @@ public struct NativeChatInput: View {
     private func selectTeammateSuggestion(_ suggestion: TeammateSuggestion) {
         if let triggerIdx = atTriggerIndex {
             let before = String(text[text.startIndex..<triggerIdx])
-            text = before + "@" + suggestion.name + " "
+            text = before + "@" + Self.mentionToken(suggestion.name) + " "
         } else {
-            text += "@" + suggestion.name + " "
+            text += "@" + Self.mentionToken(suggestion.name) + " "
         }
         if !addressedParticipants.contains(suggestion.id) {
             addressedParticipants.append(suggestion.id)
@@ -873,6 +1001,16 @@ public struct NativeChatInput: View {
                 showAtNotice(error.map { "Couldn't invite \(who): \($0)" } ?? "Invited \(who) to this chat")
             }
         }
+    }
+
+    private func selectChatSuggestion(_ suggestion: ChatSuggestion) {
+        // Keep two chats with the same title independently addressable.
+        let alias = ContextMentionAliasing.uniqueAlias(for: suggestion.name, token: suggestion.token, aliases: contextAliases)
+        contextAliases[alias] = suggestion.token
+        if let triggerIdx = atTriggerIndex {
+            text = String(text[text.startIndex..<triggerIdx]) + alias + " "
+        } else { text += alias + " " }
+        dismissAtOverlay()
     }
 
     private func selectBranchSuggestion(_ suggestion: BranchSuggestion) {
@@ -904,6 +1042,7 @@ public struct NativeChatInput: View {
     /// then hand off. `text` is a binding straight into the caller's state, so
     /// the submit handler reads the expanded string.
     private func submitMessage() {
+        onTypingChange?(false)
         guard !composerActionPending else { return }
         let expanded = ContextMentionAliasing.expand(text, using: contextAliases)
         if expanded != text { text = expanded }
@@ -918,11 +1057,13 @@ public struct NativeChatInput: View {
             hiddenClasses.insert(key)
         }
         AtClassToggles.setHidden(key, hiddenClasses.contains(key))
+        if key == "chats" { handleAtDetection(text) }
     }
 
     /// Fast show/hide chips for whole classes of suggestions, pinned atop the
     /// overlay. Persistence mirrors the web composer's atMenuClassToggles.
     private var classToggleRow: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
         HStack(spacing: 6) {
             ForEach(AtClassToggleSpec.all) { spec in
                 Button {
@@ -942,6 +1083,28 @@ public struct NativeChatInput: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
+        }
+    }
+
+    private func chatRow(_ suggestion: ChatSuggestion) -> some View {
+        Button { selectChatSuggestion(suggestion) } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "bubble.left.and.bubble.right")
+                    .foregroundStyle(.ripul(.textSecondary)).frame(width: 20)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(suggestion.name).font(.ripul(size: 14, weight: .medium))
+                        .foregroundStyle(.ripul(.text)).lineLimit(2)
+                    if let description = suggestion.description {
+                        Text(description).font(.ripul(size: 11))
+                            .foregroundStyle(.ripul(.textSecondary)).lineLimit(2)
+                    }
+                }
+                Spacer()
+            }
+            .padding(.horizontal, 12).padding(.vertical, 8).contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("Composer.chatSuggestion")
     }
 
     private func branchRow(_ suggestion: BranchSuggestion) -> some View {
@@ -986,20 +1149,69 @@ public struct NativeChatInput: View {
         return String(text[after...])
     }
 
+    /// The @ list's rows in the order the overlay draws them, so the arrow
+    /// keys walk what is on screen. Each pick runs the row's own tap action.
+    private var atPicks: [(id: String, select: () -> Void)] {
+        var picks: [(id: String, select: () -> Void)] = []
+        if elementPickShown { picks.append(("pick", { selectElementPick() })) }
+        if !hiddenClasses.contains("people") {
+            picks += participantSuggestions.map { s in ("p:\(s.id)", { selectParticipantSuggestion(s) }) }
+            picks += teammateSuggestions.map { s in ("t:\(s.id)", { selectTeammateSuggestion(s) }) }
+        }
+        if !hiddenClasses.contains("chats") {
+            picks += chatSuggestions.map { s in ("c:\(s.id)", { selectChatSuggestion(s) }) }
+        }
+        if !hiddenClasses.contains("repo") {
+            picks += branchSuggestions.map { s in ("b:\(s.id)", { selectBranchSuggestion(s) }) }
+        }
+        if !hiddenClasses.contains("files") {
+            picks += fileSuggestions.map { s in ("f:\(s.id)", { selectFileSuggestion(s) }) }
+        }
+        picks += elementSuggestions.map { s in ("e:\(s.id)", { selectElementSuggestion(s) }) }
+        return picks
+    }
+
+    /// A hardware key while the @ list is open: the arrows move the highlight,
+    /// Return and Tab pick it, Escape closes the list.
+    private func handleSuggestionKey(_ key: ChatTextView.SuggestionKey) {
+        let picks = atPicks
+        switch key {
+        case .up, .down:
+            guard !picks.isEmpty else { return }
+            let step = key == .up ? -1 : 1
+            atHighlight = (min(atHighlight, picks.count - 1) + step + picks.count) % picks.count
+        case .pick:
+            guard picks.indices.contains(atHighlight) else { dismissAtOverlay(); return }
+            picks[atHighlight].select()
+        case .dismiss:
+            dismissAtOverlay()
+        }
+    }
+
+    /// Marks the highlighted row and gives it an id to scroll to.
+    private func atRow<Row: View>(_ id: String, highlighted: String?, @ViewBuilder _ row: () -> Row) -> some View {
+        row()
+            .background(id == highlighted ? Color.accentColor.opacity(0.15) : Color.clear)
+            .id(id)
+    }
+
     private var unifiedSuggestionsOverlay: some View {
-        VStack(spacing: 0) {
+        let picks = atPicks
+        let highlighted = picks.indices.contains(atHighlight) ? picks[atHighlight].id : nil
+        return VStack(spacing: 0) {
             classToggleRow
             let peopleShown = !participantSuggestions.isEmpty && !hiddenClasses.contains("people")
             let teamShown = !teammateSuggestions.isEmpty && !hiddenClasses.contains("people")
+            let chatsShown = (!chatSuggestions.isEmpty || chatsLoading) && !hiddenClasses.contains("chats")
             let branchesShown = !branchSuggestions.isEmpty && !hiddenClasses.contains("repo")
             let filesShown = !fileSuggestions.isEmpty && !hiddenClasses.contains("files")
-            let hasResults = elementPickShown || peopleShown || teamShown || branchesShown || filesShown || !elementSuggestions.isEmpty
+            let hasResults = elementPickShown || peopleShown || teamShown || chatsShown || branchesShown || filesShown || !elementSuggestions.isEmpty
             if !hasResults {
                 HStack(spacing: 8) {
                     Image(systemName: "magnifyingglass")
                         .foregroundStyle(.ripul(.textSecondary))
                         .frame(width: 20)
-                    Text(hiddenClasses.contains("people") && hiddenClasses.contains("repo") && hiddenClasses.contains("files") && elementSuggestions.isEmpty ? "All classes hidden — use the toggles above" : (afterAtText.isEmpty ? "Type to search people, branches, files, and UI elements" : "No matches for \u{201C}\(afterAtText)\u{201D}"))
+                    Text(hiddenClasses.contains("people") && hiddenClasses.contains("chats") && hiddenClasses.contains("repo") && hiddenClasses.contains("files") && elementSuggestions.isEmpty ? "All classes hidden — use the toggles above" : (afterAtText.isEmpty ? "Search chats, people, branches, files, and UI elements" : "No matches for \u{201C}\(afterAtText)\u{201D}"))
                         .font(.ripul(size: 14))
                         .foregroundStyle(.ripul(.textSecondary))
                     Spacer()
@@ -1007,19 +1219,20 @@ public struct NativeChatInput: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 12)
             } else {
+                ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 0) {
                         if elementPickShown {
                             suggestionSectionHeader("Element")
-                            elementPickRow
-                            if peopleShown || teamShown || branchesShown || filesShown || !elementSuggestions.isEmpty {
+                            atRow("pick", highlighted: highlighted) { elementPickRow }
+                            if peopleShown || teamShown || chatsShown || branchesShown || filesShown || !elementSuggestions.isEmpty {
                                 Divider()
                             }
                         }
                         if peopleShown {
                             suggestionSectionHeader("People")
                             ForEach(participantSuggestions) { suggestion in
-                                participantRow(suggestion)
+                                atRow("p:\(suggestion.id)", highlighted: highlighted) { participantRow(suggestion) }
                                 if suggestion.id != participantSuggestions.last?.id {
                                     Divider().padding(.leading, 40)
                                 }
@@ -1031,10 +1244,19 @@ public struct NativeChatInput: View {
                             }
                             suggestionSectionHeader("Team")
                             ForEach(teammateSuggestions) { suggestion in
-                                teammateRow(suggestion)
+                                atRow("t:\(suggestion.id)", highlighted: highlighted) { teammateRow(suggestion) }
                                 if suggestion.id != teammateSuggestions.last?.id {
                                     Divider().padding(.leading, 40)
                                 }
+                            }
+                        }
+                        if chatsShown {
+                            if peopleShown || teamShown { Divider() }
+                            suggestionSectionHeader("Chats")
+                            if chatsLoading { ProgressView().padding(8) }
+                            ForEach(chatSuggestions) { suggestion in
+                                atRow("c:\(suggestion.id)", highlighted: highlighted) { chatRow(suggestion) }
+                                if suggestion.id != chatSuggestions.last?.id { Divider().padding(.leading, 40) }
                             }
                         }
                         if branchesShown {
@@ -1043,31 +1265,31 @@ public struct NativeChatInput: View {
                             }
                             suggestionSectionHeader("Branches")
                             ForEach(branchSuggestions) { suggestion in
-                                branchRow(suggestion)
+                                atRow("b:\(suggestion.id)", highlighted: highlighted) { branchRow(suggestion) }
                                 if suggestion.id != branchSuggestions.last?.id {
                                     Divider().padding(.leading, 40)
                                 }
                             }
                         }
                         if filesShown {
-                            if peopleShown || teamShown || branchesShown {
+                            if peopleShown || teamShown || chatsShown || branchesShown {
                                 Divider()
                             }
                             suggestionSectionHeader("Files")
                             ForEach(fileSuggestions) { suggestion in
-                                fileRow(suggestion)
+                                atRow("f:\(suggestion.id)", highlighted: highlighted) { fileRow(suggestion) }
                                 if suggestion.id != fileSuggestions.last?.id {
                                     Divider().padding(.leading, 40)
                                 }
                             }
                         }
                         if !elementSuggestions.isEmpty {
-                            if peopleShown || teamShown || branchesShown || filesShown {
+                            if peopleShown || teamShown || chatsShown || branchesShown || filesShown {
                                 Divider()
                             }
                             suggestionSectionHeader("UI Elements")
                             ForEach(elementSuggestions) { suggestion in
-                                elementRow(suggestion)
+                                atRow("e:\(suggestion.id)", highlighted: highlighted) { elementRow(suggestion) }
                                 if suggestion.id != elementSuggestions.last?.id {
                                     Divider().padding(.leading, 40)
                                 }
@@ -1076,6 +1298,10 @@ public struct NativeChatInput: View {
                     }
                 }
                 .frame(maxHeight: 280)
+                .onChange(of: highlighted) { id in
+                    if let id { withAnimation(.easeOut(duration: 0.1)) { proxy.scrollTo(id) } }
+                }
+                }
             }
         }
         .background(.ultraThinMaterial)
@@ -1553,14 +1779,6 @@ public struct NativeChatInput: View {
 
     private var plusMenuButton: some View {
         Menu { MenuIcons {
-            #if targetEnvironment(macCatalyst)
-            Button {
-                dismissKeyboard()
-                showImageFilePicker = true
-            } label: {
-                Label("Choose Images…", systemImage: "folder")
-            }
-            #endif
             Button {
                 showCamera = true
             } label: {
@@ -1570,6 +1788,18 @@ public struct NativeChatInput: View {
                 showPhotoPicker = true
             } label: {
                 Label("Photos", systemImage: "photo")
+            }
+            // PDFs, Word, PowerPoint, spreadsheets, code and other text, and
+            // images kept as files (FileAttachmentHelper).
+            Button {
+                dismissKeyboard()
+                showFilePicker = true
+            } label: {
+                #if targetEnvironment(macCatalyst)
+                Label("Choose Files…", systemImage: "doc")
+                #else
+                Label("Files", systemImage: "doc")
+                #endif
             }
             if onFetchTodoItems != nil {
                 Button {
@@ -1650,8 +1880,10 @@ public struct NativeChatInput: View {
         // An edited recall is the user's text now: keep it as the draft that
         // Down returns to, rather than continuing from the old position.
         if let entry = history.browsingEntry, entry != text { history.resetCursor() }
+        if history.browsingEntry == nil { historyDraftAttachments = imageAttachments }
         if let recalled = up ? history.navigateUp(currentText: text) : history.navigateDown() {
             text = recalled
+            imageAttachments = history.recalledAttachments.map(NativeImageAttachment.restore) ?? historyDraftAttachments
         }
     }
 
@@ -1669,6 +1901,7 @@ public struct NativeChatInput: View {
                 submitMessage()
             },
             onTextChange: { newText in
+                onTypingChange?(!newText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 if newText.isEmpty {
                     dismissAtOverlay()
                     dismissSlashOverlay()
@@ -1679,6 +1912,7 @@ public struct NativeChatInput: View {
             },
             onFocusChanged: { focused in
                 composerFocused = focused
+                if !focused { onTypingChange?(false) }
                 if focused { composerChrome?.requestExpand?() }
                 onFocusChanged?(focused)
             },
@@ -1688,10 +1922,13 @@ public struct NativeChatInput: View {
                 imageAttachments.append(contentsOf: attachments)
                 return true
             },
+            onDropFiles: { attachDroppedFiles($0) },
             canRecallHistory: messageHistory == nil ? nil : { up, singleLine in
                 canRecallHistory(up: up, singleLine: singleLine)
             },
             onRecallHistory: { up in recallHistory(up: up) },
+            suggestionsOpen: showAtSuggestions,
+            onSuggestionKey: { handleSuggestionKey($0) },
             freezesHeight: composerCollapse > 0
         )
         .frame(maxWidth: .infinity, minHeight: textHeight + (36 - textHeight) * composerCollapse, maxHeight: textHeight + (36 - textHeight) * composerCollapse, alignment: .leading)
@@ -1895,7 +2132,9 @@ public struct NativeChatInput: View {
             }
             .ripulSheet(isPresented: $showHistorySheet) {
                 HistorySheet(history: history) { msg in
-                    text = msg
+                    text = msg.text
+                    imageAttachments = NativeImageAttachment.restore(history.attachments(for: msg))
+                    history.resetCursor()
                     showHistorySheet = false
                 }
             }
@@ -1907,11 +2146,15 @@ public struct NativeChatInput: View {
             HStack(spacing: 8) {
                 ForEach(imageAttachments) { attachment in
                     ZStack(alignment: .topTrailing) {
-                        Image(uiImage: attachment.thumbnail)
-                            .resizable()
-                            .scaledToFill()
-                            .frame(width: 56, height: 56)
-                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                        if attachment.isImage {
+                            Image(uiImage: attachment.thumbnail)
+                                .resizable()
+                                .scaledToFill()
+                                .frame(width: 56, height: 56)
+                                .clipShape(RoundedRectangle(cornerRadius: 8))
+                        } else {
+                            fileChip(attachment)
+                        }
 
                         Button {
                             imageAttachments.removeAll { $0.id == attachment.id }
@@ -1931,6 +2174,26 @@ public struct NativeChatInput: View {
             .padding(.bottom, 4)
         }
     }
+
+    /// A file other than a photo: its symbol and its name, as tall as a thumbnail.
+    private func fileChip(_ attachment: NativeImageAttachment) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: FileAttachmentHelper.symbolName(for: attachment.mediaType, name: attachment.name))
+                .font(.ripulIcon(size: 20))
+                .foregroundStyle(.ripul(.textSecondary))
+            Text(attachment.name ?? "File")
+                .font(.ripul(.caption))
+                .foregroundStyle(.ripul(.text))
+                .lineLimit(2)
+                .truncationMode(.middle)
+                .multilineTextAlignment(.leading)
+        }
+        .padding(.horizontal, 8)
+        .frame(width: 140, height: 56, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.ripul(system: .secondarySystemBackground)))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Attached file \(attachment.name ?? "")")
+    }
 }
 
 #elseif os(macOS)
@@ -1943,6 +2206,7 @@ public struct NativeChatInput: View {
     let isAgentRunning: Bool
     let isAgentPaused: Bool
     let onSubmit: () -> Void
+    var onTypingChange: ((Bool) -> Void)?
     @ObservedObject var contextStore: RipulComposerContextStore
     var contextSessionID: String?
     var contextOptions: [RipulComposerContext]
@@ -1980,6 +2244,7 @@ public struct NativeChatInput: View {
     /// Optional callback to fetch repo branch suggestions (the chat's repo).
     /// When provided, the `@` overlay shows a "Branches" section; picking one
     /// inserts its `[context: …]` token, resolved to live branch facts at send.
+    var onQueryChats: ((String) async -> [ChatSuggestion])?
     var onQueryBranches: ((String) async -> [BranchSuggestion])?
     /// Optional callback to fetch teammates not yet in this chat. When provided,
     /// the `@` overlay shows a "Team" section under People; picking one inserts
@@ -2010,6 +2275,7 @@ public struct NativeChatInput: View {
     /// The character index where the `@` trigger was typed
     @State private var atTriggerIndex: String.Index?
     @State private var showHistorySheet = false
+    @State private var historyDraftAttachments: [NativeImageAttachment] = []
     @State private var showTodoPicker = false
     @State private var showAtSuggestions = false
     @State private var allElementSuggestions: [ElementSuggestion] = []
@@ -2018,6 +2284,9 @@ public struct NativeChatInput: View {
     @State private var participantSuggestions: [ParticipantSuggestion] = []
     @State private var branchSuggestions: [BranchSuggestion] = []
     @State private var allBranchSuggestions: [BranchSuggestion] = []
+    @State private var chatSuggestions: [ChatSuggestion] = []
+    @State private var chatQueryTask: Task<Void, Never>?
+    @State private var chatsLoading = false
     @State private var allTeammateSuggestions: [TeammateSuggestion] = []
     @State private var teammateSuggestions: [TeammateSuggestion] = []
     /// Outcome of the last teammate invitation, shown briefly above the field.
@@ -2038,6 +2307,7 @@ public struct NativeChatInput: View {
         isAgentRunning: Bool = false,
         isAgentPaused: Bool = false,
         onSubmit: @escaping () -> Void,
+        onTypingChange: ((Bool) -> Void)? = nil,
         onSubmitNote: (() -> Void)? = nil,
         conversationMode: String = "agent",
         replyTarget: RipulReplyTarget? = nil,
@@ -2060,6 +2330,7 @@ public struct NativeChatInput: View {
         onQueryParticipants: (() async -> [ParticipantSuggestion])? = nil,
         onQueryTeammates: (() async -> [TeammateSuggestion])? = nil,
         onInviteTeammate: ((TeammateSuggestion) async -> String?)? = nil,
+        onQueryChats: ((String) async -> [ChatSuggestion])? = nil,
         onQueryBranches: ((String) async -> [BranchSuggestion])? = nil,
         addressedParticipants: Binding<[String]> = .constant([]),
         onFocusChanged: ((Bool) -> Void)? = nil,
@@ -2075,6 +2346,7 @@ public struct NativeChatInput: View {
         self.isAgentRunning = isAgentRunning
         self.isAgentPaused = isAgentPaused
         self.onSubmit = onSubmit
+        self.onTypingChange = onTypingChange
         self.onSubmitNote = onSubmitNote
         self.conversationMode = conversationMode
         self.replyTarget = replyTarget
@@ -2095,6 +2367,7 @@ public struct NativeChatInput: View {
         self.onQueryFiles = onQueryFiles
         self.onQueryElements = onQueryElements
         self.onQueryParticipants = onQueryParticipants
+        self.onQueryChats = onQueryChats
         self.onQueryBranches = onQueryBranches
         self.onQueryTeammates = onQueryTeammates
         self.onInviteTeammate = onInviteTeammate
@@ -2112,7 +2385,7 @@ public struct NativeChatInput: View {
     /// Detect `@` followed by typing and populate a single ranked suggestion list
     /// (participants first, then files, then UI elements).
     private func handleAtDetection(_ value: String) {
-        guard onQueryFiles != nil || onQueryElements != nil || onQueryParticipants != nil || onQueryBranches != nil || onQueryTeammates != nil else { return }
+        guard onQueryFiles != nil || onQueryElements != nil || onQueryParticipants != nil || onQueryBranches != nil || onQueryChats != nil || onQueryTeammates != nil else { return }
 
         guard let atRange = value.range(of: "@", options: .backwards) else {
             dismissAtOverlay()
@@ -2129,7 +2402,7 @@ public struct NativeChatInput: View {
 
         let afterAt = String(value[atRange.upperBound...])
 
-        if afterAt.contains(" ") {
+        if afterAt.contains("\n") || afterAt.count > 120 || (afterAt.contains(" ") && !showAtSuggestions) || contextAliases.keys.contains(where: { afterAt.hasPrefix(String($0.dropFirst()) + " ") }) {
             dismissAtOverlay()
             return
         }
@@ -2184,6 +2457,21 @@ public struct NativeChatInput: View {
             elementSuggestions = filterElements(by: afterAt, all: allElementSuggestions)
         }
 
+        // Re-query the complete catalogue for each search, not just the initial
+        // recent page. Cancellation prevents an old query replacing new results.
+        chatQueryTask?.cancel()
+        if !hiddenClasses.contains("chats"), let queryChats = onQueryChats {
+            chatsLoading = true
+            chatQueryTask = Task {
+                try? await Task.sleep(nanoseconds: 150_000_000)
+                guard !Task.isCancelled else { return }
+                let results = await queryChats(afterAt)
+                guard !Task.isCancelled, showAtSuggestions else { return }
+                chatSuggestions = results
+                chatsLoading = false
+            }
+        } else { chatsLoading = false; chatSuggestions = [] }
+
         // Files: debounced remote query, only when there's text to search for.
         fileQueryTask?.cancel()
         if afterAt.isEmpty {
@@ -2236,6 +2524,9 @@ public struct NativeChatInput: View {
         allTeammateSuggestions = []
         branchSuggestions = []
         allBranchSuggestions = []
+        chatSuggestions = []
+        chatsLoading = false
+        chatQueryTask?.cancel()
         atTriggerIndex = nil
         fileQueryTask?.cancel()
     }
@@ -2260,12 +2551,20 @@ public struct NativeChatInput: View {
         dismissAtOverlay()
     }
 
+    /// A person's name as an @ token. A mention ends at the first space, so
+    /// "Sandsend Retreats" went out as "@Sandsend Retreats" and only "Sandsend"
+    /// was drawn as the mention. The web composer flattens spaces to `_` and
+    /// the message renderer turns them back (participantMentions.ts).
+    static func mentionToken(_ name: String) -> String {
+        name.split(whereSeparator: \.isWhitespace).joined(separator: "_")
+    }
+
     private func selectParticipantSuggestion(_ suggestion: ParticipantSuggestion) {
         if let triggerIdx = atTriggerIndex {
             let before = String(text[text.startIndex..<triggerIdx])
-            text = before + "@" + suggestion.name + " "
+            text = before + "@" + Self.mentionToken(suggestion.name) + " "
         } else {
-            text += "@" + suggestion.name + " "
+            text += "@" + Self.mentionToken(suggestion.name) + " "
         }
         if !addressedParticipants.contains(suggestion.id) {
             addressedParticipants.append(suggestion.id)
@@ -2276,9 +2575,9 @@ public struct NativeChatInput: View {
     private func selectTeammateSuggestion(_ suggestion: TeammateSuggestion) {
         if let triggerIdx = atTriggerIndex {
             let before = String(text[text.startIndex..<triggerIdx])
-            text = before + "@" + suggestion.name + " "
+            text = before + "@" + Self.mentionToken(suggestion.name) + " "
         } else {
-            text += "@" + suggestion.name + " "
+            text += "@" + Self.mentionToken(suggestion.name) + " "
         }
         if !addressedParticipants.contains(suggestion.id) {
             addressedParticipants.append(suggestion.id)
@@ -2292,6 +2591,16 @@ public struct NativeChatInput: View {
                 showAtNotice(error.map { "Couldn't invite \(who): \($0)" } ?? "Invited \(who) to this chat")
             }
         }
+    }
+
+    private func selectChatSuggestion(_ suggestion: ChatSuggestion) {
+        // Keep two chats with the same title independently addressable.
+        let alias = ContextMentionAliasing.uniqueAlias(for: suggestion.name, token: suggestion.token, aliases: contextAliases)
+        contextAliases[alias] = suggestion.token
+        if let triggerIdx = atTriggerIndex {
+            text = String(text[text.startIndex..<triggerIdx]) + alias + " "
+        } else { text += alias + " " }
+        dismissAtOverlay()
     }
 
     private func selectBranchSuggestion(_ suggestion: BranchSuggestion) {
@@ -2323,6 +2632,7 @@ public struct NativeChatInput: View {
     /// then hand off. `text` is a binding straight into the caller's state, so
     /// the submit handler reads the expanded string.
     private func submitMessage() {
+        onTypingChange?(false)
         guard !composerActionPending else { return }
         let expanded = ContextMentionAliasing.expand(text, using: contextAliases)
         if expanded != text { text = expanded }
@@ -2337,11 +2647,13 @@ public struct NativeChatInput: View {
             hiddenClasses.insert(key)
         }
         AtClassToggles.setHidden(key, hiddenClasses.contains(key))
+        if key == "chats" { handleAtDetection(text) }
     }
 
     /// Fast show/hide chips for whole classes of suggestions, pinned atop the
     /// overlay. Persistence mirrors the web composer's atMenuClassToggles.
     private var classToggleRow: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
         HStack(spacing: 6) {
             ForEach(AtClassToggleSpec.all) { spec in
                 Button {
@@ -2361,6 +2673,28 @@ public struct NativeChatInput: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
+        }
+    }
+
+    private func chatRow(_ suggestion: ChatSuggestion) -> some View {
+        Button { selectChatSuggestion(suggestion) } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "bubble.left.and.bubble.right")
+                    .foregroundStyle(.ripul(.textSecondary)).frame(width: 20)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(suggestion.name).font(.ripul(size: 14, weight: .medium))
+                        .foregroundStyle(.ripul(.text)).lineLimit(2)
+                    if let description = suggestion.description {
+                        Text(description).font(.ripul(size: 11))
+                            .foregroundStyle(.ripul(.textSecondary)).lineLimit(2)
+                    }
+                }
+                Spacer()
+            }
+            .padding(.horizontal, 12).padding(.vertical, 8).contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("Composer.chatSuggestion")
     }
 
     private func branchRow(_ suggestion: BranchSuggestion) -> some View {
@@ -2410,15 +2744,16 @@ public struct NativeChatInput: View {
             classToggleRow
             let peopleShown = !participantSuggestions.isEmpty && !hiddenClasses.contains("people")
             let teamShown = !teammateSuggestions.isEmpty && !hiddenClasses.contains("people")
+            let chatsShown = (!chatSuggestions.isEmpty || chatsLoading) && !hiddenClasses.contains("chats")
             let branchesShown = !branchSuggestions.isEmpty && !hiddenClasses.contains("repo")
             let filesShown = !fileSuggestions.isEmpty && !hiddenClasses.contains("files")
-            let hasResults = peopleShown || teamShown || branchesShown || filesShown || !elementSuggestions.isEmpty
+            let hasResults = peopleShown || teamShown || chatsShown || branchesShown || filesShown || !elementSuggestions.isEmpty
             if !hasResults {
                 HStack(spacing: 8) {
                     Image(systemName: "magnifyingglass")
                         .foregroundStyle(.ripul(.textSecondary))
                         .frame(width: 20)
-                    Text(hiddenClasses.contains("people") && hiddenClasses.contains("repo") && hiddenClasses.contains("files") && elementSuggestions.isEmpty ? "All classes hidden — use the toggles above" : (afterAtText.isEmpty ? "Type to search people, branches, files, and UI elements" : "No matches for \u{201C}\(afterAtText)\u{201D}"))
+                    Text(hiddenClasses.contains("people") && hiddenClasses.contains("chats") && hiddenClasses.contains("repo") && hiddenClasses.contains("files") && elementSuggestions.isEmpty ? "All classes hidden — use the toggles above" : (afterAtText.isEmpty ? "Search chats, people, branches, files, and UI elements" : "No matches for \u{201C}\(afterAtText)\u{201D}"))
                         .font(.ripul(size: 14))
                         .foregroundStyle(.ripul(.textSecondary))
                     Spacer()
@@ -2449,6 +2784,15 @@ public struct NativeChatInput: View {
                                 }
                             }
                         }
+                        if chatsShown {
+                            if peopleShown || teamShown { Divider() }
+                            suggestionSectionHeader("Chats")
+                            if chatsLoading { ProgressView().padding(8) }
+                            ForEach(chatSuggestions) { suggestion in
+                                chatRow(suggestion)
+                                if suggestion.id != chatSuggestions.last?.id { Divider().padding(.leading, 40) }
+                            }
+                        }
                         if branchesShown {
                             if peopleShown || teamShown {
                                 Divider()
@@ -2462,7 +2806,7 @@ public struct NativeChatInput: View {
                             }
                         }
                         if filesShown {
-                            if peopleShown || teamShown || branchesShown {
+                            if peopleShown || teamShown || chatsShown || branchesShown {
                                 Divider()
                             }
                             suggestionSectionHeader("Files")
@@ -2474,7 +2818,7 @@ public struct NativeChatInput: View {
                             }
                         }
                         if !elementSuggestions.isEmpty {
-                            if peopleShown || teamShown || branchesShown || filesShown {
+                            if peopleShown || teamShown || chatsShown || branchesShown || filesShown {
                                 Divider()
                             }
                             suggestionSectionHeader("UI Elements")
@@ -2677,8 +3021,12 @@ public struct NativeChatInput: View {
         }
         .animation(.easeInOut(duration: 0.2), value: imageAttachments.count)
         .animation(.easeInOut(duration: 0.2), value: isAgentRunning)
+        .onChange(of: contextSessionID) { _ in
+            dismissAtOverlay()
+        }
         .animation(.easeInOut(duration: 0.2), value: isTwoRow)
         .onChange(of: text) { newValue in
+            if newValue.isEmpty { messageHistory?.composerModality = "keyboard" }
             if isDictating && newValue.isEmpty {
                 dictationBase = ""
             }
@@ -2701,6 +3049,7 @@ public struct NativeChatInput: View {
             isFocused = true
         }
         .onChange(of: isFocused) { focused in
+            if !focused { onTypingChange?(false) }
             onFocusChanged?(focused)
         }
         .onKeyPress(.escape) {
@@ -2711,9 +3060,11 @@ public struct NativeChatInput: View {
             return .ignored
         }
         .onKeyPress(.upArrow) {
+            if let history = messageHistory, history.browsingEntry == nil { historyDraftAttachments = imageAttachments }
             if let history = messageHistory,
                let previous = history.navigateUp(currentText: text) {
                 text = previous
+                imageAttachments = history.recalledAttachments.map(NativeImageAttachment.restore) ?? historyDraftAttachments
                 return .handled
             }
             return .ignored
@@ -2722,6 +3073,7 @@ public struct NativeChatInput: View {
             if let history = messageHistory,
                let next = history.navigateDown() {
                 text = next
+                imageAttachments = history.recalledAttachments.map(NativeImageAttachment.restore) ?? historyDraftAttachments
                 return .handled
             }
             return .ignored
@@ -2753,8 +3105,10 @@ public struct NativeChatInput: View {
                 try await provider.startTranscription { event in
                     switch event {
                     case .partial(let partial):
+                        messageHistory?.composerModality = "voice"
                         text = dictationBase.isEmpty ? partial : dictationBase + " " + partial
                     case .committed(let segment):
+                        messageHistory?.composerModality = "voice"
                         dictationBase = dictationBase.isEmpty ? segment : dictationBase + " " + segment
                         text = dictationBase
                     case .audioLevel, .connectionReady, .recovery:
@@ -2970,6 +3324,7 @@ public struct NativeChatInput: View {
                 submitMessage()
             }
             .onChange(of: text) { newValue in
+                if isFocused { onTypingChange?(!newValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) }
                 handleAtDetection(newValue)
             }
     }
@@ -3186,7 +3541,9 @@ public struct NativeChatInput: View {
             .modifier(GlassCircleModifier(glassStyle: isTwoRow ? nil : resolvedChatInputGlassStyle))
             .ripulSheet(isPresented: $showHistorySheet) {
                 HistorySheet(history: history) { msg in
-                    text = msg
+                    text = msg.text
+                    imageAttachments = NativeImageAttachment.restore(history.attachments(for: msg))
+                    history.resetCursor()
                     showHistorySheet = false
                 }
             }
@@ -3232,29 +3589,35 @@ public struct NativeChatInput: View {
 @available(iOS 16.0, macOS 14.0, *)
 struct HistorySheet: View {
     @ObservedObject var history: MessageHistory
-    let onSelect: (String) -> Void
+    let onSelect: (MessageHistory.Entry) -> Void
     @Environment(\.dismiss) private var dismiss
+    @State private var search = ""
+
+    private var groups: [(id: String, title: String, entries: [MessageHistory.Entry])] {
+        let entries = history.entries.reversed().filter {
+            search.isEmpty || $0.text.localizedCaseInsensitiveContains(search)
+                || $0.chatTitle.localizedCaseInsensitiveContains(search)
+                || $0.attachmentNames.contains { $0.localizedCaseInsensitiveContains(search) }
+        }
+        var result: [(id: String, title: String, entries: [MessageHistory.Entry])] = []
+        for entry in entries {
+            let id = entry.chatID ?? "unassigned"
+            if let index = result.firstIndex(where: { $0.id == id }) { result[index].entries.append(entry) }
+            else { result.append((id, entry.chatTitle, [entry])) }
+        }
+        return result
+    }
 
     var body: some View {
         NavigationStack {
             List {
-                let favs = history.favoriteMessages
-                let recent = history.nonFavoriteRecentMessages
-                if !favs.isEmpty {
-                    Section(themed: "Favorites") {
-                        ForEach(favs.prefix(15), id: \.self) { msg in
-                            historyRow(msg)
-                        }
-                    }.ripulThemedListRows()
-                }
-                if !recent.isEmpty {
-                    Section(themed: "Recent") {
-                        ForEach(recent.prefix(15), id: \.self) { msg in
-                            historyRow(msg)
-                        }
+                ForEach(groups, id: \.id) { group in
+                    Section(themed: group.title) {
+                        ForEach(group.entries) { msg in historyRow(msg) }
                     }.ripulThemedListRows()
                 }
             }.ripulThemedList()
+            .searchable(text: $search, prompt: "Search prompts, chats and files")
             .navigationTitle("Recent Prompts")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
@@ -3272,19 +3635,32 @@ struct HistorySheet: View {
         #endif
     }
 
-    private func historyRow(_ msg: String) -> some View {
+    private func historyRow(_ msg: MessageHistory.Entry) -> some View {
         Button {
             onSelect(msg)
         } label: {
             HStack {
-                if history.isFavorite(msg) {
+                if msg.favorite {
                     Image(systemName: "star.fill")
                         .foregroundStyle(.ripul(system: .systemYellow))
                         .font(.ripulIcon(.caption2))
                 }
-                Text(msg)
-                    .lineLimit(2)
-                    .foregroundStyle(.ripul(.text))
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(msg.text.isEmpty ? "Attachments" : msg.text)
+                        .lineLimit(3)
+                        .foregroundStyle(.ripul(.text))
+                    if !msg.attachmentNames.isEmpty {
+                        Label(msg.attachmentNames.joined(separator: ", "), systemImage: "paperclip")
+                            .lineLimit(2)
+                    }
+                    HStack {
+                        Label(msg.modality == "voice" ? "Voice" : msg.modality == "unknown" ? "Earlier prompt" : "Keyboard",
+                              systemImage: msg.modality == "voice" ? "mic" : "keyboard")
+                        Text(msg.sentAt, style: .date)
+                        Text(msg.sentAt, style: .time)
+                    }
+                }
+                .font(.ripul(.caption))
                 Spacer()
             }
             .contentShape(Rectangle())
@@ -3302,8 +3678,8 @@ struct HistorySheet: View {
                 history.toggleFavorite(msg)
             } label: {
                 Label(
-                    history.isFavorite(msg) ? "Unfavorite" : "Favorite",
-                    systemImage: history.isFavorite(msg) ? "star.slash.fill" : "star.fill"
+                    msg.favorite ? "Unfavorite" : "Favorite",
+                    systemImage: msg.favorite ? "star.slash.fill" : "star.fill"
                 )
             }
             .tint(Color.ripul(system: .systemYellow))
@@ -3513,6 +3889,20 @@ private struct ChatInputGlassGroup<Content: View>: View {
 // MARK: - iOS-only: UIKit Text Input & Camera
 
 #if os(iOS)
+extension ChatTextView: UITextPasteDelegate {
+    func textPasteConfigurationSupporting(_ textPasteConfigurationSupporting: any UITextPasteConfigurationSupporting,
+                                          transform item: UITextPasteItem) {
+        let provider = item.itemProvider
+        guard provider.hasItemConformingToTypeIdentifier(UTType.image.identifier)
+                || provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) else {
+            item.setDefaultResult()
+            return
+        }
+        item.setNoResult()
+        DispatchQueue.main.async { self.takeDroppedFile(provider) }
+    }
+}
+
 /// UITextView subclass that suppresses the iOS autofill toolbar above the keyboard.
 class ChatTextView: UITextView {
     /// Return true only after images have become composer attachments. Reading
@@ -3525,6 +3915,26 @@ class ChatTextView: UITextView {
             return
         }
         super.paste(sender)
+    }
+
+    /// Images and files dropped on the editor. UIKit sends text drops through
+    /// the paste delegate, which would insert a Finder file's path as text;
+    /// those items go here instead, and text still drops in as text.
+    var onDropFiles: (([NSItemProvider]) -> Void)? {
+        didSet { pasteDelegate = onDropFiles == nil ? nil : self }
+    }
+    private var droppedFiles: [NSItemProvider] = []
+
+    private func takeDroppedFile(_ provider: NSItemProvider) {
+        droppedFiles.append(provider)
+        guard droppedFiles.count == 1 else { return }
+        // One drop transforms each of its items in turn: hand them over together.
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            let providers = droppedFiles
+            droppedFiles = []
+            onDropFiles?(providers)
+        }
     }
 
     override func resignFirstResponder() -> Bool {
@@ -3599,6 +4009,11 @@ class ChatTextView: UITextView {
     /// arrow is left to move the caret, so multi-line text navigates normally.
     var canRecallHistory: ((_ up: Bool, _ singleLine: Bool) -> Bool)?
     var onRecallHistory: ((_ up: Bool) -> Void)?
+    /// While the @ list is open, the arrows, Return, Tab and Escape drive it
+    /// instead of the caret, history and send.
+    enum SuggestionKey { case up, down, pick, dismiss }
+    var suggestionsOpen = false
+    var onSuggestionKey: ((SuggestionKey) -> Void)?
 
     /// Start and end of the text share a visual line; a soft wrap counts as a
     /// second line, the same as a newline.
@@ -3611,6 +4026,19 @@ class ChatTextView: UITextView {
         // Let an input method use Return to confirm its marked text instead
         // of accidentally sending an unfinished composition.
         guard isEditable, markedTextRange == nil, onReturnKey != nil else { return super.keyCommands }
+        if suggestionsOpen, onSuggestionKey != nil {
+            let keys: [(String, Selector)] = [
+                (UIKeyCommand.inputUpArrow, #selector(handleSuggestionUp)),
+                (UIKeyCommand.inputDownArrow, #selector(handleSuggestionDown)),
+                ("\r", #selector(handleSuggestionPick)), ("\t", #selector(handleSuggestionPick)),
+                (UIKeyCommand.inputEscape, #selector(handleSuggestionDismiss)),
+            ]
+            return keys.map { input, action in
+                let command = UIKeyCommand(input: input, modifierFlags: [], action: action)
+                command.wantsPriorityOverSystemBehavior = true
+                return command
+            } + (super.keyCommands ?? [])
+        }
         let send = UIKeyCommand(input: "\r", modifierFlags: [], action: #selector(handleReturnKey))
         send.wantsPriorityOverSystemBehavior = true
         let newline = UIKeyCommand(input: "\r", modifierFlags: .shift, action: #selector(handleShiftReturnKey))
@@ -3639,6 +4067,10 @@ class ChatTextView: UITextView {
         guard isEditable, markedTextRange == nil else { return }
         insertText("\n")
     }
+    @objc private func handleSuggestionUp() { onSuggestionKey?(.up) }
+    @objc private func handleSuggestionDown() { onSuggestionKey?(.down) }
+    @objc private func handleSuggestionPick() { onSuggestionKey?(.pick) }
+    @objc private func handleSuggestionDismiss() { onSuggestionKey?(.dismiss) }
     @objc private func handleHistoryUp() { onRecallHistory?(true) }
     @objc private func handleHistoryDown() { onRecallHistory?(false) }
 }
@@ -3653,8 +4085,11 @@ struct NoAutofillTextView: UIViewRepresentable {
     var onTextChange: ((String) -> Void)?
     var onFocusChanged: ((Bool) -> Void)?
     var onPasteImages: (([UIImage]) -> Bool)?
+    var onDropFiles: (([NSItemProvider]) -> Void)?
     var canRecallHistory: ((_ up: Bool, _ singleLine: Bool) -> Bool)?
     var onRecallHistory: ((_ up: Bool) -> Void)?
+    var suggestionsOpen = false
+    var onSuggestionKey: ((ChatTextView.SuggestionKey) -> Void)?
     var freezesHeight = false
 
     private let minHeight: CGFloat = 36
@@ -3718,9 +4153,12 @@ struct NoAutofillTextView: UIViewRepresentable {
         context.coordinator.parent = self
         if wasFrozen && !freezesHeight { context.coordinator.recalcHeight(textView) }
         textView.onPasteImages = onPasteImages
+        if (textView.onDropFiles == nil) != (onDropFiles == nil) { textView.onDropFiles = onDropFiles }
         textView.onReturnKey = onSubmit
         textView.canRecallHistory = canRecallHistory
         textView.onRecallHistory = onRecallHistory
+        textView.suggestionsOpen = suggestionsOpen
+        textView.onSuggestionKey = onSuggestionKey
         // Keep placeholder text in sync with SwiftUI state
         if context.coordinator.placeholderLabel?.text != placeholder {
             context.coordinator.placeholderLabel?.text = placeholder

@@ -76,6 +76,28 @@ public struct CmsPortalThemeConfig: Codable, Equatable {
         }
     }
 
+    /// The site's brand gradient (`gradient` in PortalThemeConfig): what
+    /// `color.gradient` paints. Unset stops: accent → primary.
+    public struct Gradient: Codable, Equatable {
+        /// Two or more CSS colours, first to last along the sweep, evenly spaced.
+        public var stops: [String]?
+        /// The sweep's direction in CSS degrees. Unset: `buttons.gradientAngle`, else 135.
+        public var angle: Double?
+        /// The stops when the site renders dark. Unset: `stops`.
+        public var darkStops: [String]?
+
+        public init(stops: [String]? = nil, angle: Double? = nil, darkStops: [String]? = nil) {
+            self.stops = stops; self.angle = angle; self.darkStops = darkStops
+        }
+
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            stops = c.lossyStrings(.stops)
+            angle = c.lossyDouble(.angle)
+            darkStops = c.lossyStrings(.darkStops)
+        }
+    }
+
     public struct Typography: Codable, Equatable {
         public var fontFamily: String?
         public var baseFontSize: Double?
@@ -161,17 +183,18 @@ public struct CmsPortalThemeConfig: Codable, Equatable {
     public var palette: Palette?
     /// Layered over `palette` when the portal renders dark.
     public var darkPalette: Palette?
+    public var gradient: Gradient?
     public var typography: Typography?
     public var spacing: Double?
     public var shape: Shape?
     public var buttons: Buttons?
 
     public init(mode: String? = nil, palette: Palette? = nil, darkPalette: Palette? = nil,
-                typography: Typography? = nil, spacing: Double? = nil, shape: Shape? = nil,
-                buttons: Buttons? = nil) {
+                gradient: Gradient? = nil, typography: Typography? = nil, spacing: Double? = nil,
+                shape: Shape? = nil, buttons: Buttons? = nil) {
         self.mode = mode; self.palette = palette; self.darkPalette = darkPalette
-        self.typography = typography; self.spacing = spacing; self.shape = shape
-        self.buttons = buttons
+        self.gradient = gradient; self.typography = typography; self.spacing = spacing
+        self.shape = shape; self.buttons = buttons
     }
 
     public init(from decoder: Decoder) throws {
@@ -179,6 +202,7 @@ public struct CmsPortalThemeConfig: Codable, Equatable {
         mode = c.lossyString(.mode)
         palette = try? c.decodeIfPresent(Palette.self, forKey: .palette)
         darkPalette = try? c.decodeIfPresent(Palette.self, forKey: .darkPalette)
+        gradient = try? c.decodeIfPresent(Gradient.self, forKey: .gradient)
         typography = try? c.decodeIfPresent(Typography.self, forKey: .typography)
         spacing = c.lossyDouble(.spacing)
         shape = try? c.decodeIfPresent(Shape.self, forKey: .shape)
@@ -194,12 +218,30 @@ private extension KeyedDecodingContainer {
         return s
     }
 
+    /// The strings of a list, skipping anything that is not one; nil when the
+    /// key is absent or not a list.
+    func lossyStrings(_ key: Key) -> [String]? {
+        guard var list = try? nestedUnkeyedContainer(forKey: key) else { return nil }
+        var out: [String] = []
+        while !list.isAtEnd {
+            if let s = try? list.decode(String.self) { out.append(s) }
+            else { _ = try? list.decode(CmsSkippedValue.self) }
+        }
+        return out
+    }
+
     /// Number, accepting a numeric string; nil otherwise.
     func lossyDouble(_ key: Key) -> Double? {
         if let n = try? decodeIfPresent(Double.self, forKey: key) { return n }
         if let s = try? decodeIfPresent(String.self, forKey: key) { return Double(s.trimmingCharacters(in: .whitespaces)) }
         return nil
     }
+}
+
+/// Decodes and discards one value of any type, so a list can step past an
+/// entry of the wrong type.
+private struct CmsSkippedValue: Decodable {
+    init(from decoder: Decoder) throws {}
 }
 
 // MARK: - RGBA maths (twins of MUI's colorManipulator)
@@ -263,6 +305,11 @@ public struct CmsPortalTheme {
     let warning: Color
     let error: Color
     let info: Color
+    /// `color.*.soft`: a status colour at 14%, the wash behind a status pill.
+    let primarySoft: Color
+    let successSoft: Color
+    let warningSoft: Color
+    let errorSoft: Color
 
     // Brand tokens (CmsBrandTokens in portalTheme.ts).
     let accent: Color
@@ -274,8 +321,10 @@ public struct CmsPortalTheme {
     let accentRGBA: CmsRGBA
     let tintRGBA: CmsRGBA
     let surfaceMutedRGBA: CmsRGBA
-    /// Brand gradient: accent → primary at `gradientAngle` CSS degrees.
+    /// Brand gradient: the theme's stops (its dark ones when dark), or
+    /// accent → primary, at `gradientAngle` CSS degrees.
     let gradient: LinearGradient
+    let gradientStops: [CmsRGBA]
     let gradientAngle: Double
     /// Base radius (`shape.borderRadius`, MUI default 4).
     let baseRadius: CGFloat
@@ -320,9 +369,16 @@ public struct CmsPortalTheme {
         textPrimary = textRGBA.color
         textSecondary = rgba(palette.mutedText, dark ? "rgba(255,255,255,0.7)" : "rgba(0,0,0,0.6)").color
         divider = rgba(palette.divider, dark ? "rgba(255,255,255,0.12)" : "rgba(0,0,0,0.12)").color
-        success = rgba(palette.success, dark ? "#66bb6a" : "#2e7d32").color
-        warning = rgba(palette.warning, dark ? "#ffa726" : "#ed6c02").color
-        error = rgba(palette.error, dark ? "#f44336" : "#d32f2f").color
+        let successRGBA = rgba(palette.success, dark ? "#66bb6a" : "#2e7d32")
+        let warningRGBA = rgba(palette.warning, dark ? "#ffa726" : "#ed6c02")
+        let errorRGBA = rgba(palette.error, dark ? "#f44336" : "#d32f2f")
+        success = successRGBA.color
+        warning = warningRGBA.color
+        error = errorRGBA.color
+        primarySoft = primaryRGBA.withAlpha(0.14).color
+        successSoft = successRGBA.withAlpha(0.14).color
+        warningSoft = warningRGBA.withAlpha(0.14).color
+        errorSoft = errorRGBA.withAlpha(0.14).color
         info = (dark ? CmsRGBA(css: "#29b6f6") : CmsRGBA(css: "#0288d1"))!.color
 
         // deriveBrand — mirror exactly.
@@ -336,10 +392,21 @@ public struct CmsPortalTheme {
         accent = accentRGBA.color
         tint = tintRGBA.color
         surfaceMuted = surfaceMutedRGBA.color
-        let angle = config?.buttons?.gradientAngle ?? 135
+        // brandGradient (portalTheme.ts): own stops, dark ones when dark, else
+        // accent → primary; fewer than two readable stops is no gradient of its own.
+        func readable(_ stops: [String]?) -> [CmsRGBA]? {
+            let parsed = (stops ?? []).compactMap { CmsRGBA(css: $0) }
+            return parsed.count >= 2 ? parsed : nil
+        }
+        let ownGradient = config?.gradient
+        let stops = (dark ? readable(ownGradient?.darkStops) : nil)
+            ?? readable(ownGradient?.stops)
+            ?? [accentRGBA, primaryRGBA]
+        gradientStops = stops
+        let angle = ownGradient?.angle ?? config?.buttons?.gradientAngle ?? 135
         gradientAngle = angle
         let points = Self.gradientPoints(angle: angle)
-        gradient = LinearGradient(colors: [accentRGBA.color, primaryRGBA.color],
+        gradient = LinearGradient(colors: stops.map(\.color),
                                   startPoint: points.start, endPoint: points.end)
 
         let shape = config?.shape
@@ -407,6 +474,10 @@ public struct CmsPortalTheme {
         case "color.accent": return accent
         case "color.tint": return tint
         case "color.surfaceMuted": return surfaceMuted
+        case "color.primary.soft": return primarySoft
+        case "color.success.soft": return successSoft
+        case "color.warning.soft": return warningSoft
+        case "color.error.soft": return errorSoft
         case "color.gradient": return nil
         default: return CmsCss.color(value)
         }

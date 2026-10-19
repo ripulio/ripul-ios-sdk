@@ -102,6 +102,7 @@ public struct AgentView<TopBar: View>: View {
     }
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.ripulPreviewPanelsAtWindow) private var previewPanelsAtWindow
 
     @State private var readyConfig: AgentConfiguration?
     // Chat text / attachments / plan-mode / addressed-participants state lives in
@@ -146,7 +147,7 @@ public struct AgentView<TopBar: View>: View {
     @Environment(\.ripulComposerChrome) private var composerChrome
     @Environment(\.composerClearanceChrome) private var clearanceChrome
 
-    @StateObject private var messageHistory = MessageHistory()
+    @StateObject private var messageHistory = MessageHistory.shared
 
     #if os(iOS)
     @StateObject private var keyboard = KeyboardObserver()
@@ -322,6 +323,7 @@ public struct AgentView<TopBar: View>: View {
         }
         .modifier(SpeechInputWarningModifier(message: $voiceMode.microphoneWarning))
         .onReceive(NotificationCenter.default.publisher(for: DeviceSpeechCredentials.changed)) { _ in voiceMode.stop() }
+        .onReceive(NotificationCenter.default.publisher(for: SecureInputProtection.began)) { _ in voiceMode.stop() }
         .onRipulVoiceModeRequest(isConnected: bridge.isConnected) { honorVoiceModeRequest() }
         .onChange(of: bridge.nativeChatScrollerEnabled) { on in
             bridge.evaluateJavaScript("window.__ripulSetNativeChatForwarding?.(\(on), 'debug')")
@@ -485,8 +487,9 @@ public struct AgentView<TopBar: View>: View {
                 "requestId": requestId,
             ])
         }, onViewSimulator: simulatorPreviewAction))
-        .modifier(SimulatorPreviewPresenter(bridge: bridge))
-        .modifier(BrowserPreviewPresenter(bridge: bridge))
+        // Unless the host app shows them over its whole window (`ripulPreviewPanels`).
+        .modifier(SimulatorPreviewPresenter(bridge: bridge, shown: !previewPanelsAtWindow))
+        .modifier(BrowserPreviewPresenter(bridge: bridge, shown: !previewPanelsAtWindow))
         .task {
             if !skipBridgeSetup {
                 bridge.searchClickDelegate = searchClickDelegate
@@ -724,6 +727,7 @@ private struct ChatComposer: View {
 
     private var conversationModeControl: some View {
         RipulConversationModeControl(mode: isGroupMode ? "group" : "agent", pending: conversationModePending,
+            typingLabel: scenePhase == .active ? bridge.conversationTypingLabel(for: bridge.currentSourceChatId) : "",
             onChange: changeConversationMode, onMention: {
                 chatMessage += (chatMessage.isEmpty || chatMessage.hasSuffix(" ") ? "" : " ") + "@Agent "
             })
@@ -805,17 +809,27 @@ private struct ChatComposer: View {
             }
         }
         .onAppear { restoreDraft(for: bridge.currentSourceChatId) }
-        .onChange(of: bridge.currentSourceChatId) { chatID in restoreDraft(for: chatID) }
+        .onChange(of: bridge.currentSourceChatId) { chatID in
+            bridge.setComposerTyping(active: false)
+            restoreDraft(for: chatID)
+        }
         .onChange(of: imageAttachments.map(\.id)) { _ in saveDraft() }
         .onChange(of: addressedParticipants) { _ in saveDraft() }
-        .onChange(of: scenePhase) { _ in saveDraft() }
-        .onDisappear { saveDraft() }
+        .onChange(of: scenePhase) { phase in
+            if phase != .active { bridge.setComposerTyping(active: false) }
+            saveDraft()
+        }
+        .onDisappear {
+            bridge.setComposerTyping(active: false)
+            saveDraft()
+        }
         .onReceive(workspace?.storage.acknowledgements.eraseToAnyPublisher() ?? Empty().eraseToAnyPublisher()) { accepted in
             guard draftChatID == accepted.chatID else { return }
             if chatMessage == accepted.text { chatMessage = ""; addressedParticipants = [] }
             imageAttachments.removeAll { accepted.imageIDs.contains($0.id) }
         }
         .onChange(of: chatMessage) { newValue in
+            if newValue.isEmpty { bridge.setComposerTyping(active: false) }
             if newValue.lowercased().hasPrefix(debugCommandTrigger) {
                 chatMessage = ""
                 onDebugCommands()
@@ -872,6 +886,7 @@ private struct ChatComposer: View {
             isAgentRunning: turnState.isRunning,
             isAgentPaused: turnState.isPaused && !isGroupMode,
             onSubmit: handleSubmit,
+            onTypingChange: { bridge.setComposerTyping(active: $0) },
             onSubmitNote: BundledAgentRuntime.isEnabled || isGroupMode ? nil : handleNoteSubmit,
             conversationMode: isGroupMode ? "group" : "agent",
             replyTarget: bridge.replyTarget(for: bridge.currentSourceChatId),
@@ -931,6 +946,14 @@ private struct ChatComposer: View {
             onInviteTeammate: { teammate in
                 await bridge.inviteTeammate(email: teammate.email)
             },
+            onQueryChats: { query in
+                let dicts = await bridge.queryAutocomplete(category: "chats", query: query)
+                return dicts.compactMap { dict in
+                    guard let name = dict["name"] as? String,
+                          let token = dict["token"] as? String else { return nil }
+                    return ChatSuggestion(id: token, name: name, description: dict["description"] as? String, token: token)
+                }
+            },
             onQueryBranches: { query in
                 let dicts = await bridge.queryAutocomplete(category: "branches", query: query)
                 return dicts.compactMap { dict in
@@ -947,7 +970,19 @@ private struct ChatComposer: View {
             },
             addressedParticipants: $addressedParticipants,
             onFocusChanged: { focused in
-                bridge.setIfChanged(\.nativeChatInputFocused, focused)
+                // The chat rides above the keyboard only while the composer
+                // has focus (the web view's offset). Losing it lowers the
+                // keyboard, so bring the chat down on the keyboard's curve:
+                // set plainly, it dropped the keyboard's height in one frame
+                // while the keyboard was still up, a jolt at the start of a
+                // swipe back.
+                if focused {
+                    bridge.setIfChanged(\.nativeChatInputFocused, true)
+                } else {
+                    withAnimation(KeyboardObserver.hideAnimation) {
+                        bridge.setIfChanged(\.nativeChatInputFocused, false)
+                    }
+                }
             },
             onPlusLongPress: { onShowConsoleLogs() },
             onQuerySlashCommands: bridge.chatInputShowQuickCommands ? { await bridge.getSlashCommands() } : nil,
@@ -998,6 +1033,7 @@ private struct ChatComposer: View {
             isAgentRunning: turnState.isRunning,
             isAgentPaused: turnState.isPaused && !isGroupMode,
             onSubmit: handleSubmit,
+            onTypingChange: { bridge.setComposerTyping(active: $0) },
             onSubmitNote: BundledAgentRuntime.isEnabled || isGroupMode ? nil : handleNoteSubmit,
             conversationMode: isGroupMode ? "group" : "agent",
             replyTarget: bridge.replyTarget(for: bridge.currentSourceChatId),
@@ -1056,6 +1092,14 @@ private struct ChatComposer: View {
             onInviteTeammate: { teammate in
                 await bridge.inviteTeammate(email: teammate.email)
             },
+            onQueryChats: { query in
+                let dicts = await bridge.queryAutocomplete(category: "chats", query: query)
+                return dicts.compactMap { dict in
+                    guard let name = dict["name"] as? String,
+                          let token = dict["token"] as? String else { return nil }
+                    return ChatSuggestion(id: token, name: name, description: dict["description"] as? String, token: token)
+                }
+            },
             onQueryBranches: { query in
                 let dicts = await bridge.queryAutocomplete(category: "branches", query: query)
                 return dicts.compactMap { dict in
@@ -1096,7 +1140,6 @@ private struct ChatComposer: View {
             : ""
         guard onEnterVoiceMode(utterance) else { return false }
         if !utterance.isEmpty {
-            recordHistory(utterance)
             chatMessage = ""
         }
         return true
@@ -1125,6 +1168,7 @@ private struct ChatComposer: View {
     // MARK: Submit handlers
 
     private func handleSubmit() {
+        bridge.setComposerTyping(active: false)
         guard !composerActionPending else { return }
         // Embedded chats can be ready in the web layer before their session is
         // represented in the native list. The web submit callable resolves the
@@ -1133,6 +1177,7 @@ private struct ChatComposer: View {
         let originalText = chatMessage
         let message = originalText.trimmingCharacters(in: .whitespacesAndNewlines)
         let images = imageAttachments
+        let modality = messageHistory.composerModality
         let addressed = addressedParticipants
         let hasContent = !message.isEmpty || !images.isEmpty || !bridge.composerContexts.attachments(for: chatID).isEmpty
         if bridge.isAgentPaused && !isGroupMode && !hasContent {
@@ -1145,7 +1190,8 @@ private struct ChatComposer: View {
         Task {
             let accepted = await bridge.submitMessage(message,
                 imageAttachments: images.isEmpty ? nil : images.map { $0.toDictionary() },
-                addressedTo: addressed.isEmpty ? nil : addressed)
+                addressedTo: addressed.isEmpty ? nil : addressed,
+                modality: modality)
             composerActionPending = false
             if accepted, let chatID {
                 workspace?.storage.acknowledgeDraft(text: originalText, imageIDs: images.map(\.id), for: chatID)
@@ -1153,7 +1199,6 @@ private struct ChatComposer: View {
             // A late acknowledgement must never clear another chat's composer.
             guard bridge.currentSourceChatId == chatID else { return }
             if accepted {
-                recordHistory(message)
                 if chatMessage == originalText { chatMessage = ""; addressedParticipants = [] }
                 imageAttachments.removeAll { image in images.contains { $0.id == image.id } }
                 selectedPhotos = []
@@ -1167,6 +1212,7 @@ private struct ChatComposer: View {
     }
 
     private func handleComposerAction(_ action: String) {
+        bridge.setComposerTyping(active: false)
         guard !composerActionPending, let chatId = bridge.currentSourceChatId else { return }
         let message = chatMessage
         let images = imageAttachments
@@ -1182,7 +1228,6 @@ private struct ChatComposer: View {
             composerActionPending = false
             guard bridge.currentSourceChatId == chatId else { return }
             if let error { composerActionError = error; return }
-            recordHistory(message)
             if chatMessage == message { chatMessage = "" }
             imageAttachments.removeAll { image in images.contains { $0.id == image.id } }
             if imageAttachments.isEmpty { selectedPhotos = [] }
@@ -1190,6 +1235,7 @@ private struct ChatComposer: View {
     }
 
     private func handleNoteSubmit() {
+        bridge.setComposerTyping(active: false)
         let message = chatMessage.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !message.isEmpty else { return }
         recordHistory(message)
@@ -1203,7 +1249,6 @@ private struct ChatComposer: View {
     /// Submit a slash command picked from the native slash menu ("/cmd" or
     /// "/cmd option"). Same path as QuickCommandsSheet — the web app executes it.
     private func handleSlashSubmit(_ message: String) {
-        recordHistory(message)
         chatMessage = ""
         Task { await bridge.submitMessage(message) }
         #if os(iOS)
@@ -1221,6 +1266,7 @@ private struct ChatComposer: View {
     }
 
     private func recordHistory(_ message: String) {
-        messageHistory.record(message)
+        messageHistory.record(message, chatID: bridge.currentSourceChatId,
+            chatTitle: bridge.sessions.first { $0.sourceChatId == bridge.currentSourceChatId }?.displayName ?? "Chat")
     }
 }

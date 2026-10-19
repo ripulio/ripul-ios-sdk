@@ -2,6 +2,7 @@
 import UIKit
 import SwiftUI
 import Combine
+import WebKit
 
 /// Observes keyboard show/hide and publishes the height above the safe area.
 public final class KeyboardObserver: ObservableObject {
@@ -9,6 +10,10 @@ public final class KeyboardObserver: ObservableObject {
     @Published public var height: CGFloat = 0
     /// Raw keyboard frame height from screen bottom (use for view frame calculations in views that ignore safe areas).
     @Published public var rawHeight: CGFloat = 0
+    /// The keyboard is up for a field in a web page: what has it is inside a
+    /// `WKWebView`. Changes with the height, in the same animation, so a screen
+    /// that treats a page's keyboard differently moves with the keyboard.
+    @Published public var isForWebContent = false
 
     public init() {
         NotificationCenter.default.addObserver(
@@ -42,27 +47,56 @@ public final class KeyboardObserver: ObservableObject {
             let adjusted = max(0, frame.height - bottomSafeArea)
             let animation = keyboardAnimation(from: notification)
             DispatchQueue.main.async {
+                // Asked a turn after the announcement, once the field that
+                // asked for the keyboard holds focus.
+                let forWebContent = Self.webViewHasFocus()
                 // willShow repeats with an identical frame on focus hops, the
-                // predictive bar and first-responder changes; don't publish those.
-                guard self.height != adjusted || self.rawHeight != frame.height else { return }
+                // predictive bar and first-responder changes; don't publish
+                // those, unless the hop was between a page and a native field.
+                guard self.height != adjusted || self.rawHeight != frame.height
+                        || self.isForWebContent != forWebContent else { return }
                 withAnimation(animation) {
                     self.height = adjusted
                     self.rawHeight = frame.height
+                    self.isForWebContent = forWebContent
                 }
             }
         }
     }
 
+    /// How everything raised above the keyboard comes back down with it:
+    /// fast initial travel, then a long gentle settle at the end.
+    public static let hideAnimation = Animation.timingCurve(0.05, 0.7, 0.1, 1.0, duration: 0.45)
+
     @objc private func keyboardWillHide(_ notification: Notification) {
-        // Fast initial travel then long gentle settle at the end
-        let animation = Animation.timingCurve(0.05, 0.7, 0.1, 1.0, duration: 0.45)
         DispatchQueue.main.async {
-            guard self.height != 0 || self.rawHeight != 0 else { return }
-            withAnimation(animation) {
+            guard self.height != 0 || self.rawHeight != 0 || self.isForWebContent else { return }
+            withAnimation(Self.hideAnimation) {
                 self.height = 0
                 self.rawHeight = 0
+                self.isForWebContent = false
             }
         }
+    }
+
+    /// Whether a field in a web page has focus: WebKit's content view, inside
+    /// a `WKWebView`, is the first responder. Looked for in every window's
+    /// views rather than through the responder chain, which starts from the
+    /// key window: which window is key does not decide it.
+    private static func webViewHasFocus() -> Bool {
+        UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap(\.windows)
+            .contains(where: containsFocusedWebView)
+    }
+
+    private static func containsFocusedWebView(_ view: UIView) -> Bool {
+        if view is WKWebView { return containsFirstResponder(view) }
+        return view.subviews.contains(where: containsFocusedWebView)
+    }
+
+    private static func containsFirstResponder(_ view: UIView) -> Bool {
+        view.isFirstResponder || view.subviews.contains(where: containsFirstResponder)
     }
 }
 #endif // os(iOS)

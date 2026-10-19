@@ -88,18 +88,22 @@ extension AgentBridge {
     }
 
     /// List a host machine's Claude account profiles and which is active.
-    public func fetchClaudeAccounts(machineId: String) async -> ClaudeAccountsListInfo {
-        let reply = await hostAccountCall("__ripulRemoteClaudeAccountsList", [machineId],
+    public func fetchClaudeAccounts(machineId: String, chatId: String? = nil) async -> ClaudeAccountsListInfo {
+        let reply = await hostAccountCall("__ripulRemoteClaudeAccountsList", [machineId, chatId],
                                           machineId: machineId, missing: "{ accounts: [], active: 'default', error: 'not ready' }")
         if let reason = reply.failure() { return ClaudeAccountsListInfo(accounts: [], active: "default", error: reason) }
         guard let dict = reply.dictionary else {
             return ClaudeAccountsListInfo(accounts: [], active: "default", error: "Unexpected result")
         }
+        if chatId != nil, dict["supportsChatAccounts"] as? Bool != true {
+            return ClaudeAccountsListInfo(accounts: [], active: "default", error: "Update Ripul on this Mac to choose an account for this chat.")
+        }
         let accounts = (dict["accounts"] as? [[String: Any]] ?? []).map { ClaudeAccountProfile.from(dict: $0) }
         return ClaudeAccountsListInfo(
             accounts: accounts,
             active: dict["active"] as? String ?? "default",
-            error: dict["error"] as? String
+            error: dict["error"] as? String,
+            followsDefault: dict["followsDefault"] as? Bool ?? true
         )
     }
 
@@ -115,11 +119,11 @@ extension AgentBridge {
 
     /// Hot-swap the host's machine-global active account. Idle persistent CLI sessions recycle onto it immediately (--resume keeps the conversation);
     /// busy ones switch after their current turn.
-    public func switchClaudeAccount(machineId: String, slug: String) async -> ClaudeAccountSwitchInfo {
+    public func switchClaudeAccount(machineId: String, slug: String, chatId: String? = nil) async -> ClaudeAccountSwitchInfo {
         func failed(_ error: String) -> ClaudeAccountSwitchInfo {
             ClaudeAccountSwitchInfo(ok: false, active: nil, recycledSessions: [], deferredBusySessions: [], error: error)
         }
-        let reply = await hostAccountCall("__ripulRemoteClaudeAccountSwitch", [machineId, slug],
+        let reply = await hostAccountCall("__ripulRemoteClaudeAccountSwitch", [machineId, slug, chatId],
                                           machineId: machineId, missing: "{ ok: false, error: 'not ready' }")
         if let reason = reply.failure() { return failed(reason) }
         guard let dict = reply.dictionary else { return failed("Unexpected result") }

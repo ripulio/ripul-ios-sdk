@@ -63,6 +63,8 @@ public struct UnifiedSession: Identifiable, Codable {
     /// session showing `Peter_Maude_(iPhone)` from the scan and its own raw
     /// `cli_<uuid>` from the local tab, alternating.
     public let titleFromScan: Bool
+    /// Nil for an automatic title; zero is a legacy, unversioned manual name.
+    public let titleRenamedAt: Double?
     /// The agent that started this chat with spawn_agent, when one did. The
     /// list shows such a chat under the chat that started it, so its title
     /// does not have to say where it came from.
@@ -124,7 +126,7 @@ public struct UnifiedSession: Identifiable, Codable {
     enum CodingKeys: String, CodingKey {
         case id, title, lastUsed, gitBranch, messageCount, projectName, projectPath
         case provider, providerLabel, model, machineName, machineId, matchKeys, cachedIsOpen
-        case tags, metadataKey, hasKnownActivity, titleFromScan, startedBy
+        case tags, metadataKey, hasKnownActivity, titleFromScan, titleRenamedAt, startedBy
     }
 
     public init(from decoder: Decoder) throws {
@@ -149,6 +151,7 @@ public struct UnifiedSession: Identifiable, Codable {
         // Same reasoning as hasKnownActivity: a row cached before this existed
         // has unknown title provenance, so assume the weaker one and let the
         // first real scan claim it.
+        titleRenamedAt = try c.decodeIfPresent(Double.self, forKey: .titleRenamedAt)
         titleFromScan = try c.decodeIfPresent(Bool.self, forKey: .titleFromScan) ?? false
         startedBy = try c.decodeIfPresent(SessionStartedBy.self, forKey: .startedBy)
         runningOnHost = false
@@ -167,12 +170,13 @@ public struct UnifiedSession: Identifiable, Codable {
         providerLabel: String?, model: String? = nil, machineName: String?, machineId: String? = nil,
         matchKeys: [String] = [], tags: [String] = [], metadataKey: String? = nil,
         cachedIsOpen: Bool? = nil,
-        titleFromScan: Bool = false,
+        titleFromScan: Bool = false, titleRenamedAt: Double? = nil,
         startedBy: SessionStartedBy? = nil,
         runningOnHost: Bool = false,
         ripulSession: ChatSession?
     ) {
         self.titleFromScan = titleFromScan
+        self.titleRenamedAt = titleRenamedAt
         self.startedBy = startedBy
         self.runningOnHost = runningOnHost
         self.id = id; self.title = title; self.lastUsed = lastUsed
@@ -208,6 +212,13 @@ public struct UnifiedSession: Identifiable, Codable {
         [id, ripulSession?.sourceChatId, ripulSession?.id].compactMap { $0 } + matchKeys
     }
 
+    /// Every id the chat is known by, for what the server names by the
+    /// owner's chat id: an invited member's tab knows it only as `hostChatId`.
+    /// Not used for read state, which is kept per row.
+    public var attentionKeys: [String] {
+        readStateKeys + [ripulSession?.hostChatId].compactMap { $0 }
+    }
+
     /// Copy of this row with a different (or no) matched Ripul tab, and
     /// optionally a refreshed title.
     ///
@@ -223,13 +234,24 @@ public struct UnifiedSession: Identifiable, Codable {
             provider: provider, providerLabel: providerLabel, model: model,
             machineName: machineName, machineId: machineId,
             matchKeys: matchKeys, tags: tags, metadataKey: metadataKey,
-            // A title supplied here came from the local tab, so the row is no
-            // longer scan-titled; without a new title the provenance stands.
-            titleFromScan: newTitle == nil ? titleFromScan : false,
+            titleFromScan: titleFromScan,
+            titleRenamedAt: newTitle == nil ? titleRenamedAt : Self.manualTitleVersion(match),
             startedBy: startedBy,
             runningOnHost: runningOnHost,
             ripulSession: match
         )
+    }
+
+    static func manualTitleVersion(_ session: ChatSession?) -> Double? {
+        guard let session, ["cli", "user"].contains(session.displayNameSource ?? "") else { return nil }
+        return session.displayNameRenamedAt ?? 0
+    }
+
+    func acceptsLocalTitle(_ session: ChatSession?) -> Bool {
+        guard let session else { return false }
+        guard let version = Self.manualTitleVersion(session) else { return !titleFromScan && titleRenamedAt == nil }
+        guard let current = titleRenamedAt else { return true }
+        return version > current || version == current && session.displayName >= title
     }
 
     /// True when this row represents the given local tab — the same identity
@@ -275,7 +297,7 @@ public struct UnifiedSession: Identifiable, Codable {
             machineName: machineName, machineId: machineId,
             matchKeys: matchKeys, tags: tags, metadataKey: metadataKey,
             cachedIsOpen: cachedIsOpen,
-            titleFromScan: titleFromScan,
+            titleFromScan: titleFromScan, titleRenamedAt: titleRenamedAt,
             startedBy: startedBy,
             runningOnHost: runningOnHost,
             ripulSession: ripulSession
@@ -292,7 +314,7 @@ public struct UnifiedSession: Identifiable, Codable {
             machineName: machineName, machineId: machineId,
             matchKeys: matchKeys, tags: tags, metadataKey: metadataKey,
             cachedIsOpen: cachedIsOpen,
-            titleFromScan: titleFromScan,
+            titleFromScan: titleFromScan, titleRenamedAt: titleRenamedAt,
             startedBy: startedBy,
             runningOnHost: runningOnHost,
             ripulSession: ripulSession
@@ -311,7 +333,7 @@ public struct UnifiedSession: Identifiable, Codable {
             machineName: machineName, machineId: machineId,
             matchKeys: matchKeys, tags: tags, metadataKey: metadataKey,
             cachedIsOpen: cachedIsOpen,
-            titleFromScan: titleFromScan,
+            titleFromScan: titleFromScan, titleRenamedAt: titleRenamedAt,
             startedBy: startedBy,
             runningOnHost: runningOnHost,
             ripulSession: ripulSession
@@ -377,6 +399,11 @@ public struct UnifiedSession: Identifiable, Codable {
             tags: (tags.isEmpty && keepTagsWhenEmpty) ? previous.tags : tags,
             metadataKey: metadataKey,
             cachedIsOpen: keepOpen ? true : cachedIsOpen,
+            // The title is this build's, so where it came from is too. Left to
+            // the defaults, every rescan that changed a row filed its title as
+            // a tab's, and the open tab's stale automatic name took the row
+            // on its next update (ChatTitleLiveUpdateTests).
+            titleFromScan: titleFromScan, titleRenamedAt: titleRenamedAt,
             // Who started a chat never changes; a scan that could not say keeps what was known.
             startedBy: startedBy ?? previous.startedBy,
             runningOnHost: runningOnHost,
@@ -544,9 +571,14 @@ public struct UnifiedSession: Identifiable, Codable {
                 }
             }
             let rowKeys = [r.id, r.sourceChatId, r.hostChatId].compactMap({ $0 })
+            let remoteVersion = r.customTitle == nil ? nil : r.customTitleRenamedAt ?? 0
+            let localVersion = Self.manualTitleVersion(ripulMatch)
+            let useLocal = localVersion.map { version in
+                remoteVersion == nil || version > remoteVersion! || version == remoteVersion! && (ripulMatch?.displayName ?? "") >= r.displayName
+            } ?? false
             result.append(UnifiedSession(
                 id: r.id,
-                title: r.displayName,
+                title: useLocal ? ripulMatch!.displayName : r.displayName,
                 // lastModified is the scanner's real last-message time; createdAt
                 // is only a stand-in, so a row falling back to it is guessing.
                 lastUsed: r.lastModified ?? r.createdAt,
@@ -563,7 +595,7 @@ public struct UnifiedSession: Identifiable, Codable {
                 matchKeys: rowKeys,
                 tags: resolveTags(rowKeys),
                 metadataKey: canonicalKey(r.sourceChatId),
-                titleFromScan: true,
+                titleFromScan: true, titleRenamedAt: useLocal ? localVersion : remoteVersion,
                 startedBy: r.startedBy,
                 runningOnHost: r.isRunning,
                 ripulSession: ripulMatch
@@ -637,11 +669,16 @@ public struct UnifiedSession: Identifiable, Codable {
                 model: s.model,
                 machineName: s.remoteMachineName,
                 machineId: nil,
+                // A chat you were invited to is named by the server with the
+                // owner's chat id, which only its tab knew. Kept on the row,
+                // it survives the saved list (which drops the tab), so a
+                // mention or question for it finds the row.
+                matchKeys: s.isSharedGuest == true ? [s.hostChatId].compactMap { $0 } : [],
                 tags: resolveTags([s.id, s.sourceChatId]),
                 metadataKey: canonicalKey(s.sourceChatId),
                 // Orphan: no scan row covered this conversation, so the local
                 // tab is the ONLY title source and must stay free to update it.
-                titleFromScan: false,
+                titleFromScan: false, titleRenamedAt: Self.manualTitleVersion(s),
                 ripulSession: s
             ))
         }

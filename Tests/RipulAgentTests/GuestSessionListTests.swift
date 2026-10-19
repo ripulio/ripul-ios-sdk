@@ -125,6 +125,7 @@ final class GuestSessionListTests: XCTestCase {
             "id": "shared_1", "sourceChatId": "shared_1", "displayName": "Shared", "createdAt": 1_700_000_000_000.0,
             "provider": "claude-cli", "providerLabel": "Claude", "modelId": "claude-opus-5",
             "hostChatId": "cli_abc", "isSharedGuest": true, "projectName": "ripul", "gitBranch": "main",
+            "latestReplyAuthorName": "Sandsend Retreats", "typingNames": ["George"],
         ]
         let session = try XCTUnwrap(ChatSession.fromWire(wire))
         XCTAssertEqual(session.model, "claude-opus-5")
@@ -133,6 +134,44 @@ final class GuestSessionListTests: XCTestCase {
         XCTAssertEqual(session.isSharedGuest, true)
         XCTAssertEqual(session.projectName, "ripul")
         XCTAssertEqual(session.gitBranch, "main")
+        XCTAssertEqual(session.latestReplyAuthorName, "Sandsend Retreats")
+        XCTAssertEqual(session.typingNames, ["George"])
+        let cached = try JSONDecoder().decode(ChatSession.self, from: JSONEncoder().encode(session))
+        XCTAssertEqual(cached.latestReplyAuthorName, "Sandsend Retreats")
+        XCTAssertTrue(cached.typingNames.isEmpty, "Typing must never survive a cached session")
+        var ownReply = wire
+        ownReply.removeValue(forKey: "latestReplyAuthorName")
+        XCTAssertNil(ChatSession.fromWire(ownReply)?.latestReplyAuthorName)
         XCTAssertNil(ChatSession.fromWire(["id": "x"]), "A row without its identity fields is dropped")
+    }
+
+    func testExistingRowFollowsTheLatestReplyAuthorWithoutARename() async throws {
+        let bridge = AgentBridge()
+        let model = RipulSessionListModel(bridge: bridge, tokenProvider: { nil }, cache: cache())
+        var shared = tab("shared_reply")
+        bridge.sessions = [shared]
+        await settle()
+        XCTAssertNil(model.unifiedSessions.first?.ripulSession?.latestReplyAuthorName)
+
+        shared.latestReplyAuthorName = "Sandsend Retreats"
+        bridge.sessions = [shared]
+        await settle()
+        XCTAssertEqual(model.unifiedSessions.first?.ripulSession?.latestReplyAuthorName, "Sandsend Retreats")
+
+        shared.typingNames = ["George"]
+        bridge.sessions = [shared]
+        await settle()
+        XCTAssertEqual(model.unifiedSessions.first?.ripulSession?.typingNames, ["George"])
+        XCTAssertEqual(model.unifiedSessions.first?.ripulSession?.latestReplyAuthorName, "Sandsend Retreats")
+        shared.typingNames = []
+        bridge.sessions = [shared]
+        await settle()
+        XCTAssertEqual(model.unifiedSessions.first?.ripulSession?.typingNames, [])
+
+        shared.latestReplyAuthorName = nil
+        bridge.sessions = [shared]
+        await settle()
+        XCTAssertNil(model.unifiedSessions.first?.ripulSession?.latestReplyAuthorName,
+                     "My reply clears the name without changing the tab id or title")
     }
 }

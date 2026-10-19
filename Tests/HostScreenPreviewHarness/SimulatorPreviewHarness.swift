@@ -16,6 +16,9 @@ struct SimulatorPreviewHarness: View {
                         "simulatorTargets": [["udid": "08E561AA-A868-4196-AF4A-3501D80DF965"]]]]], opening: true)
             }
             Button("Chat taps: \(taps)") { taps += 1 }.accessibilityIdentifier("SimulatorHarness.chat")
+            Button("Open second simulator") {
+                state.open(SimulatorTarget(udid: "5F0C2B1E-7D3A-4C69-9E21-6A8B0D4E3F17"), machineId: "host", chatId: "chat", automatic: true)
+            }
             TextField("Message", text: .constant("")).textFieldStyle(.roundedBorder)
         }.padding()
         .overlay { SimulatorHarnessOverlay(state: state).ignoresSafeArea(.container) }
@@ -34,11 +37,12 @@ private struct SimulatorHarnessOverlay: UIViewControllerRepresentable {
             ("9:41\n\nSimulator\n\nYour app preview" as NSString).draw(in: CGRect(x: 30, y: 50, width: 260, height: 550),
                 withAttributes: [.font: UIFont.systemFont(ofSize: 28), .foregroundColor: UIColor.white])
         }.jpegData(compressionQuality: 0.6)!.base64EncodedString()
-        return SimulatorPreviewController(state: state) { _, method, _, _ in
-            if method == "simulatorWindows" { return ["success": true, "result": [
-                "appearance": ["cropPresetId": "simulator.device-screen", "cornerRadiusFraction": 62.0 / 440],
-                "windows": [["id": 42, "title": "iPhone", "frame": ["width": 494.0, "height": 1054.0]]]]] }
-            return ["success": true, "result": ["cropPresetId": "simulator.device-screen", "jpegB64": image]]
+        // Control shows, as in the app, so the panel carries all its buttons.
+        state.liveContent = { _, _ in AnyView(Color.green) }
+        return SimulatorPreviewController(state: state) { _, _, args, _ in
+            let udid = (args.first as? [String: Any])?["udid"] as? String
+            return ["success": true, "result": ["name": udid?.hasPrefix("5F0C") == true ? "iPhone Air" : "iPhone 17", "jpegB64": image,
+                "appearance": ["cropPresetId": "simulator.display", "cornerRadiusFraction": 62.0 / 440]]]
         }
     }
     func updateUIViewController(_ controller: SimulatorPreviewController, context: Context) {}

@@ -285,7 +285,10 @@ private class PlatformLayerView: UIView {
         isUserInteractionEnabled = false
         backgroundColor = .clear
         setUpLayer()
+        // A loop that is running takes a new rate from Settings at once.
+        NotificationCenter.default.addObserver(self, selector: #selector(rateChanged), name: PerfSwitch.loopRateChanged, object: nil)
     }
+    @objc private func rateChanged() { layoutLayer() }
     required init?(coder: NSCoder) { fatalError("not used") }
     func setUpLayer() {}
     /// Sets the layer up for its size and starts the loop, or stops it when the
@@ -383,7 +386,9 @@ private class PlatformLayerView: NSView {
         super.init(frame: frame)
         wantsLayer = true
         setUpLayer()
+        NotificationCenter.default.addObserver(self, selector: #selector(rateChanged), name: PerfSwitch.loopRateChanged, object: nil)
     }
+    @objc private func rateChanged() { layoutLayer() }
     required init?(coder: NSCoder) { fatalError("not used") }
     func setUpLayer() {}
     func layoutLayer() {}

@@ -76,7 +76,10 @@ final class RipulThemeCoreTests: XCTestCase {
 
     // MARK: the repository's document
 
-    func testTheRepositoryDocumentIsTodaysLook() throws {
+    /// Ripul's own document is paper and navy: the brand's accent and families, the
+    /// website's grounds, surfaces, separator and ink, and a faint ink one step stronger
+    /// than the website's. The roles it does not name stay the system's.
+    func testTheRepositoryDocumentIsPaperAndNavy() throws {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         let url = root.appendingPathComponent("theme/ripul-theme.json")
@@ -84,11 +87,25 @@ final class RipulThemeCoreTests: XCTestCase {
             throw XCTSkip("theme/ripul-theme.json is outside the SDK; not present in a standalone package checkout")
         }
         try RipulTheme.adopt(documentData: Data(contentsOf: url))
-        for role in RipulColorRole.allCases { XCTAssertTrue(RipulTheme.isDefault(role), "\(role)") }
-        XCTAssertNil(RipulTheme.accentOverride)
-        XCTAssertNil(RipulTheme.defaultFontOverride)
-        XCTAssertEqual(Font.ripul(.body), Font.body)
-        XCTAssertEqual(Font.ripul(.eyebrow), Font.subheadline.weight(.semibold))
+        func pair(_ light: String, _ dark: String) -> RipulColorValue {
+            RipulColorValue(light: RipulColorLiteral(light)!, dark: RipulColorLiteral(dark))
+        }
+        let named: [RipulColorRole: RipulColorValue] = [
+            .accent: pair("#1f6f70", "#62b9b4"), .onAccent: pair("#FFFFFF", "#23253a"),
+            .canvas: pair("#f8f4ec", "#1b1d2e"), .surfaceSunken: pair("#f8f4ec", "#1b1d2e"),
+            .surface: pair("#fffdf9", "#262940"), .text: pair("#23253a", "#f8f4ec"),
+            .textSecondary: pair("#5b5e73", "#f8f4ecbd"), .textTertiary: pair("#686a80", "#f8f4eca6"),
+            .separator: pair("#23253a1f", "#f8f4ec24"),
+        ]
+        for role in RipulColorRole.allCases {
+            if let value = named[role] {
+                XCTAssertEqual(RipulTheme.color(role), value, "\(role)")
+            } else {
+                XCTAssertTrue(RipulTheme.isDefault(role), "\(role)")
+            }
+        }
+        XCTAssertEqual(RipulTheme.face(.text), "Archivo")
+        XCTAssertEqual(RipulTheme.face(.display), "Instrument Serif")
     }
 
     /// The trial brand document sets the accent, what sits on it and two families, and

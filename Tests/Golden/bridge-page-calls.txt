@@ -263,30 +263,37 @@ result: false
 ## submitMessage / missing
 result: false
 page saw: []
+console: LOG [SubmitMessage] the page has not started — waiting for it
+state: _messageSubmissionError = "The chat is still loading. Try again in a moment."
 
 ## submitMessage / null
 result: false
-page saw: [["__ripulSubmitMessage",["it's \"quoted\" \\ and\nsplit","<undefined>","<undefined>","<undefined>"]]]
+page saw: [["__ripulSubmitMessage",["it's \"quoted\" \\ and\nsplit","<undefined>","<undefined>","<undefined>","send-1"]]]
 
 ## submitMessage / scalar
 result: false
-page saw: [["__ripulSubmitMessage",["it's \"quoted\" \\ and\nsplit","<undefined>","<undefined>","<undefined>"]]]
+page saw: [["__ripulSubmitMessage",["it's \"quoted\" \\ and\nsplit","<undefined>","<undefined>","<undefined>","send-1"]]]
 
 ## submitMessage / refused
 result: false
-page saw: [["__ripulSubmitMessage",["it's \"quoted\" \\ and\nsplit","<undefined>","<undefined>","<undefined>"]]]
+page saw: [["__ripulSubmitMessage",["it's \"quoted\" \\ and\nsplit","<undefined>","<undefined>","<undefined>","send-1"]]]
 state: _messageSubmissionError = "refused"
 
 ## submitMessage / answered
 result: true
-page saw: [["__ripulSubmitMessage",["it's \"quoted\" \\ and\nsplit","<undefined>","<undefined>","<undefined>"]]]
+page saw: [["__ripulSubmitMessage",["it's \"quoted\" \\ and\nsplit","<undefined>","<undefined>","<undefined>","send-1"]]]
 state: composerContexts = RipulComposerContextStore(_selections: Published<Dictionary<String, Array<RipulContextAttachment>>>(storage: .value(["__new_conversation__": []])), elementLetters: [], availableOptions: [RipulComposerContext(id: "ripul.currentScreen", title: "Current screen", subtitle: "Choose a description, screenshot or recognized text", systemImage: "rectangle.inset.filled", kind: .screen, resolve: (Function), captureScreen: (Function))], storage: NSUserDefaults(), storagePrefix: "ripul.composer-context.v1.")
 
 ## submitMessage / throwing
 result: false
-page saw: [["__ripulSubmitMessage",["it's \"quoted\" \\ and\nsplit","<undefined>","<undefined>","<undefined>"]]]
-nslog: [AgentBridge] submitMessage error: A JavaScript exception occurred
-state: _messageSubmissionError = "A JavaScript exception occurred"
+page saw: [["__ripulSubmitMessage",["it's \"quoted\" \\ and\nsplit","<undefined>","<undefined>","<undefined>","send-1"]],["__ripulDiagnostics",["<undefined>"]]]
+console: WARN [SubmitMessage] no answer from the page (WKErrorDomain#4 JavaScriptExceptionOccurred) — finding out what became of the message
+console: ERROR [CONN_DIAG] __ripulSubmitMessage failed: WKErrorDomain#4 JavaScriptExceptionOccurred — probing web context
+console: WARN [CONN_DIAG] __ripulSubmitMessage probe=healthy path=/ ready=complete age=Ns globals=118 uaNative=false
+console: WARN [CONN_DIAG] __ripulSubmitMessage probe raw: {"callables":true,"crashed":false,"globals":118,"globalNames":["__ripulArchiveRemoteSession","__ripulCanEditModels","__ripulClearCommsLog","__ripulClearReplyTarget","__ripulCloseSession","__ripulCloseTabMirror","__ripulConnectToMachine","__ripulConnectToMachineWithProvider","__ripulConsoleExec","__ripulConsoleJobControl","__ripulCreateChat","__ripulDeleteArchivedSession"],"readyState":"complete","docAgeMs":N,"path":"/","nav":null,"uaNative":false,"bootPhase":null,"bootError":null,"bootHistory":null,"build":null}
+state: _messageSubmissionError = "The chat did not confirm your message. Check the conversation before sending it again."
+state: jsErrorMessages = ["[CONN_DIAG] __ripulSubmitMessage failed: WKErrorDomain#4 JavaScriptExceptionOccurred — probing web context"]
+state: jsErrorDebounce = DispatchWorkItem(_block: (Function))
 
 ## submitMessage.images / detached
 result: false
@@ -294,30 +301,37 @@ result: false
 ## submitMessage.images / missing
 result: false
 page saw: []
+console: LOG [SubmitMessage] the page has not started — waiting for it
+state: _messageSubmissionError = "The chat is still loading. Try again in a moment."
 
 ## submitMessage.images / null
 result: false
-page saw: [["__ripulSubmitMessage",["hi",[{"data":"AAAA","id":"i1","mediaType":"image/png"}],"<undefined>","<undefined>"]]]
+page saw: [["__ripulSubmitMessage",["hi",[{"data":"AAAA","id":"i1","mediaType":"image/png"}],"<undefined>","<undefined>","send-1"]]]
 
 ## submitMessage.images / scalar
 result: false
-page saw: [["__ripulSubmitMessage",["hi",[{"data":"AAAA","id":"i1","mediaType":"image/png"}],"<undefined>","<undefined>"]]]
+page saw: [["__ripulSubmitMessage",["hi",[{"data":"AAAA","id":"i1","mediaType":"image/png"}],"<undefined>","<undefined>","send-1"]]]
 
 ## submitMessage.images / refused
 result: false
-page saw: [["__ripulSubmitMessage",["hi",[{"data":"AAAA","id":"i1","mediaType":"image/png"}],"<undefined>","<undefined>"]]]
+page saw: [["__ripulSubmitMessage",["hi",[{"data":"AAAA","id":"i1","mediaType":"image/png"}],"<undefined>","<undefined>","send-1"]]]
 state: _messageSubmissionError = "refused"
 
 ## submitMessage.images / answered
 result: true
-page saw: [["__ripulSubmitMessage",["hi",[{"data":"AAAA","id":"i1","mediaType":"image/png"}],"<undefined>","<undefined>"]]]
+page saw: [["__ripulSubmitMessage",["hi",[{"data":"AAAA","id":"i1","mediaType":"image/png"}],"<undefined>","<undefined>","send-1"]]]
 state: composerContexts = RipulComposerContextStore(_selections: Published<Dictionary<String, Array<RipulContextAttachment>>>(storage: .value(["__new_conversation__": []])), elementLetters: [], availableOptions: [RipulComposerContext(id: "ripul.currentScreen", title: "Current screen", subtitle: "Choose a description, screenshot or recognized text", systemImage: "rectangle.inset.filled", kind: .screen, resolve: (Function), captureScreen: (Function))], storage: NSUserDefaults(), storagePrefix: "ripul.composer-context.v1.")
 
 ## submitMessage.images / throwing
 result: false
-page saw: [["__ripulSubmitMessage",["hi",[{"data":"AAAA","id":"i1","mediaType":"image/png"}],"<undefined>","<undefined>"]]]
-nslog: [AgentBridge] submitMessage error: A JavaScript exception occurred
-state: _messageSubmissionError = "A JavaScript exception occurred"
+page saw: [["__ripulSubmitMessage",["hi",[{"data":"AAAA","id":"i1","mediaType":"image/png"}],"<undefined>","<undefined>","send-1"]],["__ripulDiagnostics",["<undefined>"]]]
+console: WARN [SubmitMessage] no answer from the page (WKErrorDomain#4 JavaScriptExceptionOccurred) — finding out what became of the message
+console: ERROR [CONN_DIAG] __ripulSubmitMessage failed: WKErrorDomain#4 JavaScriptExceptionOccurred — probing web context
+console: WARN [CONN_DIAG] __ripulSubmitMessage probe=healthy path=/ ready=complete age=Ns globals=118 uaNative=false
+console: WARN [CONN_DIAG] __ripulSubmitMessage probe raw: {"callables":true,"crashed":false,"globals":118,"globalNames":["__ripulArchiveRemoteSession","__ripulCanEditModels","__ripulClearCommsLog","__ripulClearReplyTarget","__ripulCloseSession","__ripulCloseTabMirror","__ripulConnectToMachine","__ripulConnectToMachineWithProvider","__ripulConsoleExec","__ripulConsoleJobControl","__ripulCreateChat","__ripulDeleteArchivedSession"],"readyState":"complete","docAgeMs":N,"path":"/","nav":null,"uaNative":false,"bootPhase":null,"bootError":null,"bootHistory":null,"build":null}
+state: _messageSubmissionError = "The chat did not confirm your message. Check the conversation before sending it again."
+state: jsErrorMessages = ["[CONN_DIAG] __ripulSubmitMessage failed: WKErrorDomain#4 JavaScriptExceptionOccurred — probing web context"]
+state: jsErrorDebounce = DispatchWorkItem(_block: (Function))
 
 ## submitMessage.addressed / detached
 result: false
@@ -325,30 +339,37 @@ result: false
 ## submitMessage.addressed / missing
 result: false
 page saw: []
+console: LOG [SubmitMessage] the page has not started — waiting for it
+state: _messageSubmissionError = "The chat is still loading. Try again in a moment."
 
 ## submitMessage.addressed / null
 result: false
-page saw: [["__ripulSubmitMessage",["hi","<undefined>",["@a"],"voice"]]]
+page saw: [["__ripulSubmitMessage",["hi","<undefined>",["@a"],"voice","send-1"]]]
 
 ## submitMessage.addressed / scalar
 result: false
-page saw: [["__ripulSubmitMessage",["hi","<undefined>",["@a"],"voice"]]]
+page saw: [["__ripulSubmitMessage",["hi","<undefined>",["@a"],"voice","send-1"]]]
 
 ## submitMessage.addressed / refused
 result: false
-page saw: [["__ripulSubmitMessage",["hi","<undefined>",["@a"],"voice"]]]
+page saw: [["__ripulSubmitMessage",["hi","<undefined>",["@a"],"voice","send-1"]]]
 state: _messageSubmissionError = "refused"
 
 ## submitMessage.addressed / answered
 result: true
-page saw: [["__ripulSubmitMessage",["hi","<undefined>",["@a"],"voice"]]]
+page saw: [["__ripulSubmitMessage",["hi","<undefined>",["@a"],"voice","send-1"]]]
 state: composerContexts = RipulComposerContextStore(_selections: Published<Dictionary<String, Array<RipulContextAttachment>>>(storage: .value(["__new_conversation__": []])), elementLetters: [], availableOptions: [RipulComposerContext(id: "ripul.currentScreen", title: "Current screen", subtitle: "Choose a description, screenshot or recognized text", systemImage: "rectangle.inset.filled", kind: .screen, resolve: (Function), captureScreen: (Function))], storage: NSUserDefaults(), storagePrefix: "ripul.composer-context.v1.")
 
 ## submitMessage.addressed / throwing
 result: false
-page saw: [["__ripulSubmitMessage",["hi","<undefined>",["@a"],"voice"]]]
-nslog: [AgentBridge] submitMessage error: A JavaScript exception occurred
-state: _messageSubmissionError = "A JavaScript exception occurred"
+page saw: [["__ripulSubmitMessage",["hi","<undefined>",["@a"],"voice","send-1"]],["__ripulDiagnostics",["<undefined>"]]]
+console: WARN [SubmitMessage] no answer from the page (WKErrorDomain#4 JavaScriptExceptionOccurred) — finding out what became of the message
+console: ERROR [CONN_DIAG] __ripulSubmitMessage failed: WKErrorDomain#4 JavaScriptExceptionOccurred — probing web context
+console: WARN [CONN_DIAG] __ripulSubmitMessage probe=healthy path=/ ready=complete age=Ns globals=118 uaNative=false
+console: WARN [CONN_DIAG] __ripulSubmitMessage probe raw: {"callables":true,"crashed":false,"globals":118,"globalNames":["__ripulArchiveRemoteSession","__ripulCanEditModels","__ripulClearCommsLog","__ripulClearReplyTarget","__ripulCloseSession","__ripulCloseTabMirror","__ripulConnectToMachine","__ripulConnectToMachineWithProvider","__ripulConsoleExec","__ripulConsoleJobControl","__ripulCreateChat","__ripulDeleteArchivedSession"],"readyState":"complete","docAgeMs":N,"path":"/","nav":null,"uaNative":false,"bootPhase":null,"bootError":null,"bootHistory":null,"build":null}
+state: _messageSubmissionError = "The chat did not confirm your message. Check the conversation before sending it again."
+state: jsErrorMessages = ["[CONN_DIAG] __ripulSubmitMessage failed: WKErrorDomain#4 JavaScriptExceptionOccurred — probing web context"]
+state: jsErrorDebounce = DispatchWorkItem(_block: (Function))
 
 ## submitMessage.all / detached
 result: false
@@ -356,30 +377,37 @@ result: false
 ## submitMessage.all / missing
 result: false
 page saw: []
+console: LOG [SubmitMessage] the page has not started — waiting for it
+state: _messageSubmissionError = "The chat is still loading. Try again in a moment."
 
 ## submitMessage.all / null
 result: false
-page saw: [["__ripulSubmitMessage",["hi",[{"data":"AAAA","id":"i1","mediaType":"image/png"}],["@a","@b"],"voice"]]]
+page saw: [["__ripulSubmitMessage",["hi",[{"data":"AAAA","id":"i1","mediaType":"image/png"}],["@a","@b"],"voice","send-1"]]]
 
 ## submitMessage.all / scalar
 result: false
-page saw: [["__ripulSubmitMessage",["hi",[{"data":"AAAA","id":"i1","mediaType":"image/png"}],["@a","@b"],"voice"]]]
+page saw: [["__ripulSubmitMessage",["hi",[{"data":"AAAA","id":"i1","mediaType":"image/png"}],["@a","@b"],"voice","send-1"]]]
 
 ## submitMessage.all / refused
 result: false
-page saw: [["__ripulSubmitMessage",["hi",[{"data":"AAAA","id":"i1","mediaType":"image/png"}],["@a","@b"],"voice"]]]
+page saw: [["__ripulSubmitMessage",["hi",[{"data":"AAAA","id":"i1","mediaType":"image/png"}],["@a","@b"],"voice","send-1"]]]
 state: _messageSubmissionError = "refused"
 
 ## submitMessage.all / answered
 result: true
-page saw: [["__ripulSubmitMessage",["hi",[{"data":"AAAA","id":"i1","mediaType":"image/png"}],["@a","@b"],"voice"]]]
+page saw: [["__ripulSubmitMessage",["hi",[{"data":"AAAA","id":"i1","mediaType":"image/png"}],["@a","@b"],"voice","send-1"]]]
 state: composerContexts = RipulComposerContextStore(_selections: Published<Dictionary<String, Array<RipulContextAttachment>>>(storage: .value(["__new_conversation__": []])), elementLetters: [], availableOptions: [RipulComposerContext(id: "ripul.currentScreen", title: "Current screen", subtitle: "Choose a description, screenshot or recognized text", systemImage: "rectangle.inset.filled", kind: .screen, resolve: (Function), captureScreen: (Function))], storage: NSUserDefaults(), storagePrefix: "ripul.composer-context.v1.")
 
 ## submitMessage.all / throwing
 result: false
-page saw: [["__ripulSubmitMessage",["hi",[{"data":"AAAA","id":"i1","mediaType":"image/png"}],["@a","@b"],"voice"]]]
-nslog: [AgentBridge] submitMessage error: A JavaScript exception occurred
-state: _messageSubmissionError = "A JavaScript exception occurred"
+page saw: [["__ripulSubmitMessage",["hi",[{"data":"AAAA","id":"i1","mediaType":"image/png"}],["@a","@b"],"voice","send-1"]],["__ripulDiagnostics",["<undefined>"]]]
+console: WARN [SubmitMessage] no answer from the page (WKErrorDomain#4 JavaScriptExceptionOccurred) — finding out what became of the message
+console: ERROR [CONN_DIAG] __ripulSubmitMessage failed: WKErrorDomain#4 JavaScriptExceptionOccurred — probing web context
+console: WARN [CONN_DIAG] __ripulSubmitMessage probe=healthy path=/ ready=complete age=Ns globals=118 uaNative=false
+console: WARN [CONN_DIAG] __ripulSubmitMessage probe raw: {"callables":true,"crashed":false,"globals":118,"globalNames":["__ripulArchiveRemoteSession","__ripulCanEditModels","__ripulClearCommsLog","__ripulClearReplyTarget","__ripulCloseSession","__ripulCloseTabMirror","__ripulConnectToMachine","__ripulConnectToMachineWithProvider","__ripulConsoleExec","__ripulConsoleJobControl","__ripulCreateChat","__ripulDeleteArchivedSession"],"readyState":"complete","docAgeMs":N,"path":"/","nav":null,"uaNative":false,"bootPhase":null,"bootError":null,"bootHistory":null,"build":null}
+state: _messageSubmissionError = "The chat did not confirm your message. Check the conversation before sending it again."
+state: jsErrorMessages = ["[CONN_DIAG] __ripulSubmitMessage failed: WKErrorDomain#4 JavaScriptExceptionOccurred — probing web context"]
+state: jsErrorDebounce = DispatchWorkItem(_block: (Function))
 
 ## refreshComposerActions / detached
 result: ()
@@ -1689,7 +1717,7 @@ state: _lastModelsError = "WebView not available"
 result: ()
 page saw: [["__ripulGetModels",[]]]
 nslog: [AgentBridge] fetchModels: 1 models, selected: m1
-state: _availableModels = [ModelInfo(id: "m1", name: "Model One", modelId: "model-1", provider: "anthropic", group: "anthropic", description: nil, supportsThinking: true, type: nil, url: "", enabled: true, sortOrder: 1, cliModelId: nil, cliRawMode: false, cliEffort: nil, cliMode: nil, cliSupportedEfforts: nil, cliDefaultEffort: nil, perMInput: 3, perMOutput: 15, tier: nil, pickable: nil)]
+state: _availableModels = [ModelInfo(id: "m1", name: "Model One", modelId: "model-1", provider: "anthropic", group: "anthropic", description: nil, supportsThinking: true, type: nil, url: "", enabled: true, sortOrder: 1, cliModelId: nil, cliRawMode: false, cliEffort: nil, cliMode: nil, cliSupportedEfforts: nil, cliDefaultEffort: nil, perMInput: 3, perMOutput: 15, tier: nil, pickable: nil, personalOf: nil, cliToolProfile: nil, canPersonalise: nil)]
 state: _selectedModelId = "m1"
 
 ## setModel / detached
@@ -1932,7 +1960,7 @@ page saw: [["__ripulSaveModel",["m1","{\"name\":\"x\"}"]]]
 result: "(.0: true, .1: nil)"
 page saw: [["__ripulSaveModel",["m1","{\"name\":\"x\"}"]],["__ripulGetModels",[]]]
 nslog: [AgentBridge] fetchModels: 1 models, selected: m1
-state: _availableModels = [ModelInfo(id: "m1", name: "Model One", modelId: "model-1", provider: "anthropic", group: "anthropic", description: nil, supportsThinking: true, type: nil, url: "", enabled: true, sortOrder: 1, cliModelId: nil, cliRawMode: false, cliEffort: nil, cliMode: nil, cliSupportedEfforts: nil, cliDefaultEffort: nil, perMInput: 3, perMOutput: 15, tier: nil, pickable: nil)]
+state: _availableModels = [ModelInfo(id: "m1", name: "Model One", modelId: "model-1", provider: "anthropic", group: "anthropic", description: nil, supportsThinking: true, type: nil, url: "", enabled: true, sortOrder: 1, cliModelId: nil, cliRawMode: false, cliEffort: nil, cliMode: nil, cliSupportedEfforts: nil, cliDefaultEffort: nil, perMInput: 3, perMOutput: 15, tier: nil, pickable: nil, personalOf: nil, cliToolProfile: nil, canPersonalise: nil)]
 state: _selectedModelId = "m1"
 
 ## saveModel / throwing
@@ -1963,7 +1991,7 @@ page saw: [["__ripulDeleteModel",["m1"]]]
 result: "(.0: true, .1: nil)"
 page saw: [["__ripulDeleteModel",["m1"]],["__ripulGetModels",[]]]
 nslog: [AgentBridge] fetchModels: 1 models, selected: m1
-state: _availableModels = [ModelInfo(id: "m1", name: "Model One", modelId: "model-1", provider: "anthropic", group: "anthropic", description: nil, supportsThinking: true, type: nil, url: "", enabled: true, sortOrder: 1, cliModelId: nil, cliRawMode: false, cliEffort: nil, cliMode: nil, cliSupportedEfforts: nil, cliDefaultEffort: nil, perMInput: 3, perMOutput: 15, tier: nil, pickable: nil)]
+state: _availableModels = [ModelInfo(id: "m1", name: "Model One", modelId: "model-1", provider: "anthropic", group: "anthropic", description: nil, supportsThinking: true, type: nil, url: "", enabled: true, sortOrder: 1, cliModelId: nil, cliRawMode: false, cliEffort: nil, cliMode: nil, cliSupportedEfforts: nil, cliDefaultEffort: nil, perMInput: 3, perMOutput: 15, tier: nil, pickable: nil, personalOf: nil, cliToolProfile: nil, canPersonalise: nil)]
 state: _selectedModelId = "m1"
 
 ## deleteModel / throwing
@@ -2096,7 +2124,7 @@ result: []
 page saw: [["__ripulDiscoverCodexModels",["mac-1"]]]
 
 ## discoverCodexModels / answered
-result: [ModelInfo(id: "c1", name: "Codex One", modelId: "gpt-x", provider: "codex-cli", group: "Codex", description: nil, supportsThinking: true, type: nil, url: "", enabled: true, sortOrder: nil, cliModelId: nil, cliRawMode: false, cliEffort: nil, cliMode: nil, cliSupportedEfforts: ["low", "high"], cliDefaultEffort: "low", perMInput: nil, perMOutput: nil, tier: nil, pickable: nil)]
+result: [ModelInfo(id: "c1", name: "Codex One", modelId: "gpt-x", provider: "codex-cli", group: "Codex", description: nil, supportsThinking: true, type: nil, url: "", enabled: true, sortOrder: nil, cliModelId: nil, cliRawMode: false, cliEffort: nil, cliMode: nil, cliSupportedEfforts: ["low", "high"], cliDefaultEffort: "low", perMInput: nil, perMOutput: nil, tier: nil, pickable: nil, personalOf: nil, cliToolProfile: nil, canPersonalise: nil)]
 page saw: [["__ripulDiscoverCodexModels",["mac-1"]]]
 console: LOG [AgentBridge] discoverCodexModels warning: partial
 
@@ -2164,61 +2192,61 @@ page saw: [["__ripulForkSession",["chat-1",null]]]
 nslog: [AgentBridge] forkSession error: A JavaScript exception occurred
 
 ## moveSession / detached
-result: "(success: false, newChatId: nil, effectiveCwd: nil, cwdFallback: false, targetMachineName: nil, error: "webView is nil", sourceRemoved: false, sourceRemoveError: nil)"
+result: "MoveSessionOutcome(success: false, newChatId: nil, effectiveCwd: nil, cwdFallback: false, targetMachineName: nil, sourceMachineName: nil, error: "webView is nil", failedStep: nil, sourceRemoved: false, sourceRemoveError: nil)"
 
 ## moveSession / missing
-result: "(success: false, newChatId: nil, effectiveCwd: nil, cwdFallback: false, targetMachineName: nil, error: "not ready", sourceRemoved: false, sourceRemoveError: nil)"
+result: "MoveSessionOutcome(success: false, newChatId: nil, effectiveCwd: nil, cwdFallback: false, targetMachineName: nil, sourceMachineName: nil, error: "not ready", failedStep: nil, sourceRemoved: false, sourceRemoveError: nil)"
 page saw: []
 
 ## moveSession / null
-result: "(success: false, newChatId: nil, effectiveCwd: nil, cwdFallback: false, targetMachineName: nil, error: "not ready", sourceRemoved: false, sourceRemoveError: nil)"
-page saw: [["__ripulMoveSession",["chat-1","mac-2","Moved","mac-1"]]]
+result: "MoveSessionOutcome(success: false, newChatId: nil, effectiveCwd: nil, cwdFallback: false, targetMachineName: nil, sourceMachineName: nil, error: "not ready", failedStep: nil, sourceRemoved: false, sourceRemoveError: nil)"
+page saw: [["__ripulMoveSession",["chat-1","mac-2","Moved","mac-1",null]]]
 
 ## moveSession / scalar
-result: "(success: false, newChatId: nil, effectiveCwd: nil, cwdFallback: false, targetMachineName: nil, error: nil, sourceRemoved: false, sourceRemoveError: nil)"
-page saw: [["__ripulMoveSession",["chat-1","mac-2","Moved","mac-1"]]]
+result: "MoveSessionOutcome(success: false, newChatId: nil, effectiveCwd: nil, cwdFallback: false, targetMachineName: nil, sourceMachineName: nil, error: nil, failedStep: nil, sourceRemoved: false, sourceRemoveError: nil)"
+page saw: [["__ripulMoveSession",["chat-1","mac-2","Moved","mac-1",null]]]
 
 ## moveSession / refused
-result: "(success: false, newChatId: nil, effectiveCwd: nil, cwdFallback: false, targetMachineName: nil, error: "refused", sourceRemoved: false, sourceRemoveError: nil)"
-page saw: [["__ripulMoveSession",["chat-1","mac-2","Moved","mac-1"]]]
+result: "MoveSessionOutcome(success: false, newChatId: nil, effectiveCwd: nil, cwdFallback: false, targetMachineName: nil, sourceMachineName: nil, error: "refused", failedStep: nil, sourceRemoved: false, sourceRemoveError: nil)"
+page saw: [["__ripulMoveSession",["chat-1","mac-2","Moved","mac-1",null]]]
 
 ## moveSession / answered
-result: "(success: true, newChatId: "chat-moved", effectiveCwd: "/w", cwdFallback: true, targetMachineName: "Studio", error: nil, sourceRemoved: true, sourceRemoveError: nil)"
-page saw: [["__ripulMoveSession",["chat-1","mac-2","Moved","mac-1"]]]
+result: "MoveSessionOutcome(success: true, newChatId: "chat-moved", effectiveCwd: "/w", cwdFallback: true, targetMachineName: "Studio", sourceMachineName: nil, error: nil, failedStep: nil, sourceRemoved: true, sourceRemoveError: nil)"
+page saw: [["__ripulMoveSession",["chat-1","mac-2","Moved","mac-1",null]]]
 nslog: [AgentBridge] moveSession: moved chat-1 → mac-2 (new=chat-moved)
 
 ## moveSession / throwing
-result: "(success: false, newChatId: nil, effectiveCwd: nil, cwdFallback: false, targetMachineName: nil, error: "A JavaScript exception occurred", sourceRemoved: false, sourceRemoveError: nil)"
-page saw: [["__ripulMoveSession",["chat-1","mac-2","Moved","mac-1"]]]
+result: "MoveSessionOutcome(success: false, newChatId: nil, effectiveCwd: nil, cwdFallback: false, targetMachineName: nil, sourceMachineName: nil, error: "A JavaScript exception occurred", failedStep: nil, sourceRemoved: false, sourceRemoveError: nil)"
+page saw: [["__ripulMoveSession",["chat-1","mac-2","Moved","mac-1",null]]]
 nslog: [AgentBridge] moveSession error: A JavaScript exception occurred
 
 ## moveSession.bare / detached
-result: "(success: false, newChatId: nil, effectiveCwd: nil, cwdFallback: false, targetMachineName: nil, error: "webView is nil", sourceRemoved: false, sourceRemoveError: nil)"
+result: "MoveSessionOutcome(success: false, newChatId: nil, effectiveCwd: nil, cwdFallback: false, targetMachineName: nil, sourceMachineName: nil, error: "webView is nil", failedStep: nil, sourceRemoved: false, sourceRemoveError: nil)"
 
 ## moveSession.bare / missing
-result: "(success: false, newChatId: nil, effectiveCwd: nil, cwdFallback: false, targetMachineName: nil, error: "not ready", sourceRemoved: false, sourceRemoveError: nil)"
+result: "MoveSessionOutcome(success: false, newChatId: nil, effectiveCwd: nil, cwdFallback: false, targetMachineName: nil, sourceMachineName: nil, error: "not ready", failedStep: nil, sourceRemoved: false, sourceRemoveError: nil)"
 page saw: []
 
 ## moveSession.bare / null
-result: "(success: false, newChatId: nil, effectiveCwd: nil, cwdFallback: false, targetMachineName: nil, error: "not ready", sourceRemoved: false, sourceRemoveError: nil)"
-page saw: [["__ripulMoveSession",["chat-1","mac-2",null,null]]]
+result: "MoveSessionOutcome(success: false, newChatId: nil, effectiveCwd: nil, cwdFallback: false, targetMachineName: nil, sourceMachineName: nil, error: "not ready", failedStep: nil, sourceRemoved: false, sourceRemoveError: nil)"
+page saw: [["__ripulMoveSession",["chat-1","mac-2",null,null,null]]]
 
 ## moveSession.bare / scalar
-result: "(success: false, newChatId: nil, effectiveCwd: nil, cwdFallback: false, targetMachineName: nil, error: nil, sourceRemoved: false, sourceRemoveError: nil)"
-page saw: [["__ripulMoveSession",["chat-1","mac-2",null,null]]]
+result: "MoveSessionOutcome(success: false, newChatId: nil, effectiveCwd: nil, cwdFallback: false, targetMachineName: nil, sourceMachineName: nil, error: nil, failedStep: nil, sourceRemoved: false, sourceRemoveError: nil)"
+page saw: [["__ripulMoveSession",["chat-1","mac-2",null,null,null]]]
 
 ## moveSession.bare / refused
-result: "(success: false, newChatId: nil, effectiveCwd: nil, cwdFallback: false, targetMachineName: nil, error: "refused", sourceRemoved: false, sourceRemoveError: nil)"
-page saw: [["__ripulMoveSession",["chat-1","mac-2",null,null]]]
+result: "MoveSessionOutcome(success: false, newChatId: nil, effectiveCwd: nil, cwdFallback: false, targetMachineName: nil, sourceMachineName: nil, error: "refused", failedStep: nil, sourceRemoved: false, sourceRemoveError: nil)"
+page saw: [["__ripulMoveSession",["chat-1","mac-2",null,null,null]]]
 
 ## moveSession.bare / answered
-result: "(success: true, newChatId: "chat-moved", effectiveCwd: "/w", cwdFallback: true, targetMachineName: "Studio", error: nil, sourceRemoved: true, sourceRemoveError: nil)"
-page saw: [["__ripulMoveSession",["chat-1","mac-2",null,null]]]
+result: "MoveSessionOutcome(success: true, newChatId: "chat-moved", effectiveCwd: "/w", cwdFallback: true, targetMachineName: "Studio", sourceMachineName: nil, error: nil, failedStep: nil, sourceRemoved: true, sourceRemoveError: nil)"
+page saw: [["__ripulMoveSession",["chat-1","mac-2",null,null,null]]]
 nslog: [AgentBridge] moveSession: moved chat-1 → mac-2 (new=chat-moved)
 
 ## moveSession.bare / throwing
-result: "(success: false, newChatId: nil, effectiveCwd: nil, cwdFallback: false, targetMachineName: nil, error: "A JavaScript exception occurred", sourceRemoved: false, sourceRemoveError: nil)"
-page saw: [["__ripulMoveSession",["chat-1","mac-2",null,null]]]
+result: "MoveSessionOutcome(success: false, newChatId: nil, effectiveCwd: nil, cwdFallback: false, targetMachineName: nil, sourceMachineName: nil, error: "A JavaScript exception occurred", failedStep: nil, sourceRemoved: false, sourceRemoveError: nil)"
+page saw: [["__ripulMoveSession",["chat-1","mac-2",null,null,null]]]
 nslog: [AgentBridge] moveSession error: A JavaScript exception occurred
 
 ## setWorkingDirectory / detached
@@ -2627,7 +2655,7 @@ page saw: [["__ripulListRemoteSessions",["mac-1"]]]
 nslog: [AgentBridge] listRemoteSessions: unexpected result type: Optional({
 
 ## listRemoteSessionsAnswer / answered
-result: "(sessions: [RemoteSessionInfo(id: "s1", sourceChatId: "c1", displayName: "Remote", createdAt: date(1700000000.0), lastModified: date(1700000005.0), isRunning: true, projectName: "p", cwd: "/w", gitBranch: "main", messageCount: 3, provider: "claude-cli", providerLabel: "Claude", model: "m", hostChatId: "h1", machineId: "mac-1", teamVisibility: nil, creatorUserId: nil)], answered: true)"
+result: "(sessions: [RemoteSessionInfo(id: "s1", sourceChatId: "c1", displayName: "Remote", createdAt: date(1700000000.0), lastModified: date(1700000005.0), isRunning: true, projectName: "p", cwd: "/w", gitBranch: "main", messageCount: 3, provider: "claude-cli", providerLabel: "Claude", model: "m", hostChatId: "h1", machineId: "mac-1", teamVisibility: nil, creatorUserId: nil, startedBy: nil)], answered: true)"
 page saw: [["__ripulListRemoteSessions",["mac-1"]]]
 nslog: [AgentBridge] listRemoteSessions: 1 sessions on mac-1
 console: LOG [relay] debug_timeline listRemoteSessions(mac-1): a | b
@@ -3432,58 +3460,58 @@ page saw: [["__ripulQueryAutocomplete",["files","it's \"quoted\" \\ and\nsplit"]
 nslog: [AgentBridge] queryAutocomplete error: A JavaScript exception occurred
 
 ## fetchHostAuthStatus / detached
-result: HostAuthStatusInfo(loggedIn: false, authMethod: nil, apiProvider: nil, email: nil, orgName: nil, subscriptionType: nil, pendingSessionId: nil, error: "webView is nil")
+result: HostAuthStatusInfo(loggedIn: false, authMethod: nil, apiProvider: nil, email: nil, orgName: nil, subscriptionType: nil, pendingSessionId: nil, error: "webView is nil", toolsNotice: nil)
 
 ## fetchHostAuthStatus / missing
-result: HostAuthStatusInfo(loggedIn: false, authMethod: nil, apiProvider: nil, email: nil, orgName: nil, subscriptionType: nil, pendingSessionId: nil, error: "not ready")
+result: HostAuthStatusInfo(loggedIn: false, authMethod: nil, apiProvider: nil, email: nil, orgName: nil, subscriptionType: nil, pendingSessionId: nil, error: "not ready", toolsNotice: nil)
 page saw: []
 
 ## fetchHostAuthStatus / null
-result: HostAuthStatusInfo(loggedIn: false, authMethod: nil, apiProvider: nil, email: nil, orgName: nil, subscriptionType: nil, pendingSessionId: nil, error: "Unexpected result")
+result: HostAuthStatusInfo(loggedIn: false, authMethod: nil, apiProvider: nil, email: nil, orgName: nil, subscriptionType: nil, pendingSessionId: nil, error: "Unexpected result", toolsNotice: nil)
 page saw: [["__ripulRemoteHostAuthStatus",["mac-1",null]]]
 
 ## fetchHostAuthStatus / scalar
-result: HostAuthStatusInfo(loggedIn: false, authMethod: nil, apiProvider: nil, email: nil, orgName: nil, subscriptionType: nil, pendingSessionId: nil, error: "Unexpected result")
+result: HostAuthStatusInfo(loggedIn: false, authMethod: nil, apiProvider: nil, email: nil, orgName: nil, subscriptionType: nil, pendingSessionId: nil, error: "Unexpected result", toolsNotice: nil)
 page saw: [["__ripulRemoteHostAuthStatus",["mac-1",null]]]
 
 ## fetchHostAuthStatus / refused
-result: HostAuthStatusInfo(loggedIn: false, authMethod: nil, apiProvider: nil, email: nil, orgName: nil, subscriptionType: nil, pendingSessionId: nil, error: "refused")
+result: HostAuthStatusInfo(loggedIn: false, authMethod: nil, apiProvider: nil, email: nil, orgName: nil, subscriptionType: nil, pendingSessionId: nil, error: "refused", toolsNotice: nil)
 page saw: [["__ripulRemoteHostAuthStatus",["mac-1",null]]]
 
 ## fetchHostAuthStatus / answered
-result: HostAuthStatusInfo(loggedIn: true, authMethod: nil, apiProvider: nil, email: "a@b.c", orgName: nil, subscriptionType: nil, pendingSessionId: nil, error: nil)
+result: HostAuthStatusInfo(loggedIn: true, authMethod: nil, apiProvider: nil, email: "a@b.c", orgName: nil, subscriptionType: nil, pendingSessionId: nil, error: nil, toolsNotice: nil)
 page saw: [["__ripulRemoteHostAuthStatus",["mac-1",null]]]
 
 ## fetchHostAuthStatus / throwing
-result: HostAuthStatusInfo(loggedIn: false, authMethod: nil, apiProvider: nil, email: nil, orgName: nil, subscriptionType: nil, pendingSessionId: nil, error: "A JavaScript exception occurred")
+result: HostAuthStatusInfo(loggedIn: false, authMethod: nil, apiProvider: nil, email: nil, orgName: nil, subscriptionType: nil, pendingSessionId: nil, error: "A JavaScript exception occurred", toolsNotice: nil)
 page saw: [["__ripulRemoteHostAuthStatus",["mac-1",null]]]
 console: LOG [AgentBridge] fetchHostAuthStatus(mac-1) error: A JavaScript exception occurred
 
 ## fetchHostAuthStatus.profile / detached
-result: HostAuthStatusInfo(loggedIn: false, authMethod: nil, apiProvider: nil, email: nil, orgName: nil, subscriptionType: nil, pendingSessionId: nil, error: "webView is nil")
+result: HostAuthStatusInfo(loggedIn: false, authMethod: nil, apiProvider: nil, email: nil, orgName: nil, subscriptionType: nil, pendingSessionId: nil, error: "webView is nil", toolsNotice: nil)
 
 ## fetchHostAuthStatus.profile / missing
-result: HostAuthStatusInfo(loggedIn: false, authMethod: nil, apiProvider: nil, email: nil, orgName: nil, subscriptionType: nil, pendingSessionId: nil, error: "not ready")
+result: HostAuthStatusInfo(loggedIn: false, authMethod: nil, apiProvider: nil, email: nil, orgName: nil, subscriptionType: nil, pendingSessionId: nil, error: "not ready", toolsNotice: nil)
 page saw: []
 
 ## fetchHostAuthStatus.profile / null
-result: HostAuthStatusInfo(loggedIn: false, authMethod: nil, apiProvider: nil, email: nil, orgName: nil, subscriptionType: nil, pendingSessionId: nil, error: "Unexpected result")
+result: HostAuthStatusInfo(loggedIn: false, authMethod: nil, apiProvider: nil, email: nil, orgName: nil, subscriptionType: nil, pendingSessionId: nil, error: "Unexpected result", toolsNotice: nil)
 page saw: [["__ripulRemoteHostAuthStatus",["mac-1","work"]]]
 
 ## fetchHostAuthStatus.profile / scalar
-result: HostAuthStatusInfo(loggedIn: false, authMethod: nil, apiProvider: nil, email: nil, orgName: nil, subscriptionType: nil, pendingSessionId: nil, error: "Unexpected result")
+result: HostAuthStatusInfo(loggedIn: false, authMethod: nil, apiProvider: nil, email: nil, orgName: nil, subscriptionType: nil, pendingSessionId: nil, error: "Unexpected result", toolsNotice: nil)
 page saw: [["__ripulRemoteHostAuthStatus",["mac-1","work"]]]
 
 ## fetchHostAuthStatus.profile / refused
-result: HostAuthStatusInfo(loggedIn: false, authMethod: nil, apiProvider: nil, email: nil, orgName: nil, subscriptionType: nil, pendingSessionId: nil, error: "refused")
+result: HostAuthStatusInfo(loggedIn: false, authMethod: nil, apiProvider: nil, email: nil, orgName: nil, subscriptionType: nil, pendingSessionId: nil, error: "refused", toolsNotice: nil)
 page saw: [["__ripulRemoteHostAuthStatus",["mac-1","work"]]]
 
 ## fetchHostAuthStatus.profile / answered
-result: HostAuthStatusInfo(loggedIn: true, authMethod: nil, apiProvider: nil, email: "a@b.c", orgName: nil, subscriptionType: nil, pendingSessionId: nil, error: nil)
+result: HostAuthStatusInfo(loggedIn: true, authMethod: nil, apiProvider: nil, email: "a@b.c", orgName: nil, subscriptionType: nil, pendingSessionId: nil, error: nil, toolsNotice: nil)
 page saw: [["__ripulRemoteHostAuthStatus",["mac-1","work"]]]
 
 ## fetchHostAuthStatus.profile / throwing
-result: HostAuthStatusInfo(loggedIn: false, authMethod: nil, apiProvider: nil, email: nil, orgName: nil, subscriptionType: nil, pendingSessionId: nil, error: "A JavaScript exception occurred")
+result: HostAuthStatusInfo(loggedIn: false, authMethod: nil, apiProvider: nil, email: nil, orgName: nil, subscriptionType: nil, pendingSessionId: nil, error: "A JavaScript exception occurred", toolsNotice: nil)
 page saw: [["__ripulRemoteHostAuthStatus",["mac-1","work"]]]
 console: LOG [AgentBridge] fetchHostAuthStatus(mac-1) error: A JavaScript exception occurred
 
@@ -3824,7 +3852,7 @@ page saw: [["__ripulListArchivedSessions",["mac-1"]]]
 nslog: [AgentBridge] listArchivedSessions error from JS: refused
 
 ## listArchivedSessions / answered
-result: [ArchivedSessionInfo(id: "a1", displayName: "Old", projectName: "p", archivedAt: date(1700000000.0), provider: "claude-cli", machineId: "mac-1"), ArchivedSessionInfo(id: "a2", displayName: "a2", projectName: nil, archivedAt: date(0.0), provider: nil, machineId: "mac-1")]
+result: [ArchivedSessionInfo(id: "a1", displayName: "Old", projectName: "p", archivedAt: date(1700000000.0), provider: "claude-cli", machineId: "mac-1", startedBy: nil), ArchivedSessionInfo(id: "a2", displayName: "a2", projectName: nil, archivedAt: date(0.0), provider: nil, machineId: "mac-1", startedBy: nil)]
 page saw: [["__ripulListArchivedSessions",["mac-1"]]]
 nslog: [AgentBridge] listArchivedSessions: 2 sessions on mac-1
 
@@ -4091,7 +4119,7 @@ result: nil
 page saw: [["__ripulGetSessionMetadata",["s1"]]]
 
 ## getSessionMetadata / answered
-result: SessionMetadata(id: "s1", description: "d", notes: [NoteEntry(id: "n1", text: "note", createdAt: nil, timestamp: nil)], filesEdited: [], deployments: [], contributors: [], participants: [], model: "m", modelHistory: ["m"], createdAt: "c", updatedAt: "u")
+result: SessionMetadata(id: "s1", description: "d", notes: [NoteEntry(id: "n1", text: "note", createdAt: nil, timestamp: nil)], filesEdited: [], deployments: [], contributors: [], participants: [], model: "m", modelHistory: ["m"], createdAt: "c", updatedAt: "u", story: nil)
 page saw: [["__ripulGetSessionMetadata",["s1"]]]
 
 ## getSessionMetadata / throwing
@@ -4119,7 +4147,7 @@ result: nil
 page saw: [["__ripulPatchSessionMetadata",["s1",{"description":"it's \"quoted\" \\ and\nsplit"}]]]
 
 ## patchSessionMetadata / answered
-result: SessionMetadata(id: "s1", description: "patched", notes: [], filesEdited: [], deployments: [], contributors: [], participants: [], model: nil, modelHistory: [], createdAt: nil, updatedAt: nil)
+result: SessionMetadata(id: "s1", description: "patched", notes: [], filesEdited: [], deployments: [], contributors: [], participants: [], model: nil, modelHistory: [], createdAt: nil, updatedAt: nil, story: nil)
 page saw: [["__ripulPatchSessionMetadata",["s1",{"description":"it's \"quoted\" \\ and\nsplit"}]]]
 
 ## patchSessionMetadata / throwing

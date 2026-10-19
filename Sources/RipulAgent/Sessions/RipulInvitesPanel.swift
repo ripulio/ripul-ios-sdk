@@ -15,6 +15,9 @@ struct RipulInvitesPanel: View {
     var actions: InvitesSectionActions? = nil
 
     @ObservedObject var inviteManager: RipulInviteManager
+    /// False where the Sessions list shows chat invitations as its own rows:
+    /// then only team invitations are drawn here.
+    var includesChatInvites = true
     @State private var invitesExpanded = true
     @State private var isSelectingInvites = false
     @State private var selectedInviteTokens: Set<String> = []
@@ -25,10 +28,16 @@ struct RipulInvitesPanel: View {
     /// failure is what made this whole flow untrustworthy.
     @State private var joinError: String? = nil
     @State private var leavingInvite: RipulShareInvite?
+    /// The team invitation being accepted or declined, and why the last failed.
+    @State private var busyTeamInviteId: String?
+    @State private var teamInviteError: String?
 
     var body: some View {
+        if !inviteManager.teamInvites.isEmpty {
+            teamInvitesPanel
+        }
         // The twin rendered the panel only when invites exist — keep that.
-        if !inviteManager.invites.isEmpty {
+        if includesChatInvites && !inviteManager.invites.isEmpty {
             content
                 .confirmationDialog("Leave this chat?", isPresented: Binding(get: { leavingInvite != nil }, set: { if !$0 { leavingInvite = nil } })) {
                     Button("Leave chat", role: .destructive) {
@@ -46,6 +55,49 @@ struct RipulInvitesPanel: View {
             // Still fetch on appear so a later invite appearing flips us visible.
             Color.clear.frame(height: 0)
                 .task { await inviteManager.fetchInvites() }
+        }
+    }
+
+    /// Team invitations, each with Accept and Decline in the row: the one
+    /// place a Mac shows them, so the action has to be here, not a screen away.
+    private var teamInvitesPanel: some View {
+        GlassSectionPanel(title: "Team invitations (\(inviteManager.teamInvites.count))", isExpanded: .constant(true),
+                          collapsible: false) {
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(inviteManager.teamInvites) { invite in
+                    RipulTeamInviteInboxRow(
+                        invite: invite,
+                        busy: busyTeamInviteId == invite.id,
+                        onAccept: { respond(to: invite, accept: true) },
+                        onDecline: { respond(to: invite, accept: false) }
+                    )
+                    .padding(.horizontal, 16)
+                    .uiKitIdentifier("GlassSessionsList.teamInvites.row")
+                }
+                if let teamInviteError {
+                    Text(teamInviteError)
+                        .font(.ripul(.caption))
+                        .foregroundStyle(.ripul(.warning))
+                        .padding(.horizontal, 16)
+                        .uiKitIdentifier("GlassSessionsList.teamInvites.error")
+                }
+            }
+            .padding(.vertical, 8)
+        }
+        .uiKitIdentifier("GlassSessionsList.teamInvites")
+    }
+
+    private func respond(to invite: RipulTeamInvite, accept: Bool) {
+        busyTeamInviteId = invite.id
+        teamInviteError = nil
+        Task {
+            do {
+                if accept { try await inviteManager.acceptTeamInvite(invite) }
+                else { try await inviteManager.declineTeamInvite(invite) }
+            } catch {
+                teamInviteError = error.localizedDescription
+            }
+            busyTeamInviteId = nil
         }
     }
 

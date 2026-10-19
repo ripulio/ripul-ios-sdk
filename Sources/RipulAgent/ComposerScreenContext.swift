@@ -41,6 +41,8 @@ enum ComposerScreenContext {
 
     static func capture(configuration: RipulScreenContextConfiguration,
                         provider: (@MainActor () async throws -> String)? = nil) async throws -> RipulScreenContextSnapshot {
+        let privacyEpoch = SecureInputProtection.epoch
+        try SecureInputProtection.check()
         let needsPixels = configuration.available.contains(.screenshot) || configuration.available.contains(.fallbackText)
         let snapshot = try snapshot(includeImage: needsPixels)
         try Task.checkCancellation()
@@ -78,6 +80,7 @@ enum ComposerScreenContext {
             accessibleFallback: fallback, configuration: configuration)
         if result.selected.contains(.fallbackText) { result.fallbackText = try await result.recognizeFallback() }
         try Task.checkCancellation()
+        try SecureInputProtection.check(since: privacyEpoch)
         return result
     }
 
@@ -87,9 +90,13 @@ enum ComposerScreenContext {
     }
 
     static func captureSelectedElement(configuration: RipulScreenContextConfiguration) async throws -> RipulScreenContextSnapshot {
+        let privacyEpoch = SecureInputProtection.epoch
+        try SecureInputProtection.check()
         #if os(iOS)
         if let session = ViewInspectorController.live?.session, session.web != nil {
-            return try await session.captureWeb(configuration: configuration)
+            let result = try await session.captureWeb(configuration: configuration)
+            try SecureInputProtection.check(since: privacyEpoch)
+            return result
         }
         guard let selection = ViewInspectorController.live?.composerSelection() else {
             throw ElementUnavailable(message: "Open Inspector and highlight an element first. If the screen changed, select the element again.")
@@ -151,6 +158,7 @@ enum ComposerScreenContext {
         result.attachmentTitle = "Element — " + String(name.prefix(80))
         if result.selected.contains(.fallbackText) { result.fallbackText = try await result.recognizeFallback() }
         try Task.checkCancellation()
+        try SecureInputProtection.check(since: privacyEpoch)
         return result
         #else
         throw ElementUnavailable(message: "Selected element context requires the iOS Inspector.")

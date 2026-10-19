@@ -38,6 +38,8 @@ public struct HostSetting: Decodable, Identifiable {
     public let max: Double?
     public let step: Double?
     public let unit: String?
+    /// What the Mac did with the last change, such as asking for a permission.
+    public let note: String?
     public var id: String { key }
 }
 
@@ -113,6 +115,23 @@ final class HostSettingsModel: ObservableObject {
         }
     }
 
+    /// Ask the Mac for a permission (kind `permission`): macOS puts its own
+    /// question on the Mac's screen, or the Mac opens System Settings there. The
+    /// person answers at the Mac, so the list is read again for two minutes.
+    @Published private(set) var askedAt: Date?
+
+    func ask(_ key: String) {
+        Task {
+            saving.insert(key)
+            defer { saving.remove(key) }
+            do { apply(try await bridge.hostSettings(machineId: machineId, setKey: key, value: "ask")) }
+            catch { self.error = error.localizedDescription }
+            askedAt = Date()
+            // The app brings that Mac's question forward when it appears (MacDialogNotice).
+            NotificationCenter.default.post(name: .ripulHostPermissionAsked, object: nil, userInfo: ["machineId": machineId])
+        }
+    }
+
     /// The reply always carries what the Mac actually holds, so a refused
     /// change snaps back to the real value.
     private func apply(_ state: HostSettingsState) {
@@ -152,6 +171,14 @@ public struct HostSettingsForm: View {
         #endif
         .refreshable { await model.load() }
         .task { await model.load() }
+        .task(id: model.askedAt) {
+            // A permission is switched on at the Mac, not here: watch for it for a while.
+            guard let askedAt = model.askedAt else { return }
+            while !Task.isCancelled, Date().timeIntervalSince(askedAt) < 120 {
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                await model.load()
+            }
+        }
     }
 }
 
@@ -274,6 +301,8 @@ private struct HostSettingRow: View {
             } label: {
                 LabeledContent { Text("\(paths.count)") } label: { labelled }
             }
+        case ("permission", .text(let state)):
+            HostPermissionRow(setting: setting, state: state) { model.ask(setting.key) }
         default:
             // A kind this phone doesn't know yet: show it rather than hide it.
             LabeledContent(setting.label) { Text("Update Ripul to change this").foregroundStyle(.ripul(.textSecondary)) }
@@ -298,6 +327,46 @@ private struct HostSettingRow: View {
         if setting.unit == "%" { return "\(Int((n * 100).rounded()))%" }
         let text = n == n.rounded() ? String(Int(n)) : String(format: "%.1f", n)
         return setting.unit.map { text + $0 } ?? text
+    }
+}
+
+extension Notification.Name {
+    /// A permission was asked for on a Mac (`userInfo["machineId"]`): the
+    /// question it puts up can be brought forward on this device.
+    public static let ripulHostPermissionAsked = Notification.Name("ripulHostPermissionAsked")
+}
+
+/// One macOS permission on the Mac (HostPermissions.swift there): allowed, or
+/// a way to ask. Asking happens on the Mac's own screen, so the button says so.
+private struct HostPermissionRow: View {
+    let setting: HostSetting
+    let state: String
+    let ask: () -> Void
+
+    private var granted: Bool { state == "granted" }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Label(setting.label, systemImage: granted ? "checkmark.circle.fill" : "exclamationmark.circle")
+                    .foregroundStyle(.ripul(granted ? .text : .warning))
+                Spacer()
+                if granted {
+                    Text("Allowed").foregroundStyle(.ripul(.textSecondary))
+                } else {
+                    Button(state == "notAsked" ? "Ask on the Mac" : "Open on the Mac", action: ask)
+                        .buttonStyle(.borderless)
+                        .uiKitIdentifier("HostSettings.permission.ask")
+                }
+            }
+            if let detail = setting.detail {
+                Text(state == "denied" ? "Refused earlier, so macOS won't ask again: switch it on in System Settings on the Mac. \(detail)" : detail)
+                    .font(.ripul(.caption)).foregroundStyle(.ripul(.textSecondary))
+            }
+            if let note = setting.note {
+                Text(note).font(.ripul(.caption)).foregroundStyle(.ripul(.info))
+            }
+        }
     }
 }
 

@@ -207,8 +207,10 @@ public struct RipulSessionsView: View {
         // By row id, or any id the chat is known by (its host chat id, a
         // `cli_` tab id): a deep link or launch argument names the chat, not
         // the list's row.
-        guard let session = model.unifiedSessions.first(where: { $0.id == wanted })
-            ?? model.unifiedSessions.first(where: { $0.matchKeys.contains(wanted) })
+        let candidates = model.unifiedSessions.filter { RipulOpenSessionRequest.pendingMachineId == nil || $0.machineId == RipulOpenSessionRequest.pendingMachineId }
+        guard let session = candidates.first(where: { $0.id == wanted })
+            ?? candidates.first(where: { $0.matchKeys.contains(wanted) })
+            ?? candidates.first(where: { $0.attentionKeys.contains(wanted) })
         else {
             rescanForMissingRequest(wanted)
             return

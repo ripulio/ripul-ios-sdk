@@ -123,6 +123,40 @@ final class CmsPortalThemeTests: XCTestCase {
         XCTAssertEqual(theme.gradientAngle, 135)
     }
 
+    func testBrandGradientFollowsTheThemesOwnStops() throws {
+        let palette = CmsPortalThemeConfig.Palette(primary: "#753589", accent: "#4c2258")
+        // No gradient of its own: accent → primary at 135°, as before.
+        let derived = CmsPortalTheme(config: CmsPortalThemeConfig(palette: palette))
+        XCTAssertEqual(derived.gradientStops, [CmsRGBA(css: "#4c2258")!, CmsRGBA(css: "#753589")!])
+        XCTAssertEqual(derived.gradientAngle, 135)
+
+        let config = try decode(##"""
+        {"palette":{"primary":"#753589","accent":"#4c2258"},"buttons":{"gradientAngle":90},
+         "gradient":{"stops":["#6d3180",7,"#7c3b91"],"angle":"120","darkStops":["#2d1636","#4c2258"]}}
+        """##)
+        XCTAssertEqual(config.gradient?.stops, ["#6d3180", "#7c3b91"]) // the number is skipped
+        let light = CmsPortalTheme(config: config, effectiveDark: false)
+        XCTAssertEqual(light.gradientStops, [CmsRGBA(css: "#6d3180")!, CmsRGBA(css: "#7c3b91")!])
+        XCTAssertEqual(light.gradientAngle, 120) // gradient.angle wins over buttons.gradientAngle
+        let dark = CmsPortalTheme(config: config, effectiveDark: true)
+        XCTAssertEqual(dark.gradientStops, [CmsRGBA(css: "#2d1636")!, CmsRGBA(css: "#4c2258")!])
+
+        // One readable stop is no gradient of its own.
+        let one = CmsPortalTheme(config: CmsPortalThemeConfig(palette: palette, gradient: .init(stops: ["#6d3180", "teal-ish"])))
+        XCTAssertEqual(one.gradientStops, [CmsRGBA(css: "#4c2258")!, CmsRGBA(css: "#753589")!])
+        // The older angle still reads when the gradient has none.
+        let older = CmsPortalTheme(config: CmsPortalThemeConfig(palette: palette, buttons: .init(gradientAngle: 90)))
+        XCTAssertEqual(older.gradientAngle, 90)
+    }
+
+    func testSoftStatusColours() {
+        let theme = CmsPortalTheme(config: CmsPortalThemeConfig(palette: .init(success: "#0e9f78")))
+        XCTAssertEqual(theme.resolve("color.success.soft"), CmsRGBA(css: "#0e9f78")!.withAlpha(0.14).color)
+        XCTAssertNotNil(theme.resolve("color.warning.soft"))
+        XCTAssertNotNil(theme.resolve("color.error.soft"))
+        XCTAssertNotNil(theme.resolve("color.primary.soft"))
+    }
+
     func testContrastTextMatchesMui() {
         // #1976d2 → white; #90caf9 → rgba(0,0,0,0.87) (MUI defaults).
         XCTAssertEqual(CmsRGBA(css: "#1976d2")!.contrastText, CmsRGBA(r: 1, g: 1, b: 1))

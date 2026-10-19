@@ -16,21 +16,29 @@ import SwiftUI
 public struct ClaudeAccountSwitcherSheet: View {
     let machine: RemoteMachine
     let bridge: AgentBridge
+    var chatId: String? = nil
     /// Fires after a successful switch so the caller can refresh its label.
     var onSwitched: ((ClaudeAccountProfile?) -> Void)? = nil
 
     @Environment(\.dismiss) private var dismiss
+    @State private var signIn: ClaudeAccountSignInRequest?
+    @State private var refreshToken = UUID()
 
-    public init(machine: RemoteMachine, bridge: AgentBridge, onSwitched: ((ClaudeAccountProfile?) -> Void)? = nil) {
+    public init(machine: RemoteMachine, bridge: AgentBridge, chatId: String? = nil, onSwitched: ((ClaudeAccountProfile?) -> Void)? = nil) {
         self.machine = machine
         self.bridge = bridge
+        self.chatId = chatId
         self.onSwitched = onSwitched
     }
 
     public var body: some View {
         NavigationStack {
-            List { ClaudeAccountSection(machine: machine, bridge: bridge, onSwitched: onSwitched) }.ripulThemedList()
-                .navigationTitle("Claude accounts")
+            List {
+                ClaudeAccountSection(machine: machine, bridge: bridge, chatId: chatId,
+                    onSignIn: { signIn = ClaudeAccountSignInRequest(machine: machine, profile: $0) },
+                    onSwitched: onSwitched, refreshToken: refreshToken)
+            }.ripulThemedList()
+                .navigationTitle(chatId == nil ? "Claude accounts" : "Chat account")
                 #if os(iOS)
                 .navigationBarTitleDisplayMode(.inline)
                 #endif
@@ -44,25 +52,39 @@ public struct ClaudeAccountSwitcherSheet: View {
         .frame(minWidth: 480, minHeight: 420)
         #endif
         .ripulSheet(.page, detents: [.medium, .large])
+        .ripulSheet(item: $signIn, onDismiss: { refreshToken = UUID() }) { request in
+            HostSignInSheet(machine: request.machine, bridge: bridge,
+                profile: request.profile.slug, profileName: request.profile.name,
+                startSignInImmediately: request.profile.loggedIn)
+        }
     }
+}
+
+/// The screen owns presentation, outside the List's changing form/account rows.
+struct ClaudeAccountSignInRequest: Identifiable {
+    let machine: RemoteMachine
+    let profile: ClaudeAccountProfile
+    var id: String { "\(machine.machineId)/\(profile.slug)" }
 }
 
 /// Account rows shared by Settings and the per-machine shortcut, without another navigation layer.
 struct ClaudeAccountSection: View {
     let machine: RemoteMachine
     let bridge: AgentBridge
+    var chatId: String? = nil
+    let onSignIn: (ClaudeAccountProfile) -> Void
     var onSwitched: ((ClaudeAccountProfile?) -> Void)? = nil
     var refreshToken: UUID? = nil
     @Environment(\.scenePhase) private var scenePhase
 
     @State private var accounts: [ClaudeAccountProfile] = []
     @State private var active: String = "default"
+    @State private var followsDefault = true
     @State private var loading = true
     @State private var error: String?
     @State private var switchingTo: String?
     @State private var addingAccount = false
     @State private var newName = ""
-    @State private var signInProfile: ClaudeAccountProfile?
     @State private var deleteCandidate: ClaudeAccountProfile?
 
     var body: some View {
@@ -72,6 +94,17 @@ struct ClaudeAccountSection: View {
             } else {
                 if loading && accounts.isEmpty {
                     ProgressView("Loading accounts…").uiKitIdentifier("ClaudeAccountSwitcherSheet.loading")
+                }
+                if chatId != nil && !accounts.isEmpty {
+                    Button { Task { await selectAccount("__machine_default__") } } label: {
+                        HStack {
+                            Label("Use Mac default", systemImage: "desktopcomputer")
+                            Spacer()
+                            if followsDefault { Image(systemName: "checkmark.circle.fill") }
+                        }
+                    }
+                    .disabled(loading || switchingTo != nil)
+                    .uiKitIdentifier("ClaudeAccountSwitcherSheet.useDefault")
                 }
                 ForEach(accounts) { account in accountRow(account) }
                 if let error, !error.isEmpty {
@@ -85,11 +118,18 @@ struct ClaudeAccountSection: View {
                             .textInputAutocapitalization(.words)
                             #endif
                             .uiKitIdentifier("ClaudeAccountSwitcherSheet.nameField")
-                        Button("Create") { Task { await createAndSignIn() } }
+                        Button("Create") {
+                            let name = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+                            Task { await createAndSignIn(name: name) }
+                        }
                             .disabled(loading || newName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                             .uiKitIdentifier("ClaudeAccountSwitcherSheet.createAccount")
                         Button("Cancel") { addingAccount = false; newName = "" }.disabled(loading)
+                            .uiKitIdentifier("ClaudeAccountSwitcherSheet.cancelCreateAccount")
                     }
+                    // Automatic List buttons share the row's tap: Create also
+                    // fired Cancel, clearing the name before its Task ran.
+                    .buttonStyle(.borderless)
                 } else {
                     Button { addingAccount = true } label: { Label("Add account", systemImage: "plus") }
                         .disabled(loading || switchingTo != nil)
@@ -104,7 +144,9 @@ struct ClaudeAccountSection: View {
             }
         } } footer: { RipulSectionFooter {
             if machine.isOnline {
-                Text("New sessions use the selected account. Running sessions switch after their current reply.")
+                Text(chatId == nil
+                    ? "Chats using the Mac default switch after their current reply. Chats with their own account keep it."
+                    : "Applies only to this chat, after the current reply finishes. Conversation history is kept.")
                     .fixedSize(horizontal: false, vertical: true)
             }
         } }.ripulThemedListRows()
@@ -115,10 +157,6 @@ struct ClaudeAccountSection: View {
             } while !Task.isCancelled
         }
         .onChange(of: scenePhase) { phase in if phase == .active { Task { await refresh() } } }
-        .ripulSheet(item: $signInProfile) { profile in
-            HostSignInSheet(machine: machine, bridge: bridge, profile: profile.slug, profileName: profile.name,
-                            startSignInImmediately: profile.loggedIn)
-        }
         .confirmationDialog(
             "Remove \(deleteCandidate?.name ?? "account")?",
             isPresented: Binding(
@@ -136,16 +174,11 @@ struct ClaudeAccountSection: View {
         } message: {
             Text("This deletes the profile and its sign-in on \(machine.displayName). Conversations are shared across accounts and are kept.")
         }
-        // A completed (or cancelled) sign-in changes the list — refresh when
-        // the sheet dismisses.
-        .onChange(of: signInProfile) { _, newValue in
-            if newValue == nil { Task { await refresh() } }
-        }
     }
 
     @ViewBuilder
     private func accountRow(_ account: ClaudeAccountProfile) -> some View {
-        let isActive = account.slug == active
+        let isActive = account.slug == active && (chatId == nil || !followsDefault)
         Button {
             Task { await handleTap(account) }
         } label: {
@@ -180,7 +213,7 @@ struct ClaudeAccountSection: View {
         .uiKitIdentifier("ClaudeAccountSwitcherSheet.accountRow.\(account.slug)")
         .contextMenu { MenuIcons {
             if account.loggedIn {
-                Button("Sign in again", systemImage: "arrow.clockwise") { signInProfile = account }
+                Button("Sign in again", systemImage: "arrow.clockwise") { onSignIn(account) }
             }
         }}
         // The default profile is the Mac's own login — removing it would sign the Mac
@@ -196,7 +229,7 @@ struct ClaudeAccountSection: View {
             }
         }
         if account.loggedIn, account.usage?.error != nil {
-            Button("Sign in again") { signInProfile = account }
+            Button("Sign in again") { onSignIn(account) }
                 .font(.ripul(.subheadline))
                 .disabled(loading || switchingTo != nil)
                 .uiKitIdentifier("ClaudeAccountSwitcherSheet.accountRow.\(account.slug).signInAgain")
@@ -204,25 +237,30 @@ struct ClaudeAccountSection: View {
     }
 
     private func handleTap(_ account: ClaudeAccountProfile) async {
-        if (account.slug == active && account.loggedIn) || switchingTo != nil { return }
+        if (account.slug == active && account.loggedIn && (chatId == nil || !followsDefault)) || switchingTo != nil { return }
         // No login yet → sign the profile in rather than switching to it.
         guard account.loggedIn else {
-            signInProfile = account
+            onSignIn(account)
             return
         }
-        switchingTo = account.slug
-        let result = await bridge.switchClaudeAccount(machineId: machine.machineId, slug: account.slug)
+        await selectAccount(account.slug)
+    }
+
+    private func selectAccount(_ slug: String) async {
+        switchingTo = slug
+        error = nil
+        let result = await bridge.switchClaudeAccount(machineId: machine.machineId, slug: slug, chatId: chatId)
         switchingTo = nil
         if result.ok {
-            active = result.active ?? account.slug
+            active = result.active ?? slug
+            followsDefault = slug == "__machine_default__"
             onSwitched?(accounts.first { $0.slug == active })
         } else {
             error = result.error ?? "Switch failed"
         }
     }
 
-    private func createAndSignIn() async {
-        let name = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+    private func createAndSignIn(name: String) async {
         guard !name.isEmpty else { return }
         loading = true
         let result = await bridge.createClaudeAccount(machineId: machine.machineId, name: name)
@@ -230,10 +268,11 @@ struct ClaudeAccountSection: View {
         if result.ok, let slug = result.slug {
             addingAccount = false
             newName = ""
-            await refresh()
-            signInProfile = ClaudeAccountProfile(
+            let profile = ClaudeAccountProfile(
                 slug: slug, name: result.name ?? name, email: nil, loggedIn: false, isDefault: false
             )
+            accounts.append(profile)
+            onSignIn(profile)
         } else {
             error = result.error ?? "Could not create the account"
         }
@@ -254,8 +293,8 @@ struct ClaudeAccountSection: View {
     private func refresh() async {
         guard machine.isOnline else { loading = false; return }
         loading = true
-        let result = await bridge.fetchClaudeAccounts(machineId: machine.machineId)
-        if result.error == nil { accounts = result.accounts; active = result.active }
+        let result = await bridge.fetchClaudeAccounts(machineId: machine.machineId, chatId: chatId)
+        if result.error == nil { accounts = result.accounts; active = result.active; followsDefault = result.followsDefault }
         error = result.error
         loading = false
     }

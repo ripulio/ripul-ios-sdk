@@ -234,6 +234,9 @@ struct SessionMilestonesSection: View {
                     .buttonStyle(.plain)
                     .uiKitIdentifier("SessionMetadataPanel.milestoneRow")
 
+                    // Only the sentence the agent wrote is behind the chevron. The
+                    // commits and deploys are counted on the row and listed in Repos.
+                    if !(milestone.detail ?? "").isEmpty {
                     Button {
                         withAnimation(.easeInOut(duration: 0.2)) { openId = isOpen ? nil : milestone.id }
                     } label: {
@@ -245,8 +248,9 @@ struct SessionMilestonesSection: View {
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .accessibilityLabel(isOpen ? "Hide what went into it" : "Show what went into it")
+                    .accessibilityLabel(isOpen ? "Hide the detail" : "Show the detail")
                     .uiKitIdentifier("SessionMetadataPanel.milestoneRow.expand")
+                    }
                 }
                 .padding(.leading, 16)
                 .padding(.trailing, 8)
@@ -308,28 +312,6 @@ struct SessionMilestonesSection: View {
                     .font(.ripul(.footnote))
                     .fixedSize(horizontal: false, vertical: true)
             }
-            ForEach(milestone.commits) { commit in
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text(String(commit.sha.prefix(7)))
-                        .font(.ripul(.caption2).monospacedDigit())
-                        .foregroundStyle(.ripul(.textSecondary))
-                    Text(commit.subject.isEmpty ? "Commit" : commit.subject).ripulText()
-                        .font(.ripul(.caption))
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                }
-                .uiKitIdentifier("SessionMetadataPanel.milestoneRow.commit")
-            }
-            ForEach(milestone.deployments) { deploy in
-                Text(Self.deployLabel(deploy.target))
-                    .font(.ripul(.caption))
-                    .foregroundStyle(.ripul(.textSecondary))
-            }
-            if milestone.commits.isEmpty && milestone.deployments.isEmpty && (milestone.detail ?? "").isEmpty {
-                Text("No commits or deploys recorded for it.")
-                    .font(.ripul(.caption))
-                    .foregroundStyle(.ripul(.textTertiary))
-            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -373,16 +355,6 @@ struct SessionMilestonesSection: View {
     }
 
     // MARK: - Helpers
-
-    private static func deployLabel(_ target: String) -> String {
-        switch target {
-        case "pages": return "Web deploy"
-        case "worker": return "Worker deploy"
-        case "ios": return "iPhone build"
-        case "macos": return "Mac build"
-        default: return "Deploy"
-        }
-    }
 
     private static func date(_ iso: String) -> Date? {
         let formatter = ISO8601DateFormatter()

@@ -70,8 +70,7 @@ struct SessionTitleLozenge: View {
                 .fill(Color.ripul(.textSecondary).opacity(0.12))
         )
         .uiKitIdentifier("SessionTitleLozenge.container")
-        .animation(.easeInOut(duration: 0.175), value: iconName)
-        .animation(.easeInOut(duration: 0.175), value: label)
+        // No animation on a new tool or count: see the row's subtitle.
     }
 }
 
@@ -167,6 +166,13 @@ public struct UnifiedSessionRow: View {
     /// Tapping the row's icon puts the started chats away, or brings them back.
     var onToggleStartedChats: (() -> Void)? = nil
     var onSessionAction: ((SessionRowAction) -> Void)? = nil
+    /// What is waiting on you in this chat, worked out by the list and handed
+    /// in. A row in the session `List` was not redrawn when the store changed,
+    /// so a mention showed only once the filter rebuilt the rows; a value
+    /// that changes always redraws. Nil `attention` with `attentionGiven`
+    /// false means the row reads the store itself (the other screens).
+    var attention: PendingAgentQuestion? = nil
+    var attentionGiven = false
 
     public init(
         sessionStore: SessionListStore,
@@ -192,8 +198,13 @@ public struct UnifiedSessionRow: View {
         startedChatsNeedLooking: Bool = false,
         startedChatsPutAway: [UnifiedSession] = [],
         onToggleStartedChats: (() -> Void)? = nil,
-        onSessionAction: ((SessionRowAction) -> Void)? = nil
+        onSessionAction: ((SessionRowAction) -> Void)? = nil,
+        attention: PendingAgentQuestion?? = .none
     ) {
+        if case .some(let given) = attention {
+            self.attention = given
+            self.attentionGiven = true
+        }
         self.sessionStore = sessionStore
         self.session = session
         self.presentation = presentation
@@ -238,8 +249,14 @@ public struct UnifiedSessionRow: View {
     /// Every alias is offered because CLI sessions are keyed inconsistently
     /// (`cli_<uuid>` live, bare uuid from the scanner) and matchKeys is exactly
     /// the set of names this row answers to.
+    private var pendingAttention: PendingAgentQuestion? {
+        attentionGiven ? attention : PendingQuestionStore.shared.first(anyOf: session.attentionKeys)
+    }
+
+    /// Bold for an unread reply, and for a question or mention waiting on you.
     private var isUnread: Bool {
         sessionStore.isUnread(anyOf: session.readStateKeys)
+            || pendingAttention != nil
     }
 
     private var isPinned: Bool {
@@ -305,13 +322,6 @@ public struct UnifiedSessionRow: View {
         return sessionStore.sessionActions(for: ripul.id)
             ?? sessionStore.sessionActions(for: ripul.sourceChatId)
             ?? []
-    }
-
-    /// True when both a plan is in progress AND a tool call is active —
-    /// determines whether the third row (inline tool line) is shown.
-    private var hasInlineToolActivity: Bool {
-        let state = SessionSubtitleState.resolve(activePlan: activePlan, listPlan: listPlan, latestToolActivity: latestToolActivity)
-        return state.planIsInProgress && latestToolActivity != nil
     }
 
     private var providerIcon: String {
@@ -417,7 +427,16 @@ public struct UnifiedSessionRow: View {
                     // One slot: unread outranks pinned, because it asks for
                     // action and a pin is already shown by the row's position.
                     if !presentation.isLozenge {
-                        if isUnread {
+                        if let pending = pendingAttention {
+                            Image(systemName: pending.isMention ? "at.circle.fill" : "questionmark.bubble.fill")
+                                .font(.ripulIcon(size: 12, weight: .medium))
+                                .foregroundStyle(.tint)
+                                .background(.background, in: RoundedRectangle(cornerRadius: 2))
+                                .offset(x: 4, y: 4)
+                                .accessibilityLabel(pending.isMention
+                                    ? "\(pending.fromName ?? "Someone") mentioned you" : "Needs your answer")
+                                .uiKitIdentifier("UnifiedSessionRow.questionIndicator")
+                        } else if isUnread {
                             Image(systemName: "envelope")
                                 .font(.ripulIcon(size: 11, weight: .medium))
                                 // .primary, not .white: the backing is
@@ -438,7 +457,6 @@ public struct UnifiedSessionRow: View {
                         }
                     }
                 }
-                .animation(.easeInOut(duration: 0.175), value: toolIcon)
 
                 // The label under the icon needs a second line the top-bar
                 // pill doesn't have; there the tool name stays in the subtitle.
@@ -452,7 +470,6 @@ public struct UnifiedSessionRow: View {
                 }
             }
             .frame(width: iconWidth)
-            .animation(.easeInOut(duration: 0.175), value: latestToolActivity != nil)
             .modifier(StartedChatsToggle(
                 count: startedChats, isClosed: startedChatsClosed,
                 // Selecting rows owns the tap; the top-bar pill has no family to show.
@@ -495,8 +512,6 @@ public struct UnifiedSessionRow: View {
                     return latestToolActivity
                 }()
 
-                let subtitleKey = subtitleState.subtitleKey(inlineToolActivity: inlineToolActivity)
-
                 // Unread replies use a bold title alongside the envelope.
                 HStack(spacing: 6) {
                     Text(session.title).ripulText()
@@ -518,6 +533,34 @@ public struct UnifiedSessionRow: View {
                             .fixedSize()
                             .accessibilityLabel("\(startedChats) \(startedChats == 1 ? "chat" : "chats") under it put away")
                             .uiKitIdentifier("UnifiedSessionRow.startedChatsCount")
+                    }
+                    let typingNames = session.ripulSession?.typingNames ?? []
+                    let isTyping = !typingNames.isEmpty
+                    let personName = isTyping ? typingNames.joined(separator: ", ") : session.ripulSession?.latestReplyAuthorName
+                    if let author = personName, !author.isEmpty {
+                        Spacer(minLength: 0)
+                        SessionReplyAuthorLayout {
+                            HStack(spacing: 2) {
+                                Text(author)
+                                    .lineLimit(1)
+                                    .truncationMode(.tail)
+                                if isTyping {
+                                    Text("…").fixedSize()
+                                }
+                            }
+                            .font(.ripul(.caption2, weight: .semibold))
+                            .foregroundStyle(isTyping ? Color.accentColor : Color.ripul(.textSecondary))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background {
+                                Capsule()
+                                    .fill(isTyping ? Color.accentColor.opacity(0.18) : Color.ripul(.textSecondary).opacity(0.12))
+                                    .shadow(color: Color.accentColor.opacity(isTyping ? 0.55 : 0), radius: 5)
+                            }
+                        }
+                        .layoutPriority(1)
+                        .accessibilityLabel(isTyping ? "\(author) typing" : "Latest reply from \(author)")
+                        .uiKitIdentifier("UnifiedSessionRow.replyAuthorLozenge")
                     }
                 }
 
@@ -618,7 +661,13 @@ public struct UnifiedSessionRow: View {
                         .truncationMode(.tail)
                     }
                 }
-                .animation(.easeInOut(duration: 0.175), value: subtitleKey)
+                // A new tool swaps the icon, the lozenge and this line at once,
+                // not in 0.175 s animations. Each of those was about 20 frames
+                // of SwiftUI layout on a 120 Hz phone, for every tool event, in
+                // the list row and again in the chat's top-bar pill (whose
+                // width change morphed the bar's glass too). Peter's phone,
+                // 18 October 2026: 43-83 tool events a minute, and one row and
+                // the hidden top bar changing 7-13 times a second.
 
                 // Third row: only when a plan is driving the row AND a tool
                 // call is live underneath it. The top-bar pill is two lines
@@ -641,14 +690,13 @@ public struct UnifiedSessionRow: View {
                     .transition(.opacity.combined(with: .move(edge: .top)))
                 }
             }
-            .animation(.easeInOut(duration: 0.175), value: hasInlineToolActivity)
+            .frame(maxWidth: presentation.isLozenge ? nil : .infinity, alignment: .leading)
 
             // List-only trailing chrome. The top-bar pill hugs its content and
             // sits between two 44pt buttons — there is no room for a running
             // indicator, tool action buttons or a timestamp, and the chat
             // screen states all three itself.
             if !presentation.isLozenge {
-                Spacer()
                 listTrailingChrome
             }
         }

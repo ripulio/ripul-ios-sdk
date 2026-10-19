@@ -89,6 +89,30 @@ extension AgentBridge {
         public var isEmpty: Bool { goal == nil && openSummary.isEmpty && milestones.isEmpty }
     }
 
+    /// A link the chat keeps to hand: an artefact it made, a page it deployed.
+    /// The agent keeps them with the `shortcut` tool; a `key` one also shows in
+    /// the chat's header lozenge.
+    public struct ChatShortcut: Hashable, Identifiable {
+        public let id: String
+        public let title: String
+        public let url: URL
+        public let kind: String
+        public let key: Bool
+        /// A person added or changed it.
+        public let persons: Bool
+
+        public var isArtefact: Bool { kind == "artefact" }
+        /// The address's host, for a second line under the title.
+        public var host: String {
+            let host = url.host ?? url.absoluteString
+            return host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
+        }
+        public var symbol: String { isArtefact ? "square.grid.2x2" : "link" }
+    }
+
+    /// How many key shortcuts the header shows. The panel shows them all.
+    public static let headerShortcutLimit = 3
+
     /// Full session metadata fetched from the API.
     public struct SessionMetadata {
         public let id: String
@@ -104,6 +128,13 @@ extension AgentBridge {
         public let updatedAt: String?
         /// Nil when the page is on a build from before milestones.
         public let story: ChatStory?
+        /// Key ones first, then the newest first.
+        public let shortcuts: [ChatShortcut]
+
+        /// The ones the header lozenge shows.
+        public var headerShortcuts: [ChatShortcut] {
+            Array(shortcuts.filter(\.key).prefix(AgentBridge.headerShortcutLimit))
+        }
     }
 
     /// Fetch full session metadata from the API for a live session.
@@ -325,6 +356,25 @@ extension AgentBridge {
         return ChatStory(goal: goal, openSummary: open?["summary"] as? String ?? "", milestones: milestones)
     }
 
+    /// Parse the chat's shortcuts, key ones first, then the newest first:
+    /// the order `shortcutsInOrder` gives on the page.
+    static func parseShortcuts(_ raw: Any?) -> [ChatShortcut] {
+        let parsed = (raw as? [[String: Any]] ?? []).compactMap { entry -> ChatShortcut? in
+            guard let id = entry["id"] as? String, let title = entry["title"] as? String,
+                  let address = entry["url"] as? String, let url = URL(string: address),
+                  let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" else { return nil }
+            return ChatShortcut(
+                id: id,
+                title: title,
+                url: url,
+                kind: entry["kind"] as? String ?? "url",
+                key: entry["key"] as? Bool ?? false,
+                persons: entry["author"] as? String == "person" || entry["editedByPerson"] as? Bool == true
+            )
+        }
+        return parsed.reversed().filter(\.key) + parsed.reversed().filter { !$0.key }
+    }
+
     /// Parse a raw JSON dictionary into a SessionMetadata.
     private static func parseSessionMetadata(_ raw: [String: Any], story: [String: Any]? = nil) -> SessionMetadata {
         let filesEdited = (raw["filesEdited"] as? [[String: Any]])?.compactMap { entry -> FileEditEntry? in
@@ -385,7 +435,8 @@ extension AgentBridge {
             modelHistory: raw["modelHistory"] as? [String] ?? [],
             createdAt: raw["createdAt"] as? String,
             updatedAt: raw["updatedAt"] as? String,
-            story: parseChatStory(story)
+            story: parseChatStory(story),
+            shortcuts: parseShortcuts(raw["shortcuts"])
         )
     }
 }

@@ -259,6 +259,8 @@ public struct SlidePanelOverlay<Content: View>: View {
 /// so the caller can update SwiftUI state with `withTransaction(disablesAnimations:)`
 /// for smooth 120 fps tracking without animation interpolation overhead.
 public struct InteractiveEdgeSwipeView: UIViewRepresentable {
+    /// Once, when the swipe is recognised and before its first `onChanged`.
+    public var onBegan: (() -> Void)? = nil
     public var onChanged: ((CGFloat) -> Void)? = nil
     public let onEnded: (CGFloat, CGFloat) -> Void
     public let onCancelled: () -> Void
@@ -270,12 +272,14 @@ public struct InteractiveEdgeSwipeView: UIViewRepresentable {
     public var directTransformTarget: UIView? = nil
 
     public init(
+        onBegan: (() -> Void)? = nil,
         onChanged: ((CGFloat) -> Void)? = nil,
         onEnded: @escaping (CGFloat, CGFloat) -> Void,
         onCancelled: @escaping () -> Void,
         maxOffset: CGFloat? = nil,
         directTransformTarget: UIView? = nil
     ) {
+        self.onBegan = onBegan
         self.onChanged = onChanged
         self.onEnded = onEnded
         self.onCancelled = onCancelled
@@ -285,6 +289,7 @@ public struct InteractiveEdgeSwipeView: UIViewRepresentable {
 
     public func makeCoordinator() -> Coordinator {
         Coordinator(
+            onBegan: onBegan,
             onChanged: onChanged,
             onEnded: onEnded,
             onCancelled: onCancelled,
@@ -305,6 +310,7 @@ public struct InteractiveEdgeSwipeView: UIViewRepresentable {
     }
 
     public func updateUIView(_ uiView: UIView, context: Context) {
+        context.coordinator.onBegan = onBegan
         context.coordinator.onChanged = onChanged
         context.coordinator.onEnded = onEnded
         context.coordinator.onCancelled = onCancelled
@@ -313,6 +319,7 @@ public struct InteractiveEdgeSwipeView: UIViewRepresentable {
     }
 
     public class Coordinator {
+        public var onBegan: (() -> Void)?
         public var onChanged: ((CGFloat) -> Void)?
         public var onEnded: (CGFloat, CGFloat) -> Void
         public var onCancelled: () -> Void
@@ -324,11 +331,13 @@ public struct InteractiveEdgeSwipeView: UIViewRepresentable {
         private var dragSnapshot: UIView?
 
         init(
+            onBegan: (() -> Void)?,
             onChanged: ((CGFloat) -> Void)?,
             onEnded: @escaping (CGFloat, CGFloat) -> Void,
             onCancelled: @escaping () -> Void,
             maxOffset: CGFloat?
         ) {
+            self.onBegan = onBegan
             self.onChanged = onChanged
             self.onEnded = onEnded
             self.onCancelled = onCancelled
@@ -372,6 +381,8 @@ public struct InteractiveEdgeSwipeView: UIViewRepresentable {
             let offset = max(0, min(limit, translation.x))
 
             switch recognizer.state {
+            case .began:
+                onBegan?()
             case .changed:
                 attachFreezeOverlay()
                 onChanged?(offset)

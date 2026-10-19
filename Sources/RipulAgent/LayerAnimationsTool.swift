@@ -28,11 +28,16 @@ public struct LayerAnimationsTool: NativeTool {
         + "draws every frame, which the app's own processor counters cannot see), with the layer, its place on "
         + "screen and the view that owns it. action \"pause\" freezes the looping ones where they are and "
         + "\"resume\" lets them run again, to measure what one costs: read the render server's load, pause, read "
-        + "it again. match narrows any action to animations whose key, key path, owner or id contains the text."
+        + "it again. match narrows any action to animations whose key, key path, owner or id contains the text. "
+        + "action \"changing\" watches for a few seconds what the app's main thread itself changes on screen, wake "
+        + "by wake (a SwiftUI animation re-renders on the main thread every frame, and no loop above shows it): how "
+        + "often the main thread woke and for how long, and the views whose layers changed most often."
     public let inputSchema: [String: Any] = ToolSchema.object(
-        .string("action", "list (default), pause or resume"),
+        .string("action", "list (default), pause, resume or changing"),
         .string("match", "Only animations whose key, key path, layer class, owning view or id contains this (case-insensitive)"),
-        .bool("includeFinite", "Also list animations that end by themselves, and the system's own that only keep one layer in step with another (default: only loops)")
+        .bool("includeFinite", "Also list animations that end by themselves, and the system's own that only keep one layer in step with another (default: only loops)"),
+        .number("seconds", "changing: how long to watch, 1-10 seconds (default 3)"),
+        .integer("limit", "changing: how many views to report (default 15)")
     )
 
     /// SDK-internal — see `RipulDeveloperOnlyTool`.
@@ -44,11 +49,17 @@ public struct LayerAnimationsTool: NativeTool {
     @MainActor
     public func execute(args: [String: Any]) async throws -> Any {
         let action = (args["action"] as? String ?? "list").lowercased()
-        guard ["list", "pause", "resume"].contains(action) else {
-            return ["success": false, "error": "action is list, pause or resume"]
+        guard ["list", "pause", "resume", "changing"].contains(action) else {
+            return ["success": false, "error": "action is list, pause, resume or changing"]
         }
         let match = (args["match"] as? String).flatMap { $0.isEmpty ? nil : $0.lowercased() }
         let includeFinite = args["includeFinite"] as? Bool ?? false
+
+        if action == "changing" {
+            let seconds = min(10, max(1, (args["seconds"] as? NSNumber)?.doubleValue ?? 3))
+            let limit = min(40, max(1, (args["limit"] as? NSNumber)?.intValue ?? 15))
+            return await LayerChangeWatcher.watch(seconds: seconds, limit: limit, match: match)
+        }
 
         if action == "resume" {
             let layers = Self.frozen.allObjects
@@ -103,6 +114,13 @@ public struct LayerAnimationsTool: NativeTool {
                     ]
                     if let keyPath { entry["keyPath"] = keyPath }
                     if animation.autoreverses { entry["autoreverses"] = true }
+                    // The rate it asks the render server for (`RenderServerAnimations`
+                    // sets one on each loop); absent means every frame the display draws
+                    // (the default range is all zeros).
+                    let rate = animation.preferredFrameRateRange
+                    if rate.maximum > 0 {
+                        entry["framesPerSecond"] = (rate.preferred ?? rate.maximum).rounded()
+                    }
                     if let ownerName { entry["owner"] = ownerName }
                     if let id { entry["id"] = id }
                     found.append(entry)
@@ -141,7 +159,7 @@ public struct LayerAnimationsTool: NativeTool {
 
     /// The view whose layer this is, or the nearest one above it.
     @MainActor
-    private static func owner(of layer: CALayer) -> UIView? {
+    static func owner(of layer: CALayer) -> UIView? {
         var current: CALayer? = layer
         while let node = current {
             if let view = node.delegate as? UIView { return view }
@@ -152,7 +170,7 @@ public struct LayerAnimationsTool: NativeTool {
 
     /// The identifier the view carries, or the nearest one above it.
     @MainActor
-    private static func nearestIdentifier(_ view: UIView) -> String? {
+    static func nearestIdentifier(_ view: UIView) -> String? {
         var current: UIView? = view
         var steps = 0
         while let node = current, steps < 40 {

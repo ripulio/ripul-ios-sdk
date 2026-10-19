@@ -334,7 +334,10 @@ extension AgentBridge {
                 machineId: machineId,
                 teamVisibility: item["teamVisibility"] as? String,
                 creatorUserId: item["creatorUserId"] as? String,
-                startedBy: SessionStartedBy(wire: item["startedBy"])
+                startedBy: SessionStartedBy(wire: item["startedBy"]),
+                customTitle: item["customTitle"] as? String,
+                customTitleRenamedAt: item["customTitleRenamedAt"] as? Double,
+                aiTitle: item["aiTitle"] as? String
             )
         }
         NSLog("[AgentBridge] listRemoteSessions: %d sessions on %@", parsed.count, machineId)

@@ -26,9 +26,10 @@ add its file layout, its streams and their baselines. The tests are `Tests/Ripul
 Every token has a default, written in code, that is the system value the call
 site used before: `Font.ripul(.body)` is `Font.body`, `.ripul(.textSecondary)`
 is the system's `.secondary` style, `UIColor.ripul(.text)` is `UIColor.label`,
-the same object. So a migrated call site draws the same pixels, and the
-default theme document is empty. A theme document changes a token only by
-naming it.
+the same object. So a migrated call site draws the same pixels, and an
+empty theme document is the system look. A theme document changes a token only
+by naming it. (Ripul's own document was empty until 12 October 2026; it is now
+paper and navy: see "Ripul's theme document".)
 
 ## What a view writes
 
@@ -360,6 +361,19 @@ for in another family with `family:`.
 and web. The native app bundles it; the web build reads the same file.
 `theme/ripul-theme-loud.json` is a test document (see "The loud document"), and
 `theme/ripul-theme-brand.json` a trial of the brand (see "The brand document").
+
+**What it holds.** Paper and navy, since 12 October 2026 (Peter: "ship with our
+new themes, and on next update switch them over"): the values of "The paper
+and navy document" below with the faint ink one step stronger,
+`ripul.textTertiary` `#686a80` in light and the light ink at 65 per cent in
+dark (4.8 to 1 on the paper, 7.1 on the navy). It was the trial document
+`ripul-theme-paper-strong.json`, which is gone. Every build shows it, store
+builds included. A device that had kept a look from the trial forgets it once,
+at the first launch of a build with this change (`iOS/RipulAppApp.swift`, the
+key `ripul.theme.paperNavyDefault.switched`), so the update moves every device
+over; UX Settings still offers the other looks in a Debug build. What the look
+does not yet reach is listed in `docs/plans/theme-aware-codebase.md`, "Paper
+and navy".
 
 **Shape.** Every key is optional. An absent key means "today's look": the
 default written in code on that platform. The default document sets nothing.
@@ -849,13 +863,14 @@ sans did.
 (`OnboardingView.swift`). `ripulTextStyle(.eyebrow)` is used nowhere yet, so
 the eyebrow's tracking shows nowhere.
 
-## The paper and navy document (a trial)
+## The paper and navy document (the website's own faint ink)
 
 `theme/ripul-theme-paper.json` is the brand document plus the website's
 grounds: its warm paper in light and its navy in dark, with ink text. Chosen
 as the others are (`-ripul.theme.document ripul-theme-paper`, or
 `ripul://theme?name=ripul-theme-paper`; `ripul://theme?name=ripul-theme` goes
-back), in a Debug build only. It is not the default. The values are the
+back), in a Debug build only. It is not the default: the default is this look
+with a stronger faint ink (see "Ripul's theme document"). The values are the
 website's own (`website/public/css/site.css`).
 
 | It sets, beside what the brand document sets | Light | Dark |

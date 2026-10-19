@@ -176,47 +176,50 @@ private struct HostScreenPreviewView: View {
                     store: state.store,
                     aspectRatio: ratio,
                     contentInsets: UIEdgeInsets(top: 52, left: 0, bottom: 88, right: 0),
-                    avoidsKeyboard: true
+                    avoidsKeyboard: true,
+                    keepsTrailingEdge: true
                 ) { size in
-                    // Keep one shape mounted throughout the shrink/expand. The
-                    // panel already hugs its content and retains the expanded
-                    // size, so collapsing never overwrites the resize setting.
+                    // The panel hugs its content and keeps the expanded size,
+                    // so minimising never overwrites the resize setting.
                     let availableHeight = geometry.size.height - state.hostSafeArea.top - state.hostSafeArea.bottom - 156
                     let width = max(56, min(size.width, geometry.size.width - 32, max(56, availableHeight * ratio)))
-                    let collapsed = state.isCollapsed
-                    ZStack(alignment: .topTrailing) {
-                        HostScreenPreviewImage(frame: state.frame)
-                            .background(Color.ripul(.canvas))
-                            .opacity(collapsed ? 0 : 1)
-                        if collapsed {
-                            Button { state.isCollapsed = false } label: {
-                                Image(systemName: "pip")
-                                    .font(.ripulIcon(size: 22, weight: .medium))
-                                    .frame(width: 56, height: 56)
-                                    .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel("Expand host screen preview")
-                            .uiKitIdentifier("RipulDevConsole.hostPreview.expand")
-                        } else {
+                    // Minimises into the button at its top-right, as the simulator and browser panels do.
+                    FloatingPanelCollapse(collapsed: state.isCollapsed, expanded: CGSize(width: width, height: width / ratio),
+                                          animation: reduceMotion ? nil : .spring(response: 0.38, dampingFraction: 0.88)) {
+                        ZStack(alignment: .topTrailing) {
+                            HostScreenPreviewImage(frame: state.frame)
+                                .background(Color.ripul(.canvas)) // theme-mapping: unchanged, moved into the collapse helper
                             Button { state.isCollapsed = true } label: {
                                 Image(systemName: "minus")
-                                    .font(.ripulIcon(size: 16, weight: .semibold))
+                                    .font(.ripulIcon(size: 13, weight: .semibold)) // theme-mapping: drawn a touch smaller, as the simulator panel's (14 Oct 2026)
+                                    .frame(width: 36, height: 36)
+                                    .glassEffect(.regular.interactive(), in: Circle())
                                     .frame(width: 44, height: 44)
                                     .contentShape(Rectangle())
-                                    .glassEffect(.regular.interactive(), in: Circle())
                             }
                             .buttonStyle(.plain)
                             .padding(4)
                             .accessibilityLabel("Minimise host screen preview")
                             .uiKitIdentifier("RipulDevConsole.hostPreview.minimize")
                         }
+                        .frame(width: width, height: width / ratio)
+                        .clipShape(RoundedRectangle(cornerRadius: 18))
+                        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 18))
+                        .shadow(color: Color.ripul(system: .black).opacity(0.18), radius: 10, y: 3) // theme-mapping: the panel's shadow unchanged, now on the panel and its minimised button apart
+                    } minimised: {
+                        Button { state.isCollapsed = false } label: {
+                            Image(systemName: "pip")
+                                .font(.ripulIcon(size: 22, weight: .medium)) // theme-mapping: unchanged, moved into the collapse helper
+                                .frame(width: 56, height: 56)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Expand host screen preview")
+                        .uiKitIdentifier("RipulDevConsole.hostPreview.expand")
+                        .clipShape(Circle())
+                        .glassEffect(.regular, in: Circle())
+                        .shadow(color: Color.ripul(system: .black).opacity(0.18), radius: 10, y: 3) // theme-mapping: the panel's shadow unchanged, now on the panel and its minimised button apart
                     }
-                    .frame(width: collapsed ? 56 : width, height: collapsed ? 56 : width / ratio)
-                    .clipShape(RoundedRectangle(cornerRadius: collapsed ? 28 : 18))
-                    .glassEffect(.regular, in: RoundedRectangle(cornerRadius: collapsed ? 28 : 18))
-                    .shadow(color: Color.ripul(system: .black).opacity(0.18), radius: 10, y: 3)
-                    .animation(reduceMotion ? nil : .spring(response: 0.38, dampingFraction: 0.88), value: collapsed)
                 }
                 .id(ratio)
             }

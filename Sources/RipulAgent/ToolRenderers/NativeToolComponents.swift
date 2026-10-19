@@ -183,19 +183,24 @@ struct NativeToolValueView: View {
     var titleFont: Font = .ripul(.headline)
     var identifier = "NativeTool.value"
     var textSyntax: NativeToolCodeSyntax?
+    var narrative = true
     @State private var visibleItems = 40
 
     var body: some View {
-        if let title, case .string(let text) = value, text.contains("\n") || (textSyntax != nil && !text.isEmpty) {
+        let display = narrative && textSyntax == nil ? NativeToolNarrative.expanded(value) : value
+        if let title, case .string(let text) = display, !NativeToolNarrative.isProse(text, enabled: narrative, hasSyntax: textSyntax != nil), text.contains("\n") || (textSyntax != nil && !text.isEmpty) {
             NativeToolCodeBlock(text: text, title: title, titleFont: titleFont, syntax: textSyntax, identifier: identifier)
         } else if let title {
-            NativeToolSection(title: title) { content(value) }
-        } else { content(value) }
+            NativeToolSection(title: title) { content(display) }
+        } else { content(display) }
     }
 
     private func content(_ value: CmsJSON) -> AnyView {
         switch value {
         case .string(let text):
+            if NativeToolNarrative.isProse(text, enabled: narrative, hasSyntax: textSyntax != nil) {
+                return AnyView(NativeToolProse(text: text, identifier: identifier))
+            }
             if text.contains("\n") || (textSyntax != nil && !text.isEmpty) {
                 return AnyView(NativeToolCodeBlock(text: text, syntax: textSyntax, identifier: identifier))
             }
@@ -209,7 +214,7 @@ struct NativeToolValueView: View {
                 ForEach(Array(items.prefix(visibleItems).enumerated()), id: \.offset) { index, item in
                     HStack(alignment: .top, spacing: 10) {
                         Text("\(index + 1)").font(.ripul(.caption)).foregroundStyle(.ripul(.textSecondary))
-                        NativeToolValueView(value: item, textSyntax: textSyntax)
+                        NativeToolValueView(value: item, textSyntax: textSyntax, narrative: narrative)
                     }
                     if index < items.count - 1 { Divider() }
                 }
@@ -222,10 +227,12 @@ struct NativeToolValueView: View {
                 ForEach(object.keys.sorted(), id: \.self) { key in
                     if let item = object[key] {
                         if item.objectValue != nil || item.toolArray != nil {
-                            DisclosureGroup(ToolValue.title(key)) { NativeToolValueView(value: item, textSyntax: textSyntax).padding(.top, 8) }
+                            DisclosureGroup(ToolValue.title(key)) { NativeToolValueView(value: item, textSyntax: textSyntax, narrative: narrative && !NativeToolNarrative.isLiteralField(key)).padding(.top, 8) }
                         } else {
                             let syntax = ["stdout", "stderr", "output", "text", "content"].contains(key) ? textSyntax : nil
-                            if let text = item.stringValue, text.contains("\n") || (syntax != nil && !text.isEmpty) {
+                            if let text = item.stringValue, NativeToolNarrative.isProse(text, field: key, enabled: narrative, hasSyntax: textSyntax != nil) {
+                                NativeToolSection(title: ToolValue.title(key)) { NativeToolProse(text: text) }
+                            } else if let text = item.stringValue, text.contains("\n") || (syntax != nil && !text.isEmpty) {
                                 NativeToolCodeBlock(text: text, title: ToolValue.title(key), titleFont: .ripul(.caption), syntax: syntax, identifier: "NativeTool.value")
                             } else {
                                 VStack(alignment: .leading, spacing: 4) {
@@ -233,7 +240,7 @@ struct NativeToolValueView: View {
                                     if let raw = item.stringValue, let url = URL(string: raw), ["https", "http"].contains(url.scheme) {
                                         Link(raw, destination: url).textSelection(.enabled)
                                     } else {
-                                        NativeToolValueView(value: item, textSyntax: syntax)
+                                        NativeToolValueView(value: item, textSyntax: syntax, narrative: false)
                                     }
                                 }
                             }

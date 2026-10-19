@@ -109,23 +109,23 @@ private struct BrowserPreviewImage: View {
 struct BrowserPreviewPanel: View {
     @ObservedObject var state: BrowserPreviewState
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    private var spring: Animation? { reduceMotion ? nil : .spring(response: 0.38, dampingFraction: 0.88) }
 
     var body: some View {
         GeometryReader { geometry in
             if state.chatId != nil && state.allowed {
                 let ratio = state.aspectRatio
                 RipulFloatingPanel(storageKey: "ripul.browserPreview",
-                    defaultSize: CGSize(width: geometry.size.width / 3, height: geometry.size.width / 3 / ratio),
+                    defaultSize: CGSize(width: min(geometry.size.width / 3, 300), height: min(geometry.size.width / 3, 300) / ratio),
                     minSize: CGSize(width: 120, height: 120 / ratio), showsResizeGrip: !state.collapsed,
-                    aspectRatio: ratio, contentInsets: UIEdgeInsets(top: 52, left: 0, bottom: 88, right: 0), avoidsKeyboard: true) { size in
+                    aspectRatio: ratio, contentInsets: UIEdgeInsets(top: 52, left: 0, bottom: 88, right: 0), avoidsKeyboard: true,
+                    keepsTrailingEdge: true) { size in
                     let width = min(size.width, geometry.size.width - 24, max(120, (geometry.size.height - 156) * ratio))
-                    let outline = RoundedRectangle(cornerRadius: state.collapsed ? 28 : 16, style: .continuous)
-                    ZStack(alignment: .topTrailing) {
-                        BrowserPreviewImage(frame: state.frame).allowsHitTesting(false).opacity(state.collapsed ? 0 : 1)
-                        if state.collapsed {
-                            control("globe", label: "Expand browser preview", id: "expand", size: 56) { state.collapsed = false }
-                                .contextMenu { MenuIcons { Button("Close preview", role: .destructive) { state.close() } }}
-                        } else {
+                    let outline = RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    // Minimises into the button at its top-right, as the simulator's does.
+                    FloatingPanelCollapse(collapsed: state.collapsed, expanded: CGSize(width: width, height: width / ratio), animation: spring) {
+                        ZStack(alignment: .topTrailing) {
+                            BrowserPreviewImage(frame: state.frame).allowsHitTesting(false)
                             if let message = state.message {
                                 Text(message).ripulText().font(.ripul(.caption)).multilineTextAlignment(.center)
                                     .padding(8).padding(.top, 44).frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -142,23 +142,30 @@ struct BrowserPreviewPanel: View {
                                 control("minus", label: "Minimise browser preview", id: "minimize") { state.collapsed = true }
                             }.padding(4)
                         }
+                        .frame(width: width, height: width / ratio)
+                        .clipShape(outline).glassEffect(.regular, in: outline)
+                        .shadow(color: Color.ripul(system: .black).opacity(0.2), radius: 10, y: 3) // theme-mapping: the panel's shadow unchanged, now on the panel and on its minimised button apart
+                        .accessibilityElement(children: .contain).accessibilityLabel(state.title)
+                        .accessibilityIdentifier("BrowserPreview.surface")
+                    } minimised: {
+                        control("globe", label: "Expand browser preview", id: "expand", size: 56) { state.collapsed = false }
+                            .contextMenu { MenuIcons { Button("Close preview", role: .destructive) { state.close() } }}
+                            .clipShape(Circle()).glassEffect(.regular, in: Circle())
+                            .shadow(color: Color.ripul(system: .black).opacity(0.2), radius: 10, y: 3) // theme-mapping: the panel's shadow unchanged, now on the panel and on its minimised button apart
                     }
-                    .frame(width: state.collapsed ? 56 : width, height: state.collapsed ? 56 : width / ratio)
-                    .clipShape(outline).glassEffect(.regular, in: outline)
-                    .shadow(color: Color.ripul(system: .black).opacity(0.2), radius: 10, y: 3)
-                    .accessibilityElement(children: .contain).accessibilityLabel(state.title)
-                    .accessibilityIdentifier("BrowserPreview.surface")
-                    .animation(reduceMotion ? nil : .spring(response: 0.38, dampingFraction: 0.88), value: state.collapsed)
                 }
             }
         }.ignoresSafeArea(.container)
     }
 
+    /// A round button drawn 36 points across over a 44-point touch area.
     private func control(_ symbol: String, label: String, id: String, size: CGFloat = 44, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: symbol).font(.ripulIcon(size: size == 56 ? 22 : 14, weight: .semibold))
-                .frame(width: size, height: size).contentShape(Rectangle())
+        let drawn = size == 56 ? 56 : min(size, 36)
+        return Button(action: action) {
+            Image(systemName: symbol).font(.ripulIcon(size: size == 56 ? 22 : 13, weight: .semibold)) // theme-mapping: the panel's buttons drawn a touch smaller, as the simulator's (14 Oct 2026)
+                .frame(width: drawn, height: drawn)
                 .glassEffect(.regular.interactive(), in: Circle())
+                .frame(width: size, height: size).contentShape(Rectangle())
         }.buttonStyle(.plain).accessibilityLabel(label).uiKitIdentifier("BrowserPreview.\(id)")
     }
 }
@@ -229,8 +236,9 @@ private struct BrowserPreviewOverlay: UIViewControllerRepresentable {
 
 struct BrowserPreviewPresenter: ViewModifier {
     let bridge: AgentBridge
+    var shown = true
     func body(content: Content) -> some View {
-        if #available(iOS 26.0, *) { content.overlay { BrowserPreviewOverlay(bridge: bridge).ignoresSafeArea(.container) } }
+        if #available(iOS 26.0, *) { content.overlay { if shown { BrowserPreviewOverlay(bridge: bridge).ignoresSafeArea(.container) } } }
         else { content }
     }
 }
@@ -238,6 +246,7 @@ struct BrowserPreviewPresenter: ViewModifier {
 import SwiftUI
 struct BrowserPreviewPresenter: ViewModifier {
     let bridge: AgentBridge
+    var shown = true
     func body(content: Content) -> some View { content }
 }
 #endif

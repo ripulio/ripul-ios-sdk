@@ -19,7 +19,8 @@ public enum PerfSwitch {
     /// `-perfLoopFps 10`, or Settings > Debug > Working Animations: the most
     /// frames a second the turn-long loops may ask the render server for. Nil
     /// leaves the shipped limit (`RenderServerAnimations`); 120 or more lifts
-    /// it. Read each time a loop starts, so a change shows on the next turn.
+    /// it. Read each time a loop starts; the setting posts `loopRateChanged`,
+    /// which restarts the loops already running.
     static var loopFramesPerSecond: Float? {
         let asked = UserDefaults.standard.float(forKey: loopFramesKey)
         return asked >= 1 ? asked : nil
@@ -35,4 +36,17 @@ public enum PerfSwitch {
     #endif
     /// The preference both read. Public so the app's debug settings can set it.
     public static let loopFramesKey = "perfLoopFps"
+
+    /// Posted by the setting when the rate moves, so loops already running and
+    /// the page's spinners take it at once instead of from the next turn.
+    public static let loopRateChanged = Notification.Name("RipulLoopRateChanged")
+
+    /// Sets the page's spinners to the same rate as the loops. A spinner turns
+    /// once every 1.2 s in `steps(var(--ripul-spinner-steps))`
+    /// (`OnScreenSpinner.tsx`), so 12 steps is ten a second, the default; off
+    /// holds them still.
+    static var pageMotionScript: String {
+        let steps = loopsAreOff ? 1 : max(1, Int((Double(loopFramesPerSecond ?? 10) * 1.2).rounded()))
+        return "document.documentElement && document.documentElement.style.setProperty('--ripul-spinner-steps', '\(steps)');"
+    }
 }

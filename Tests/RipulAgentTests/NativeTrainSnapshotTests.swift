@@ -29,6 +29,15 @@ final class NativeTrainSnapshotTests: XCTestCase {
     XCTAssertThrowsError(try NativeTrainSnapshot.decode(["id": "t", "title": "", "detail": "x", "state": "running"]))
   }
 
+  func testCutsALongDetailInsteadOfRefusingIt() throws {
+    let long = "Failed: could not prepare the ios checkout: " + String(repeating: "ripul-native-app/iOS/ContentView.swift, ", count: 12)
+    let train = try NativeTrainSnapshot.decode(["id": "t", "title": "ios train", "detail": long, "state": "failed"])
+    XCTAssertEqual(train.detail.count, NativeTrainSnapshot.maxDetail)
+    XCTAssertTrue(train.detail.hasPrefix("Failed: could not prepare the ios checkout: "))
+    XCTAssertTrue(train.detail.hasSuffix("…"))
+    XCTAssertThrowsError(try NativeTrainSnapshot.decode(["id": "t", "title": "ios train", "detail": "", "state": "failed"]))
+  }
+
   func testStepCountsAreBounded() throws {
     let train = try NativeTrainSnapshot.decode([
       "id": "t", "title": "web train", "detail": "x", "state": "running", "stepsDone": 99, "stepsTotal": 400,

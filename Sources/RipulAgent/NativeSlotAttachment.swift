@@ -218,6 +218,61 @@ final class NativeSlotAttachment {
         visitScrolls(webView.scrollView)
         return lines.joined(separator: " || ")
     }
+
+    /// Why content parked on the scroller cannot ride its slot's view: how many
+    /// views have the slot's rect, how many of those are empty mounts, and
+    /// what there is near it. For the log line written when the climb onto
+    /// the slot's view is given up.
+    func describeMissingSlotView(geometry g: NativeSlotGeometry) -> String {
+        guard let target = scroller, let placed = placement(in: target, for: g) else { return "no scroller" }
+        var matching = 0, empty = 0
+        func visit(_ view: UIView) {
+            if view is SlotMountView { return }
+            if view !== target {
+                if view is UIScrollView { return }
+                if Self.matches(view.convert(view.bounds, to: target), placed.rect) {
+                    matching += 1
+                    if view.subviews.allSatisfy({ $0 is SlotMountView }) { empty += 1 }
+                }
+            }
+            view.subviews.forEach(visit)
+        }
+        visit(target)
+        // WebKit can keep a compositing layer with no view of its own. Such a
+        // layer at the slot's rect is the slot's, with nothing to parent to.
+        var layers = 0, layersAtSlot = 0, layersAtSlotWithoutView = 0
+        var listed: [(CGFloat, String)] = []
+        func walk(_ layer: CALayer, depth: Int) {
+            if layer.delegate is SlotMountView { return }
+            layers += 1
+            if layer !== target.layer {
+                let frame = layer.convert(layer.bounds, to: target.layer)
+                if Self.matches(frame, placed.rect) {
+                    layersAtSlot += 1
+                    if !(layer.delegate is UIView) { layersAtSlotWithoutView += 1 }
+                }
+                listed.append((abs(frame.midY - placed.rect.midY),
+                               "\(layer.delegate.map { String(describing: type(of: $0)) } ?? "layer")\(Self.describe(frame)) d\(depth)"))
+            }
+            layer.sublayers?.forEach { walk($0, depth: depth + 1) }
+        }
+        walk(target.layer, depth: 0)
+        // The layers nearest the slot, whatever their size: what WebKit made of this part of the page.
+        let nearest = listed.sorted { $0.0 < $1.0 }.prefix(14).map(\.1).joined(separator: " ")
+        return "slot \(Self.describe(placed.rect)) matching=\(matching) empty=\(empty) layers=\(layers) layersAtSlot=\(layersAtSlot) "
+            + "withoutView=\(layersAtSlotWithoutView); nearest layers: \(nearest); near: " + nearbyViews(in: target, around: placed.rect)
+    }
+
+    /// What a slot's view is, for the line logged when content is parented to one.
+    private static func describe(slotView view: UIView, in target: UIScrollView) -> String {
+        var views = 0
+        func count(_ view: UIView) { views += 1; view.subviews.forEach(count) }
+        count(target)
+        var depth = 0
+        var parent = view.superview
+        while let current = parent, current !== target { depth += 1; parent = current.superview }
+        return "\(type(of: view)) depth=\(depth) subviews=\(view.subviews.count) animations=\(view.layer.animationKeys() ?? []) scrollerViews=\(views)"
+    }
     #endif
 
     /// Whether any view of about the slot's height sits within 80pt of it in
@@ -310,7 +365,7 @@ final class NativeSlotAttachment {
         let parent: UIView = slot ?? placed.scroller
         #if DEBUG
         if slot !== slotView || container.superview == nil || placed.scroller !== scroller {
-            NSLog("[SLOT] %@ parent=%@", label, slot == nil ? "scroller" : "layer")
+            NSLog("[SLOT] %@ parent=%@", label, slot.map { "layer " + Self.describe(slotView: $0, in: placed.scroller) } ?? "scroller")
         }
         let before = isMounted ? container.convert(container.bounds, to: placed.scroller).minY : nil
         #endif

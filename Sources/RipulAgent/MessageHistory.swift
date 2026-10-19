@@ -1,137 +1,119 @@
 import Foundation
+import Combine
 
-/// Tracks sent message history and supports terminal-style up/down arrow cycling.
-/// Messages are de-duplicated — only the most recent occurrence of each message is kept.
-/// History is persisted to UserDefaults across sessions.
-/// Favorites are stored separately and are never evicted by the max-entries limit.
+/// Durable recent prompts. Attachment bytes live on disk and are loaded only on recall.
 @available(iOS 16.0, macOS 14.0, *)
 public class MessageHistory: ObservableObject {
-    private static let storageKey = "ripul.messageHistory"
-    private static let favoritesKey = "ripul.messageHistory.favorites"
+    public static let shared = MessageHistory()
 
-    private var messages: [String] = []
-    @Published private var favorites: Set<String> = []
-    /// Current position when browsing. `messages.count` means "not browsing" (at the draft).
-    private var cursor: Int = 0
-    /// The text the user was typing before they started browsing history.
-    private var draft: String = ""
+    public struct Entry: Identifiable, Codable, Equatable {
+        public let id: String
+        public let text: String
+        public let chatID: String?
+        public let chatTitle: String
+        public let sentAt: Date
+        public let modality: String
+        public let attachmentNames: [String]
+        public var favorite: Bool = false
+    }
+
+    @Published public private(set) var entries: [Entry] = [] // oldest first
+    /// Dictation marks the next composer send; voice mode supplies its own modality.
+    public var composerModality = "keyboard"
+    private let directory: URL
     private let maxEntries: Int
-
-    public init(maxEntries: Int = 500) {
-        self.maxEntries = maxEntries
-        if let saved = UserDefaults.standard.stringArray(forKey: Self.storageKey) {
-            self.messages = Array(saved.suffix(maxEntries))
-        }
-        if let savedFavorites = UserDefaults.standard.stringArray(forKey: Self.favoritesKey) {
-            self.favorites = Set(savedFavorites)
-        }
-        self.cursor = messages.count
+    private var cursor = 0
+    private var draft = ""
+    public var recalledAttachments: [[String: String]]? {
+        guard cursor < entries.count else { return nil }
+        return attachments(for: entries[cursor])
     }
 
-    /// Record a sent message. De-duplicates by removing any earlier occurrence.
-    public func record(_ message: String) {
-        let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        messages.removeAll { $0 == trimmed }
-        messages.append(trimmed)
-        // When trimming, never evict favorites
-        while messages.count > maxEntries {
-            if let idx = messages.firstIndex(where: { !favorites.contains($0) }) {
-                messages.remove(at: idx)
-            } else {
-                break // all remaining are favorites, stop evicting
+    public init(maxEntries: Int = 500, directory: URL? = nil) {
+        self.maxEntries = max(200, maxEntries)
+        self.directory = directory ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Ripul/PromptHistory", isDirectory: true)
+        do {
+            try FileManager.default.createDirectory(at: self.directory, withIntermediateDirectories: true)
+            let index = self.directory.appendingPathComponent("index.json")
+            if FileManager.default.fileExists(atPath: index.path) {
+                entries = try JSONDecoder().decode([Entry].self, from: Data(contentsOf: index))
+            } else if directory == nil {
+                // Keep the person's existing text-only prompts when creating the richer index.
+                let favorites = Set(UserDefaults.standard.stringArray(forKey: "ripul.messageHistory.favorites") ?? [])
+                entries = (UserDefaults.standard.stringArray(forKey: "ripul.messageHistory") ?? []).map {
+                    Entry(id: UUID().uuidString, text: $0, chatID: nil, chatTitle: "Earlier prompts",
+                          sentAt: Date(), modality: "unknown", attachmentNames: [], favorite: favorites.contains($0))
+                }
+                try persist(entries)
             }
-        }
+        } catch { NSLog("[PromptHistory] Could not load history: %@", error.localizedDescription) }
         resetCursor()
-        save()
     }
 
-    /// Remove a message from history entirely (also unfavorites it).
-    public func remove(_ message: String) {
-        messages.removeAll { $0 == message }
-        favorites.remove(message)
-        resetCursor()
-        save()
-        saveFavorites()
+    public func record(_ text: String, chatID: String? = nil, chatTitle: String = "Chat",
+                       attachments: [[String: String]] = [], modality: String = "keyboard") {
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty else { return }
+        let entry = Entry(id: UUID().uuidString, text: text, chatID: chatID, chatTitle: chatTitle,
+                          sentAt: Date(), modality: modality,
+                          attachmentNames: attachments.map { $0["name"] ?? ($0["mediaType"]?.hasPrefix("image/") == true ? "Image" : "File") })
+        do {
+            if !attachments.isEmpty {
+                try JSONEncoder().encode(attachments).write(to: attachmentURL(entry), options: .atomic)
+            }
+            var updated = entries + [entry]
+            var evicted: [Entry] = []
+            while updated.filter({ !$0.favorite }).count > maxEntries {
+                if let index = updated.firstIndex(where: { !$0.favorite }) { evicted.append(updated.remove(at: index)) }
+            }
+            try persist(updated)
+            entries = updated
+            for old in evicted { try? FileManager.default.removeItem(at: attachmentURL(old)) }
+            resetCursor()
+        } catch { NSLog("[PromptHistory] Could not save prompt: %@", error.localizedDescription) }
     }
 
-    /// Toggle whether a message is favorited.
-    public func toggleFavorite(_ message: String) {
-        if favorites.contains(message) {
-            favorites.remove(message)
-        } else {
-            favorites.insert(message)
-        }
-        saveFavorites()
+    public func attachments(for entry: Entry) -> [[String: String]] {
+        guard !entry.attachmentNames.isEmpty else { return [] }
+        do { return try JSONDecoder().decode([[String: String]].self, from: Data(contentsOf: attachmentURL(entry))) }
+        catch { NSLog("[PromptHistory] Could not restore files: %@", error.localizedDescription); return [] }
     }
 
-    /// Check if a message is favorited.
-    public func isFavorite(_ message: String) -> Bool {
-        favorites.contains(message)
+    public func remove(_ entry: Entry) {
+        let updated = entries.filter { $0.id != entry.id }
+        do {
+            try persist(updated)
+            entries = updated
+            try? FileManager.default.removeItem(at: attachmentURL(entry))
+            resetCursor()
+        } catch { NSLog("[PromptHistory] Could not delete prompt: %@", error.localizedDescription) }
     }
 
-    private func save() {
-        UserDefaults.standard.set(messages, forKey: Self.storageKey)
+    public func toggleFavorite(_ entry: Entry) {
+        var updated = entries
+        guard let index = updated.firstIndex(where: { $0.id == entry.id }) else { return }
+        updated[index].favorite.toggle()
+        do { try persist(updated); entries = updated }
+        catch { NSLog("[PromptHistory] Could not save favorite: %@", error.localizedDescription) }
     }
 
-    private func saveFavorites() {
-        UserDefaults.standard.set(Array(favorites), forKey: Self.favoritesKey)
+    private func attachmentURL(_ entry: Entry) -> URL { directory.appendingPathComponent(entry.id + ".json") }
+    private func persist(_ updated: [Entry]) throws {
+        try JSONEncoder().encode(updated).write(to: directory.appendingPathComponent("index.json"), options: .atomic)
     }
-
-    /// Call when up arrow is pressed. Returns the text to display, or nil if no history.
     public func navigateUp(currentText: String) -> String? {
-        guard !messages.isEmpty else { return nil }
-        if cursor == messages.count {
-            // Starting to browse — save the draft
-            draft = currentText
-        }
-        if cursor > 0 {
-            cursor -= 1
-            return messages[cursor]
-        }
-        // Already at oldest — stay there
-        return messages[cursor]
+        guard !entries.isEmpty else { return nil }
+        if cursor == entries.count { draft = currentText }
+        cursor = max(0, cursor - 1)
+        return entries[cursor].text
     }
-
-    /// Call when down arrow is pressed. Returns the text to display, or nil if already at draft.
     public func navigateDown() -> String? {
-        guard cursor < messages.count else { return nil }
+        guard cursor < entries.count else { return nil }
         cursor += 1
-        if cursor == messages.count {
-            // Back to draft
-            return draft
-        }
-        return messages[cursor]
+        return cursor == entries.count ? draft : entries[cursor].text
     }
-
-    /// The recalled message on show while browsing; nil when back at the draft.
-    public var browsingEntry: String? {
-        cursor < messages.count ? messages[cursor] : nil
-    }
-
-    /// Reset browsing position (e.g. after sending a message).
-    public func resetCursor() {
-        cursor = messages.count
-        draft = ""
-    }
-
-    /// Returns recent messages in reverse chronological order (most recent first).
-    public var recentMessages: [String] {
-        Array(messages.reversed())
-    }
-
-    /// Returns favorited messages in reverse chronological order (most recent first).
-    public var favoriteMessages: [String] {
-        messages.reversed().filter { favorites.contains($0) }
-    }
-
-    /// Returns non-favorited recent messages in reverse chronological order.
-    public var nonFavoriteRecentMessages: [String] {
-        messages.reversed().filter { !favorites.contains($0) }
-    }
-
-    /// Whether there are any messages (favorites or recent) to show.
-    public var hasMessages: Bool {
-        !messages.isEmpty
-    }
+    public var browsingEntry: String? { cursor < entries.count ? entries[cursor].text : nil }
+    public func resetCursor() { cursor = entries.count; draft = "" }
+    public var recentMessages: [String] { entries.reversed().map(\.text) }
+    public var hasMessages: Bool { !entries.isEmpty }
 }

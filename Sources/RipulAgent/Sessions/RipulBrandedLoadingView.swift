@@ -14,7 +14,6 @@ public struct RipulBrandedLoadingView: View {
     let status: String
     let action: (title: String, handler: () -> Void)?
 
-    @State private var breathe = false
     @State private var appeared = false
 
     public init(status: String, action: (title: String, handler: () -> Void)? = nil) {
@@ -24,11 +23,9 @@ public struct RipulBrandedLoadingView: View {
 
     public var body: some View {
         VStack(spacing: 20) {
-            RipulWordmark(height: 64, dot: RipulWordmark.lime, bobs: true)
+            RipulWordmark(height: 64, dot: RipulWordmark.lime, bobs: true,
+                          breath: .init(scale: 0.97...1.04, opacity: 0.75...1, duration: 1.6))
                 .foregroundStyle(.ripul(.text))
-                .scaleEffect(breathe ? 1.04 : 0.97)
-                .opacity(breathe ? 1 : 0.75)
-                .animation(.easeInOut(duration: 1.6).repeatForever(autoreverses: true), value: breathe)
 
             VStack(spacing: 10) {
                 ProgressView()
@@ -52,7 +49,6 @@ public struct RipulBrandedLoadingView: View {
         .background(.background)
         .transition(.opacity)
         .onAppear {
-            breathe = true
             withAnimation(.easeOut(duration: 0.35)) { appeared = true }
         }
     }

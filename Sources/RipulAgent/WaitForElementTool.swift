@@ -38,6 +38,8 @@ public struct WaitForElementTool: NativeTool {
 
     @MainActor
     public func execute(args: [String: Any]) async throws -> Any {
+        let privacyEpoch = SecureInputProtection.epoch
+        try SecureInputProtection.check()
         let id = args["id"] as? String
         let text = args["text"] as? String
         let handle = args["handle"] as? String
@@ -55,6 +57,7 @@ public struct WaitForElementTool: NativeTool {
         let start = Date()
         let deadline = start.addingTimeInterval(timeoutSeconds)
         while true {
+            try SecureInputProtection.check(since: privacyEpoch)
             let found = lookup(id: id, text: text, handle: handle, role: role, className: className, within: within)
             if wantGone != (found != nil) {
                 var result: [String: Any] = [

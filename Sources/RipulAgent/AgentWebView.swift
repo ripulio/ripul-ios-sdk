@@ -175,6 +175,12 @@ public struct AgentWebView: NSViewRepresentable {
             self.baseHost = baseHost
             self.standalone = standalone
             super.init()
+            NotificationCenter.default.addObserver(self, selector: #selector(motionRateChanged), name: PerfSwitch.loopRateChanged, object: nil)
+        }
+
+        /// The animation rate moved in Settings: the page's spinners follow.
+        @objc private func motionRateChanged() {
+            Task { @MainActor in bridge.evaluateJavaScript(PerfSwitch.pageMotionScript) }
         }
 
         func attachWebView(_ webView: WKWebView) {
@@ -237,6 +243,7 @@ public struct AgentWebView: NSViewRepresentable {
             _ webView: WKWebView,
             decidePolicyFor navigationAction: WKNavigationAction
         ) async -> WKNavigationActionPolicy {
+            if let url = navigationAction.request.url, RipulSecureConnection.open(url) { return .cancel }
             if standalone {
                 guard let url = navigationAction.request.url, let local = BundledAgentRuntime.shared.baseURL,
                       url.scheme == local.scheme, url.host == local.host, url.port == local.port else { return .cancel }
@@ -260,6 +267,7 @@ public struct AgentWebView: NSViewRepresentable {
             for navigationAction: WKNavigationAction,
             windowFeatures: WKWindowFeatures
         ) -> WKWebView? {
+            if let url = navigationAction.request.url, RipulSecureConnection.open(url) { return nil }
             if standalone { return nil }
             if let url = navigationAction.request.url {
                 NSLog("[AgentWebView] Popup request: %@", url.absoluteString)
@@ -289,6 +297,7 @@ public struct AgentWebView: NSViewRepresentable {
 
         public func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             NSLog("[AgentWebView] Page finished loading: %@", WebViewLogRedaction.url(webView.url))
+            webView.evaluateJavaScript(PerfSwitch.pageMotionScript, completionHandler: nil)
             Task { @MainActor in
                 bridge.pageDidFinishLoading()
             }
@@ -316,7 +325,7 @@ public struct AgentWebView: NSViewRepresentable {
 
         /// Called when the WKWebView's web content process crashes or is terminated by the OS.
         /// The web view shows a blank white page after this — record the crash and reload.
-        public func webView(_ webView: WKWebView, webContentProcessDidTerminate: WKWebView) {
+        public func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
             Task { @MainActor in
                 bridge.recordProcessTermination()
             }
@@ -589,6 +598,12 @@ private struct AgentWebViewRepresentable: UIViewControllerRepresentable {
         let webView = FullBleedWebView(frame: .zero, configuration: config)
         let controller = AgentWebViewController(webView: webView)
         controller.loadViewIfNeeded()
+        webView.onReplySelectionError = { [weak controller] message in
+            guard let controller, controller.view.window != nil else { return }
+            let alert = UIAlertController(title: "Couldn't quote text", message: message, preferredStyle: .alert)
+            alert.addAction(UIAlertAction(title: "OK", style: .default))
+            controller.present(alert, animated: true)
+        }
         webView.toolStripAccessibilityElements = { [weak bridge] in bridge?.toolStripAccessibilityElements ?? [] }
         webView.toolStripHitTest = { [weak bridge] point, event in bridge?.hitTestToolStrip(point, event: event) }
         // Pose changes (fold, rotate, Split View) move the native bar's row;
@@ -701,6 +716,12 @@ extension AgentWebView {
                 name: UIResponder.keyboardWillHideNotification,
                 object: nil
             )
+            NotificationCenter.default.addObserver(self, selector: #selector(motionRateChanged), name: PerfSwitch.loopRateChanged, object: nil)
+        }
+
+        /// The animation rate moved in Settings: the page's spinners follow.
+        @objc private func motionRateChanged() {
+            Task { @MainActor in bridge.evaluateJavaScript(PerfSwitch.pageMotionScript) }
         }
 
         deinit {
@@ -826,6 +847,7 @@ extension AgentWebView {
             _ webView: WKWebView,
             decidePolicyFor navigationAction: WKNavigationAction
         ) async -> WKNavigationActionPolicy {
+            if let url = navigationAction.request.url, RipulSecureConnection.open(url) { return .cancel }
             if standalone {
                 guard let url = navigationAction.request.url, let local = BundledAgentRuntime.shared.baseURL,
                       url.scheme == local.scheme, url.host == local.host, url.port == local.port else { return .cancel }
@@ -849,6 +871,7 @@ extension AgentWebView {
             for navigationAction: WKNavigationAction,
             windowFeatures: WKWindowFeatures
         ) -> WKWebView? {
+            if let url = navigationAction.request.url, RipulSecureConnection.open(url) { return nil }
             if standalone { return nil }
             if let url = navigationAction.request.url {
                 NSLog("[AgentWebView] Popup request: %@", url.absoluteString)
@@ -885,6 +908,7 @@ extension AgentWebView {
             Self.removeInputAccessoryView(from: webView)
             Self.injectSafeAreaInset(into: webView)
             Self.lockTabsHeight(in: webView)
+            webView.evaluateJavaScript(PerfSwitch.pageMotionScript, completionHandler: nil)
             Task { @MainActor in
                 bridge.pageDidFinishLoading()
                 // Every main-frame didFinish lands here; publish only the first.
@@ -978,7 +1002,7 @@ extension AgentWebView {
 
         /// Called when the WKWebView's web content process crashes or is terminated by the OS.
         /// The web view shows a blank white page after this — record the crash and reload.
-        public func webView(_ webView: WKWebView, webContentProcessDidTerminate: WKWebView) {
+        public func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
             Task { @MainActor in
                 bridge.recordProcessTermination()
             }

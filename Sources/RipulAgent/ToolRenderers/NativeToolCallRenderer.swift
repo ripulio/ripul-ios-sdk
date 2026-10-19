@@ -22,17 +22,18 @@ struct NativeToolCallRenderer: View {
                 if !reason.isEmpty { Label(reason, systemImage: "text.magnifyingglass") }
                 NativeToolCodeBlock(text: content.string("expression", "code", "script"), title: "JavaScript", numbered: true, syntax: .javascript, identifier: "NativeTool.expression")
                 NativeToolParameters(args: content.args, excluding: ["reason", "description", "expression", "code", "script"])
-                NativeToolResultView(content: content)
+                NativeToolResultView(content: content, textSyntax: .automatic)
             case .web, .http: NativeWebToolView(content: content)
             case .agent:
                 let description = content.string("description", "subagent_type", "agent_type", "family")
                 if !description.isEmpty { Label(description, systemImage: "person.crop.circle") }
-                NativeToolSection(title: "Task") { Markdown(content.string("prompt", "message", "task")) }
+                NativeToolSection(title: "Task") { NativeToolProse(text: content.string("prompt", "message", "task")) }
                 NativeToolParameters(args: content.args, excluding: ["description", "subagent_type", "agent_type", "family", "prompt", "message", "task"])
                 NativeToolResultView(content: content, title: "Response")
             case .agentComms: NativeAgentCommsToolView(content: content)
             case .agentList: NativeAgentListToolView(content: content)
             case .tools: NativeDiscoveredToolsView(content: content)
+            case .secureConnection: NativeSecureConnectionToolView(content: content)
             case .host:
                 if let object = content.output?.objectValue {
                     Label(object.string("machineName") ?? "Host", systemImage: "desktopcomputer").font(.ripul(.headline))
@@ -89,7 +90,7 @@ private struct NativeFileToolView: View {
             let alreadyNumbered = source.range(of: "^\\s*\\d+[→\\t]", options: .regularExpression) != nil
             NativeToolCodeBlock(text: source, title: write ? "File contents" : "Contents", numbered: !alreadyNumbered, firstLine: first, syntax: .file(content.filePath), readLineNumbers: alreadyNumbered, identifier: "NativeTool.fileContents")
             if write { NativeToolResultView(content: content) }
-        } else { NativeToolResultView(content: content, title: "Contents") }
+        } else { NativeToolResultView(content: content, title: "Contents", textSyntax: .automatic) }
         NativeToolParameters(args: content.args, excluding: ["file_path", "path", "TargetFile", "AbsolutePath", "content", "CodeContent"])
     }
 }
@@ -188,7 +189,7 @@ private struct NativeSearchToolView: View {
                     if lines.count > visibleRows { Button("Show more matches") { visibleRows += 200 } }
                 }.accessibilityIdentifier("NativeTool.matches")
             }
-        } else { NativeToolResultView(content: content, title: "Matches") }
+        } else { NativeToolResultView(content: content, title: "Matches", textSyntax: .automatic) }
         NativeToolParameters(args: content.args, excluding: ["pattern", "Query", "query", "path", "SearchPath", "DirectoryPath"])
     }
 }
@@ -244,7 +245,7 @@ private struct NativeWebToolView: View {
                 }
             }
         } else if content.kind == .web, let text = ToolValue.plainText(content.output) {
-            NativeToolSection(title: "Response") { Markdown(text).textSelection(.enabled) }
+            NativeToolSection(title: "Response") { NativeToolProse(text: text) }
         } else { NativeToolResultView(content: content, title: "Response") }
     }
 }

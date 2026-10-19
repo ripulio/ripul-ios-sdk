@@ -28,6 +28,7 @@ public struct ScreenFrameTool: NativeTool {
 
     @MainActor
     public func execute(args: [String: Any]) async throws -> Any {
+        try SecureInputProtection.check()
         #if canImport(UIKit)
         if let refusal = LiveStreamHost.shared.relayRefusal(args) {
             return ["success": false, "error": refusal]
@@ -68,6 +69,10 @@ public struct ScreenFrameTool: NativeTool {
                                      "modelName": RipulLiveViewIdentity.modelName,
                                      "app": RipulLiveViewIdentity.appName,
                                      "system": UIDevice.current.systemVersion]
+        // A simulator says which one it is, so the Mac can show it in the chat that drives it.
+        if let udid = ProcessInfo.processInfo.environment["SIMULATOR_UDID"], UUID(uuidString: udid) != nil {
+            result["simulatorUdid"] = udid
+        }
         if let since = args["since"] as? String, since == id {
             result["unchanged"] = true
         } else {

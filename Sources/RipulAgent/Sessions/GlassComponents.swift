@@ -179,13 +179,56 @@ public struct GlassSelectButton: View {
 
 // MARK: - Background modifiers
 
+/// How a panel that is glass by default is drawn. Offered in the app's UX Settings and
+/// kept in the standard defaults. Under a theme that names no `surface`, which is every
+/// app that has not chosen one, `.automatic` is the clear glass every panel drew before
+/// the choice existed.
+public enum GlassPanelStyle: String, CaseIterable, Identifiable, Sendable {
+    /// Tinted glass in dark mode and clear glass in light, where the theme names a
+    /// `surface` to tint with; clear glass otherwise. Measured under paper and navy:
+    /// clear glass lifts a dark panel's ground and costs a title a third of its contrast
+    /// (10.0 to 1 against 15.0), and costs nothing in light.
+    case automatic
+    /// Clear glass: the ground shows through, lifted by the glass.
+    case glass
+    /// Glass carrying the theme's `surface`, so text stands on the card's own colour.
+    case tintedGlass
+    /// The theme's `surface` with no glass, as a grouped list's rows are drawn.
+    case solid
+
+    public static let defaultsKey = "ripul.panelStyle"
+
+    public var id: String { rawValue }
+
+    public var title: String {
+        switch self {
+        case .automatic: "Automatic"
+        case .glass: "Glass"
+        case .tintedGlass: "Tinted Glass"
+        case .solid: "Solid Card"
+        }
+    }
+
+    /// How much of the theme's `surface` a tinted panel carries.
+    static let tintOpacity = 0.85
+
+    /// The style to draw: this one, or what `.automatic` stands for now.
+    func resolved(dark: Bool) -> GlassPanelStyle {
+        guard self == .automatic else { return self }
+        return dark && !RipulTheme.isDefault(.surface) ? .tintedGlass : .glass
+    }
+}
+
 public struct GlassPanelBackground: ViewModifier {
     var followsContainerBottomCorners: Bool
+    @AppStorage(GlassPanelStyle.defaultsKey) private var chosen = GlassPanelStyle.automatic
+    @Environment(\.colorScheme) private var colorScheme
 
     public init(followsContainerBottomCorners: Bool = false) {
         self.followsContainerBottomCorners = followsContainerBottomCorners
     }
     public func body(content: Content) -> some View {
+        let style = chosen.resolved(dark: colorScheme == .dark)
         #if os(iOS)
         if #available(iOS 26.0, *) {
             if followsContainerBottomCorners, SessionsPanelLayout.hasConcentricShapes {
@@ -196,25 +239,73 @@ public struct GlassPanelBackground: ViewModifier {
                 // SwiftUI resolves a body's whole type whichever branch runs,
                 // and on a 26.0 beta that type is missing (see hasConcentricShapes).
                 let shape = SessionsPanelLayout.shape
-                AnyView(content.clipShape(shape).glassEffect(.clear, in: shape))
+                switch style {
+                case .glass, .automatic:
+                    AnyView(content.clipShape(shape).glassEffect(.clear, in: shape))
+                case .tintedGlass:
+                    AnyView(content.clipShape(shape).glassEffect(.clear.tint(Self.tint), in: shape))
+                case .solid:
+                    AnyView(content.clipShape(shape).background { shape.fill(Self.card) })
+                }
             } else {
-                content.glassEffect(.clear, in: .rect(cornerRadius: 16))
+                switch style {
+                case .glass, .automatic:
+                    content.glassEffect(.clear, in: .rect(cornerRadius: 16))
+                case .tintedGlass:
+                    content.glassEffect(.clear.tint(Self.tint), in: .rect(cornerRadius: 16))
+                case .solid:
+                    content.background(Self.card, in: RoundedRectangle(cornerRadius: 16))
+                }
             }
         } else {
-            content
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
+            switch style {
+            case .glass, .automatic:
+                content
+                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
+            case .tintedGlass:
+                content
+                    .background(Self.tint, in: RoundedRectangle(cornerRadius: 16))
+                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
+            case .solid:
+                content
+                    .background(Self.card, in: RoundedRectangle(cornerRadius: 16))
+            }
         }
         #else
         if #available(macOS 26.0, *) {
-            content
-                .background(.clear)
-                .glassEffect(.clear, in: .rect(cornerRadius: 16))
+            switch style {
+            case .glass, .automatic:
+                content
+                    .background(.clear)
+                    .glassEffect(.clear, in: .rect(cornerRadius: 16))
+            case .tintedGlass:
+                content
+                    .background(.clear)
+                    .glassEffect(.clear.tint(Self.tint), in: .rect(cornerRadius: 16))
+            case .solid:
+                content
+                    .background(Self.card, in: RoundedRectangle(cornerRadius: 16))
+            }
         } else {
-            content
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
+            switch style {
+            case .glass, .automatic:
+                content
+                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
+            case .tintedGlass:
+                content
+                    .background(Self.tint, in: RoundedRectangle(cornerRadius: 16))
+                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
+            case .solid:
+                content
+                    .background(Self.card, in: RoundedRectangle(cornerRadius: 16))
+            }
         }
         #endif
     }
+
+    /// The card a solid panel stands on, and the colour a tinted one carries.
+    private static var card: Color { Color.ripul(.surface) } // theme-mapping: new with the panel styles; a glass panel draws no colour of its own
+    private static var tint: Color { card.opacity(GlassPanelStyle.tintOpacity) }
 }
 
 public struct GlassCapsuleBackground: ViewModifier {

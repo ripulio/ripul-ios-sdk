@@ -1833,6 +1833,7 @@ public struct TapElementTool: NativeTool {
 
     @MainActor
     public func execute(args: [String: Any]) async throws -> Any {
+        try SecureInputProtection.check()
         if let alertResult = Self.pressAlertAction(args: args) { return alertResult }
         let target: ScreenElementFinder.Match
         let matchCount: Int
@@ -2212,6 +2213,7 @@ public struct TypeTextTool: NativeTool {
 
     @MainActor
     public func execute(args: [String: Any]) async throws -> Any {
+        try SecureInputProtection.check()
         guard let text = args["text"] as? String else {
             return ["success": false, "error": "text is required"]
         }
@@ -2317,6 +2319,7 @@ public struct ScrollElementTool: NativeTool {
 
     @MainActor
     public func execute(args: [String: Any]) async throws -> Any {
+        try SecureInputProtection.check()
         let direction = (args["direction"] as? String ?? "down").lowercased()
         let amount = min(max(args["amount"] as? Double ?? 0.8, 0.1), 2.0)
 

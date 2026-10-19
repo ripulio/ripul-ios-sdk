@@ -31,6 +31,9 @@ struct NativeTrainSnapshot: Equatable {
 
   var isLive: Bool { state == .waiting || state == .running }
 
+  /// The most of a detail that is kept. The row shows three lines of it.
+  static let maxDetail = 400
+
   static func decode(_ value: [String: Any]) throws -> NativeTrainSnapshot {
     func text(_ key: String, max: Int) throws -> String {
       guard let string = value[key] as? String, !string.isEmpty, string.count <= max else { throw Invalid.invalid }
@@ -46,10 +49,14 @@ struct NativeTrainSnapshot: Equatable {
     }
     guard let state = State(rawValue: try text("state", max: 20)) else { throw Invalid.invalid }
     let total = min(max(Int(number("stepsTotal") ?? 0), 0), 12)
+    // The detail can be whatever went wrong, at any length (a failure that
+    // listed its files ran to 459 characters on 12 October 2026). It is cut,
+    // not refused: a refused snapshot leaves the row to the web's copy.
+    guard let detail = value["detail"] as? String, !detail.isEmpty else { throw Invalid.invalid }
     return NativeTrainSnapshot(
       id: try text("id", max: 100),
       title: try text("title", max: 120),
-      detail: try text("detail", max: 400),
+      detail: detail.count <= maxDetail ? detail : String(detail.prefix(maxDetail - 1)) + "…",
       state: state,
       since: number("since").map { Date(timeIntervalSince1970: $0 / 1000) },
       elapsed: number("elapsedMs").map { max(0, $0 / 1000) },
@@ -142,9 +149,11 @@ public extension Notification.Name {
               .font(.ripul(.subheadline, weight: .semibold))
               .foregroundStyle(.ripul(.text))
               .accessibilityIdentifier("NativeTrain.title")
+            // Three lines at most, as the web row has; the train's sheet has the rest.
             Text(train.detail)
               .font(.ripul(.caption))
               .foregroundStyle(.ripul(.textSecondary))
+              .lineLimit(3)
               .fixedSize(horizontal: false, vertical: true)
               .accessibilityIdentifier("NativeTrain.detail")
             if train.isLive, train.stepsTotal > 0 {

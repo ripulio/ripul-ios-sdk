@@ -40,6 +40,28 @@ final class RipulThemeLibraryTests: XCTestCase {
         XCTAssertEqual(RipulTheme.selectedTheme, "brand")
     }
 
+    func testInfoPlistCanChooseDifferentPlatformDocumentsAndHandsTheChoiceToThePage() throws {
+        // Two app builds can point at different documents without different loaders.
+        // A shipping build must use that choice even if a debug look was saved before.
+        UserDefaults.standard.set("loud", forKey: RipulTheme.choiceKey)
+        for (name, document, expected) in [("brand", brand, "#112233"), ("loud", loud, "#FF00FF")] {
+            RipulTheme.resetLibraryForTests()
+            let app = folder.appendingPathComponent("\(name).bundle")
+            try FileManager.default.createDirectory(at: app, withIntermediateDirectories: true)
+            try document.write(to: app.appendingPathComponent("\(name).json"), atomically: true, encoding: .utf8)
+            let info = try PropertyListSerialization.data(fromPropertyList: [RipulTheme.infoPlistKey: name],
+                                                         format: .xml, options: 0)
+            try info.write(to: app.appendingPathComponent("Info.plist"))
+            RipulTheme.install(bundle: try XCTUnwrap(Bundle(url: app)), keepsChoice: false)
+            XCTAssertEqual(RipulTheme.selectedTheme, name)
+            XCTAssertEqual(accent, rgb(expected))
+            let handedOff = try XCTUnwrap(RipulTheme.adoptedDocumentData)
+            let actual = try JSONSerialization.jsonObject(with: handedOff) as? NSDictionary
+            let supplied = try JSONSerialization.jsonObject(with: Data(document.utf8)) as? NSDictionary
+            XCTAssertEqual(actual, supplied, "the web chat receives the selected platform's document")
+        }
+    }
+
     func testAHostThatNamesNothingIsLeftAsItIs() throws {
         try RipulTheme.adopt(documentData: Data(loud.utf8))
         RipulTheme.install(bundle: bundle)

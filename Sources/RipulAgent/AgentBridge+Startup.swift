@@ -126,8 +126,24 @@ extension AgentBridge {
         // keeps reloads of the same webview accurate after host-prefs:set writes.
         pushHostPrefsToPage()
         pushHostTokenToPage()
+        // A page that loads under the list starts out of sight.
+        if pageOutOfSight { evaluateJavaScript(Self.outOfSightScript(true)) }
         startupNavigationFinished = true
         recordStartupProgress()
+    }
+
+    /// Marks the chat's page out of sight, or back in view: the session list
+    /// slid over it with the web view still in the window, where WebKit draws
+    /// it, spinners and all (Peter's phone, 18 October 2026: one turning at
+    /// x 460 of a 440 pt screen). `OnScreenSpinner.tsx` pauses on the mark.
+    public func setPageOutOfSight(_ outOfSight: Bool) {
+        guard outOfSight != pageOutOfSight else { return }
+        pageOutOfSight = outOfSight
+        evaluateJavaScript(Self.outOfSightScript(outOfSight))
+    }
+
+    static func outOfSightScript(_ outOfSight: Bool) -> String {
+        "document.documentElement && document.documentElement.toggleAttribute('data-ripul-out-of-sight', \(outOfSight));"
     }
 
     /// Reload the web view, clearing any load error.

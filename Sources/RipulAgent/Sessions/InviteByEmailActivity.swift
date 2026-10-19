@@ -5,9 +5,13 @@ import UIKit
 public struct InviteSheetItem: Identifiable {
     public let id = UUID()
     public let shareURL: String
+    /// The chat the link is for, when the sheet was opened from that chat:
+    /// its People list can then say what each member may use.
+    public let chatId: String?
 
-    public init(shareURL: String) {
+    public init(shareURL: String, chatId: String? = nil) {
         self.shareURL = shareURL
+        self.chatId = chatId
     }
 }
 

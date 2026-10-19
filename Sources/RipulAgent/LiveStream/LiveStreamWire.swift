@@ -113,6 +113,9 @@ public enum LiveStreamProtocol {
         case page
         /// A browser tab, as its structure rather than pixels (Remote Tabs, reading).
         case tab
+        /// A simulator on the Mac, its whole screen, read from the simulator itself
+        /// and taking fingers. A viewer that doesn't know it reads it as an app.
+        case simulator
     }
 
     /// The kind of input the source takes.
