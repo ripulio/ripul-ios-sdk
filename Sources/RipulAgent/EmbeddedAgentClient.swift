@@ -17,6 +17,7 @@ public actor EmbeddedAgentClient {
         public let binding_key: String
         public let organisation_id: String
         public let claim_generation: Int
+        public let created_at: String?
     }
     public struct Message: Decodable, Sendable {
         public let id: String

@@ -5,6 +5,9 @@ import Foundation
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let history = MessageHistory(maxEntries: 200, directory: directory)
+        history.record("private job message", chatID: "ecv_123", chatTitle: "Private job")
+        precondition(history.entries.isEmpty, "Employment messages never enter the device-wide prompt history")
+        precondition(MessageHistory(maxEntries: 200, directory: directory).entries.isEmpty, "Employment prompts are not persisted for another account")
         let files = [["id": "file", "name": "notes.txt", "mediaType": "text/plain", "data": Data("keep me".utf8).base64EncodedString()]]
         history.record("", chatID: "a", chatTitle: "Chat A", attachments: files, modality: "voice")
         let attached = history.entries[0]

@@ -53,6 +53,9 @@ public class MessageHistory: ObservableObject {
 
     public func record(_ text: String, chatID: String? = nil, chatTitle: String = "Chat",
                        attachments: [[String: String]] = [], modality: String = "keyboard") {
+        // Employment history belongs to the authenticated conversation API,
+        // never the device-wide prompt picker (which spans accounts and jobs).
+        guard chatID?.hasPrefix("ecv_") != true else { return }
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty else { return }
         let entry = Entry(id: UUID().uuidString, text: text, chatID: chatID, chatTitle: chatTitle,
                           sentAt: Date(), modality: modality,

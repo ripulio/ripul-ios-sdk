@@ -18,6 +18,11 @@ final class FixtureProtocol: URLProtocol {
             precondition(request.value(forHTTPHeaderField: "secret") == nil)
             precondition(request.value(forHTTPHeaderField: "Authorization") == "Bearer \(Self.token)")
             if request.httpMethod == "DELETE" { body = "{\"signedOut\":true}" }
+            else if request.url!.path.hasSuffix("/availability") { body = "{\"enabled\":true}" }
+            else if request.url!.path.hasSuffix("/conversations") {
+                precondition(URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems?.first?.value == "claim-a&other=value")
+                body = "{\"conversations\":[]}"
+            }
             else { body = "{\"claims\":[{\"id\":\"claim-a\",\"binding_key\":\"CAFE-A\",\"organisation_id\":\"cafe\",\"generation\":1},{\"id\":\"claim-b\",\"binding_key\":\"BAR-A\",\"organisation_id\":\"bar\",\"generation\":1}]}" }
         }
         client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, cacheStoragePolicy: .notAllowed)
@@ -56,6 +61,11 @@ actor CredentialGate {
         _ = try await client.claims()
         precondition(FixtureProtocol.requests.filter { $0.url!.path.hasSuffix("/session") }.count == 1)
         print("PASS: separate employment identities; credentials only in exchange; session reused")
+        let enabled = try await client.isEnabled(code: "CAFE-A")
+        precondition(enabled)
+        let inbox = try await client.conversations(claimID: "claim-a&other=value")
+        precondition(inbox.isEmpty)
+        print("PASS: company availability and escaped claim-specific inbox query")
         await client.resetIdentity()
         _ = try await client.claims()
         precondition(FixtureProtocol.requests.filter { $0.httpMethod == "DELETE" }.count == 1)
