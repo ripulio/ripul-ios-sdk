@@ -984,6 +984,7 @@ public final class AgentBridge: NSObject {
 
     /// Masthead configuration from the web app (text, image, colors for native glass lozenge).
     public var mastheadConfig: MastheadConfig?
+    var hostRendersMasthead = false
     /// Resolved from the site's view context. nil leaves the host's default in place.
     public var embeddedChatPresentation: EmbeddedChatPresentation?
     @ObservationIgnored public var onEmbeddedChatPresentationChanged: (() -> Void)?
@@ -3851,7 +3852,7 @@ public final class AgentBridge: NSObject {
         // content below it still clears the camera's band.
         let clearance = webView.window.map { WindowTopChromeLayout.clearance(for: $0) }
             ?? WindowTopChromeClearance(top: 54, safeTop: 54)
-        totalHeight = Int(clearance.contentClearance(below: 44)) + mastheadExtra
+        totalHeight = hostRendersMasthead ? 0 : Int(clearance.contentClearance(below: 44)) + mastheadExtra
         #else
         totalHeight = 44 + mastheadExtra
         #endif

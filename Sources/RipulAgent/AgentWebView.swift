@@ -450,7 +450,7 @@ public struct AgentWebView: View {
         AgentWebViewRepresentable(configuration: configuration, bridge: bridge)
             .background(WindowTopChrome { topChrome = $0 })
             .overlay(alignment: .top) {
-                if let config = bridge.mastheadConfig {
+                if !configuration.hostRendersMasthead, let config = bridge.mastheadConfig {
                     GlassMastheadView(config: config)
                         .contentShape(Capsule())
                         .onLongPressGesture(minimumDuration: 0.6) {
@@ -478,6 +478,13 @@ private struct AgentWebViewRepresentable: UIViewControllerRepresentable {
 
     func makeUIViewController(context: Context) -> AgentWebViewController {
         let config = WKWebViewConfiguration()
+        bridge.hostRendersMasthead = configuration.hostRendersMasthead
+        if configuration.hostRendersMasthead {
+            config.userContentController.addUserScript(WKUserScript(
+                source: "window.__ripulHostRendersMasthead = true;",
+                injectionTime: .atDocumentStart, forMainFrameOnly: true
+            ))
+        }
 
         // Inject the bridge script before any page JS runs
         let bridgeScript = WKUserScript(
@@ -906,7 +913,7 @@ extension AgentWebView {
 
         public func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             Self.removeInputAccessoryView(from: webView)
-            Self.injectSafeAreaInset(into: webView)
+            Self.injectSafeAreaInset(into: webView, hostRendersMasthead: bridge.hostRendersMasthead)
             Self.lockTabsHeight(in: webView)
             webView.evaluateJavaScript(PerfSwitch.pageMotionScript, completionHandler: nil)
             Task { @MainActor in
@@ -934,13 +941,13 @@ extension AgentWebView {
             }
         }
 
-        private static func injectSafeAreaInset(into webView: WKWebView) {
+        private static func injectSafeAreaInset(into webView: WKWebView, hostRendersMasthead: Bool) {
             // The row the native bar occupies in the OWNING window — a corner
             // camera (iPhone Duo open) pulls it above the rectangular inset.
             let clearance = webView.window.map { WindowTopChromeLayout.clearance(for: $0) }
                 ?? WindowTopChromeClearance(top: 54, safeTop: 54)
             let insetTop = clearance.top
-            let totalHeight = Int(clearance.contentClearance(below: 44))
+            let totalHeight = hostRendersMasthead ? 0 : Int(clearance.contentClearance(below: 44))
             let js = "document.documentElement.style.setProperty('--native-header-height', '\(totalHeight)px')"
             webView.evaluateJavaScript(js) { _, error in
                 if let error {

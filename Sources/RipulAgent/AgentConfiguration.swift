@@ -56,6 +56,9 @@ public struct AgentConfiguration {
     /// Use when the embedding container already reserves system safe areas and
     /// follows the keyboard. Keeps the web surface inside that content region.
     public var respectsContainerSafeArea: Bool = false
+    /// The host lays out `GlassMastheadView` from `bridge.mastheadConfig` in its
+    /// own header row. Suppress the web-view overlay and its CSS clearance.
+    public var hostRendersMasthead: Bool = false
     /// Height in CSS pixels to reserve at the bottom of the chat scroll area
     /// for the native chat input. Only used when `hideChatInput` is true.
     public var nativeChatInputHeight: Int = 0
