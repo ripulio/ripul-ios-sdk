@@ -984,6 +984,9 @@ public final class AgentBridge: NSObject {
 
     /// Masthead configuration from the web app (text, image, colors for native glass lozenge).
     public var mastheadConfig: MastheadConfig?
+    /// Resolved from the site's view context. nil leaves the host's default in place.
+    public var embeddedChatPresentation: EmbeddedChatPresentation?
+    @ObservationIgnored public var onEmbeddedChatPresentationChanged: (() -> Void)?
     /// Active voice profile from the site key, for settings UI that shows it.
     public var voiceProfile: VoiceProfileConfig?
     /// Glass style for the native chat input: "regular", "clear", or "identity".
@@ -1767,6 +1770,12 @@ public final class AgentBridge: NSObject {
                let data = try? JSONSerialization.data(withJSONObject: dict),
                let state = try? JSONDecoder().decode(RipulComposerState.self, from: data) {
                 composerActions.update(chatId: chatId, state: state)
+            }
+        case "embed:presentation":
+            let presentation = (dict["presentation"] as? String).flatMap(EmbeddedChatPresentation.init(rawValue:))
+            if embeddedChatPresentation != presentation {
+                embeddedChatPresentation = presentation
+                onEmbeddedChatPresentationChanged?()
             }
         case "chatInput:config":
             // Sent on every chat activation, i.e. mid-slide; almost always unchanged.

@@ -457,8 +457,8 @@ public struct AgentWebView: View {
                             bridge.wantsShowConsoleLogs = true
                         }
                         .padding(.horizontal, 12)
-                        .topChromeExclusion(topChrome)
-                        .padding(.top, topChrome.top + (config.topOffset ?? 4))
+                        .topChromeExclusion(configuration.respectsContainerSafeArea ? WindowTopChromeClearance() : topChrome)
+                        .padding(.top, (configuration.respectsContainerSafeArea ? 0 : topChrome.top) + (config.topOffset ?? 4))
                         .transition(.opacity.combined(with: .move(edge: .top)))
                 }
             }

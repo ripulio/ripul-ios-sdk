@@ -33,6 +33,7 @@ struct RipulViewContextField: Identifiable {
         .init(key: "promptCollectionId", title: "Prompt collection id", group: "Welcome screen", kind: .text),
         .init(key: "inlineThinkingFontSize", title: "Inline thinking font size", group: "Thinking", kind: .number),
         .init(key: "inlineThinkingMaxHeight", title: "Inline thinking max height", group: "Thinking", kind: .number),
+        .init(key: "embeddedChatPresentation", title: "Embedded chat presentation", group: "Appearance", kind: .choice(["fullscreen", "floating"])),
         .init(key: "chatBottomBuffer", title: "Chat bottom buffer", group: "Appearance", kind: .number),
         .init(key: "uiScale", title: "Ui scale", group: "Appearance", kind: .number),
         .init(key: "hideSendButton", title: "Hide send button", group: "Chat features", kind: .boolean),

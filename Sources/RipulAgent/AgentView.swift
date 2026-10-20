@@ -283,7 +283,7 @@ public struct AgentView<TopBar: View>: View {
                     // and split chat, including embedded native rows. Only extend
                     // vertically beneath the title/composer glass; CSS must not
                     // add a second side inset to this already-safe viewport.
-                    .ignoresSafeArea(.container, edges: .vertical)
+                    .ignoresSafeArea(.container, edges: configuration.respectsContainerSafeArea ? [] : .vertical)
                     .ignoresSafeArea(.keyboard)
                     // Slide the entire WKWebView up by the full keyboard frame height.
                     // Only applies when the native chat input is active — on sign-in and
@@ -291,7 +291,7 @@ public struct AgentView<TopBar: View>: View {
                     // (the browser scrolls the focused input into the visual viewport).
                     // Uses rawHeight (not safe-area-adjusted) because the web view ignores safe areas.
                     // Animation is driven by withAnimation in KeyboardObserver, not here.
-                    .offset(y: bridge.currentPageContext.showNativeChatInput && !bridge.suppressNativeChatInput && bridge.nativeChatInputFocused && keyboard.rawHeight > 0 ? -keyboard.rawHeight : 0)
+                    .offset(y: !configuration.respectsContainerSafeArea && bridge.currentPageContext.showNativeChatInput && !bridge.suppressNativeChatInput && bridge.nativeChatInputFocused && keyboard.rawHeight > 0 ? -keyboard.rawHeight : 0)
                 #endif
             }
 
@@ -600,9 +600,9 @@ public struct AgentView<TopBar: View>: View {
     /// measured input height + resting inset + an 8pt gap above the composer.
     private var nativeScrollerBottomInset: CGFloat {
         #if os(iOS)
-        let safeBottom = bridge.hostingWindow?.safeAreaInsets.bottom ?? 0
+        let safeBottom = configuration.respectsContainerSafeArea ? 0 : (bridge.hostingWindow?.safeAreaInsets.bottom ?? 0)
         return ComposerContentLayout.bottomClearance(inputHeight: chatInputMeasuredHeight,
-            navigationInset: chatNavigationInset, safeBottom: safeBottom, keyboardHeight: keyboard.height)
+            navigationInset: chatNavigationInset, safeBottom: safeBottom, keyboardHeight: configuration.respectsContainerSafeArea ? 0 : keyboard.height)
         #else
         return ComposerContentLayout.bottomClearance(inputHeight: chatInputMeasuredHeight,
             navigationInset: chatNavigationInset, safeBottom: 0)
@@ -624,7 +624,7 @@ public struct AgentView<TopBar: View>: View {
         guard measuredHeight > 0 else { return }
         let safeBottom: CGFloat
         #if os(iOS)
-        safeBottom = bridge.hostingWindow?.safeAreaInsets.bottom ?? 0
+        safeBottom = configuration.respectsContainerSafeArea ? 0 : (bridge.hostingWindow?.safeAreaInsets.bottom ?? 0)
         // Resting padding only — keyboard shift is handled natively via WKWebView offset
         #else
         safeBottom = 0

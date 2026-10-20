@@ -52,6 +52,10 @@ public struct AgentConfiguration {
     /// When true, the web app's chat input box is hidden so the native
     /// app can provide its own input widget. Chat input is shown by default.
     public var hideChatInput: Bool = false
+
+    /// Use when the embedding container already reserves system safe areas and
+    /// follows the keyboard. Keeps the web surface inside that content region.
+    public var respectsContainerSafeArea: Bool = false
     /// Height in CSS pixels to reserve at the bottom of the chat scroll area
     /// for the native chat input. Only used when `hideChatInput` is true.
     public var nativeChatInputHeight: Int = 0

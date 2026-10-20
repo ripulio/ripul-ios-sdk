@@ -754,3 +754,26 @@ The timeout value is sent as milliseconds in the MCP tool definition and the fra
 4. Grant calendar access when prompted
 5. Tap the sparkle button (bottom-right) to open the Ripul AI Agent
 6. Try: "What events do I have this week?" or "Create a meeting tomorrow at 2pm"
+
+
+### Embedded chat presentation (0.7.179+)
+
+A site's View Context → Appearance → **Embedded chat presentation** can choose
+`fullscreen` or `floating`. An unset value keeps the embedding app's default.
+The same preference controls website widgets; inline CMS blocks keep their page layout.
+
+For an iOS app, create one bridge and one `AgentView`, set
+`configuration.respectsContainerSafeArea = true`, and wrap its hosting controller
+in `EmbeddedAgentContainerController(content:bridge:defaultPresentation:)`.
+Attach the container as a child covering the parent's bounds, using standard
+UIKit containment. The container reserves the parent's system safe area and
+keyboard space, then resizes the existing child when the preference changes.
+Supply a close/back control in the hosted content. `onPresentationChanged` lets
+the app hide its tab bar for full screen and restore it for floating; optionally
+bind `floatingCornerRadius` to the app's shared theme.
+
+Presentation never changes the chat's identity, membership or conversation ID.
+Website widgets also retain the iframe and draft across presentation/viewport
+changes. Old native integrations keep their existing layout until they adopt
+the new container. View-context changes arrive when the host reloads/refetches
+its configuration; this setting does not add a configuration polling service.
