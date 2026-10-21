@@ -276,10 +276,7 @@ struct CmsAgGridBlockView: View {
                 .foregroundColor(runtime.theme.textSecondary)
                 .padding(12)
         case .error(let message):
-            Label(message, systemImage: "exclamationmark.triangle")
-                .font(.footnote)
-                .foregroundColor(runtime.theme.resolve("color.error") ?? .red)
-                .padding(12)
+            CmsQueryErrorView(message: message, querySlug: querySlug)
         case .ok(let result):
             // Configured columns + every unconfigured schema column appended
             // (web parity — see resolvedColumns). No columns configured at all

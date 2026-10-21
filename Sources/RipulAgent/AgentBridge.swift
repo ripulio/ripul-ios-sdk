@@ -142,7 +142,12 @@ public final class AgentBridge: NSObject {
     /// Set to true to request the Plan Review screen. AgentView observes this
     /// and presents the sheet, then resets the flag.
     public var wantsShowPlanReview = false
-    public var sessions: [ChatSession] = ChatSession.loadCached() { didSet { sessionsStream.send(sessions) } }
+    public var sessions: [ChatSession] = ChatSession.loadCached() {
+        didSet {
+            receiveHumanReplyActivity(sessions)
+            sessionsStream.send(sessions)
+        }
+    }
     /// Tab IDs of ephemeral commit-viewer sessions that should be excluded
     /// from the sessions list. Managed by CommitsScreen (insert on open)
     /// and AgentScreen (remove on back-nav / close).

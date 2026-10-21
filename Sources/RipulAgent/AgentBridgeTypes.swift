@@ -82,6 +82,8 @@ public struct ChatSession: Identifiable, Equatable, Codable {
     /// Latest human reply's author, omitted when this account spoke last.
     /// Agent and tool messages do not replace it. Only group rows show it.
     public var latestReplyAuthorName: String?
+    /// Time of the latest human message, including Group replies with no agent turn.
+    public var latestHumanReplyAt: Date?
     /// Live room activity only. Deliberately excluded from every persisted cache.
     public var typingNames: [String] = []
 
@@ -89,7 +91,7 @@ public struct ChatSession: Identifiable, Equatable, Codable {
         case id, sourceChatId, displayName, createdAt, remoteMachineName
         case provider, providerLabel, model, hostChatId, sizeBytes
         case displayNameSource, displayNameRenamedAt, projectName, gitBranch
-        case isSharedGuest, latestReplyAuthorName
+        case isSharedGuest, latestReplyAuthorName, latestHumanReplyAt
     }
 
     public init(
@@ -109,6 +111,7 @@ public struct ChatSession: Identifiable, Equatable, Codable {
         gitBranch: String? = nil,
         isSharedGuest: Bool? = nil,
         latestReplyAuthorName: String? = nil,
+        latestHumanReplyAt: Date? = nil,
         typingNames: [String] = []
     ) {
         self.id = id
@@ -127,6 +130,7 @@ public struct ChatSession: Identifiable, Equatable, Codable {
         self.gitBranch = gitBranch
         self.isSharedGuest = isSharedGuest
         self.latestReplyAuthorName = latestReplyAuthorName
+        self.latestHumanReplyAt = latestHumanReplyAt
         self.typingNames = typingNames
     }
 
@@ -178,6 +182,10 @@ public struct ChatSession: Identifiable, Equatable, Codable {
             gitBranch: item["gitBranch"] as? String,
             isSharedGuest: item["isSharedGuest"] as? Bool,
             latestReplyAuthorName: item["latestReplyAuthorName"] as? String,
+            latestHumanReplyAt: (item["latestHumanReplyAt"] as? NSNumber).flatMap {
+                $0.doubleValue.isFinite && $0.doubleValue > 0
+                    ? Date(timeIntervalSince1970: $0.doubleValue / 1000) : nil
+            },
             typingNames: item["typingNames"] as? [String] ?? []
         )
     }

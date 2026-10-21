@@ -53,6 +53,18 @@ public struct CmsBrowserView: View {
                 }
                 ForEach(definitions, id: \.id) { definition in
                     Section {
+                        // The site as a visitor arrives: its landing page,
+                        // inside its shell and design.
+                        Button {
+                            presented = PortalPresentation(
+                                cmsId: definition.id,
+                                pageSlug: "",
+                                visitorKey: visitorKeyByCms[definition.id]
+                            )
+                        } label: {
+                            Label("Open site", systemImage: "rectangle.portrait.and.arrow.forward")
+                        }
+                        .cmsInspectorID("CmsBrowser.openSite.\(definition.id)")
                         ForEach(definition.pages ?? []) { page in
                             pageRow(definition: definition, page: page)
                         }
@@ -63,7 +75,15 @@ public struct CmsBrowserView: View {
             }
         }
         .navigationTitle("CMS Pages")
-        .onAppear { loader.load() }
+        .onAppear {
+            loader.load()
+            // Developer convenience for simulator runs: open a site at once.
+            // `defaults write io.ripul.app io.ripul.cms.testBed.autoOpen "<cmsId>[|<pageSlug>]"`
+            if presented == nil, let auto = UserDefaults.standard.string(forKey: "io.ripul.cms.testBed.autoOpen"), !auto.isEmpty {
+                let parts = auto.split(separator: "|", maxSplits: 1).map(String.init)
+                presented = PortalPresentation(cmsId: parts[0], pageSlug: parts.count > 1 ? parts[1] : "", visitorKey: nil)
+            }
+        }
         .portalCover(item: $presented) { portal in
             CmsPageView(
                 cmsId: portal.cmsId,

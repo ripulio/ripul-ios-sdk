@@ -81,6 +81,7 @@ struct SessionFamilies: Equatable {
         isPinned: (UnifiedSession) -> Bool = { _ in false },
         recency: (UnifiedSession) -> Int,
         mustShow: (UnifiedSession) -> Bool = { _ in false },
+        heldOrder: [String]? = nil,
         placedUnder: (UnifiedSession) -> String? = { _ in nil }
     ) -> SessionFamilies {
         let pinned = sessions.map(isPinned)
@@ -167,7 +168,16 @@ struct SessionFamilies: Equatable {
             }
         }
         heads.forEach(lift)
+        // Compare siblings only, so freezing order never separates a family.
+        let heldRanks = Dictionary((heldOrder ?? []).enumerated().map { ($0.element, $0.offset) }, uniquingKeysWith: min)
+        func heldComparison(_ a: Int, _ b: Int) -> Bool? {
+            guard heldOrder != nil else { return nil }
+            let ra = heldRanks[sessions[a].id] ?? Int.max
+            let rb = heldRanks[sessions[b].id] ?? Int.max
+            return ra == rb ? nil : ra < rb
+        }
         heads.sort { a, b in
+            if let held = heldComparison(a, b) { return held }
             if pinned[a] != pinned[b] { return pinned[a] }
             if recencyOfFamily[a] != recencyOfFamily[b] { return recencyOfFamily[a] > recencyOfFamily[b] }
             return lastUsedOfFamily[a] > lastUsedOfFamily[b]
@@ -195,7 +205,8 @@ struct SessionFamilies: Equatable {
             if level > 0 { depth[session.id] = min(level, deepest) }
 
             let started = children[index].sorted { a, b in
-                recencyOfFamily[a] != recencyOfFamily[b] ? recencyOfFamily[a] > recencyOfFamily[b] : lastUsedOfFamily[a] > lastUsedOfFamily[b]
+                if let held = heldComparison(a, b) { return held }
+                return recencyOfFamily[a] != recencyOfFamily[b] ? recencyOfFamily[a] > recencyOfFamily[b] : lastUsedOfFamily[a] > lastUsedOfFamily[b]
             }
             guard !started.isEmpty else { return 0 }
 

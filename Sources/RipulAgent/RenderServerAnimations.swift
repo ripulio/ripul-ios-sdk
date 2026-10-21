@@ -83,20 +83,14 @@ struct RenderServerPulsingSymbol: View {
 
 /// The most frames a second a turn-long loop asks the render server for.
 ///
-/// They are slow decorations: a six-second glow, a two-second shimmer, a pulse.
-/// Left alone they are drawn at the display's own rate, 120 a second on a
-/// ProMotion iPhone (the app opts in with CADisableMinimumFrameDurationOnPhone),
-/// for as long as a turn runs. The render server's load follows the rate. On a
-/// simulator, which draws 60 a second, with the glow and shimmer running
-/// (8 October 2026): no limit 33% of a core, 30 a second 25-28%, 10 a second
-/// 10%, none running under 1%. Ten is Peter's choice of that morning.
-private let turnLoopFramesPerSecond: Float = 10
+/// Thirty frames a second keeps the composer's glow, shimmer and session-list
+/// pulse visually smooth while capping ProMotion's 120 Hz display rate during
+/// long turns.
+private let turnLoopFramesPerSecond: Float = 30
 
-/// The session list's running indicator gets a few more. It is the quickest of
-/// the loops, a small icon going from dim to full, and at 10 a second it moved
-/// in visible steps (Peter, 8 October 2026, who also asked for it to cycle at
-/// half the speed). It only runs while the list can be seen.
-private let listIndicatorFramesPerSecond: Float = 15
+/// The session list's running indicator shares the smooth 30 fps rate and
+/// only runs while the list can be seen.
+private let listIndicatorFramesPerSecond: Float = 30
 
 /// The shimmer on waiting text: a smooth sweep, then a rest, for as long as it waits.
 private let shimmerFramesPerSecond: Float = 30

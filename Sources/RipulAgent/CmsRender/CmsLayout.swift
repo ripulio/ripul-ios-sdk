@@ -8,10 +8,18 @@ import AppKit
 /// Swift twin of resolveLayout.ts — maps the CMS layout vocabulary
 /// (hug / fill / fixed, container frames, CSS-ish size values) onto SwiftUI.
 enum CmsCss {
-    /// Parse a CSS length ("12px", "12", "1rem") to points. Percentages and
-    /// tokens return nil — callers fall back to natural sizing.
+    /// SPACING_SCALE in spacingTokens.ts.
+    static let spacingScale: [String: CGFloat] = [
+        "spacing.xs": 0.5, "spacing.sm": 1, "spacing.md": 2, "spacing.lg": 3, "spacing.xl": 6,
+    ]
+
+    /// Parse a CSS length ("12px", "12", "1rem", "spacing.md") to points.
+    /// Percentages and other tokens return nil — callers fall back to
+    /// natural sizing.
     static func points(_ value: String?) -> CGFloat? {
         guard var v = value?.trimmingCharacters(in: .whitespaces), !v.isEmpty else { return nil }
+        // Spacing tokens (spacingTokens.ts) resolve through theme.spacing (8).
+        if let multiple = spacingScale[v] { return multiple * 8 }
         var scale: CGFloat = 1
         if v.hasSuffix("px") { v = String(v.dropLast(2)) }
         else if v.hasSuffix("rem") { v = String(v.dropLast(3)); scale = 16 }

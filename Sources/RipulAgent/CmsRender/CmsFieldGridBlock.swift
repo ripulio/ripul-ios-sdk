@@ -106,10 +106,7 @@ struct CmsFieldGridBlockView: View {
                 .foregroundColor(.secondary)
                 .padding(12)
         case .error(let message):
-            Label(message, systemImage: "exclamationmark.triangle")
-                .font(.footnote)
-                .foregroundColor(.red)
-                .padding(12)
+            CmsQueryErrorView(message: message, querySlug: querySlug)
         case .ok(let result):
             // The form's cursor: the SHARED selection only (web parity —
             // picker mode seeds it; plain mode follows whoever selected).

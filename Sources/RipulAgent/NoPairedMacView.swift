@@ -35,6 +35,12 @@ public extension EnvironmentValues {
 public struct NoPairedMacView<Actions: View>: View {
     private let purpose: String
     private let actions: Actions
+    /// A Mac shared with this person's team whose owner has not shared this
+    /// screen's area with them, and the area's name ("the Dock"). The screen
+    /// has no Mac to work through, but "No Paired Mac" would send a team
+    /// member off to pair one; this says why instead.
+    private var withheldBy: String?
+    private var area = ""
     @State private var showingHelp = false
     @Environment(\.ripulSignedIn) private var signedIn
 
@@ -43,7 +49,34 @@ public struct NoPairedMacView<Actions: View>: View {
         self.actions = actions()
     }
 
+    /// Says a team Mac is there but this area of it is not shared, when
+    /// `macName` is set; otherwise the usual "No Paired Mac".
+    public func withheld(by macName: String?, area: String) -> Self {
+        var copy = self
+        copy.withheldBy = macName
+        copy.area = area
+        return copy
+    }
+
     public var body: some View {
+        if let withheldBy {
+            ContentUnavailableView {
+                Label {
+                    Text("Not Shared With Your Team").ripulEmptyStateTitle()
+                } icon: {
+                    Image(systemName: "lock")
+                }
+            } description: {
+                Text("\(withheldBy)'s owner hasn't shared \(area) with your team.")
+                    .ripulEmptyStateDescription()
+            }
+            .uiKitIdentifier("NoPairedMacView.withheld")
+        } else {
+            noPairedMac
+        }
+    }
+
+    private var noPairedMac: some View {
         ContentUnavailableView {
             Label {
                 HStack(spacing: 6) {

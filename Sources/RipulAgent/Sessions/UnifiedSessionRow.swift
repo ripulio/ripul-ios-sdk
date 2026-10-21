@@ -300,6 +300,8 @@ public struct UnifiedSessionRow: View {
         var best = liveLastActive(of: session)
         for started in startedChatsPutAway { best = max(best, liveLastActive(of: started)) }
         if let t = cachedLastActive { best = max(best, t) }
+        if let t = PendingQuestionStore.shared.latestMentionAt(anyOf: session.attentionKeys) { best = max(best, t) }
+        if let pendingAttention { best = max(best, Date(timeIntervalSince1970: pendingAttention.createdAt / 1000)) }
         return best
     }
 

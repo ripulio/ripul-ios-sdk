@@ -73,6 +73,21 @@ public enum CmsBlockRegistry {
         map["trailMap"] = { block, _ in AnyView(CmsTrailMapBlockView(block: block)) }
         map["featurePanel"] = { block, _ in AnyView(CmsFeaturePanelBlockView(block: block)) }
         map["stepProgress"] = { block, _ in AnyView(CmsStepProgressBlockView(block: block)) }
+        map["actionButton"] = { block, _ in AnyView(CmsActionButtonBlockView(block: block)) }
+        map["workspaceCard"] = { block, _ in AnyView(CmsWorkspaceCardBlockView(block: block)) }
+        map["notificationCentre"] = { block, _ in AnyView(CmsNotificationCentreBlockView(block: block)) }
+        map["userAccount"] = { block, _ in AnyView(CmsUserAccountBlockView(block: block)) }
+        map["pageTabs"] = { block, _ in AnyView(CmsPageTabsBlockView(block: block)) }
+        map["offerGrid"] = { block, _ in AnyView(CmsOfferGridBlockView(block: block)) }
+        map["planSummary"] = { block, _ in AnyView(CmsPlanSummaryBlockView(block: block)) }
+        map["varianceImpact"] = { block, _ in AnyView(CmsVarianceImpactBlockView(block: block)) }
+        map["reportLibrary"] = { block, _ in AnyView(CmsReportLibraryBlockView(block: block)) }
+        map["activityThreads"] = { block, _ in AnyView(CmsActivityThreadsBlockView(block: block)) }
+        map["fileLibrary"] = { block, _ in AnyView(CmsFileLibraryBlockView(block: block)) }
+        map["actionList"] = { block, _ in AnyView(CmsActionListBlockView(block: block)) }
+        map["rotaTeam"] = { block, _ in AnyView(CmsRotaTeamBlockView(block: block)) }
+        map["rotaBuilder"] = { block, _ in AnyView(CmsRotaBuilderBlockView(block: block)) }
+        map["resourceTimeline"] = { block, _ in AnyView(CmsResourceTimelineBlockView(block: block)) }
         return map
     }
 }
@@ -98,8 +113,12 @@ struct CmsBlockView: View {
     private var isSuppressed: Bool { block.hidden == true || excludedOnMobile }
     private var isSelected: Bool { runtime.selectedBlockId == block.id }
 
+    /// A Page tabs block has hidden it (its tab is closed) — in the designer
+    /// too, as on the web.
+    private var tabHidden: Bool { runtime.isTabHidden(block) }
+
     var body: some View {
-        if isSuppressed && !runtime.isDesignMode {
+        if (isSuppressed && !runtime.isDesignMode) || tabHidden {
             CmsBlockRegistry.render(block, axis: axis)
                 .frame(height: 0)
                 .clipped()
@@ -240,17 +259,36 @@ struct CmsBlockContainerView: View {
                                             fill: { runtime.fill($0) }, radius: { runtime.radius($0) }))
     }
 
+    /// Not on the page right now (hidden, off this device, or in a closed
+    /// tab), so drawn out of the stack's flow: mounted, so it keeps feeding
+    /// outputs and what it loaded, but taking no space or gap — the web
+    /// renders such blocks off-screen.
+    private func offstage(_ block: CmsBlock) -> Bool {
+        if runtime.isTabHidden(block) { return true }
+        guard !runtime.isDesignMode else { return false }
+        if block.hidden == true { return true }
+        if let on = block.visibleOn, !on.isEmpty, !on.contains("mobile") { return true }
+        return false
+    }
+
     @ViewBuilder
     private func stack(items: [CmsBlock], frame: CmsContainerFrame?) -> some View {
         let gap = frame?.gapPoints ?? 16
-        if frame?.stackAxis == .horizontal {
-            HStack(alignment: frame?.verticalAlignment ?? .top, spacing: gap) {
-                ForEach(items) { CmsBlockView(block: $0, axis: .horizontal) }
+        let shown = items.filter { !offstage($0) }
+        let away = items.filter(offstage)
+        Group {
+            if frame?.stackAxis == .horizontal {
+                HStack(alignment: frame?.verticalAlignment ?? .top, spacing: gap) {
+                    ForEach(shown) { CmsBlockView(block: $0, axis: .horizontal) }
+                }
+            } else {
+                VStack(alignment: frame?.horizontalAlignment ?? .leading, spacing: gap) {
+                    ForEach(shown) { CmsBlockView(block: $0, axis: .vertical) }
+                }
             }
-        } else {
-            VStack(alignment: frame?.horizontalAlignment ?? .leading, spacing: gap) {
-                ForEach(items) { CmsBlockView(block: $0, axis: .vertical) }
-            }
+        }
+        .background(alignment: .topLeading) {
+            ZStack { ForEach(away) { CmsBlockView(block: $0, axis: .vertical) } }
         }
     }
 

@@ -60,9 +60,79 @@ struct CmsKpiStripBlockView: View {
         }
     }
 
+    private var appearance: String { block.props.string("appearance") ?? "strip" }
+
+    /// Tiles and band: the fill (default the brand gradient) and whether text
+    /// goes light on it — brand tokens and gradients always, a solid colour by
+    /// its contrast (KpiStripBlock `onBrand`).
+    private var fill: (style: AnyShapeStyle, light: Bool) {
+        let token = block.props.string("tileBackground").flatMap { $0.isEmpty ? nil : $0 } ?? "color.gradient"
+        let style = runtime.fill(token) ?? AnyShapeStyle(runtime.theme.gradient)
+        if ["color.gradient", "color.primary", "color.accent"].contains(token) || token.contains("gradient(") {
+            return (style, true)
+        }
+        if let solid = runtime.color(token) { return (style, !CmsCss.isLight(solid)) }
+        return (style, true)
+    }
+
     var body: some View {
+        if appearance == "band" || appearance == "tiles" {
+            filled
+        } else {
+            strip
+        }
+    }
+
+    /// `band`: one filled panel, figures centred in equal cells, light rules
+    /// between them. `tiles`: each figure on its own filled card. Phones keep
+    /// up to three side by side, compact, as the web does.
+    private var filled: some View {
         let items = self.items
-        Group {
+        let fill = self.fill
+        let fg = fill.light ? runtime.theme.primaryContrast : runtime.theme.textPrimary
+        let muted = fill.light ? runtime.theme.primaryContrast.opacity(0.75) : runtime.theme.textSecondary
+        let rule = fill.light ? runtime.theme.primaryContrast.opacity(0.28) : runtime.theme.divider
+        let radius = max(runtime.theme.inputRadius, 10)
+        let cell = { (item: KpiItem) in
+            KpiTileView(
+                item: item, alignment: .center, frameAlignment: .center, responsive: shrinkToFit,
+                labelTypography: block.props.object("labelTypography"),
+                valueTypography: block.props.object("valueTypography"),
+                subtitleTypography: block.props.object("subtitleTypography"),
+                labelColor: typographyColor("labelTypography") ?? muted,
+                valueColor: typographyColor("valueTypography") ?? fg,
+                subtitleColor: typographyColor("subtitleTypography") ?? muted,
+                heavy: true
+            )
+        }
+        return Group {
+            if appearance == "band" {
+                HStack(spacing: 0) {
+                    ForEach(Array(items.enumerated()), id: \.offset) { index, item in
+                        if index > 0 { Rectangle().fill(rule).frame(width: 1) }
+                        cell(item).padding(.horizontal, 8).padding(.vertical, 2)
+                    }
+                }
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.vertical, 12)
+                .padding(.horizontal, 4)
+                .background(fill.style, in: RoundedRectangle(cornerRadius: radius, style: .continuous))
+                .cmsInspectorID("Cms.kpiStrip.band")
+            } else {
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: min(max(items.count, 1), 3)), spacing: 8) {
+                    ForEach(Array(items.enumerated()), id: \.offset) { _, item in
+                        cell(item)
+                            .padding(12)
+                            .background(fill.style, in: RoundedRectangle(cornerRadius: radius, style: .continuous))
+                    }
+                }
+            }
+        }
+    }
+
+    private var strip: some View {
+        let items = self.items
+        return Group {
             if !isRow {
                 VStack(alignment: alignment, spacing: gap) {
                     tiles(items, verticalDividers: false)
@@ -140,6 +210,8 @@ private struct KpiTileView: View {
     let labelColor: Color?
     let valueColor: Color?
     let subtitleColor: Color?
+    /// Tiles and band: the web's heavier value (800) and tighter label.
+    var heavy = false
 
     @State private var width: CGFloat = 0
 
@@ -152,12 +224,13 @@ private struct KpiTileView: View {
     // Authored size wins; else the fluid clamp; responsiveText off = the
     // web's static defaults (label 11, value h4 = 34, subtitle 12).
     private var labelFont: Font {
-        .system(size: CmsTypography.size(labelTypography) ?? (responsive ? fluid(9, 8, 0.01, 11) : 11),
-                weight: CmsTypography.weight(labelTypography) ?? .semibold)
+        .system(size: CmsTypography.size(labelTypography) ?? (heavy ? 9.5 : (responsive ? fluid(9, 8, 0.01, 11) : 11)),
+                weight: CmsTypography.weight(labelTypography) ?? (heavy ? .bold : .semibold))
     }
     private var valueFont: Font {
-        .system(size: CmsTypography.size(valueTypography) ?? (responsive ? fluid(16, 8.8, 0.05, 32) : 34),
-                weight: CmsTypography.weight(valueTypography) ?? .bold)
+        .system(size: CmsTypography.size(valueTypography)
+                    ?? (heavy ? (responsive ? fluid(18, 4, 0.17, 26) : 22) : (responsive ? fluid(16, 8.8, 0.05, 32) : 34)),
+                weight: CmsTypography.weight(valueTypography) ?? (heavy ? .heavy : .bold))
     }
     private var subtitleFont: Font {
         .system(size: CmsTypography.size(subtitleTypography) ?? (responsive ? fluid(10, 8, 0.012, 12) : 12),
@@ -169,7 +242,8 @@ private struct KpiTileView: View {
             if !item.label.isEmpty {
                 Text(item.label.uppercased())
                     .font(labelFont)
-                    .kerning(0.5)
+                    .kerning(heavy ? 0.6 : 0.5)
+                    .multilineTextAlignment(heavy ? .center : .leading)
                     .foregroundColor(labelColor ?? .secondary)
             }
             Text(item.value)

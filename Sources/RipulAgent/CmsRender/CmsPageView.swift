@@ -105,6 +105,9 @@ public struct CmsPageView: View {
                         showDiagnostics: $showDiagnostics
                     )
                 }
+                .overlay(alignment: .bottomTrailing) {
+                    CmsFloatingChatHost(runtime: loader.runtime)
+                }
                 .ripulSheet(isPresented: $showDiagnostics) {
                     CmsRuntimeDiagnosticsView(runtime: loader.runtime)
                 }
@@ -171,7 +174,11 @@ final class CmsPageLoader: ObservableObject {
 
     @Published var state: State = .idle
     /// Pages navigable in this session (visitor mode: public pages only).
-    private(set) var availablePages: [CmsPage] = []
+    private(set) var availablePages: [CmsPage] = [] {
+        didSet {
+            runtime.pageTitles = Dictionary(availablePages.map { ($0.slug, $0.title) }, uniquingKeysWith: { first, _ in first })
+        }
+    }
     /// The portal shell page (cms.shellPageId), when designated and visible.
     private(set) var shellPage: CmsPage?
     let runtime: CmsRuntime
@@ -182,6 +189,13 @@ final class CmsPageLoader: ObservableObject {
     /// Definition's designated shell id — kept so design edits can
     /// re-resolve the shell from the mutated pages tree.
     private var shellPageId: String?
+    /// Every page, auth-hidden ones included: a page's own shell may be one
+    /// the visitor can't route to (the shell is chrome, not content).
+    private var allPages: [CmsPage] = []
+    /// The visitor's design and the site's own shell, kept so design edits
+    /// (which work on the stored pages, as the web designer does) re-apply it.
+    private var activeDesign: CmsPortalDesign?
+    private var storedShellPageId: String?
     /// Visitor mode membership — kept so design edits re-filter page
     /// visibility with the same role context.
     private var membership: CmsPortalMembership?
@@ -197,7 +211,9 @@ final class CmsPageLoader: ObservableObject {
         self.runtime = CmsRuntime(cmsId: cmsId, client: self.client)
     }
 
-    func load(pageSlug: String?) {
+    func load(pageSlug requested: String?) {
+        // An empty slug opens the site at its landing page.
+        let pageSlug = requested?.isEmpty == true ? nil : requested
         if case .loading = state { return }
         if case .loaded = state { return }
         state = .loading
@@ -219,6 +235,13 @@ final class CmsPageLoader: ObservableObject {
                     client.siteKeyId = linked.id
                     client.siteKeyPublishable = linked.publishableKey
                 }
+                // The admin fetch worked: the caller owns the site and sees
+                // it as its designer does. Their member row, when they have
+                // one, gives the email the bell and account menu use.
+                self.runtime.canDesign = true
+                if let publishable = client.siteKeyPublishable {
+                    self.runtime.membership = try? await client.fetchPortalMembership(siteKey: publishable)
+                }
                 self.runtime.queryDefs = Dictionary(
                     uniqueKeysWithValues: (definition.queries ?? []).map { ($0.slug, $0) }
                 )
@@ -230,16 +253,29 @@ final class CmsPageLoader: ObservableObject {
                     (definition.cardViews ?? []).map { ($0.slug, $0) },
                     uniquingKeysWith: { first, _ in first }
                 )
-                let pages = definition.pages ?? []
+                self.runtime.mutationDefs = Dictionary(
+                    (definition.mutations ?? []).map { ($0.slug, $0) },
+                    uniquingKeysWith: { first, _ in first }
+                )
+                self.activeDesign = CmsPortalDesigns.chosen(cmsId: cmsId, designs: definition.portalConfig?.designs ?? [])
+                self.storedShellPageId = definition.shellPageId
+                let designed = CmsPortalDesigns.apply(
+                    pages: definition.pages ?? [],
+                    shellPageId: definition.shellPageId,
+                    landingPageId: definition.landingPageId,
+                    design: activeDesign
+                )
+                let pages = designed.pages
                 self.availablePages = pages
-                self.shellPageId = definition.shellPageId
-                self.shellPage = definition.shellPageId.flatMap { id in pages.first { $0.id == id } }
+                self.allPages = pages
+                self.shellPageId = designed.shellPageId
+                self.shellPage = designed.shellPageId.flatMap { id in pages.first { $0.id == id } }
                 // Design controller: the admin fetch succeeded, so the
                 // caller is the owner — wire the owner save path.
                 self.wireDesignController(CmsDesignController(
                     cmsId: cmsId, client: client, rawPages: fetched.rawPages
                 ))
-                let landing = definition.landingPageId.flatMap { id in pages.first { $0.id == id } }
+                let landing = designed.landingPageId.flatMap { id in pages.first { $0.id == id } }
                 let page = pageSlug.flatMap { slug in pages.first { $0.slug == slug } } ?? landing ?? pages.first
                 if let page {
                     self.present(page, animated: false)
@@ -307,6 +343,8 @@ final class CmsPageLoader: ObservableObject {
             client.siteKeyId = nil
         }
         self.membership = membership
+        runtime.membership = membership
+        runtime.canDesign = membership?.canDesign ?? false
 
         struct VisitorConfig: Codable {
             struct Cms: Codable {
@@ -317,9 +355,11 @@ final class CmsPageLoader: ObservableObject {
                 var landingPageId: String?
                 var columnViews: [CmsColumnView]?
                 var cardViews: [CmsCardView]?
+                var mutations: [CmsMutationDef]?
             }
             var cmsDefinitionId: String?
             var cms: Cms?
+            var portalConfig: CmsPortalConfig?
         }
         guard let config = try? JSONDecoder().decode(VisitorConfig.self, from: configData),
               let cms = config.cms else {
@@ -339,15 +379,28 @@ final class CmsPageLoader: ObservableObject {
             (cms.cardViews ?? []).map { ($0.slug, $0) },
             uniquingKeysWith: { first, _ in first }
         )
-        let allPages = cms.pages ?? []
+        runtime.mutationDefs = Dictionary(
+            (cms.mutations ?? []).map { ($0.slug, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        activeDesign = CmsPortalDesigns.chosen(cmsId: cmsId, designs: config.portalConfig?.designs ?? [])
+        storedShellPageId = cms.shellPageId
+        let designed = CmsPortalDesigns.apply(
+            pages: cms.pages ?? [],
+            shellPageId: cms.shellPageId,
+            landingPageId: cms.landingPageId,
+            design: activeDesign
+        )
+        let allPages = designed.pages
         let visible = allPages.filter { CmsPageVisibility.canView($0, membership: membership) }
         availablePages = visible
-        shellPageId = cms.shellPageId
+        self.allPages = allPages
+        shellPageId = designed.shellPageId
         // The shell is CHROME, not routable content — resolve it from ALL
         // pages. Its own auth flag doesn't gate it (the web router renders
         // the shell for every visitor and gates only the routed pages;
         // WAC's shell page is auth-defaulted and was silently dropped here).
-        shellPage = cms.shellPageId.flatMap { id in allPages.first { $0.id == id } }
+        shellPage = designed.shellPageId.flatMap { id in allPages.first { $0.id == id } }
         // Delegated design: a member with canDesign edits through the
         // per-site design endpoint. The pages go to the controller RAW (the
         // embedded config is the complete pages array — the save replaces
@@ -363,7 +416,7 @@ final class CmsPageLoader: ObservableObject {
                 delegatedSiteKey: publishableKey
             ))
         }
-        let landing = cms.landingPageId.flatMap { id in visible.first { $0.id == id } }
+        let landing = designed.landingPageId.flatMap { id in visible.first { $0.id == id } }
         if let pageSlug {
             if let page = visible.first(where: { $0.slug == pageSlug }) {
                 present(page, animated: false)
@@ -404,8 +457,15 @@ final class CmsPageLoader: ObservableObject {
     /// runtime state survive — the web's optimistic local update reading.
     private func designPagesDidChange() {
         guard let controller = designController else { return }
-        let typed = controller.typedPages
-        shellPage = shellPageId.flatMap { id in typed.first { $0.id == id } }
+        let designed = CmsPortalDesigns.apply(
+            pages: controller.typedPages, shellPageId: storedShellPageId,
+            landingPageId: nil, design: activeDesign
+        )
+        let typed = designed.pages
+        allPages = typed
+        if let current = shellPage?.id {
+            shellPage = typed.first { $0.id == current }
+        }
         if visitorSiteKey != nil {
             availablePages = typed.filter { CmsPageVisibility.canView($0, membership: membership) }
         } else {
@@ -431,7 +491,16 @@ final class CmsPageLoader: ObservableObject {
     /// up, so nav drawers and their edge-swipe registrations persist). The
     /// shell itself (or no shell) renders standalone.
     private func present(_ page: CmsPage, animated: Bool) {
-        if let shell = shellPage, page.id != shell.id {
+        // PortalPageView's layoutShell: none when the page hides it, else the
+        // page's own shell, else the site's.
+        let shell: CmsPage? = page.hideShell == true ? nil
+            : page.shellPageId.flatMap { id in allPages.first { $0.id == id } }
+                ?? shellPageId.flatMap { id in allPages.first { $0.id == id } }
+        if shell?.id != shellPage?.id {
+            shellPage = shell
+            runtime.outletPage = nil
+        }
+        if let shell, page.id != shell.id {
             applyPageContext(page)
             if isShowingShell {
                 if animated {

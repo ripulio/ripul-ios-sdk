@@ -24,7 +24,92 @@ public struct RipulDepartmentHost: Identifiable, Codable, Hashable {
     public let teamId: String
     public let teamName: String
     public let role: String
+    /// What this person's role may use of the Mac beyond chats: area → "view" or "control".
+    public var access: [String: String]? = nil
+    /// Every role's grants. Sent only to the Mac's own owner, who sets them.
+    public var sharing: RipulSharedMacAccess? = nil
     public var id: String { ownerId + ":" + machineId }
+}
+
+/// What the owner of a shared Mac lets each team role use beyond its chats.
+/// A team's owners count as admins. An area that is absent is off.
+public struct RipulSharedMacAccess: Codable, Hashable {
+    public var member: [String: String]
+    public var admin: [String: String]
+
+    public subscript(role: RipulMacRole) -> [String: String] {
+        get { role == .admin ? admin : member }
+        set { if role == .admin { admin = newValue } else { member = newValue } }
+    }
+}
+
+public enum RipulMacRole: String, CaseIterable, Identifiable {
+    case member, admin
+    public var id: String { rawValue }
+    public var label: String { self == .admin ? "Admins" : "Members" }
+}
+
+public enum RipulMacAreaLevel: String, CaseIterable, Identifiable {
+    case off, view, control
+    public var id: String { rawValue }
+}
+
+/// One part of a shared Mac its owner can let a team use. Kept in step with
+/// `MAC_AREAS` in the web app's `src/shared/sharedMacAccess.ts`, which a test
+/// there checks: same ids, same order, the same areas with a view level.
+public struct RipulMacArea: Identifiable, Hashable {
+    public let id: String
+    public let label: String
+    public let icon: String
+    /// What View gives; nil for an area that is only on or off.
+    public let view: String?
+    public let control: String
+
+    public var levels: [RipulMacAreaLevel] { view == nil ? [.off, .control] : [.off, .view, .control] }
+
+    public func summary(_ level: RipulMacAreaLevel) -> String {
+        switch level {
+        case .off: return "Not shared"
+        case .view: return view ?? control
+        case .control:
+            guard let view else { return control }
+            return "\(view). \(control)"
+        }
+    }
+
+    public func levelLabel(_ level: RipulMacAreaLevel) -> String {
+        switch level {
+        case .off: return "Off"
+        case .view: return "View"
+        case .control: return view == nil ? "On" : "Control"
+        }
+    }
+
+    public static let all: [RipulMacArea] = [
+        .init(id: "screen", label: "Screen", icon: "display", view: "Watch the screen and its windows", control: "Use the mouse and keyboard"),
+        .init(id: "dock", label: "Dock", icon: "dock.rectangle", view: "See the apps in the Dock", control: "Open, quit and rearrange apps"),
+        .init(id: "processes", label: "Processes", icon: "cpu", view: "See what is running", control: "Quit processes"),
+        .init(id: "tabs", label: "Browser tabs", icon: "macwindow.on.rectangle", view: "See the Mac's browser tabs", control: "Open and drive tabs"),
+        .init(id: "files", label: "Files", icon: "folder", view: "Browse and read files", control: "Change files"),
+        .init(id: "terminal", label: "Terminal", icon: "terminal", view: nil, control: "Run commands in a shell"),
+        .init(id: "repos", label: "Repos", icon: "arrow.triangle.branch", view: "See repos, branches and commits", control: "Clone, switch branches and push"),
+        .init(id: "scripts", label: "Scripts", icon: "scroll", view: "See the scripts", control: "Run, change and delete scripts"),
+        .init(id: "devices", label: "Phones and simulators", icon: "iphone", view: "See devices and their screens", control: "Install, launch and touch"),
+        .init(id: "trainyard", label: "Trainyard", icon: "tram.fill", view: "See builds and holds", control: "Request, hold and force builds"),
+        .init(id: "system", label: "System", icon: "gauge.with.dots.needle.33percent", view: "See alerts, disk and system details", control: "Clear temporary files"),
+    ]
+
+    /// The area a recorded command or remote action belongs to, for the activity list.
+    static func area(of command: String) -> RipulMacArea? {
+        let prefixes: [(String, String)] = [
+            ("dock:", "dock"), ("processes:", "processes"), ("screen:", "screen"), ("mirror:", "screen"),
+            ("liveview:", "devices"), ("bridge:", "devices"), ("trainyard:", "trainyard"), ("script:", "scripts"),
+            ("alerts:", "system"), ("agent:writeFile", "files"), ("agent:repo", "repos"), ("agent:git", "repos"),
+            ("agent:script", "scripts"), ("agent:jobControl", "terminal"),
+        ]
+        guard let id = prefixes.first(where: { command.hasPrefix($0.0) })?.1 else { return nil }
+        return all.first { $0.id == id }
+    }
 }
 
 public struct RipulDepartmentActivity: Codable, Hashable {
@@ -47,7 +132,9 @@ public struct RipulDepartmentActivity: Codable, Hashable {
         case "agent:setWorkingDirectory": return "Changed working folder"
         case "chat:share": return "Shared a chat with the team"
         case "chat:unshare": return "Made a chat private"
-        default: return "Updated the host"
+        default:
+            if let area = RipulMacArea.area(of: command) { return "Used \(area.label)" }
+            return "Updated the host"
         }
     }
 }
@@ -291,6 +378,16 @@ public final class RipulTeamsClient {
 
     public func shareHost(teamId: String, machineId: String) async throws {
         _ = try await send("POST", "api/v1/teams/\(encode(teamId))/hosts", body: ["machineId": machineId])
+    }
+
+    /// Set what one team role may use of a Mac beyond its chats. Only the
+    /// Mac's own owner may; the server says so to anyone else.
+    public func setHostAccess(teamId: String, machineId: String, role: RipulMacRole,
+                              access: [String: String]) async throws -> RipulSharedMacAccess {
+        let json = try await send("PUT", "api/v1/teams/\(encode(teamId))/hosts/access",
+                                  body: ["machineId": machineId, "role": role.rawValue, "access": access])
+        return try JSONDecoder().decode(RipulSharedMacAccess.self,
+                                        from: JSONSerialization.data(withJSONObject: json["sharing"] ?? [:]))
     }
 
     public func removeHost(teamId: String, host: RipulDepartmentHost) async throws {

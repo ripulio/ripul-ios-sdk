@@ -204,6 +204,9 @@ public struct RipulAgentConsole: View {
         ), onDismiss: { navigation.onThemeReviewDismiss?() }) {
             ThemePublishEntryScreen(baseURL: configuration.baseURL, tokenProvider: { authStore.token })
         }
+        #if DEBUG || RIPUL_DEVELOPER_BUILD || RIPUL_DEVELOPER_TOOLS
+        .modifier(SiteSwitchSheet(bridge: bridge, baseURL: configuration.baseURL, tokenProvider: { authStore.token }))
+        #endif
         .ripulSheet(isPresented: $showProfile) {
             NavigationStack {
                 RipulProfileScreen(

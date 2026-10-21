@@ -138,7 +138,11 @@ struct CmsSimpleCalendarBlockView: View {
         // runtime across visits — before falling back to author defaults.
         if let parameterId = block.props.string("parameterId"), !parameterId.isEmpty,
            let saved = runtime.parameters[parameterId]?.objectValue,
-           let op = saved.string("operator").flatMap(CmsRangePredicateOperator.init(rawValue:)) {
+           let op = saved.string("operator").flatMap(CmsRangePredicateOperator.init(rawValue:)),
+           // A saved value with no dates is no choice at all (the web seeds
+           // the default whenever the parameter holds none).
+           saved.string("start") != nil || saved.string("end") != nil
+               || ![.eq, .gt, .gte, .lt, .lte, .between].contains(op) {
             operatorValue = op
             selStart = saved.string("start").flatMap(CmsDatePredicate.date(fromIso:))
             selEnd = saved.string("end").flatMap(CmsDatePredicate.date(fromIso:))
@@ -451,15 +455,29 @@ struct CmsSimpleCalendarBlockView: View {
                         .font(.system(size: 11))
                 }
                 .foregroundColor(typographyColor("predicateTypography") ?? .primary)
+                .padding(.horizontal, lozengeFill == nil ? 0 : 10)
+                .frame(minHeight: 32)
+                .background {
+                    if let fill = lozengeFill {
+                        RoundedRectangle(cornerRadius: 6, style: .continuous).fill(fill)
+                    }
+                }
+                .overlay {
+                    if let border = lozengeBorder {
+                        RoundedRectangle(cornerRadius: 6, style: .continuous).strokeBorder(border)
+                    }
+                }
             }
 
             Spacer(minLength: 0)
 
             if operatorValue.needsDate {
-                dateChip(.start, value: selStart)
+                dateChip(.start, value: selStart, placeholder: operatorValue == .between ? "Start date" : "Pick a date")
                 if operatorValue == .between {
-                    Text("–").foregroundColor(typographyColor("predicateTypography") ?? .secondary)
-                    dateChip(.end, value: selEnd ?? selStart)
+                    Text("and")
+                        .font(typographyFont("predicateTypography", base: 13, weight: .regular))
+                        .foregroundColor(typographyColor("predicateTypography") ?? .secondary)
+                    dateChip(.end, value: selEnd, placeholder: "End date")
                 }
             }
 
@@ -482,19 +500,27 @@ struct CmsSimpleCalendarBlockView: View {
         var id: String { rawValue }
     }
 
-    private func dateChip(_ target: DateChipTarget, value: Date?) -> some View {
+    /// The block's pill colours (`lozengeBackground` / `lozengeBorderColor`,
+    /// SimpleCalendarBlock's LozengeColors): a slim row on a coloured band
+    /// draws translucent pills so its light text reads.
+    private var lozengeFill: Color? { runtime.color(block.props.string("lozengeBackground")) }
+    private var lozengeBorder: Color? { runtime.color(block.props.string("lozengeBorderColor")) }
+
+    private func dateChip(_ target: DateChipTarget, value: Date?, placeholder: String) -> some View {
         let typo = block.props.object("dateDropdownTypography")
         let authored = runtime.color(typo?.string("color"))
         let textColor = authored ?? (value != nil ? runtime.theme.textPrimary : runtime.theme.textSecondary)
         let font = Font.system(size: CmsTypography.size(typo) ?? 14,
                                weight: CmsTypography.weight(typo) ?? .regular)
         let formatter = DateFormatter()
-        formatter.dateFormat = "MMM d, yyyy"
+        // Phones drop this year's year, as the web's short chips do.
+        let thisYear = value.map { calendar.component(.year, from: $0) == calendar.component(.year, from: Date()) } ?? false
+        formatter.dateFormat = thisYear ? "MMM d" : "MMM d, yyyy"
         return Button {
             dateChipTarget = target
         } label: {
             HStack(spacing: 4) {
-                Text(value.map { formatter.string(from: $0) } ?? "Pick a date")
+                Text(value.map { formatter.string(from: $0) } ?? placeholder)
                     .font(font)
                     .foregroundColor(textColor)
                     .lineLimit(1)
@@ -506,11 +532,11 @@ struct CmsSimpleCalendarBlockView: View {
             .frame(minHeight: 32)
             .background(
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(runtime.theme.paper)
+                    .fill(lozengeFill ?? runtime.theme.paper)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .strokeBorder(runtime.theme.divider)
+                    .strokeBorder(lozengeBorder ?? runtime.theme.divider)
             )
             .contentShape(Rectangle())
         }
@@ -621,6 +647,12 @@ struct CmsSimpleCalendarBlockView: View {
             selStart = calendar.startOfDay(for: now)
         case "firstOfMonth":
             selStart = calendar.dateInterval(of: .month, for: now)?.start
+            // Range mode: the month's last day as the end, so the default is
+            // a full month that fires at once (SimpleCalendarBlock initialEnd).
+            if (block.props.string("selectionMode") ?? "single") != "single",
+               let interval = calendar.dateInterval(of: .month, for: now) {
+                selEnd = calendar.date(byAdding: .day, value: -1, to: interval.end).map { calendar.startOfDay(for: $0) }
+            }
         case "lastOfMonth":
             if let interval = calendar.dateInterval(of: .month, for: now) {
                 selStart = calendar.date(byAdding: .day, value: -1, to: interval.end).map { calendar.startOfDay(for: $0) }

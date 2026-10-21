@@ -57,4 +57,66 @@ final class ModelIdentityParityTests: XCTestCase {
         XCTAssertEqual(ModelIdentity.resolve(modelId: "gemini-2.5-pro")?.label, "Gemini 2.5 Pro")
         XCTAssertEqual(ModelIdentity.resolve(modelId: "antigravity-cli-raw-gemini-3.5-flash")?.label, "Gemini 3.5 Flash")
     }
+
+    func testUnmergedAntigravitySessionResolvesProviderAndModelInUnifiedSessionBuild() {
+        let now = Date()
+        let remote = RemoteSessionInfo(
+            id: "chat_agy",
+            sourceChatId: "chat_agy",
+            displayName: "Antigravity task",
+            createdAt: now,
+            lastModified: nil,
+            isRunning: false,
+            projectName: nil,
+            cwd: nil,
+            gitBranch: nil,
+            messageCount: nil,
+            provider: nil,
+            providerLabel: nil,
+            model: nil,
+            hostChatId: "chat_agy",
+            machineId: "mac-1",
+            teamVisibility: nil,
+            creatorUserId: nil,
+            startedBy: nil
+        )
+        let localTab = ChatSession(
+            id: "chat_agy",
+            sourceChatId: "chat_agy",
+            displayName: "Antigravity task",
+            createdAt: now,
+            provider: "antigravity-cli",
+            providerLabel: "Antigravity",
+            model: "antigravity-cli-raw-gemini-4-argon",
+            hostChatId: "chat_agy"
+        )
+        let built = UnifiedSession.build(
+            from: [remote],
+            localSessions: [localTab],
+            machineNames: ["chat_agy": "Mac"]
+        )
+        XCTAssertEqual(built.first?.provider, "antigravity-cli")
+        XCTAssertEqual(built.first?.providerLabel, "Antigravity")
+        XCTAssertEqual(built.first?.model, "antigravity-cli-raw-gemini-4-argon")
+        XCTAssertEqual(built.first?.resolvedProvider?.id, "antigravity")
+
+        // When only the generic CLI default model id is set, modelDisplayName returns nil
+        // so the row falls back to the provider label ("Antigravity") instead of raw id.
+        let genericRow = built.first?.withModel("antigravity-cli-raw-default")
+        XCTAssertNil(genericRow?.modelDisplayName)
+
+        // When a scanned row has nil provider/model and its matched tab later supplies them,
+        // tabFactsDiffer and adoptingTabFacts fill in the missing fields without overruling host values.
+        let bareScanned = UnifiedSession.build(
+            from: [remote],
+            localSessions: [],
+            machineNames: ["chat_agy": "Mac"]
+        )[0]
+        XCTAssertTrue(bareScanned.tabFactsDiffer(from: localTab))
+        let adopted = bareScanned.adoptingTabFacts(localTab)
+        XCTAssertEqual(adopted.provider, "antigravity-cli")
+        XCTAssertEqual(adopted.providerLabel, "Antigravity")
+        XCTAssertEqual(adopted.model, "antigravity-cli-raw-gemini-4-argon")
+        XCTAssertFalse(adopted.tabFactsDiffer(from: localTab))
+    }
 }

@@ -668,13 +668,32 @@ struct RipulTeamDetailScreen: View {
         .ripulTeamsErrorAlert($model.errorMessage)
     }
 
+    /// "Chats, Dock and Screen": what the team has of a Mac, in one line.
+    /// The owner reads what members have; anyone else, what they have.
+    static func sharedSummary(_ host: RipulDepartmentHost, isOwner: Bool) -> String {
+        let access = (isOwner ? host.sharing?.member : host.access) ?? [:]
+        let names = ["Chats"] + RipulMacArea.all.filter { access[$0.id] != nil }.map(\.label)
+        let list = names.count > 1 ? names.dropLast().joined(separator: ", ") + " and " + names.last! : names[0]
+        return isOwner ? "Members: \(list)" : "You can use: \(list)"
+    }
+
     private var hostsSection: some View {
         Section {
             ForEach(model.hosts) { host in
                 NavigationLink {
-                    RipulDepartmentActivityScreen(client: model.client, host: host)
+                    RipulSharedMacScreen(client: model.client, host: host, isOwner: host.ownerId == model.me?.userId) {
+                        await model.load()
+                    }
                 } label: {
-                    Label(host.displayName, systemImage: "desktopcomputer")
+                    Label {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(host.displayName).ripulText()
+                            Text(Self.sharedSummary(host, isOwner: host.ownerId == model.me?.userId))
+                                .font(.ripul(.caption)).foregroundStyle(.ripul(.textSecondary))
+                        }
+                    } icon: {
+                        Image(systemName: "desktopcomputer")
+                    }
                 }
                 .swipeActions {
                     if model.myRole?.canManage == true {
@@ -703,7 +722,7 @@ struct RipulTeamDetailScreen: View {
         } header: { RipulSectionHeader {
             Text("Shared Hosts")
         } } footer: { RipulSectionFooter {
-            Text("Accepted team members can start chats using each Mac's files, tools and coding account. Each person's chats are private until they share one with the team. Find shared Macs in Agents. Stopping sharing ends command and chat access within 30 seconds; accepted jobs can finish.")
+            Text("Accepted team members can start chats using each Mac's files, tools and coding account. Each person's chats are private until they share one with the team. Find shared Macs in Agents. A Mac's owner chooses what else of it the team can use: open the Mac to choose. Stopping sharing ends command and chat access within 30 seconds; accepted jobs can finish.")
         } }.ripulThemedListRows()
     }
 
@@ -1096,9 +1115,16 @@ extension View {
     }
 }
 @available(iOS 17.0, *)
-private struct RipulDepartmentActivityScreen: View {
+private struct RipulSharedMacScreen: View {
     let client: RipulTeamsClient
     let host: RipulDepartmentHost
+    /// The Mac is the signed-in person's: they choose what the team may use.
+    let isOwner: Bool
+    /// Called after a change is saved, so the list behind shows it.
+    let onChange: () async -> Void
+    @State private var sharing: RipulSharedMacAccess?
+    @State private var role: RipulMacRole = .member
+    @State private var saving = false
     @State private var activity: [RipulDepartmentActivity] = []
     @State private var errorMessage: String?
     @State private var loading = false
@@ -1110,6 +1136,7 @@ private struct RipulDepartmentActivityScreen: View {
                 Text("Runs on the Mac's configured coding account. Team members' requests are recorded below.")
                     .font(.ripul(.subheadline)).foregroundStyle(.ripul(.textSecondary))
             }.ripulThemedListRows()
+            if isOwner { chooseSection } else { yoursSection }
             Section(themed: "Recent Activity") {
                 if loading { ProgressView() }
                 else if activity.isEmpty { Text("No team activity yet.").foregroundStyle(.ripul(.textSecondary)) }
@@ -1125,10 +1152,101 @@ private struct RipulDepartmentActivityScreen: View {
             }.ripulThemedListRows()
         }.ripulThemedList()
         .navigationTitle(host.displayName)
-        .task { await load() }
+        .task {
+            if sharing == nil { sharing = host.sharing ?? RipulSharedMacAccess(member: [:], admin: [:]) }
+            await load()
+        }
         .refreshable { await load() }
         .ripulTeamsErrorAlert($errorMessage)
     }
+
+    /// The owner's switches: one role at a time, one row per area.
+    private var chooseSection: some View {
+        Section {
+            Picker("Role", selection: $role) {
+                ForEach(RipulMacRole.allCases) { Text($0.label).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .uiKitIdentifier("SharedMac.role")
+            LabeledContent {
+                Text("Always").foregroundStyle(.ripul(.textSecondary))
+            } label: {
+                Label("Chats", systemImage: "message")
+            }
+            ForEach(RipulMacArea.all) { area in
+                Picker(selection: level(area)) {
+                    ForEach(area.levels) { Text(area.levelLabel($0)).tag($0) }
+                } label: {
+                    Label {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(area.label).ripulText()
+                            Text(area.summary(level(area).wrappedValue))
+                                .font(.ripul(.caption)).foregroundStyle(.ripul(.textSecondary))
+                        }
+                    } icon: {
+                        Image(systemName: area.icon)
+                    }
+                }
+                .pickerStyle(.menu)
+                .disabled(saving)
+                .uiKitIdentifier("SharedMac.area")
+            }
+        } header: { RipulSectionHeader {
+            Text("What the Team Can Use")
+        } } footer: { RipulSectionFooter {
+            Text("Chats are always shared. Everything else is off until you turn it on. View lets \(role == .admin ? "admins" : "members") look; Control lets them act. A change applies from the next thing they do. Team owners count as admins.")
+        } }.ripulThemedListRows()
+    }
+
+    /// Anyone else sees what their role has, set by the Mac's owner.
+    private var yoursSection: some View {
+        Section {
+            LabeledContent {
+                Text("Always").foregroundStyle(.ripul(.textSecondary))
+            } label: {
+                Label("Chats", systemImage: "message")
+            }
+            ForEach(RipulMacArea.all) { area in
+                let held = RipulMacAreaLevel(rawValue: host.access?[area.id] ?? "") ?? .off
+                LabeledContent {
+                    Text(area.levelLabel(held)).foregroundStyle(.ripul(.textSecondary))
+                } label: {
+                    Label(area.label, systemImage: area.icon)
+                }
+            }
+        } header: { RipulSectionHeader {
+            Text("What You Can Use")
+        } } footer: { RipulSectionFooter {
+            Text("Set by the Mac's owner.")
+        } }.ripulThemedListRows()
+    }
+
+    private func level(_ area: RipulMacArea) -> Binding<RipulMacAreaLevel> {
+        Binding(
+            get: { RipulMacAreaLevel(rawValue: sharing?[role][area.id] ?? "") ?? .off },
+            set: { new in Task { await save(area, new) } }
+        )
+    }
+
+    private func save(_ area: RipulMacArea, _ level: RipulMacAreaLevel) async {
+        guard var next = sharing else { return }
+        let before = next
+        var access = next[role]
+        access[area.id] = level == .off ? nil : level.rawValue
+        next[role] = access
+        let asked = role
+        sharing = next
+        saving = true
+        defer { saving = false }
+        do {
+            sharing = try await client.setHostAccess(teamId: host.teamId, machineId: host.machineId, role: asked, access: access)
+            await onChange()
+        } catch {
+            sharing = before
+            errorMessage = error.localizedDescription
+        }
+    }
+
     private func load() async {
         loading = true
         defer { loading = false }

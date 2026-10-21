@@ -23,17 +23,26 @@ public struct CmsClientConfig {
     /// the customer backend's validation endpoint and authenticates the
     /// caller as that app's user (member id `<subPrefix>:<principalId>`).
     public var portalCredentialProvider: (() async -> [String: String]?)?
+    /// The signed-in person as the host app knows them (the web's
+    /// `auth.user`): the account avatar's initials and name, and the email the
+    /// bell's read records are kept under when the member lookup has none.
+    public var userName: String?
+    public var userEmail: String?
 
     public init(
         getToken: @escaping () async -> String?,
         baseUrl: String = RipulDomain.llmProxyURL,
         siteKeyId: String? = nil,
-        portalCredentialProvider: (() async -> [String: String]?)? = nil
+        portalCredentialProvider: (() async -> [String: String]?)? = nil,
+        userName: String? = nil,
+        userEmail: String? = nil
     ) {
         self.getToken = getToken
         self.baseUrl = baseUrl
         self.siteKeyId = siteKeyId
         self.portalCredentialProvider = portalCredentialProvider
+        self.userName = userName
+        self.userEmail = userEmail
     }
 }
 
@@ -55,6 +64,8 @@ public enum CmsClientError: Error, LocalizedError {
 
 public final class CmsClient {
     private let config: CmsClientConfig
+    public var userName: String? { config.userName.flatMap { $0.isEmpty ? nil : $0 } }
+    public var userEmail: String? { config.userEmail.flatMap { $0.isEmpty ? nil : $0 } }
 
     /// Site key threaded into query runs for RLS scoping. Without one, a
     /// Clerk-authed run has no site-key context and owner/site-scoped RLS
@@ -99,10 +110,16 @@ public final class CmsClient {
     /// but fetchDefinition is the authoritative source for rendering).
     public func listDefinitions() async throws -> [CmsRenderDefinition] {
         let data = try await request(path: "/admin/cms-definitions", method: "GET", body: nil)
-        struct ListResponse: Codable {
-            var cmsDefinitions: [CmsRenderDefinition]
+        // One site that fails to decode is left out rather than emptying the
+        // whole list (a numeric frame gap once hid every site).
+        struct Lossy: Decodable {
+            let value: CmsRenderDefinition?
+            init(from decoder: Decoder) throws { value = try? CmsRenderDefinition(from: decoder) }
         }
-        return try JSONDecoder().decode(ListResponse.self, from: data).cmsDefinitions
+        struct ListResponse: Decodable {
+            var cmsDefinitions: [Lossy]
+        }
+        return try JSONDecoder().decode(ListResponse.self, from: data).cmsDefinitions.compactMap(\.value)
     }
 
     /// Fetch the full definition (owner-scoped admin endpoint — the PoC
@@ -193,13 +210,59 @@ public final class CmsClient {
         return CmsQueryResult(rows: response.rows ?? [], schema: response.schema ?? [])
     }
 
+    /// Run a saved mutation by slug (`runSavedMutation` in
+    /// cmsDefinitionsService.ts). Returns the rows it changed; a refusal
+    /// throws with the server's message.
+    public func runSavedMutation(
+        cmsId: String,
+        mutationSlug: String,
+        params: [String: CmsJSON]? = nil
+    ) async throws -> Int {
+        var body: [String: CmsJSON] = [:]
+        if let siteKeyId {
+            body["siteKeyId"] = .string(siteKeyId)
+        }
+        if let params, !params.isEmpty {
+            body["params"] = .object(params)
+        }
+        let data = try await request(
+            path: "/v1/cms-definitions/\(encode(cmsId))/mutations/\(encode(mutationSlug))/run",
+            method: "POST",
+            body: body
+        )
+        struct RunResponse: Decodable {
+            var ok: Bool
+            var affectedRows: Int?
+            var error: String?
+        }
+        let response = try JSONDecoder().decode(RunResponse.self, from: data)
+        guard response.ok else {
+            throw CmsClientError.queryFailed(response.error ?? "Mutation failed")
+        }
+        return response.affectedRows ?? 0
+    }
+
+    /// Raw JSON call to an llm-proxy route a block owns (billing, files…),
+    /// with the same credentials as every other call.
+    public func json(_ path: String, method: String = "GET", body: [String: CmsJSON]? = nil) async throws -> CmsJSON {
+        let data = try await request(path: path, method: method, body: body)
+        return try JSONDecoder().decode(CmsJSON.self, from: data)
+    }
+
+    /// Raw bytes in or out of a block-owned route (file uploads and
+    /// downloads): the body goes as-is with its own content type.
+    public func raw(_ path: String, method: String = "GET", data: Data? = nil, contentType: String? = nil) async throws -> Data {
+        try await request(path: path, method: method, body: nil, rawBody: data, contentType: contentType)
+    }
+
     // MARK: - Internals
 
     private func encode(_ component: String) -> String {
         component.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? component
     }
 
-    private func request(path: String, method: String, body: [String: CmsJSON]?) async throws -> Data {
+    private func request(path: String, method: String, body: [String: CmsJSON]?,
+                         rawBody: Data? = nil, contentType: String? = nil) async throws -> Data {
         let urlString = config.baseUrl + path
         guard let url = URL(string: urlString) else {
             throw CmsClientError.badURL(urlString)
@@ -227,6 +290,9 @@ public final class CmsClient {
         if let body {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             request.httpBody = try JSONEncoder().encode(body)
+        } else if let rawBody {
+            request.setValue(contentType ?? "application/octet-stream", forHTTPHeaderField: "Content-Type")
+            request.httpBody = rawBody
         }
         let (data, response) = try await URLSession.shared.data(for: request)
         if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
@@ -238,8 +304,10 @@ public final class CmsClient {
 }
 
 /// Response of `GET /v1/site-key/me` — the caller's membership on a portal.
-public struct CmsPortalMembership: Codable {
+public struct CmsPortalMembership: Codable, Equatable {
     public var isMember: Bool
     public var role: String?
     public var canDesign: Bool?
+    /// The email the membership was matched on (SiteKeyMeResponse.email).
+    public var email: String?
 }

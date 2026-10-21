@@ -271,29 +271,35 @@ public struct UnifiedSession: Identifiable, Codable {
         return !Set(mergeKeys).isDisjoint(with: keys)
     }
 
-    /// True when this row has no scan behind it and its tab now reports a
-    /// provider or model the row lacks or disagrees with. Only an orphan-local
-    /// row qualifies: a scanned row's provider and model come from the host
-    /// and the tab must not overrule them.
+    /// True when this row's matched tab holds provider or model facts the row
+    /// should adopt. An orphan-local row has no scan behind it, so any tab
+    /// change applies; a scanned row only fills in fields the host omitted
+    /// (nil) and never lets the tab overrule a non-nil host value.
     public func tabFactsDiffer(from tab: ChatSession) -> Bool {
-        guard !titleFromScan, machineId == nil else { return false }
-        if let p = tab.provider, p != provider { return true }
-        if let l = tab.providerLabel, l != providerLabel { return true }
-        if let m = tab.model, m != model { return true }
+        if !titleFromScan && machineId == nil {
+            if let p = tab.provider, p != provider { return true }
+            if let l = tab.providerLabel, l != providerLabel { return true }
+            if let m = tab.model, m != model { return true }
+            return false
+        }
+        if provider == nil, tab.provider != nil { return true }
+        if providerLabel == nil, tab.providerLabel != nil { return true }
+        if model == nil, tab.model != nil { return true }
         return false
     }
 
     /// Copy of this row taking provider, provider label and model from its tab
-    /// where the tab has an opinion. Nil on the tab means "don't know", never
-    /// "none", so a known value on the row is kept.
+    /// where appropriate. For orphan-local rows the tab wins when non-nil; for
+    /// scanned rows the tab only fills in nil fields.
     public func adoptingTabFacts(_ tab: ChatSession) -> UnifiedSession {
-        UnifiedSession(
+        let isOrphan = !titleFromScan && machineId == nil
+        return UnifiedSession(
             id: id, title: title, lastUsed: lastUsed,
             hasKnownActivity: hasKnownActivity, gitBranch: gitBranch,
             messageCount: messageCount, projectName: projectName, projectPath: projectPath,
-            provider: tab.provider ?? provider,
-            providerLabel: tab.providerLabel ?? providerLabel,
-            model: tab.model ?? model,
+            provider: isOrphan ? (tab.provider ?? provider) : (provider ?? tab.provider),
+            providerLabel: isOrphan ? (tab.providerLabel ?? providerLabel) : (providerLabel ?? tab.providerLabel),
+            model: isOrphan ? (tab.model ?? model) : (model ?? tab.model),
             machineName: machineName, machineId: machineId,
             matchKeys: matchKeys, tags: tags, metadataKey: metadataKey,
             cachedIsOpen: cachedIsOpen,
@@ -450,6 +456,9 @@ public struct UnifiedSession: Identifiable, Codable {
     /// unchanged. nil when the host couldn't resolve a model.
     public var modelDisplayName: String? {
         guard let model, !model.isEmpty else { return nil }
+        if ProviderConstants.byModelId(model) != nil, ModelIdentity.resolve(modelId: model) == nil {
+            return nil
+        }
         return UnifiedSession.prettifyModelId(model)
     }
 
@@ -589,7 +598,7 @@ public struct UnifiedSession: Identifiable, Codable {
                 projectPath: r.cwd,
                 provider: r.provider ?? ripulMatch?.provider,
                 providerLabel: r.providerLabel ?? ripulMatch?.providerLabel,
-                model: r.model,
+                model: r.model ?? ripulMatch?.model,
                 machineName: machineNames[r.id] ?? machineNames[r.sourceChatId],
                 machineId: r.machineId,
                 matchKeys: rowKeys,

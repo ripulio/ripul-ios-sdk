@@ -2026,9 +2026,11 @@ public struct NativeChatInput: View {
     }
 
     // Send-to-agent button shown while a turn is running (when there's typed
-    // content). Routes onSubmit -> bridge.submitMessage -> __ripulSubmitMessage,
-    // which the web app FIFO-queues for CLI sessions (or injects as mid-run
-    // context for in-process agents). Lets users type-ahead without stopping.
+    // content). Routes onSubmit -> bridge.submitMessage -> __ripulSubmitMessage.
+    // The web app hands it to the running task at its next step where the agent
+    // can take one (steering, logging/utils/midTaskSend.ts), else FIFO-queues it
+    // for CLI sessions (or injects it as mid-run context for in-process agents).
+    // The composer action "After this task" is the explicit wait.
     private func sendButton(size: CGFloat, glassStyle: String?) -> some View {
         Button {
             dismissKeyboard()

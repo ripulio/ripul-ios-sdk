@@ -23,6 +23,7 @@ public struct ClaudeAccountsSettingsScreen: View {
                     refreshToken: refreshToken)
             }
         }.ripulThemedList()
+        .modifier(CodingAccountsListWidth())
         .navigationTitle("Claude accounts")
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)

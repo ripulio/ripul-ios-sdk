@@ -35,9 +35,7 @@ struct CmsSelectionMenuBlockView: View {
                 .font(.caption)
                 .foregroundColor(.secondary)
         case .error(let message):
-            Label(message, systemImage: "exclamationmark.triangle")
-                .font(.footnote)
-                .foregroundColor(.orange)
+            CmsQueryErrorView(message: message, querySlug: querySlug)
         case .ok(let result):
             if result.rows.isEmpty {
                 Text(emptyLabel)

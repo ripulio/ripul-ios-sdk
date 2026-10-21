@@ -126,6 +126,7 @@ final class GuestSessionListTests: XCTestCase {
             "provider": "claude-cli", "providerLabel": "Claude", "modelId": "claude-opus-5",
             "hostChatId": "cli_abc", "isSharedGuest": true, "projectName": "ripul", "gitBranch": "main",
             "latestReplyAuthorName": "Sandsend Retreats", "typingNames": ["George"],
+            "latestHumanReplyAt": 1_700_000_010_000.0,
         ]
         let session = try XCTUnwrap(ChatSession.fromWire(wire))
         XCTAssertEqual(session.model, "claude-opus-5")
@@ -135,9 +136,11 @@ final class GuestSessionListTests: XCTestCase {
         XCTAssertEqual(session.projectName, "ripul")
         XCTAssertEqual(session.gitBranch, "main")
         XCTAssertEqual(session.latestReplyAuthorName, "Sandsend Retreats")
+        XCTAssertEqual(session.latestHumanReplyAt, Date(timeIntervalSince1970: 1_700_000_010))
         XCTAssertEqual(session.typingNames, ["George"])
         let cached = try JSONDecoder().decode(ChatSession.self, from: JSONEncoder().encode(session))
         XCTAssertEqual(cached.latestReplyAuthorName, "Sandsend Retreats")
+        XCTAssertEqual(cached.latestHumanReplyAt, session.latestHumanReplyAt)
         XCTAssertTrue(cached.typingNames.isEmpty, "Typing must never survive a cached session")
         var ownReply = wire
         ownReply.removeValue(forKey: "latestReplyAuthorName")

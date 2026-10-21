@@ -153,41 +153,15 @@ struct CodexAccountSection: View {
     private func accountRow(_ account: CodexSavedAccount) -> some View {
         let isActive = account.id == state?.active
         let pending = state?.operation?.isPending == true && state?.operation?.accountId == account.id
-        return VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .center, spacing: 12) {
-                Image(systemName: isActive ? "checkmark.circle.fill" : "person.crop.circle")
-                    .font(.ripul(.title3))
-                    .foregroundStyle(isActive ? Color.accentColor : Color.ripul(.textSecondary))
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 6) {
-                        Text(account.name).font(.ripul(.body, weight: isActive ? .semibold : .regular))
-                            .foregroundStyle(.ripul(.text)).lineLimit(1).truncationMode(.middle)
-                        CodingAccountPlanBadge(usage: account.usage, plan: account.plan)
-                    }
-                    if account.name != account.email {
-                        Text(account.email).font(.ripul(.caption)).foregroundStyle(.ripul(.textSecondary)).lineLimit(1)
-                    }
-                }
-                Spacer(minLength: 8)
-                if pending {
-                    ProgressView()
-                } else if account.needsLogin {
-                    Button("Sign in") { Task { await perform("login", accountId: account.id) } }
-                        .ripulProminentButtonStyle().controlSize(.small).disabled(busy)
-                        .uiKitIdentifier("CodexAccounts.account.\(account.id).signIn")
-                } else if isActive {
-                    Text("Active").font(.ripul(.caption, weight: .medium)).foregroundStyle(Color.accentColor)
-                } else {
-                    // Switching is also what refreshes an inactive account's usage.
-                    Button("Switch") { Task { await perform("switch", accountId: account.id) } }
-                        .buttonStyle(.bordered).controlSize(.small).disabled(busy)
-                        .uiKitIdentifier("CodexAccounts.account.\(account.id).switch")
-                }
-            }
-            CodingAccountUsageView(usage: account.usage, plan: account.plan, showsPlan: false)
-                .padding(.leading, 36)
-        }
-        .padding(.vertical, 8)
+        let action: CodingAccountRowAction =
+            pending ? .busy
+            : account.needsLogin ? .signIn("Sign in", { Task { await perform("login", accountId: account.id) } })
+            : isActive ? .active
+            // Switching is also what refreshes an inactive account's usage.
+            : .switchTo({ Task { await perform("switch", accountId: account.id) } })
+        return CodingAccountRow(name: account.name, detail: account.email, isActive: isActive,
+            usage: account.usage, plan: account.plan, action: action, disabled: busy,
+            identifier: "CodexAccounts.account.\(account.id)")
         .uiKitIdentifier("CodexAccounts.account.\(account.id)")
         .contextMenu { MenuIcons {
             Button("Rename") { newName = account.name; renaming = account }.disabled(busy)
@@ -249,13 +223,6 @@ public struct CodexAccountsSettingsScreen: View {
     @State private var loading = true
     public init(bridge: AgentBridge, machines: [RemoteMachine]? = nil) { self.bridge = bridge; self.suppliedMachines = machines }
     public var body: some View {
-        // On a wide Catalyst or Mac window the rows would stretch edge to edge,
-        // leaving a usage label and its percentage a screen apart.
-        GeometryReader { proxy in
-            list.contentMargins(.horizontal, max(0, (proxy.size.width - 680) / 2), for: .scrollContent)
-        }
-    }
-    private var list: some View {
         List {
             if loading { ProgressView("Loading Macs…") }
             else if machines.isEmpty { NoPairedMacView("See and switch the Codex accounts on your Mac.") }
@@ -265,6 +232,7 @@ public struct CodexAccountsSettingsScreen: View {
                     isOnline: machine.isOnline, refreshToken: refreshToken)
             }
         }.ripulThemedList()
+        .modifier(CodingAccountsListWidth())
         .navigationTitle("Codex accounts")
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)

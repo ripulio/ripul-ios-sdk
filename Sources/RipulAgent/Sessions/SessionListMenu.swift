@@ -161,6 +161,20 @@ public struct SessionListMenu: View {
             Divider()
         }
 
+        #if os(iOS) && (DEBUG || RIPUL_DEVELOPER_BUILD || RIPUL_DEVELOPER_TOOLS)
+        // Which Ripul site the host app talks to (RipulSiteSwitch). Compiled
+        // only into developer builds, and offered only once the host has
+        // registered the site it compiled in.
+        if bridge.audience == .developer && RipulSiteSwitch.isAvailable {
+            Button {
+                NotificationCenter.default.post(name: .ripulShowSiteSwitch, object: bridge)
+            } label: {
+                Label("Ripul Site…", systemImage: "arrow.triangle.swap")
+            }
+            .uiKitIdentifier("AgentScreen.listMenu.siteSwitch")
+        }
+        #endif
+
         if !model.usesDirectConnections {
         Button {
             NotificationCenter.default.post(name: .ripulShowAppWorkingDirectory, object: bridge)

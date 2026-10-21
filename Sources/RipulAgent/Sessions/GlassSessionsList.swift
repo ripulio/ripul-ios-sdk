@@ -193,6 +193,8 @@ public struct GlassSessionsList: View {
     var onListedSessionsChanged: (([RipulListedSession]) -> Void)? = nil
 
     @State private var needsAnswerOnly = false
+    /// The tabs' host chat ids, for `attentionKeys`: rebuilt when the tabs change.
+    @State private var hostIndex = SessionHostIndex()
     @Binding var searchText: String
     @Binding var renamingSession: ChatSession?
     @Binding var renameText: String
@@ -216,6 +218,9 @@ public struct GlassSessionsList: View {
     @State private var selectedSessionIds: Set<String> = []
     /// Heads of families whose started chats are all shown; see `SessionFamilies`.
     @State private var openFamilies: Set<String> = []
+    @State private var heldSessionOrder: [String]?
+    @State private var sessionOrderRelease: Task<Void, Never>?
+    @Environment(\.scenePhase) private var sessionListScenePhase
     /// Heads of families whose started chats the person has put away by tapping the head's icon.
     @State private var closedFamilies: Set<String> = []
     #if os(iOS)
@@ -521,7 +526,7 @@ public struct GlassSessionsList: View {
     }
 
     private func sessionsPanel(sessions: [UnifiedSession], families: SessionFamilies) -> some View {
-        let rows = visibleInviteRows + sessions
+        let rows = sessions
         return GlassSectionPanel(
             title: "Sessions",
             isExpanded: $sessionsExpanded,
@@ -718,12 +723,36 @@ public struct GlassSessionsList: View {
                               let dragged = unifiedSessions.first(where: { $0.id == id }) else { return }
                         onPlaceSession(dragged, target, false)
                     })
+                .onContinuousHover { phase in
+                    switch phase {
+                    case .active:
+                        if heldSessionOrder == nil { heldSessionOrder = families.all.map(\.id) }
+                        sessionOrderRelease?.cancel()
+                        sessionOrderRelease = Task { @MainActor in
+                            do { try await Task.sleep(for: .seconds(1)) } catch { return }
+                            heldSessionOrder = nil
+                            sessionOrderRelease = nil
+                        }
+                    case .ended:
+                        releaseSessionOrder()
+                    }
+                }
+                .onDisappear { releaseSessionOrder() }
+                .onChange(of: sessionListScenePhase) { _, phase in
+                    if phase != .active { releaseSessionOrder() }
+                }
                 .modifier(SessionsScrollClearance(actionBarHeight: hasBatchSelection ? actionBarHeight : 0))
             }
             .onReceive(inviteManager?.$invites.eraseToAnyPublisher() ?? Just([]).eraseToAnyPublisher()) { invites in
                 if invites != listedInvites { listedInvites = invites }
             }
         }
+    }
+
+    private func releaseSessionOrder() {
+        sessionOrderRelease?.cancel()
+        sessionOrderRelease = nil
+        heldSessionOrder = nil
     }
 
     /// Which resting state the list is in, or nil when it has rows to draw.
@@ -1183,11 +1212,12 @@ public struct GlassSessionsList: View {
         // sessions don't swap on every alternating tool call.
         // Pinned rows first, each group in recency order.
         let pinned = Set(base.filter { sessionStore.isPinned(anyOf: $0.readStateKeys) }.map(\.id))
+        let buckets = Dictionary(uniqueKeysWithValues: base.map { ($0.id, sortBucket(for: $0)) })
         return base.sorted { a, b in
             let pa = pinned.contains(a.id), pb = pinned.contains(b.id)
             if pa != pb { return pa }
-            let ta = sortBucket(for: a)
-            let tb = sortBucket(for: b)
+            let ta = buckets[a.id] ?? 0
+            let tb = buckets[b.id] ?? 0
             if ta != tb { return ta > tb }
             // Within the same bucket, preserve scanner order (stable).
             return a.lastUsed > b.lastUsed
@@ -1198,14 +1228,19 @@ public struct GlassSessionsList: View {
     /// with a chat an agent started under the chat that started it. A search or
     /// a filter shows every match, since a match may be a folded chat.
     private var sessionFamilies: SessionFamilies {
-        SessionFamilies.arrange(
-            matchingSessions,
+        // Invitations use the same recency ordering as chats. Keeping them in
+        // this layout also preserves pinned rows and keeps chat families together.
+        let base = matchingSessions + visibleInviteRows
+        let buckets = Dictionary(uniqueKeysWithValues: base.map { ($0.id, sortBucket(for: $0)) })
+        return SessionFamilies.arrange(
+            base,
             open: openFamilies,
             closed: closedFamilies,
             folds: !needsAnswerOnly && !isSearching && !activeGroupFilter && activeProjectFilter == nil && activeTagFilter == nil,
             isPinned: { sessionStore.isPinned(anyOf: $0.readStateKeys) },
-            recency: sortBucket(for:),
+            recency: { buckets[$0.id] ?? sortBucket(for: $0) },
             mustShow: { sessionStore.isWorkingOrAsking($0) || attention(for: $0) != nil },
+            heldOrder: heldSessionOrder,
             placedUnder: placement(of:)
         )
     }
@@ -1255,14 +1290,9 @@ public struct GlassSessionsList: View {
         let listed = Set(unifiedSessions.flatMap { attentionKeys(for: $0) }.map(PendingQuestionStore.canonical))
         let dates = ISO8601DateFormatter()
         dates.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        // Not yet joined first, newest first within each.
-        let ordered = listedInvites
+        let unlisted = listedInvites
             .filter { invite in invite.chatId.map { !listed.contains(PendingQuestionStore.canonical($0)) } ?? true }
-            .sorted { lhs, rhs in
-                let l = lhs.accepted == true, r = rhs.accepted == true
-                return l != r ? !l : lhs.createdAt > rhs.createdAt
-            }
-        return ordered.map { invite in
+        return unlisted.map { invite in
             UnifiedSession(
                 id: Self.invitePrefix + invite.token, title: invite.displayLabel,
                 lastUsed: dates.date(from: invite.createdAt) ?? .distantPast, hasKnownActivity: false,
@@ -1356,11 +1386,7 @@ public struct GlassSessionsList: View {
     /// cannot scan) the list is never rebuilt to attach one, so the @ never
     /// showed (Alice, 16 October 2026). The live tab list always has it.
     private func attentionKeys(for session: UnifiedSession) -> [String] {
-        let own = Set(session.readStateKeys)
-        let hosts = bridge.sessions
-            .filter { own.contains($0.id) || own.contains($0.sourceChatId) }
-            .compactMap(\.hostChatId)
-        return session.attentionKeys + hosts
+        session.attentionKeys + hostIndex.hosts(for: session.readStateKeys, in: bridge.sessions)
     }
 
     private func attention(for session: UnifiedSession) -> PendingAgentQuestion? {
@@ -1374,11 +1400,10 @@ public struct GlassSessionsList: View {
     @ViewBuilder
     private var unmatchedAttention: some View {
         let store = PendingQuestionStore.shared
-        let unmatched = store.questions.filter { question in
-            !unifiedSessions.contains { session in
-                attentionKeys(for: session).contains { PendingQuestionStore.canonical($0) == PendingQuestionStore.canonical(question.chatId) }
-            }
-        }
+        // Every row's keys once, not every row's again for each question.
+        let listed = store.questions.isEmpty ? []
+            : Set(unifiedSessions.flatMap { attentionKeys(for: $0) }.map(PendingQuestionStore.canonical))
+        let unmatched = store.questions.filter { !listed.contains(PendingQuestionStore.canonical($0.chatId)) }
         if !unmatched.isEmpty {
             VStack(spacing: 6) {
                 ForEach(unmatched) { question in
@@ -1474,6 +1499,7 @@ public struct GlassSessionsList: View {
             if let t = sessionStore.lastActiveTimeByChatId[key] { best = max(best, t) }
         }
         if let t = lastActiveBySessionId[session.id] { best = max(best, t) }
+        if let t = PendingQuestionStore.shared.latestMentionAt(anyOf: attentionKeys(for: session)) { best = max(best, t) }
         return best
     }
 
@@ -1604,7 +1630,9 @@ public struct GlassSessionsList: View {
         // three it could never reach the fourth row (measured 9 October 2026:
         // a chat on screen was passed to the agent as unknown). A host that
         // wants fewer takes a prefix.
-        let listedSessions = sessions.prefix(RipulListedSession.limit).map { RipulListedSession(id: $0.id, title: $0.title) }
+        // An invitation is opened through Join, not the host's chat-id route.
+        let listedSessions = sessions.filter { !$0.id.hasPrefix(Self.invitePrefix) }
+            .prefix(RipulListedSession.limit).map { RipulListedSession(id: $0.id, title: $0.title) }
         // In three parts, each checked by the compiler on its own. As one expression (the
         // panels and some twenty modifiers) the compiler gave it up on one Mac and not on
         // another: "unable to type-check this expression in reasonable time", in WAC's
@@ -1898,5 +1926,38 @@ public struct GlassSessionsList: View {
         case .postToWeb:
             onOpenUnifiedSession(session)
         }
+    }
+}
+
+/// Each tab's host chat id, by the ids the tab goes by: what the session list
+/// adds to a row's attention keys for a chat you were invited to.
+///
+/// Built again only when the bridge's tabs change. Scanning every tab for
+/// every row, on every rebuild of the list and once more per row for each
+/// waiting question, filled the main thread as Peter's phone went serious:
+/// `attentionKeys` in 29% of the main thread's samples, the list rebuilt 25
+/// times a minute, 46-56% of a core (20 October 2026).
+@MainActor
+final class SessionHostIndex {
+    private var tabs: [ChatSession] = []
+    private var hostsByKey: [String: [String]] = [:]
+
+    func hosts(for keys: [String], in sessions: [ChatSession]) -> [String] {
+        // `==` on arrays answers at once for the same storage, which is what
+        // the bridge hands back until its tabs change. The storage is kept
+        // either way, so an equal list in new storage is compared once.
+        if sessions != tabs {
+            var index: [String: [String]] = [:]
+            for tab in sessions {
+                guard let host = tab.hostChatId else { continue }
+                index[tab.id, default: []].append(host)
+                if tab.sourceChatId != tab.id { index[tab.sourceChatId, default: []].append(host) }
+            }
+            hostsByKey = index
+        }
+        tabs = sessions
+        guard !hostsByKey.isEmpty else { return [] }
+        var seen = Set<String>()
+        return keys.flatMap { hostsByKey[$0] ?? [] }.filter { seen.insert($0).inserted }
     }
 }

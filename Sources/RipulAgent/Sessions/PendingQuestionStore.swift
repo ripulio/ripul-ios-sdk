@@ -25,11 +25,13 @@ public final class PendingQuestionStore {
     public static let shared = PendingQuestionStore()
     public private(set) var questions: [PendingAgentQuestion] = []
     public private(set) var accountId: String?
+    private var mentionActivity: [String: Double] = [:]
     @ObservationIgnored private var tokenProvider: (() -> String?)?
     @ObservationIgnored private var refreshTask: Task<Bool, Never>?
     @ObservationIgnored public var visibleChatId: String?
     @ObservationIgnored public var openQuestion: ((PendingAgentQuestion) -> Void)?
     @ObservationIgnored private var dismissed: [PendingAgentQuestion] = []
+    @ObservationIgnored private var firstByCanonicalChatId: [String: PendingAgentQuestion] = [:]
     private let defaults: UserDefaults
 
     public init(defaults: UserDefaults = .standard) { self.defaults = defaults }
@@ -41,6 +43,8 @@ public final class PendingQuestionStore {
         refreshTask = nil
         self.accountId = accountId
         questions = []
+        firstByCanonicalChatId = [:]
+        mentionActivity = accountId.flatMap { defaults.dictionary(forKey: "ripul.mentionActivity.\($0)") as? [String: Double] } ?? [:]
         dismissed = accountId.flatMap { defaults.data(forKey: "ripul.dismissedQuestions.\($0)") }
             .flatMap { try? JSONDecoder().decode([PendingAgentQuestion].self, from: $0) } ?? []
         if let accountId, let data = defaults.data(forKey: cacheKey(accountId)),
@@ -52,6 +56,42 @@ public final class PendingQuestionStore {
     /// True when any item is a mention, so the list says "attention", not "answer".
     public var hasMentions: Bool { questions.contains(where: \.isMention) }
 
+    /// Kept after reading a mention: reading must not move the chat backwards.
+    public func latestMentionAt(anyOf keys: [String]) -> Date? {
+        guard !mentionActivity.isEmpty else { return nil }
+        var latest: Double?
+        for key in keys {
+            if let ts = mentionActivity[Self.canonical(key)], ts > (latest ?? -.infinity) {
+                latest = ts
+            }
+        }
+        return latest.map { Date(timeIntervalSince1970: $0 / 1000) }
+    }
+
+    /// Show the account-scoped attention row as soon as its push arrives,
+    /// including when a token refresh or a network read is temporarily failing.
+    @discardableResult public func receivePush(_ payload: [AnyHashable: Any]) -> Bool {
+        guard let accountId, payload["userId"] as? String == accountId,
+              payload["type"] as? String == "agentQuestion",
+              let chatId = payload["chatId"] as? String, !chatId.isEmpty,
+              let questionId = payload["questionId"] as? String, !questionId.isEmpty,
+              let title = payload["title"] as? String,
+              let aps = payload["aps"] as? [String: Any],
+              let alert = aps["alert"] as? [String: Any],
+              let question = alert["body"] as? String,
+              let createdAt = payload["createdAt"] as? Double, createdAt.isFinite, createdAt > 0,
+              let expiresAt = payload["expiresAt"] as? Double, expiresAt.isFinite,
+              expiresAt > Date().timeIntervalSince1970 * 1000 else { return false }
+        var item = PendingAgentQuestion(chatId: chatId, questionId: questionId, title: title,
+            question: question, blocking: payload["blocking"] as? Int ?? 0,
+            createdAt: createdAt, expiresAt: expiresAt)
+        item.kind = payload["kind"] as? String == "mention" ? "mention" : "question"
+        item.fromName = payload["fromName"] as? String
+        replace(questions.filter { $0.id != item.id } + [item])
+        if let encoded = try? JSONEncoder().encode(questions) { defaults.set(encoded, forKey: cacheKey(accountId)) }
+        return questions.contains { $0.id == item.id }
+    }
+
     /// A mention is answered by reading it: opening the chat clears it.
     /// Agent questions stay until they are answered.
     public func clearMentions(anyOf keys: [String]) {
@@ -61,8 +101,18 @@ public final class PendingQuestionStore {
     }
 
     public func first(anyOf keys: [String]) -> PendingAgentQuestion? {
-        let aliases = Set(keys.map(Self.canonical))
-        return questions.first { aliases.contains(Self.canonical($0.chatId)) }
+        guard !questions.isEmpty else { return nil }
+        var earliest: PendingAgentQuestion?
+        for key in keys {
+            if let match = firstByCanonicalChatId[Self.canonical(key)] {
+                if let current = earliest {
+                    if match.createdAt < current.createdAt { earliest = match }
+                } else {
+                    earliest = match
+                }
+            }
+        }
+        return earliest
     }
 
     public func isViewing(_ chatId: String) -> Bool {
@@ -146,8 +196,27 @@ public final class PendingQuestionStore {
     }
 
     func replace(_ incoming: [PendingAgentQuestion], now: Double = Date().timeIntervalSince1970 * 1000) {
+        var activity = mentionActivity
+        for item in incoming where item.isMention && item.createdAt.isFinite && item.createdAt > 0 {
+            let key = Self.canonical(item.chatId)
+            activity[key] = max(activity[key] ?? 0, item.createdAt)
+        }
+        if activity.count > 300 {
+            activity = Dictionary(uniqueKeysWithValues: activity.sorted { $0.value > $1.value }.prefix(200).map { ($0.key, $0.value) })
+        }
+        if activity != mentionActivity {
+            mentionActivity = activity
+            if let accountId { defaults.set(activity, forKey: "ripul.mentionActivity.\(accountId)") }
+        }
         let hidden = Set(dismissed.map(\.id))
         let live = incoming.filter { !hidden.contains($0.id) && ($0.expiresAt == nil || $0.expiresAt! > now) }
+            .sorted { $0.createdAt < $1.createdAt }
+        var byChat: [String: PendingAgentQuestion] = [:]
+        for item in live {
+            let key = Self.canonical(item.chatId)
+            if byChat[key] == nil { byChat[key] = item }
+        }
+        firstByCanonicalChatId = byChat
         if live != questions { questions = live }
     }
 

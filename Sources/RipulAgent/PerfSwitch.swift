@@ -43,10 +43,10 @@ public enum PerfSwitch {
 
     /// Sets the page's spinners to the same rate as the loops. A spinner turns
     /// once every 1.2 s in `steps(var(--ripul-spinner-steps))`
-    /// (`OnScreenSpinner.tsx`), so 12 steps is ten a second, the default; off
+    /// (`OnScreenSpinner.tsx`), so 36 steps is thirty a second, the default; off
     /// holds them still.
     static var pageMotionScript: String {
-        let steps = loopsAreOff ? 1 : max(1, Int((Double(loopFramesPerSecond ?? 10) * 1.2).rounded()))
+        let steps = loopsAreOff ? 1 : max(1, Int((Double(loopFramesPerSecond ?? 30) * 1.2).rounded()))
         return "document.documentElement && document.documentElement.style.setProperty('--ripul-spinner-steps', '\(steps)');"
     }
 }

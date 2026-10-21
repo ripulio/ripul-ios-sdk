@@ -4,10 +4,10 @@ import SwiftUI
 
 /// Machine-global Claude account switcher for a paired host (or this Mac).
 ///
-/// One tap switches the host's ACTIVE account: idle CLI sessions recycle onto
+/// Switch makes it the host's ACTIVE account: idle CLI sessions recycle onto
 /// it immediately (`--resume` keeps the conversation — every profile shares
 /// the one session store via the projects symlink), and busy sessions switch
-/// after their current reply. A profile with no login yet routes the tap into
+/// after their current reply. A profile with no login yet offers Sign in, into
 /// a profile-scoped HostSignInSheet instead — switching to a dead account
 /// would just 401 every session.
 ///
@@ -80,7 +80,7 @@ struct ClaudeAccountSection: View {
     @State private var accounts: [ClaudeAccountProfile] = []
     @State private var active: String = "default"
     @State private var followsDefault = true
-    @State private var loading = true
+    @State private var loading = false
     @State private var error: String?
     @State private var switchingTo: String?
     @State private var addingAccount = false
@@ -109,7 +109,9 @@ struct ClaudeAccountSection: View {
                 ForEach(accounts) { account in accountRow(account) }
                 if let error, !error.isEmpty {
                     Text(error).font(.ripul(.caption)).foregroundStyle(.ripul(.warning))
-                    Button("Retry") { Task { await refresh() } }.disabled(loading)
+                    Button("Retry") { Task { await refresh() } }
+                        .disabled(loading || switchingTo != nil)
+                        .uiKitIdentifier("ClaudeAccountSwitcherSheet.retry")
                 }
                 if addingAccount {
                     HStack(spacing: 8) {
@@ -179,41 +181,27 @@ struct ClaudeAccountSection: View {
     @ViewBuilder
     private func accountRow(_ account: ClaudeAccountProfile) -> some View {
         let isActive = account.slug == active && (chatId == nil || !followsDefault)
-        Button {
-            Task { await handleTap(account) }
-        } label: {
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 10) {
-                    Image(systemName: "person.circle")
-                        .foregroundStyle(isActive ? Color.accentColor : Color.ripul(.textSecondary))
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(account.isDefault ? "\(account.name) (this Mac's login)" : account.name)
-                            .font(.ripul(.subheadline).weight(isActive ? .semibold : .regular))
-                            .foregroundStyle(.ripul(.text))
-                        Text(account.email ?? (account.loggedIn ? "Signed in" : "Not signed in — tap to sign in"))
-                            .font(.ripul(.caption))
-                            .foregroundStyle(.ripul(.textSecondary))
-                    }
-                    Spacer()
-                    if switchingTo == account.slug {
-                        ProgressView()
-                    } else if isActive {
-                        Image(systemName: "checkmark.circle.fill")
-                            .foregroundStyle(.ripul(.success))
-                    }
-                }
-                if account.loggedIn {
-                    CodingAccountUsageView(usage: account.usage, plan: account.plan)
-                }
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .disabled(loading || switchingTo != nil)
+        // A usage error is almost always an expired sign-in, so it is offered in place of Switch.
+        let action: CodingAccountRowAction =
+            switchingTo == account.slug ? .busy
+            : !account.loggedIn ? .signIn("Sign in", { onSignIn(account) })
+            : account.usage?.error != nil ? .signIn("Sign in again", { onSignIn(account) })
+            : isActive ? .active
+            : .switchTo({ Task { await selectAccount(account.slug) } })
+        let detail = [account.email ?? (account.loggedIn ? "Signed in" : "Not signed in"),
+                      account.isDefault ? "This Mac's login" : nil].compactMap { $0 }.joined(separator: " · ")
+        CodingAccountRow(name: account.name, detail: detail, isActive: isActive,
+            usage: account.usage, plan: account.plan, showsUsage: account.loggedIn,
+            action: action, disabled: loading || switchingTo != nil,
+            identifier: "ClaudeAccountSwitcherSheet.accountRow.\(account.slug)")
         .uiKitIdentifier("ClaudeAccountSwitcherSheet.accountRow.\(account.slug)")
         .contextMenu { MenuIcons {
             if account.loggedIn {
                 Button("Sign in again", systemImage: "arrow.clockwise") { onSignIn(account) }
+            }
+            if !account.isDefault {
+                Button("Remove", systemImage: "trash", role: .destructive) { deleteCandidate = account }
+                    .disabled(loading || switchingTo != nil)
             }
         }}
         // The default profile is the Mac's own login — removing it would sign the Mac
@@ -228,22 +216,6 @@ struct ClaudeAccountSection: View {
                 .uiKitIdentifier("ClaudeAccountSwitcherSheet.accountRow.\(account.slug).delete")
             }
         }
-        if account.loggedIn, account.usage?.error != nil {
-            Button("Sign in again") { onSignIn(account) }
-                .font(.ripul(.subheadline))
-                .disabled(loading || switchingTo != nil)
-                .uiKitIdentifier("ClaudeAccountSwitcherSheet.accountRow.\(account.slug).signInAgain")
-        }
-    }
-
-    private func handleTap(_ account: ClaudeAccountProfile) async {
-        if (account.slug == active && account.loggedIn && (chatId == nil || !followsDefault)) || switchingTo != nil { return }
-        // No login yet → sign the profile in rather than switching to it.
-        guard account.loggedIn else {
-            onSignIn(account)
-            return
-        }
-        await selectAccount(account.slug)
     }
 
     private func selectAccount(_ slug: String) async {
@@ -291,11 +263,14 @@ struct ClaudeAccountSection: View {
     }
 
     private func refresh() async {
-        guard machine.isOnline else { loading = false; return }
+        // Foreground, the periodic task and Retry can arrive together. Keep
+        // one request in flight and remove the previous failure while it runs.
+        guard machine.isOnline, !loading, switchingTo == nil else { return }
         loading = true
+        error = nil
+        defer { loading = false }
         let result = await bridge.fetchClaudeAccounts(machineId: machine.machineId, chatId: chatId)
         if result.error == nil { accounts = result.accounts; active = result.active; followsDefault = result.followsDefault }
         error = result.error
-        loading = false
     }
 }

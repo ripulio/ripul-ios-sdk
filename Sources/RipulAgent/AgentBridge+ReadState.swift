@@ -48,6 +48,46 @@ extension AgentBridge {
 
     // MARK: - What makes a chat wait
 
+    /// List metadata reaches unopened shared chats too. A human reply must
+    /// advance recency and unread state even when no agent runs in the room.
+    func receiveHumanReplyActivity(_ incoming: [ChatSession]) {
+        var activity = sessionList.lastActiveTimeByChatId
+        let ledger = readLedger
+        let stamps = ledger.readStamps
+        var entries = ledger.waiting
+        var changed = false
+        for session in incoming {
+            guard let at = session.latestHumanReplyAt else { continue }
+            let keys = [session.id, session.sourceChatId] + [session.hostChatId].compactMap { $0 }
+            for key in keys where at > (activity[key] ?? .distantPast) { activity[key] = at }
+            guard session.latestReplyAuthorName != nil else { continue }
+            let aliases = Set(keys.map(Self.canonicalChatKey))
+            guard at > (aliases.compactMap { stamps[$0] }.max() ?? .distantPast) else { continue }
+            // A selected tab can remain active underneath the sessions list.
+            // Ripul's shell reports actual visibility through the attention store.
+            let viewing = PendingQuestionStore.shared.accountId != nil
+                ? keys.contains(where: PendingQuestionStore.shared.isViewing)
+                : keys.contains(where: isViewingChat)
+            if appIsForeground && viewing {
+                for key in keys {
+                    ledger.clearWaiting(chatId: key)
+                    ledger.stampRead(chatId: key)
+                }
+                entries.removeAll { aliases.contains(Self.canonicalChatKey($0.chatId)) }
+                changed = true
+            } else if !entries.contains(where: { aliases.contains(Self.canonicalChatKey($0.chatId)) && $0.at >= at }) {
+                entries.removeAll { aliases.contains(Self.canonicalChatKey($0.chatId)) }
+                entries.append(WaitingSession(chatId: session.sourceChatId, title: session.displayName, at: at))
+                changed = true
+            }
+        }
+        if activity != sessionList.lastActiveTimeByChatId { sessionList.lastActiveTimeByChatId = activity }
+        if changed {
+            ledger.setWaiting(entries)
+            publishUnreadIds()
+        }
+    }
+
     /// Adds or removes one session, mirroring the live phase.
     ///
     /// `completed` and `failed` mean the agent stopped and it is your move;
@@ -134,7 +174,7 @@ extension AgentBridge {
     /// offer to read you back something you just watched arrive.
     private func isViewingChat(_ chatId: String) -> Bool {
         guard appIsForeground else { return false }
-        let activeAliases = [activeSessionId, activeSession?.sourceChatId]
+        let activeAliases = [activeSessionId, activeSession?.sourceChatId, activeSession?.hostChatId]
         for case let candidate? in activeAliases {
             if candidate == chatId { return true }
             if candidate.hasPrefix("cli_"), String(candidate.dropFirst(4)) == chatId { return true }
@@ -207,9 +247,11 @@ extension AgentBridge {
         let ledger = readLedger
         ledger.clearWaiting(chatId: chatId)
         ledger.stampRead(chatId: chatId)
-        if let source = sessions.first(where: { $0.id == chatId })?.sourceChatId {
-            ledger.clearWaiting(chatId: source)
-            ledger.stampRead(chatId: source)
+        if let session = sessions.first(where: { $0.id == chatId || $0.sourceChatId == chatId || $0.hostChatId == chatId }) {
+            for key in [session.id, session.sourceChatId] + [session.hostChatId].compactMap({ $0 }) {
+                ledger.clearWaiting(chatId: key)
+                ledger.stampRead(chatId: key)
+            }
         }
         publishUnreadIds()
     }

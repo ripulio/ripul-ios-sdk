@@ -463,6 +463,25 @@ over Wi-Fi. Notes:
 
 ---
 
+### 7.5 The WAC top-bar pass (20 Oct 2026)
+
+Brought the native renderer to the WAC portal's top-bar design, checked side
+by side with the web in a simulator. What landed, and what each still lacks:
+
+| Area | Native | Not native yet |
+|---|---|---|
+| Loading | Frame numbers read as MUI's `sx` (spacing ×8, sizes px), `spacing.*` tokens; a site that fails to decode is skipped, not the whole list (`CmsLiveDefinitionDecodeTests` decodes exported definitions) | |
+| Site | `portalConfig.designs` (`CmsPortalDesigns`, twin of portalDesigns.ts), page `hideShell` / `shellPageId` | the design switcher pill |
+| Errors | `CmsQueryErrorText` (twin of queryErrorText.ts, one fixture file for both): visitors read one sentence and Try again, design mode the raw error | |
+| Data | `runSavedMutation` + `CmsRuntime.runMutation` (paramSources, paramMap, invalidateQueries); `CmsClient.json` / `raw` for block routes; member identity (`/v1/site-key/me`, host `userName`/`userEmail`) | |
+| Chat | `fab` floating button + sheet; `CmsRuntime.ask(chat:prompt:)` opens a fresh chat that sends the prompt; a block chat never restores the account's own chat | per-block prompts/view context, report "+" actions back into the to-do list |
+| Nav | topNav `menuButton` (hosts the shell drawer), `logoBadge`, `radius`, embedded blocks, item visibility; drawer sidebar seeds its card's selection while closed | slot contributions |
+| Blocks | actionButton, workspaceCard, notificationCentre, userAccount, pageTabs, offerGrid, planSummary, varianceImpact, reportLibrary (`CmsReport`), activityThreads, fileLibrary (`CmsFileWeeks`), actionList, rotaTeam, resourceTimeline (read only), rotaBuilder (`CmsRotaLogic`, `CmsRotaBuilderModel`: By day and By person in place of the grid, a context menu in place of dragging) | bell upload reminders; to-do location check and auto daily run; timeline editing and other scales; file library account picker |
+
+Hidden and closed-tab blocks render out of the stack's flow (mounted, no gap).
+The test bed opens a site at once from `io.ripul.cms.testBed.autoOpen`
+(`"<cmsId>[|<pageSlug>]"`, set with `simctl spawn … defaults write io.ripul.app`).
+
 ## 8. Known gaps / agreed queue
 
 **Queue (in order):**

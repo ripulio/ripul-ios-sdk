@@ -31,6 +31,30 @@ final class SessionFamiliesTests: XCTestCase {
                                 placedUnder: { placed[$0.title] })
     }
 
+    func testMouseHoldKeepsFamiliesAndChildrenInOrderButUsesFreshRows() {
+        let initial = arrange([chat("a", minutesAgo: 1), chat("b", minutesAgo: 20),
+                               chat("child1", minutesAgo: 2, startedBy: "a"),
+                               chat("child2", minutesAgo: 3, startedBy: "a")])
+        let changed = [chat("a", minutesAgo: 1), chat("b", minutesAgo: 0),
+                       chat("child1", minutesAgo: 2, startedBy: "a"),
+                       chat("child2", minutesAgo: 0.5, startedBy: "a")]
+        let held = SessionFamilies.arrange(changed, recency: { Int($0.lastUsed.timeIntervalSince1970 / 30) },
+                                          heldOrder: initial.all.map(\.id))
+        XCTAssertEqual(held.visible.map(\.title), ["a", "child1", "child2", "b"])
+        XCTAssertEqual(held.visible.last?.lastUsed, changed[1].lastUsed)
+        XCTAssertEqual(arrange(changed).visible.map(\.title), ["b", "a", "child2", "child1"])
+    }
+
+    func testMouseHoldAllowsRemovalNewFamiliesAndExplicitFolding() {
+        let changed = [chat("a", minutesAgo: 20), chat("child", minutesAgo: 10, startedBy: "a"),
+                       chat("new", minutesAgo: 0)]
+        let held = SessionFamilies.arrange(changed, closed: ["claude-cli:a"],
+                                          recency: { Int($0.lastUsed.timeIntervalSince1970 / 30) },
+                                          heldOrder: ["claude-cli:removed", "claude-cli:a", "claude-cli:child"])
+        XCTAssertEqual(held.visible.map(\.title), ["a", "new"])
+        XCTAssertEqual(held.heads["claude-cli:a"]?.putAway.map(\.title), ["child"])
+    }
+
     func testChatsNobodyStartedKeepTheListsOwnOrder() {
         let layout = arrange([chat("old", minutesAgo: 90), chat("new", minutesAgo: 1), chat("pinned", minutesAgo: 300)], pinned: ["pinned"])
         XCTAssertEqual(layout.visible.map(\.title), ["pinned", "new", "old"])
@@ -50,6 +74,24 @@ final class SessionFamiliesTests: XCTestCase {
         ])
         XCTAssertEqual(layout.visible.map(\.title), ["design", "panels", "tokens", "between", "yesterday"])
         XCTAssertEqual(layout.depth, ["claude-cli:panels": 1, "claude-cli:tokens": 1])
+    }
+
+    func testInvitationsInterleaveWithChatsByTimeAndKeepFamiliesTogether() {
+        func invite(_ name: String, minutesAgo: Double) -> UnifiedSession {
+            UnifiedSession(id: "invite:\(name)", title: name, lastUsed: now.addingTimeInterval(-minutesAgo * 60),
+                           hasKnownActivity: false, gitBranch: nil, messageCount: nil, projectName: nil,
+                           provider: nil, providerLabel: nil, machineName: nil, ripulSession: nil)
+        }
+        let layout = arrange([
+            invite("old invitation", minutesAgo: 120), chat("recent chat", minutesAgo: 10),
+            invite("new invitation", minutesAgo: 0), chat("starter", minutesAgo: 90),
+            chat("working child", minutesAgo: 5, startedBy: "starter"),
+            chat("pinned", minutesAgo: 300),
+        ], pinned: ["pinned"])
+        XCTAssertEqual(layout.visible.map(\.title),
+                       ["pinned", "new invitation", "starter", "working child", "recent chat", "old invitation"])
+        XCTAssertEqual(layout.depth["claude-cli:working child"], 1)
+        XCTAssertNil(layout.depth["invite:new invitation"])
     }
 
     func testAChatStartedByAStartedChatGoesOneFurtherInAndNoDeeper() {

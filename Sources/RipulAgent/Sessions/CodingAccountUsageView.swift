@@ -19,6 +19,83 @@ struct CodingAccountPlanBadge: View {
     }
 }
 
+/// What an account row offers at its trailing edge.
+enum CodingAccountRowAction {
+    case busy
+    case signIn(String, () -> Void)
+    case active
+    case switchTo(() -> Void)
+}
+
+/// One coding account, as both the Claude and Codex sections draw it: who it
+/// is, its plan, what can be done with it, and its usage beneath.
+struct CodingAccountRow: View {
+    let name: String
+    var detail: String? = nil
+    let isActive: Bool
+    let usage: CodingAccountUsage?
+    var plan: String? = nil
+    var showsUsage = true
+    let action: CodingAccountRowAction
+    var disabled = false
+    /// Prefix for the action buttons' identifiers (`.signIn`, `.switch`).
+    let identifier: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .center, spacing: 12) {
+                Image(systemName: isActive ? "checkmark.circle.fill" : "person.crop.circle")
+                    .font(.ripul(.title3))
+                    .foregroundStyle(isActive ? Color.accentColor : Color.ripul(.textSecondary))
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 6) {
+                        Text(name).font(.ripul(.body, weight: isActive ? .semibold : .regular))
+                            .foregroundStyle(.ripul(.text)).lineLimit(1).truncationMode(.middle)
+                        CodingAccountPlanBadge(usage: usage, plan: plan)
+                    }
+                    if let detail, detail != name {
+                        Text(detail).font(.ripul(.caption)).foregroundStyle(.ripul(.textSecondary)).lineLimit(1)
+                    }
+                }
+                Spacer(minLength: 8)
+                accessory
+            }
+            if showsUsage {
+                CodingAccountUsageView(usage: usage, plan: plan, showsPlan: false)
+                    .padding(.leading, 36)
+            }
+        }
+        .padding(.vertical, 8)
+    }
+
+    @ViewBuilder private var accessory: some View {
+        switch action {
+        case .busy:
+            ProgressView()
+        case .signIn(let title, let perform):
+            Button(title, action: perform)
+                .ripulProminentButtonStyle().controlSize(.small).disabled(disabled)
+                .uiKitIdentifier("\(identifier).signIn")
+        case .active:
+            Text("Active").font(.ripul(.caption, weight: .medium)).foregroundStyle(Color.accentColor)
+        case .switchTo(let perform):
+            Button("Switch", action: perform)
+                .buttonStyle(.bordered).controlSize(.small).disabled(disabled)
+                .uiKitIdentifier("\(identifier).switch")
+        }
+    }
+}
+
+/// On a wide Catalyst or Mac window the rows would stretch edge to edge,
+/// leaving a usage label and its percentage a screen apart.
+struct CodingAccountsListWidth: ViewModifier {
+    func body(content: Content) -> some View {
+        GeometryReader { proxy in
+            content.contentMargins(.horizontal, max(0, (proxy.size.width - 680) / 2), for: .scrollContent)
+        }
+    }
+}
+
 /// Shared by the Claude and Codex account rows, including inactive accounts.
 ///
 /// When the host could not refresh an account (`usage.error`), the windows it

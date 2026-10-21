@@ -44,7 +44,15 @@ struct CmsSidebarNavBlockView: View {
 
     var body: some View {
         if (block.props.string("mode") ?? "inline") == "drawer" {
-            burgerButton
+            // A top bar with a menu button opens this drawer itself.
+            Group {
+                if runtime.barHostsMenu { Color.clear.frame(width: 0, height: 0) } else { burgerButton }
+            }
+            // The card inside the closed drawer still picks the first record
+            // (the web keeps the drawer mounted: useRecordCursor autoSelectFirst),
+            // so pages waiting on that selection load.
+            .onReceive(runtime.$queries) { _ in anchorHeaderSource() }
+            .onAppear { anchorHeaderSource() }
                 // A drawer-mode nav IS the page's side panel — register it
                 // for edge swipe (same channel as sidebar-layout columns),
                 // so the screen edge tracks it open and the left-edge
@@ -167,145 +175,17 @@ struct CmsSidebarNavBlockView: View {
 
     // ── Workspace card (headerTitle / headerSubtitle / headerInitials) ──────
 
-    private var headerTitle: String? {
-        guard let title = runtime.resolveString(block: block, propKey: "headerTitle"),
-              !title.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
-        return title
-    }
-
-    /// Two-letter mark: authored initials, else the title's (any token still
-    /// unresolved is ignored, as on the web).
-    private func initials(for title: String) -> String {
-        if let authored = block.props.string("headerInitials")?.trimmingCharacters(in: .whitespaces),
-           !authored.isEmpty {
-            return String(authored.prefix(3))
-        }
-        let words = title.replacing(#/@[A-Za-z_]\w*\.[A-Za-z_]\w*/#, with: " ")
-            .split(whereSeparator: \.isWhitespace)
-        if words.count == 1 { return String(words[0].prefix(2)).uppercased() }
-        return words.prefix(2).compactMap { $0.first.map(String.init) }.joined().uppercased()
-    }
-
-    /// Records the card switches between (web: `headerQuerySlug`).
-    private var headerSource: String? {
-        block.props.string("headerQuerySlug").flatMap { $0.isEmpty ? nil : $0 }
-    }
-
-    private var headerSourceRows: [[String: CmsJSON]] {
-        guard let source = headerSource, case .ok(let result) = runtime.state(for: source) else { return [] }
-        return result.rows
-    }
-
-    /// The card's text for one record of the source: its `@source.column`
-    /// tokens read that row, other tokens the current selections.
-    private func headerText(_ propKey: String, row: [String: CmsJSON]) -> String {
-        guard let source = headerSource, let raw = block.props.string(propKey) else { return "" }
-        if let binding = block.bindings?[propKey], binding.querySlug == source {
-            return row[binding.column]?.displayString ?? ""
-        }
-        return runtime.resolveTemplate(raw.replacingOccurrences(of: "@\(source).", with: "@"), rowContext: row)
-    }
-
-    /// Land on the first record when nothing is selected yet — the shell's
-    /// pick, which the page inherits (web: useRecordCursor autoSelectFirst).
     private func anchorHeaderSource() {
-        guard let source = headerSource else { return }
+        guard let source = block.props.string("headerQuerySlug"), !source.isEmpty else { return }
         runtime.ensureLoaded(source)
-        if runtime.selectedRow(source) == nil, let first = headerSourceRows.first {
+        if runtime.selectedRow(source) == nil, case .ok(let result) = runtime.state(for: source), let first = result.rows.first {
             runtime.setSelectedRows(source, rows: [first])
         }
     }
 
-    private static let unresolvedToken = #/@[A-Za-z_]\w*\.[A-Za-z_]\w*/#
-
-    /// The workspace card: a brand-gradient mark beside the workspace name
-    /// and subtitle. With several records to pick from it is a menu of them
-    /// (plus the card's page); otherwise it opens `headerTargetPageSlug`.
-    @ViewBuilder
     private var workspaceCard: some View {
-        if let title = headerTitle {
-            let subtitle = runtime.resolveString(block: block, propKey: "headerSubtitle")
-                .flatMap { $0.isEmpty ? nil : $0 }
-            let target = block.props.string("headerTargetPageSlug").flatMap { $0.isEmpty ? nil : $0 }
-            // Tokens whose row isn't selected yet show as a placeholder, never raw.
-            let pending = title.contains(Self.unresolvedToken) || (subtitle?.contains(Self.unresolvedToken) ?? false)
-            let rows = headerSourceRows
-            let switchable = rows.count > 1
-            let card = HStack(spacing: 10) {
-                Text(initials(for: title))
-                    .font(.system(size: 12, weight: .bold))
-                    .foregroundStyle(runtime.theme.primaryContrast)
-                    .frame(width: 30, height: 30)
-                    .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(runtime.theme.gradient))
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(title)
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(.primary)
-                        .lineLimit(1)
-                    if let subtitle {
-                        Text(subtitle)
-                            .font(.system(size: 12))
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
-                }
-                Spacer(minLength: 0)
-                if switchable {
-                    Image(systemName: "chevron.up.chevron.down")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(.tertiary)
-                } else if target != nil {
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(.tertiary)
-                }
-            }
-            .redacted(reason: pending ? .placeholder : [])
-            .padding(10)
-            .background(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(runtime.theme.surfaceMuted)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .strokeBorder(runtime.theme.divider, lineWidth: 1)
-                    )
-            )
-            .contentShape(Rectangle())
+        CmsWorkspaceCard(block: block, keys: .sidebarHeader)
             .padding(.bottom, 6)
-
-            Group {
-                if switchable, let source = headerSource {
-                    let current = runtime.selectedRow(source)
-                    Menu { MenuIcons {
-                        ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
-                            Button {
-                                runtime.setSelectedRows(source, rows: [row])
-                            } label: {
-                                let label = headerText("headerTitle", row: row)
-                                if current == row {
-                                    Label(label, systemImage: "checkmark")
-                                } else {
-                                    Text(label)
-                                }
-                            }
-                        }
-                        if let target {
-                            Divider()
-                            Button("Settings") { runtime.navigate(toPage: target, viewRef: nil) }
-                        }
-                    }} label: { card }
-                    .buttonStyle(.plain)
-                    .cmsInspectorID("Cms.sidebarNav.workspaceMenu")
-                } else if let target {
-                    Button { runtime.navigate(toPage: target, viewRef: nil) } label: { card }
-                        .buttonStyle(.plain)
-                        .cmsInspectorID("Cms.sidebarNav.workspaceCard")
-                } else {
-                    card.cmsInspectorID("Cms.sidebarNav.workspaceCard")
-                }
-            }
-            .task(id: rows.count) { anchorHeaderSource() }
-        }
     }
 
     /// One WAC-idiom sidebar row: SF Symbol + label, clear background, and a
@@ -411,8 +291,14 @@ struct CmsTopNavBlockView: View {
     @Environment(\.horizontalSizeClass) private var sizeClass
     #endif
 
-    private var items: [CmsNavItem] { CmsNavItem.decodeList(block.props["items"]) }
+    private var items: [CmsNavItem] {
+        CmsNavItem.visible(CmsNavItem.decodeList(block.props["items"]),
+                           membership: runtime.membership, canDesign: runtime.canDesign)
+    }
     private var variant: String { block.props.string("itemVariant") ?? "text" }
+    /// The bar hosts the shell sidebar's drawer: its menu button opens it and
+    /// the sidebar shows no burger of its own (TopNavBlock `menuButton`).
+    private var menuButton: Bool { block.props.bool("menuButton") ?? false }
     private var activeColor: Color {
         runtime.color(block.props.string("activeColor")) ?? runtime.theme.primary
     }
@@ -486,11 +372,25 @@ struct CmsTopNavBlockView: View {
             .padding(.vertical, logoPadY)
             .accessibilityLabel(block.props.string("logoAlt") ?? "")
 
+            let tagged = HStack(spacing: 0) {
+                mark
+                if let tag = block.props.string("logoBadge")?.trimmingCharacters(in: .whitespaces), !tag.isEmpty {
+                    // White with the brand colour: it reads on a brand-coloured bar.
+                    Text(tag)
+                        .font(.system(size: 10.5, weight: .heavy))
+                        .tracking(0.4)
+                        .foregroundColor(runtime.theme.primary)
+                        .padding(.horizontal, 8)
+                        .frame(height: 18)
+                        .background(Capsule().fill(runtime.theme.paper))
+                        .cmsInspectorID("Cms.topNav.logoBadge")
+                }
+            }
             if target.isActionable {
-                Button { target.perform(runtime: runtime, openURL: openURL) } label: { mark }
+                Button { target.perform(runtime: runtime, openURL: openURL) } label: { tagged }
                     .buttonStyle(.plain)
             } else {
-                mark
+                tagged
             }
         }
     }
@@ -520,8 +420,7 @@ struct CmsTopNavBlockView: View {
         }
     }
 
-    private var collapsed: Bool {
-        guard block.props.bool("collapseOnMobile") ?? true else { return false }
+    private var compact: Bool {
         #if os(iOS)
         return sizeClass == .compact
         #else
@@ -529,9 +428,62 @@ struct CmsTopNavBlockView: View {
         #endif
     }
 
+    private var collapsed: Bool {
+        guard !menuButton, block.props.bool("collapseOnMobile") ?? true else { return false }
+        #if os(iOS)
+        return sizeClass == .compact
+        #else
+        return false
+        #endif
+    }
+
+    /// The hosted menu button: opens the drawer the shell's sidebar
+    /// registered for the left edge.
+    @ViewBuilder
+    private var hostedMenuButton: some View {
+        if menuButton, let slot = runtime.edgeSwipeLeftSlot {
+            Button {
+                runtime.openDrawer = CmsRuntime.DrawerRequest(edge: .leading, slot: slot)
+            } label: {
+                Image(systemName: "line.3.horizontal")
+                    .font(.system(size: 18, weight: .medium))
+                    .foregroundColor(labelColor)
+                    .frame(width: 36, height: 36)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Open menu")
+            .cmsInspectorID("Cms.topNav.hostedMenu")
+        }
+    }
+
+    /// The bar's own corners (`radius`, CSS order: top-left, top-right,
+    /// bottom-right, bottom-left), e.g. a bar hanging from the top edge.
+    private var barShape: UnevenRoundedRectangle {
+        let parts = (block.props.string("radius") ?? "").split(separator: " ").map { CmsCss.points(String($0)) ?? 0 }
+        let r: [CGFloat] = switch parts.count {
+        case 1: [parts[0], parts[0], parts[0], parts[0]]
+        case 2: [parts[0], parts[1], parts[0], parts[1]]
+        case 3: [parts[0], parts[1], parts[2], parts[1]]
+        case 4: parts
+        default: [0, 0, 0, 0]
+        }
+        return UnevenRoundedRectangle(topLeadingRadius: r[0], bottomLeadingRadius: r[3],
+                                      bottomTrailingRadius: r[2], topTrailingRadius: r[1], style: .continuous)
+    }
+
     var body: some View {
         HStack(spacing: CmsCss.points(block.props.string("itemGap")) ?? 8) {
-            if collapsed {
+            if menuButton && compact {
+                // TopNavBlock with a menu button on a phone: the menu, the
+                // logo, then the end items; the centre links live in the menu.
+                hostedMenuButton
+                if logoAlign != "end" { logoMark }
+                pageTitle
+                Spacer(minLength: 0)
+                ForEach(items.filter { $0.align == "end" }) { barItem($0) }
+                if logoAlign == "end" { logoMark }
+            } else if collapsed {
                 Menu { MenuIcons {
                     menuEntries(items)
                 }} label: {
@@ -550,7 +502,9 @@ struct CmsTopNavBlockView: View {
         .padding(.horizontal, CmsCss.points(block.props.string("paddingX")) ?? 12)
         .frame(minHeight: CmsCss.points(block.props.string("height")) ?? 44)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(runtime.fill(block.props.string("background")) ?? AnyShapeStyle(Color.clear))
+        .background(runtime.fill(block.props.string("background")) ?? AnyShapeStyle(Color.clear), in: barShape)
+        .onAppear { if menuButton { runtime.barHostsMenu = true } }
+        .onDisappear { if menuButton { runtime.barHostsMenu = false } }
         .overlay(alignment: .bottom) {
             if block.props.bool("borderBottom") ?? false {
                 Rectangle()
@@ -574,6 +528,7 @@ struct CmsTopNavBlockView: View {
         let center = items.filter { zone($0) == "center" }
         let end = items.filter { zone($0) == "end" }
         return HStack(spacing: CmsCss.points(block.props.string("itemGap")) ?? 8) {
+            hostedMenuButton
             if logoAlign == "start" { logoMark }
             pageTitle
             ForEach(start) { barItem($0) }
@@ -603,7 +558,10 @@ struct CmsTopNavBlockView: View {
         if item.divider {
             Divider().frame(height: 20)
         }
-        if item.iconOnly, let symbol = CmsNavIcon.symbol(for: item.icon) {
+        if let embed = item.embed {
+            CmsBlockRegistry.render(embed, axis: .horizontal)
+                .foregroundColor(labelColor)
+        } else if item.iconOnly, let symbol = CmsNavIcon.symbol(for: item.icon) {
             iconOnlyEntry(item, symbol: symbol)
         } else if !item.children.isEmpty {
             Menu { MenuIcons {

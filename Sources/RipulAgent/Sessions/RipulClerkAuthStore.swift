@@ -135,6 +135,8 @@ public final class RipulClerkAuthStore: ObservableObject {
         // signed out of. Without this they stay visible through the sign-in
         // screen and into the next account's list — see RipulAccountScopedCache.
         RipulAccountScopedCache.purge(cache: cache)
+        // A site picked in the dev helper was one this account belongs to.
+        RipulSiteSwitch.reset()
     }
 
     private func extractToken() async {

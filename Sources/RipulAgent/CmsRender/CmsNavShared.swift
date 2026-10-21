@@ -30,6 +30,12 @@ struct CmsNavItem: Identifiable {
     var badgeTone: String? = nil
     /// Top bar: icon-only entry (the label becomes the accessibility label).
     var iconOnly: Bool = false
+    /// A block shown in the item's place (`item.block`: a bell, an account
+    /// avatar), rendered through the block registry.
+    var embed: CmsBlock? = nil
+    /// everyone | members | roles (navVisibility.ts).
+    var visibility: String? = nil
+    var requiredRoles: [String] = []
 
     static func decode(_ json: CmsJSON) -> CmsNavItem? {
         guard let obj = json.objectValue else { return nil }
@@ -51,8 +57,42 @@ struct CmsNavItem: Identifiable {
             heading: obj.bool("heading") ?? false,
             badge: obj.string("badge"),
             badgeTone: obj.string("badgeTone"),
-            iconOnly: obj.bool("iconOnly") ?? false
+            iconOnly: obj.bool("iconOnly") ?? false,
+            embed: embedBlock(obj["block"]),
+            visibility: obj.string("visibility"),
+            requiredRoles: obj["requiredRoles"]?.arrayValue?.compactMap(\.stringValue) ?? []
         )
+    }
+
+    /// An embedded block definition (`{ type, props }`) as a renderable block.
+    private static func embedBlock(_ json: CmsJSON?) -> CmsBlock? {
+        guard let obj = json?.objectValue, let type = obj.string("type") else { return nil }
+        return CmsBlock(
+            id: "embed:\(type)", slug: nil, name: nil, hidden: nil, visibleOn: nil, type: type,
+            props: obj.object("props") ?? [:], frame: nil, position: nil, children: nil, bindings: nil
+        )
+    }
+
+    /// `canViewNavItem` (navVisibility.ts): designers see everything; an
+    /// empty role list never falls back to "all members".
+    func canView(membership: CmsPortalMembership?, canDesign: Bool) -> Bool {
+        guard let visibility, visibility != "everyone", !canDesign else { return true }
+        if let role = membership?.role, CmsPageVisibility.bypassRoles.contains(role) { return true }
+        if visibility == "members" { return membership?.isMember == true }
+        guard !requiredRoles.isEmpty else { return false }
+        if requiredRoles.contains(CmsPageVisibility.publicRole) { return true }
+        guard let role = membership?.role else { return false }
+        return requiredRoles.contains(role)
+    }
+
+    /// `resolveVisibleNavItems`: hidden items take their submenu with them.
+    static func visible(_ items: [CmsNavItem], membership: CmsPortalMembership?, canDesign: Bool) -> [CmsNavItem] {
+        items.compactMap { item in
+            guard item.canView(membership: membership, canDesign: canDesign) else { return nil }
+            var copy = item
+            copy.children = visible(item.children, membership: membership, canDesign: canDesign)
+            return copy
+        }
     }
 
     static func decodeList(_ json: CmsJSON?) -> [CmsNavItem] {

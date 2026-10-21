@@ -36,6 +36,54 @@ final class SessionReadStateTests: XCTestCase {
 
     // MARK: - What makes a chat wait
 
+    func testHumanRepliesAdvanceUnreadAndRecencyWithoutAnAgentTurn() {
+        let cache = cache(); let bridge = bridge(cache)
+        let at = Date().addingTimeInterval(-10)
+        let session = ChatSession(id: "guest-tab", sourceChatId: "shared-local", displayName: "Group",
+                                  createdAt: .distantPast, hostChatId: "cli_owner-chat",
+                                  latestReplyAuthorName: "Bob", latestHumanReplyAt: at)
+        bridge.sessions = [session]
+        XCTAssertEqual(bridge.sessionList.lastActive(for: "cli_owner-chat"), at)
+        XCTAssertEqual(waiting(cache), ["shared-local"])
+        bridge.markSessionRead("guest-tab")
+        bridge.receiveHumanReplyActivity([session])
+        XCTAssertEqual(waiting(cache), [], "Replaying metadata cannot unread a seen message")
+        XCTAssertEqual(bridge.sessionList.lastActive(for: "cli_owner-chat"), at, "Reading keeps recency")
+        var newer = session
+        newer.latestHumanReplyAt = Date().addingTimeInterval(1)
+        bridge.sessions = [newer]
+        XCTAssertEqual(waiting(cache), ["shared-local"])
+    }
+
+    func testSelfRepliesMoveTheRowWithoutMakingItUnread() {
+        let cache = cache(); let bridge = bridge(cache)
+        let at = Date()
+        bridge.sessions = [ChatSession(id: "self-tab", sourceChatId: "self-chat", displayName: "Group",
+                                      createdAt: .distantPast, latestHumanReplyAt: at)]
+        XCTAssertEqual(waiting(cache), [])
+        XCTAssertEqual(bridge.sessionList.lastActive(for: "self-chat"), at)
+    }
+
+    func testASelectedChatBehindTheListHasNotBeenRead() {
+        let cache = cache(); let bridge = bridge(cache)
+        let attention = PendingQuestionStore.shared
+        attention.configure(accountId: "read-test-\(UUID())", tokenProvider: { nil })
+        defer { attention.configure(accountId: nil, tokenProvider: { nil }); attention.visibleChatId = nil }
+        bridge.sessions = [ChatSession(id: "tab", sourceChatId: "shared", displayName: "Group",
+                                      createdAt: .distantPast, hostChatId: "cli_owner")]
+        bridge.activeSessionId = "tab"
+        attention.visibleChatId = nil
+        var reply = bridge.sessions[0]
+        reply.latestHumanReplyAt = Date().addingTimeInterval(1)
+        reply.latestReplyAuthorName = "Bob"
+        bridge.sessions = [reply]
+        XCTAssertEqual(waiting(cache), ["shared"])
+        attention.visibleChatId = "cli_owner"
+        reply.latestHumanReplyAt = Date().addingTimeInterval(2)
+        bridge.sessions = [reply]
+        XCTAssertEqual(waiting(cache), [], "The canonical owner id identifies the visible shared chat")
+    }
+
     func testATurnThatEndsWaitsAndOneThatIsRunningDoesNot() {
         let cache = cache(); let bridge = bridge(cache)
         turn(bridge, "Started", chat: "a")

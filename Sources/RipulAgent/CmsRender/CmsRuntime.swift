@@ -34,6 +34,67 @@ public final class CmsRuntime: ObservableObject {
     /// Shared card views (cardViewRef target), keyed by slug — set by the
     /// loader; the grid's cards projection resolves its `cardViewRef`.
     public var cardViews: [String: CmsCardView] = [:]
+    /// The signed-in member (role, email), when known — nav visibility, the
+    /// account menu and the bell's read records read it.
+    @Published public var membership: CmsPortalMembership?
+    /// The owner path (admin fetch) or a member allowed to design: sees every
+    /// nav item, as a designer does on the web.
+    public var canDesign = false
+    /// Title of every page the visitor can open, by slug — links that name a
+    /// page (a notification's, an account menu entry) read and check it here.
+    public var pageTitles: [String: String] = [:]
+    /// An `agentChat` with `fab` on this page: the page draws its floating
+    /// button. Registered by the block while it is on screen.
+    @Published public var floatingChat: CmsBlock?
+    /// Blocks each Page tabs block hides (closed tabs) and floats (a chat as
+    /// the floating button), by block id or slug — pageTabsStore.ts. Hidden
+    /// blocks stay mounted, so they keep what they loaded.
+    @Published public private(set) var tabsHidden: [String: Set<String>] = [:]
+    @Published public private(set) var tabsFloating: [String: Set<String>] = [:]
+
+    public func setTabsHidden(_ owner: String, _ refs: Set<String>) {
+        if tabsHidden[owner] != refs { tabsHidden[owner] = refs.isEmpty ? nil : refs }
+    }
+
+    public func setTabsFloating(_ owner: String, _ refs: Set<String>) {
+        if tabsFloating[owner] != refs { tabsFloating[owner] = refs.isEmpty ? nil : refs }
+    }
+
+    func isTabHidden(_ block: CmsBlock) -> Bool {
+        tabsHidden.values.contains { $0.contains(block.id) || (block.slug.map($0.contains) ?? false) }
+    }
+
+    func isTabFloating(_ block: CmsBlock) -> Bool {
+        tabsFloating.values.contains { $0.contains(block.id) || (block.slug.map($0.contains) ?? false) }
+    }
+
+    /// The page's chat blocks by slug, registered while on screen, so a block
+    /// can ask one (askChat) wherever it sits.
+    public var chatBlocks: [String: CmsBlock] = [:]
+
+    /// A question for one of the page's chats: it opens in a fresh
+    /// conversation that sends the prompt at once (the web's askChat).
+    public struct ChatAsk: Identifiable {
+        public let id = UUID()
+        public let block: CmsBlock
+        public let prompt: String
+    }
+    @Published public var chatAsk: ChatAsk?
+
+    /// Ask the chat block `slug` a question. False when no such chat is on the page.
+    @discardableResult
+    public func ask(chat slug: String, prompt: String) -> Bool {
+        guard let block = chatBlocks[slug], !prompt.isEmpty else { return false }
+        chatAsk = ChatAsk(block: block, prompt: prompt)
+        return true
+    }
+
+    /// A top bar with `menuButton` is hosting the shell sidebar's drawer.
+    @Published public var barHostsMenu = false
+    /// Host hook for the account menu's Sign out; nil hides the item.
+    public var onSignOut: (() -> Void)?
+    /// Saved mutations, keyed by slug — set by the loader; action blocks run them.
+    public var mutationDefs: [String: CmsMutationDef] = [:]
     /// Page-scoped shared column definitions (columnDefsRef target), keyed by
     /// block slug — populated at page-display time from the page's columnDefs
     /// blocks. Native twin of the web's GridApiRegistry pub-sub at render time.
@@ -335,6 +396,83 @@ public final class CmsRuntime: ObservableObject {
             } catch {
                 self.queries[querySlug] = .error(error.localizedDescription)
             }
+        }
+    }
+
+    // MARK: - Mutations
+
+    /// `invalidateByQuerySlug`: a query some block has loaded runs again with
+    /// its current params; one nobody has asked for stays idle.
+    public func invalidate(_ querySlug: String) {
+        guard case .idle = state(for: querySlug) else {
+            runQuery(querySlug)
+            return
+        }
+    }
+
+    public enum MutationOutcome {
+        case done(affectedRows: Int, message: String)
+        case failed(String)
+    }
+
+    /// Params for a mutation, as `useBlockActionRunner` resolves them: the
+    /// mutation's own paramSources from selected rows, then the caller's
+    /// paramMap over them. nil = still waiting on a selection.
+    public func mutationParams(_ slug: String, paramMap: [String: CmsJSON]?) -> [String: CmsJSON]?? {
+        var params: [String: CmsJSON] = [:]
+        var waiting = false
+        for (name, source) in mutationDefs[slug]?.paramSources ?? [:] {
+            guard let sourceSlug = source.sourceQuerySlug, let column = source.column,
+                  let value = selectedRow(sourceSlug)?[column], value != .null else {
+                waiting = true
+                continue
+            }
+            params[name] = Self.typedString(value)
+        }
+        for (name, binding) in paramMap ?? [:] {
+            guard case .object(let b) = binding else { continue }
+            switch b.string("source") {
+            case "static":
+                if let value = b.string("value") { params[name] = .object(["value": .string(value), "type": .string("string")]) }
+            case "context":
+                if b.string("key") == "siteKeyId", let id = client.siteKeyId {
+                    params[name] = .object(["value": .string(id), "type": .string("string")])
+                }
+            case "selectedRow":
+                if let sourceSlug = b.string("querySlug"), let column = b.string("column"),
+                   let value = selectedRow(sourceSlug)?[column], value != .null {
+                    params[name] = Self.typedString(value)
+                } else {
+                    waiting = true
+                }
+            default:
+                break
+            }
+        }
+        if waiting && params.isEmpty { return .some(nil) }
+        return params.isEmpty ? .none : .some(params)
+    }
+
+    private static func typedString(_ value: CmsJSON) -> CmsJSON {
+        .object(["value": .string(value.displayString), "type": .string("string")])
+    }
+
+    /// Run a saved mutation and refresh the queries it names.
+    public func runMutation(_ slug: String, params: [String: CmsJSON]?) async -> MutationOutcome {
+        let def = mutationDefs[slug]
+        do {
+            let affected = try await client.runSavedMutation(cmsId: cmsId, mutationSlug: slug, params: params)
+            for querySlug in def?.invalidateQueries ?? [] { invalidate(querySlug) }
+            let message = def?.successMessage.flatMap { $0.isEmpty ? nil : $0 }
+                ?? "Done — \(affected) row(s) affected"
+            return .done(affectedRows: affected, message: message)
+        } catch CmsClientError.http(_, let body) {
+            // The worker answers a refusal as JSON with an `error`.
+            let message = (try? JSONDecoder().decode([String: CmsJSON].self, from: Data(body.utf8)))?
+                .string("error") ?? body
+            return .failed(message)
+        } catch {
+            return .failed(error.localizedDescription)
         }
     }
 

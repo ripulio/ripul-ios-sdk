@@ -21,6 +21,57 @@ public struct CmsBlockFrame: Codable, Equatable {
     public var borderWidth: String?
     public var borderRadius: String?
     public var shadow: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case size, fixedValue, width, minHeight, maxHeight, padding, margin, align
+        case background, borderColor, borderStyle, borderWidth, borderRadius, shadow
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        size = c.cssValue(.size)
+        fixedValue = c.cssValue(.fixedValue, number: .size)
+        width = c.cssValue(.width, number: .size)
+        minHeight = c.cssValue(.minHeight, number: .size)
+        maxHeight = c.cssValue(.maxHeight, number: .size)
+        padding = c.cssValue(.padding, number: .spacing)
+        margin = c.cssValue(.margin, number: .spacing)
+        align = c.cssValue(.align)
+        background = c.cssValue(.background)
+        borderColor = c.cssValue(.borderColor)
+        borderStyle = c.cssValue(.borderStyle)
+        borderWidth = c.cssValue(.borderWidth, number: .pixels)
+        borderRadius = c.cssValue(.borderRadius, number: .pixels)
+        shadow = c.cssValue(.shadow)
+    }
+}
+
+/// How a bare JSON number in a frame field reads on the web, where frames
+/// reach MUI's `sx`: spacing keys multiply the theme spacing (8), sizing keys
+/// are pixels above 1 and fractions at or below it, the rest are pixels.
+enum CmsCssNumber { case spacing, size, pixels, none }
+
+extension KeyedDecodingContainer {
+    /// A frame field as a CSS string. Accepts the string the designer
+    /// writes, or a number written by an agent or older tool, read the way
+    /// MUI reads it. Anything else is unset rather than a failed page.
+    func cssValue(_ key: Key, number: CmsCssNumber = .none) -> String? {
+        if let s = try? decodeIfPresent(String.self, forKey: key) { return s }
+        guard let n = try? decodeIfPresent(Double.self, forKey: key) else { return nil }
+        func px(_ v: Double) -> String {
+            v.rounded() == v ? "\(Int(v))px" : "\(v)px"
+        }
+        switch number {
+        case .spacing: return px(n * 8)
+        case .size: return n > 0 && n <= 1 ? "\(n * 100)%" : px(n)
+        case .pixels: return px(n)
+        case .none: return nil
+        }
+    }
+
+    func lenientBool(_ key: Key) -> Bool? {
+        try? decodeIfPresent(Bool.self, forKey: key)
+    }
 }
 
 public struct CmsContainerFrame: Codable, Equatable {
@@ -43,6 +94,35 @@ public struct CmsContainerFrame: Codable, Equatable {
     public var borderRadius: String?
     public var shadow: String?
     public var fullBleed: Bool?
+
+    private enum CodingKeys: String, CodingKey {
+        case width, minWidth, maxWidth, minHeight, maxHeight, padding, gap, background
+        case direction, alignItems, justifyContent, wrap, overflow
+        case borderColor, borderStyle, borderWidth, borderRadius, shadow, fullBleed
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        width = c.cssValue(.width, number: .size)
+        minWidth = c.cssValue(.minWidth, number: .size)
+        maxWidth = c.cssValue(.maxWidth, number: .size)
+        minHeight = c.cssValue(.minHeight, number: .size)
+        maxHeight = c.cssValue(.maxHeight, number: .size)
+        padding = c.cssValue(.padding, number: .spacing)
+        gap = c.cssValue(.gap, number: .spacing)
+        background = c.cssValue(.background)
+        direction = c.cssValue(.direction)
+        alignItems = c.cssValue(.alignItems)
+        justifyContent = c.cssValue(.justifyContent)
+        wrap = c.cssValue(.wrap)
+        overflow = c.cssValue(.overflow)
+        borderColor = c.cssValue(.borderColor)
+        borderStyle = c.cssValue(.borderStyle)
+        borderWidth = c.cssValue(.borderWidth, number: .pixels)
+        borderRadius = c.cssValue(.borderRadius, number: .pixels)
+        shadow = c.cssValue(.shadow)
+        fullBleed = c.lenientBool(.fullBleed)
+    }
 }
 
 public struct CmsBindingEntry: Codable, Equatable {
@@ -209,6 +289,10 @@ public struct CmsPage: Codable, Identifiable, Equatable {
     /// and open drawers by edge swipe (default true).
     public var nativeSidebarIcon: Bool?
     public var nativeSidebarEdgeSwipe: Bool?
+    /// The page carries its own chrome (sign-in, onboarding): no shell.
+    public var hideShell: Bool?
+    /// A shell of the page's own instead of the site's.
+    public var shellPageId: String?
 }
 
 /// Role-based page visibility — exact mirror of the web's
@@ -251,6 +335,8 @@ public struct CmsRenderDefinition: Codable {
     /// projection references one via `cardViewRef` to design the cards
     /// distinctly from its columns (own field set + card chrome).
     public var cardViews: [CmsCardView]?
+    public var portalConfig: CmsPortalConfig?
+    public var mutations: [CmsMutationDef]?
 }
 
 /// Shared column view (`columnViewRef` target): a named, query-scoped set of
@@ -276,6 +362,33 @@ public struct CmsCardView: Codable, Equatable {
     public var querySlug: String?
     public var columns: [CmsJSON]?
     public var card: CmsJSON?
+}
+
+/// Slice of CmsMutation an action needs: how its params resolve, what to
+/// ask first, what to say after, and which queries to refresh.
+public struct CmsMutationDef: Codable, Equatable {
+    public var slug: String
+    public var name: String?
+    public var paramSources: [String: CmsQueryParamSource]?
+    public var confirmMessage: String?
+    public var successMessage: String?
+    public var invalidateQueries: [String]?
+
+    private enum CodingKeys: String, CodingKey {
+        case slug, name, paramSources, confirmMessage, successMessage, invalidateQueries
+    }
+
+    /// Lenient past the slug: a mutation is a side table to rendering, so an
+    /// odd field drops that field, never the site.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        slug = try c.decode(String.self, forKey: .slug)
+        name = try? c.decodeIfPresent(String.self, forKey: .name)
+        paramSources = try? c.decodeIfPresent([String: CmsQueryParamSource].self, forKey: .paramSources)
+        confirmMessage = try? c.decodeIfPresent(String.self, forKey: .confirmMessage)
+        successMessage = try? c.decodeIfPresent(String.self, forKey: .successMessage)
+        invalidateQueries = try? c.decodeIfPresent([String].self, forKey: .invalidateQueries)
+    }
 }
 
 /// Slice of CmsQuery the runtime needs: slug, the SQL text (only to filter

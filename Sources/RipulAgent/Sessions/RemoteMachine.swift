@@ -18,6 +18,11 @@ public struct RemoteMachine: Identifiable, Codable, Equatable {
     public var teamName: String? = nil
     public var teamRole: String? = nil
     public var shared: Bool? = nil
+    /// On a Mac someone else shares with this person's team: what their role
+    /// may use beyond chats, area → "view" or "control" (`sharedMacAccess.ts`
+    /// in the web app). An area that is absent is off. The relay enforces it;
+    /// this only decides which screens to offer.
+    public var teamAccess: [String: String]? = nil
 
     public var destinationName: String {
         teamName.map { "\(displayName) · \($0)" } ?? displayName
@@ -111,10 +116,35 @@ public struct RemoteMachine: Identifiable, Codable, Equatable {
             : ["cli", "files", "tabs", "windows", "processes"]
     }
 
-    /// Does this machine serve the given capability?
+    /// Does this machine serve the given capability, to this person? On a
+    /// Mac shared with their team, a capability whose area the owner has not
+    /// shared is not offered. `cli` is chats, which a team always has.
     public func can(_ capability: String) -> Bool {
-        capabilities.contains(capability)
+        guard capabilities.contains(capability) else { return false }
+        guard isSharedWithMe, let areas = Self.capabilityAreas[capability] else { return true }
+        return areas.contains { teamAllows($0) }
     }
+
+    /// Someone else's Mac, shared with this person's team.
+    public var isSharedWithMe: Bool { shared == true }
+
+    /// May this person use `area` of the Mac at `level` ("view" or "control")?
+    /// Always true on their own Mac.
+    public func teamAllows(_ area: String, _ level: String = "view") -> Bool {
+        guard isSharedWithMe else { return true }
+        switch teamAccess?[area] {
+        case "control": return true
+        case "view": return level == "view"
+        default: return false
+        }
+    }
+
+    /// The areas behind each capability: any one of them is enough to offer it.
+    /// `windows` is the Dock's and the window mirror's.
+    static let capabilityAreas: [String: [String]] = [
+        "files": ["files"], "windows": ["dock", "screen"], "screen": ["screen"], "tabs": ["tabs"],
+        "processes": ["processes"], "trainyard": ["trainyard"], "bridge": ["devices"], "liveview": ["devices"],
+    ]
 
     /// The physical machine a browser host runs on (loopback-probed at
     /// registration). Nil for native hosts and for browsers with no local

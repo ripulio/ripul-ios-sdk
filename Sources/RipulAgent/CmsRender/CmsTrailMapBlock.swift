@@ -58,7 +58,7 @@ struct CmsTrailMapBlockView: View {
         } else {
             switch runtime.state(for: querySlug) {
             case .error(let message):
-                placeholder("Query error: \(message)", error: true)
+                placeholder(CmsQueryErrorText.describe(message).message, error: true)
             case .idle, .loading, .waiting:
                 // Web collapses idle/waiting/loading into one prompt.
                 placeholder("Select a shift to load its trail…")

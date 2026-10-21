@@ -251,7 +251,8 @@ extension AgentBridge {
                 teamId: item["teamId"] as? String,
                 teamName: item["teamName"] as? String,
                 teamRole: item["teamRole"] as? String,
-                shared: item["shared"] as? Bool
+                shared: item["shared"] as? Bool,
+                teamAccess: item["teamAccess"] as? [String: String]
             )
         }
         NSLog("[AgentBridge] listMachines: %d machines from web registry", parsed.count)
@@ -316,6 +317,10 @@ extension AgentBridge {
             }
             let isRunning = item["isRunning"] as? Bool ?? false
             let lastModifiedMs = item["lastModified"] as? Double
+            let rawModel = (item["model"] as? String) ?? (item["modelOverride"] as? String)
+            let inferredProvider = rawModel.flatMap { ProviderConstants.byModelId($0) }
+            let rawProvider = (item["provider"] as? String) ?? (item["modelType"] as? String) ?? inferredProvider?.providerKey
+            let rawProviderLabel = (item["providerLabel"] as? String) ?? inferredProvider?.label
             return RemoteSessionInfo(
                 id: id,
                 sourceChatId: sourceChatId,
@@ -327,9 +332,9 @@ extension AgentBridge {
                 cwd: item["cwd"] as? String,
                 gitBranch: item["gitBranch"] as? String,
                 messageCount: item["messageCount"] as? Int,
-                provider: item["provider"] as? String,
-                providerLabel: item["providerLabel"] as? String,
-                model: item["model"] as? String,
+                provider: rawProvider,
+                providerLabel: rawProviderLabel,
+                model: rawModel,
                 hostChatId: item["hostChatId"] as? String,
                 machineId: machineId,
                 teamVisibility: item["teamVisibility"] as? String,
