@@ -55,6 +55,12 @@
       "timestamp": "2026-10-21T10:20:46.000Z"
     },
     {
+      "repo": "ripul-sdk-release",
+      "sha": "9fd0e58186cff70b0791c86679a4c1c6f3f2b80a",
+      "subject": "chore(sdk): stamp ripulSDKVersion 0.7.181",
+      "timestamp": "2026-10-21T10:21:26.000Z"
+    },
+    {
       "repo": "ripul-ios-sdk",
       "sha": "7778495f1ac9319d0f743fff0e45c677fbbfba03",
       "subject": "Release v0.7.181 — sync from monorepo RipulAgent SDK",
@@ -168,5 +174,5 @@
   ],
   "shortcuts": [],
   "tags": [],
-  "updatedAt": "2026-10-21T10:21:31.422Z"
+  "updatedAt": "2026-10-21T10:38:38.884Z"
 }
