@@ -1,0 +1,172 @@
+{
+  "commits": [
+    {
+      "repo": "ripul-site-key-switch",
+      "sha": "dd40e293ba41073887b4d7466378c773056cc3cf",
+      "subject": "API: GET /v1/site-key/memberships lists the sites a signed-in person belongs to",
+      "timestamp": "2026-10-21T08:20:02.000Z"
+    },
+    {
+      "repo": "ripul-site-key-switch",
+      "sha": "427aa6706b2468fa7bbba3ed78862abb947dcb22",
+      "subject": "SDK: switch which Ripul site an app talks to, from the dev helper, in developer builds only",
+      "timestamp": "2026-10-21T08:31:02.000Z"
+    },
+    {
+      "repo": "ripul-site-key-switch",
+      "sha": "fa9018e78135e194c4071fb019d1b5b460a418ff",
+      "subject": "Upload check: refuse an app carrying the SDK's site switch",
+      "timestamp": "2026-10-21T08:32:27.000Z"
+    },
+    {
+      "repo": "ripul-site-key-switch",
+      "sha": "2516694b81c22fb2140a9dbf5151d15856b2657a",
+      "subject": "SDK site switch: redraw the marker when a scene activates; tests",
+      "timestamp": "2026-10-21T08:36:30.000Z"
+    },
+    {
+      "repo": "wac-site-key-switch",
+      "sha": "9c3a01fb757fb11145685f9ffd2b26de8fcd7e68",
+      "subject": "Ripul site follows the SDK dev helper's switch in sideloaded dev/beta builds",
+      "timestamp": "2026-10-21T08:36:32.000Z"
+    },
+    {
+      "repo": "ripul-site-key-switch",
+      "sha": "6da1ff36c59a71db727e57a1ecde7cdaf1cafe14",
+      "subject": "Plan: switching the Ripul site from the SDK's dev helper",
+      "timestamp": "2026-10-21T08:38:49.000Z"
+    },
+    {
+      "repo": "ripul-site-key-switch",
+      "sha": "5ec710a08c7fcfd09371c1d488d7544b99245d3d",
+      "subject": "Plan: wac branch proved against the local SDK; a Charts link failure in SDK main",
+      "timestamp": "2026-10-21T08:51:43.000Z"
+    },
+    {
+      "repo": "ripul-sdk-release",
+      "sha": "a88c538a3edbb84bcca3942b221ed0c03c6c4585",
+      "subject": "SDK: draw varianceImpact's months without Swift Charts, so wac links",
+      "timestamp": "2026-10-21T10:20:45.000Z"
+    },
+    {
+      "repo": "ripul-sdk-release",
+      "sha": "9455d688d48b89c9ea43e2316b1c59116c6a4148",
+      "subject": "SDK: draw varianceImpact's months without Swift Charts, so wac links",
+      "timestamp": "2026-10-21T10:20:46.000Z"
+    },
+    {
+      "repo": "ripul-ios-sdk",
+      "sha": "7778495f1ac9319d0f743fff0e45c677fbbfba03",
+      "subject": "Release v0.7.181 — sync from monorepo RipulAgent SDK",
+      "timestamp": "2026-10-21T10:21:27.000Z"
+    }
+  ],
+  "contributors": [
+    {
+      "clientId": "web-user_3AONWcmlO5RS8dj3lRzQZtYXFxA",
+      "clientType": "web",
+      "displayName": "Peter Maude",
+      "firstSeenAt": "2026-10-21T08:13:40.883Z",
+      "lastSeenAt": "2026-10-21T09:57:36.854Z"
+    }
+  ],
+  "createdAt": "2026-10-21T08:13:40.899Z",
+  "deployments": [],
+  "filesEdited": [
+    {
+      "editCount": 4,
+      "fileName": "siteKeyMemberships.test.ts",
+      "filePath": "/tmp/ripul-site-key-switch/chrome-extension/packages/api/src/siteKeys/__tests__/siteKeyMemberships.test.ts",
+      "firstSeenAt": "2026-10-21T08:18:54.820Z",
+      "lastSeenAt": "2026-10-21T09:58:02.445Z",
+      "toolName": "Write"
+    },
+    {
+      "editCount": 4,
+      "fileName": "RipulSiteSwitch.swift",
+      "filePath": "/tmp/ripul-site-key-switch/ripul-ios-sdk/Sources/RipulAgent/SiteSwitch/RipulSiteSwitch.swift",
+      "firstSeenAt": "2026-10-21T08:22:09.137Z",
+      "lastSeenAt": "2026-10-21T09:58:02.752Z",
+      "toolName": "Write"
+    },
+    {
+      "editCount": 4,
+      "fileName": "RipulSiteSwitchScreen.swift",
+      "filePath": "/tmp/ripul-site-key-switch/ripul-ios-sdk/Sources/RipulAgent/SiteSwitch/RipulSiteSwitchScreen.swift",
+      "firstSeenAt": "2026-10-21T08:22:50.642Z",
+      "lastSeenAt": "2026-10-21T09:58:02.980Z",
+      "toolName": "Write"
+    },
+    {
+      "editCount": 6,
+      "fileName": "test_check_private_apis.py",
+      "filePath": "/tmp/ripul-site-key-switch/ripul-native-app/scripts/test_check_private_apis.py",
+      "firstSeenAt": "2026-10-21T08:31:54.893Z",
+      "lastSeenAt": "2026-10-21T09:58:03.446Z",
+      "toolName": "Write"
+    },
+    {
+      "editCount": 6,
+      "fileName": "check_store_build.py",
+      "filePath": "/tmp/wac-site-key-switch/scripts/check_store_build.py",
+      "firstSeenAt": "2026-10-21T08:34:11.042Z",
+      "lastSeenAt": "2026-10-21T09:58:03.683Z",
+      "toolName": "Write"
+    },
+    {
+      "editCount": 6,
+      "fileName": "test_check_store_build.py",
+      "filePath": "/tmp/wac-site-key-switch/scripts/test_check_store_build.py",
+      "firstSeenAt": "2026-10-21T08:34:18.892Z",
+      "lastSeenAt": "2026-10-21T09:58:03.889Z",
+      "toolName": "Write"
+    },
+    {
+      "editCount": 6,
+      "fileName": "RipulSiteSwitchTests.swift",
+      "filePath": "/tmp/ripul-site-key-switch/ripul-ios-sdk/Tests/RipulAgentTests/RipulSiteSwitchTests.swift",
+      "firstSeenAt": "2026-10-21T08:35:39.366Z",
+      "lastSeenAt": "2026-10-21T09:58:04.099Z",
+      "toolName": "Write"
+    },
+    {
+      "editCount": 4,
+      "fileName": "sdk-site-key-switch.md",
+      "filePath": "/tmp/ripul-site-key-switch/chrome-extension/docs/plans/sdk-site-key-switch.md",
+      "firstSeenAt": "2026-10-21T08:38:42.171Z",
+      "lastSeenAt": "2026-10-21T08:38:42.578Z",
+      "toolName": "Write"
+    }
+  ],
+  "id": "cli_8d53825d-b00a-4220-985d-861501e4ab60",
+  "milestones": [
+    {
+      "anchor": {
+        "ts": 1792571938423
+      },
+      "at": "2026-10-21T08:38:58.423Z",
+      "author": "agent",
+      "createdAt": "2026-10-21T08:38:58.525Z",
+      "detail": "sdk-site-key-switch in ripul and wac: RipulSiteSwitch (RIPUL_DEVELOPER_TOOLS only), GET /v1/site-key/memberships, upload checks refuse the switch. Nothing deployed (freeze).",
+      "id": "ms_mvhv1rw7_kyxd",
+      "kind": "delivered",
+      "title": "Site switch built on branches: SDK, server listing, upload checks",
+      "updatedAt": "2026-10-21T08:38:58.525Z"
+    }
+  ],
+  "modelHistory": [],
+  "notes": [],
+  "participants": [
+    {
+      "displayName": "Peter Maude",
+      "firstSeenAt": "2026-10-21T08:13:40.950Z",
+      "group": "web",
+      "id": "human-user_3AONWcmlO5RS8dj3lRzQZtYXFxA",
+      "kind": "human",
+      "lastSeenAt": "2026-10-21T09:57:36.982Z"
+    }
+  ],
+  "shortcuts": [],
+  "tags": [],
+  "updatedAt": "2026-10-21T10:21:31.422Z"
+}
