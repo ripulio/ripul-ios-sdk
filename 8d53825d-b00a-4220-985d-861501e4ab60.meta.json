@@ -65,6 +65,12 @@
       "sha": "7778495f1ac9319d0f743fff0e45c677fbbfba03",
       "subject": "Release v0.7.181 — sync from monorepo RipulAgent SDK",
       "timestamp": "2026-10-21T10:21:27.000Z"
+    },
+    {
+      "repo": "wac-site-key-switch",
+      "sha": "2d235597af57f409a92bd1b64bb249e386999014",
+      "subject": "Ripul SDK 0.7.181: the site switch, and the impact chart that links beside the Charts pod",
+      "timestamp": "2026-10-21T10:38:35.000Z"
     }
   ],
   "contributors": [
@@ -153,11 +159,11 @@
       "at": "2026-10-21T08:38:58.423Z",
       "author": "agent",
       "createdAt": "2026-10-21T08:38:58.525Z",
-      "detail": "sdk-site-key-switch in ripul and wac: RipulSiteSwitch (RIPUL_DEVELOPER_TOOLS only), GET /v1/site-key/memberships, upload checks refuse the switch. Nothing deployed (freeze).",
+      "detail": "Charts link fix on ripul main (9455d688d), SDK v0.7.181 public, wac v3 fast-forwarded to 2d235597a. wac prod and beta link; prod passes the store check. No phone installs, OTA or TestFlight.",
       "id": "ms_mvhv1rw7_kyxd",
       "kind": "delivered",
-      "title": "Site switch built on branches: SDK, server listing, upload checks",
-      "updatedAt": "2026-10-21T08:38:58.525Z"
+      "title": "Site switch released: SDK 0.7.181 published, wac v3 on it",
+      "updatedAt": "2026-10-21T10:39:47.343Z"
     }
   ],
   "modelHistory": [],
@@ -174,5 +180,5 @@
   ],
   "shortcuts": [],
   "tags": [],
-  "updatedAt": "2026-10-21T10:38:38.884Z"
+  "updatedAt": "2026-10-21T10:40:03.963Z"
 }
