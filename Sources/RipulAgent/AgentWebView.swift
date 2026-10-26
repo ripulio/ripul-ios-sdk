@@ -433,10 +433,16 @@ final class AgentWebViewController: UIViewController {
 public struct AgentWebView: View {
     public let configuration: AgentConfiguration
     public var bridge: AgentBridge
+    var keyboardNavigationInset: CGFloat?
 
     public init(configuration: AgentConfiguration, bridge: AgentBridge) {
+        self.init(configuration: configuration, bridge: bridge, keyboardNavigationInset: nil)
+    }
+
+    init(configuration: AgentConfiguration, bridge: AgentBridge, keyboardNavigationInset: CGFloat?) {
         self.configuration = configuration
         self.bridge = bridge
+        self.keyboardNavigationInset = keyboardNavigationInset
     }
 
     /// Where top chrome sits in this window, fed by `WindowTopChrome`.
@@ -447,7 +453,7 @@ public struct AgentWebView: View {
     @State private var topChrome = WindowTopChromeClearance()
 
     public var body: some View {
-        AgentWebViewRepresentable(configuration: configuration, bridge: bridge)
+        AgentWebViewRepresentable(configuration: configuration, bridge: bridge, keyboardNavigationInset: keyboardNavigationInset)
             .background(WindowTopChrome { topChrome = $0 })
             .overlay(alignment: .top) {
                 if !configuration.hostRendersMasthead, let config = bridge.mastheadConfig {
@@ -471,12 +477,13 @@ public struct AgentWebView: View {
 private struct AgentWebViewRepresentable: UIViewControllerRepresentable {
     let configuration: AgentConfiguration
     let bridge: AgentBridge
+    let keyboardNavigationInset: CGFloat?
 
     func makeCoordinator() -> AgentWebView.Coordinator {
         AgentWebView.Coordinator(bridge: bridge, baseHost: configuration.baseURL.host, standalone: configuration.standalone)
     }
 
-    func makeUIViewController(context: Context) -> AgentWebViewController {
+    func makeUIViewController(context: Context) -> KeyboardAttachedWebViewController {
         let config = WKWebViewConfiguration()
         bridge.hostRendersMasthead = configuration.hostRendersMasthead
         if configuration.hostRendersMasthead {
@@ -680,15 +687,16 @@ private struct AgentWebViewRepresentable: UIViewControllerRepresentable {
         NSLog("[AgentWebView] Loading URL: %@", WebViewLogRedaction.url(url))
         webView.load(URLRequest(url: url))
 
-        return controller
+        return KeyboardAttachedWebViewController(content: controller, bridge: bridge,
+                                                 navigationInset: keyboardNavigationInset)
     }
 
-    func updateUIViewController(_ controller: AgentWebViewController, context: Context) {
-        // FullBleedWebView zeroes bottom safe area so web content fills the frame.
+    func updateUIViewController(_ controller: KeyboardAttachedWebViewController, context: Context) {
+        controller.update(navigationInset: keyboardNavigationInset)
     }
 
-    static func dismantleUIViewController(_ controller: AgentWebViewController, coordinator: AgentWebView.Coordinator) {
-        let webView = controller.webView
+    static func dismantleUIViewController(_ controller: KeyboardAttachedWebViewController, coordinator: AgentWebView.Coordinator) {
+        let webView = controller.content.webView
         coordinator.bridge.detachToolStripAnchor()
         AgentWebView.retire(webView)
         AgentPageLifecycle.retired(webView, bridge: coordinator.bridge)

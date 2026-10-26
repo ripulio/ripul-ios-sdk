@@ -13,6 +13,8 @@ public struct VoiceSettingsScreen: View {
     public init(tokenProvider: @escaping () -> String?) { self.tokenProvider = tokenProvider }
 
     @AppStorage(SpeechPreferences.dictationProviderKey, store: SpeechPreferences.store) private var chatDictationProvider = "apple"
+    @AppStorage(SpeechPreferences.ttsProviderKey, store: SpeechPreferences.store) private var ttsProvider = "elevenlabs"
+    @AppStorage(SpeechPreferences.phononVoiceKey, store: SpeechPreferences.store) private var phononVoiceId = PhononNativeSpeechProvider.defaultVoiceId
     // Must match SpeechPreferences.voiceModeStyle's fallback, or the picker
     // shows a selection the app is not actually using.
     @AppStorage(SpeechPreferences.voiceModeStyleKey, store: SpeechPreferences.store) private var voiceModeStyle = "compact"
@@ -56,8 +58,36 @@ public struct VoiceSettingsScreen: View {
                 }.ripulThemedListRows()
             }
 
-            // Standalone without a key speaks with Apple, so there is no model to choose.
-            if !(BundledAgentRuntime.isEnabled && !hasDeviceKey) {
+            Section {
+                Picker(selection: $ttsProvider) {
+                    Text("Phonon (on-device)").tag("phonon")
+                    Text("ElevenLabs").tag("elevenlabs")
+                        .disabled(BundledAgentRuntime.isEnabled && !hasDeviceKey)
+                } label: {
+                    Label("Speech provider", systemImage: "speaker.wave.2.bubble")
+                }
+                .uiKitIdentifier("VoiceSettingsScreen.ttsProvider")
+
+                if ttsProvider == "phonon" || (BundledAgentRuntime.isEnabled && !hasDeviceKey) {
+                    Picker(selection: $phononVoiceId) {
+                        ForEach(PhononNativeSpeechProvider.builtInVoiceCatalog) { voice in
+                            Text(voice.displayLabel).tag(voice.id)
+                        }
+                    } label: {
+                        Label("Phonon voice", systemImage: "person.wave.2")
+                    }
+                    .uiKitIdentifier("VoiceSettingsScreen.phononVoice")
+
+                    PhononModelStatusRow()
+                }
+            } header: { RipulSectionHeader {
+                Text("Text to speech")
+            } } footer: { RipulSectionFooter {
+                Text("Phonon 31m runs locally on the Apple Neural Engine with zero cloud latency or cost; ElevenLabs streams cloud voices.")
+            } }.ripulThemedListRows()
+            .disabled(isManaged)
+
+            if ttsProvider == "elevenlabs" && !(BundledAgentRuntime.isEnabled && !hasDeviceKey) {
                 Section {
                     ForEach(SpeechRole.allCases, id: \.self) { role in
                         ElevenLabsModelPicker(role: role, defaultLabel: defaultModelLabel)
@@ -238,5 +268,59 @@ private struct ElevenLabsModelPicker: View {
         case .acknowledgement: return "checkmark.bubble"
         case .readAloud: return "speaker.wave.2"
         }
+    }
+}
+
+@available(iOS 26.0, macOS 26.0, *)
+private struct PhononModelStatusRow: View {
+    @ObservedObject private var store = PhononModelStore.shared
+
+    var body: some View {
+        HStack(spacing: 10) {
+            switch store.status {
+            case .notInstalled:
+                Label("Phonon 31m model", systemImage: "arrow.down.circle")
+                Spacer()
+                Button("Download") {
+                    Task { try? await store.ensureInstalled() }
+                }
+                .uiKitIdentifier("VoiceSettingsScreen.phononDownload")
+            case .downloading(let progress):
+                Label("Downloading Phonon 31m…", systemImage: "arrow.down.circle")
+                Spacer()
+                Text("\(Int((progress * 100).rounded()))%")
+                    .font(.ripul(.caption))
+                    .foregroundStyle(.ripul(.textSecondary))
+                    .monospacedDigit()
+            case .extracting:
+                Label("Installing Phonon 31m…", systemImage: "shippingbox")
+                Spacer()
+                ProgressView()
+            case .compiling:
+                Label("Compiling for Neural Engine…", systemImage: "cpu")
+                Spacer()
+                ProgressView()
+            case .ready:
+                Label("Phonon 31m model", systemImage: "checkmark.circle.fill")
+                Spacer()
+                Text("Installed on device")
+                    .font(.ripul(.caption))
+                    .foregroundStyle(.ripul(.textSecondary))
+            case .failed(let message):
+                VStack(alignment: .leading, spacing: 2) {
+                    Label("Phonon 31m setup failed", systemImage: "exclamationmark.triangle")
+                        .foregroundStyle(.ripul(.danger))
+                    Text(message)
+                        .font(.ripul(.caption))
+                        .foregroundStyle(.ripul(.textSecondary))
+                }
+                Spacer()
+                Button("Retry") {
+                    Task { try? await store.ensureInstalled() }
+                }
+            }
+        }
+        .uiKitIdentifier("VoiceSettingsScreen.phononStatus")
+        .onAppear { store.refreshStatus() }
     }
 }

@@ -127,6 +127,162 @@ public enum LiveStreamProtocol {
     }
 }
 
+/// Hardware display geometry and bezel chrome for a simulated device screen,
+/// expressed in oriented simulator points after applying `quarterTurnsCCW`.
+public struct SimulatorDisplayChrome: Sendable, Equatable {
+    public var topLeftRadius: Double
+    public var topRightRadius: Double
+    public var bottomRightRadius: Double
+    public var bottomLeftRadius: Double
+    public var bezelTop: Double
+    public var bezelRight: Double
+    public var bezelBottom: Double
+    public var bezelLeft: Double
+    /// Which edge of the oriented display has a foldable hinge spine ("left", "top", "right", "bottom").
+    public var hingeEdge: String?
+    /// Which axis of the oriented display has an unfolded book crease ("horizontal", "vertical").
+    public var foldCreaseAxis: String?
+    /// Sensor cutout kind ("island", "notch") and which oriented edge it sits on ("top", "left", "bottom", "right").
+    public var cutoutKind: String?
+    public var cutoutEdge: String?
+    public var quarterTurnsCCW: Int
+
+    /// Default iPhone hardware bezel geometry when a snapshot has not arrived yet.
+    public static let defaultPhone = SimulatorDisplayChrome(
+        topLeftRadius: 55,
+        topRightRadius: 55,
+        bottomRightRadius: 55,
+        bottomLeftRadius: 55,
+        bezelTop: 14,
+        bezelRight: 14,
+        bezelBottom: 14,
+        bezelLeft: 14,
+        cutoutKind: "island",
+        cutoutEdge: "top",
+        quarterTurnsCCW: 0
+    )
+
+    public static let defaultLandscapePhone = SimulatorDisplayChrome.defaultPhone.rotated(byQuarterTurnsCCW: 1)
+
+    public init(
+        topLeftRadius: Double,
+        topRightRadius: Double,
+        bottomRightRadius: Double,
+        bottomLeftRadius: Double,
+        bezelTop: Double = 18,
+        bezelRight: Double = 18,
+        bezelBottom: Double = 18,
+        bezelLeft: Double = 18,
+        hingeEdge: String? = nil,
+        foldCreaseAxis: String? = nil,
+        cutoutKind: String? = nil,
+        cutoutEdge: String? = nil,
+        quarterTurnsCCW: Int = 0
+    ) {
+        self.topLeftRadius = topLeftRadius
+        self.topRightRadius = topRightRadius
+        self.bottomRightRadius = bottomRightRadius
+        self.bottomLeftRadius = bottomLeftRadius
+        self.bezelTop = bezelTop
+        self.bezelRight = bezelRight
+        self.bezelBottom = bezelBottom
+        self.bezelLeft = bezelLeft
+        self.hingeEdge = hingeEdge
+        self.foldCreaseAxis = foldCreaseAxis
+        self.cutoutKind = cutoutKind
+        self.cutoutEdge = cutoutEdge
+        self.quarterTurnsCCW = quarterTurnsCCW
+    }
+
+    public init?(json: [String: Any]) {
+        guard let tl = (json["topLeftRadius"] as? NSNumber)?.doubleValue,
+              let tr = (json["topRightRadius"] as? NSNumber)?.doubleValue,
+              let br = (json["bottomRightRadius"] as? NSNumber)?.doubleValue,
+              let bl = (json["bottomLeftRadius"] as? NSNumber)?.doubleValue else { return nil }
+        topLeftRadius = tl
+        topRightRadius = tr
+        bottomRightRadius = br
+        bottomLeftRadius = bl
+        bezelTop = (json["bezelTop"] as? NSNumber)?.doubleValue ?? 18
+        bezelRight = (json["bezelRight"] as? NSNumber)?.doubleValue ?? 18
+        bezelBottom = (json["bezelBottom"] as? NSNumber)?.doubleValue ?? 18
+        bezelLeft = (json["bezelLeft"] as? NSNumber)?.doubleValue ?? 18
+        hingeEdge = json["hingeEdge"] as? String
+        foldCreaseAxis = json["foldCreaseAxis"] as? String
+        cutoutKind = json["cutoutKind"] as? String
+        cutoutEdge = json["cutoutEdge"] as? String
+        quarterTurnsCCW = (json["quarterTurnsCCW"] as? NSNumber)?.intValue ?? 0
+    }
+
+    public var json: [String: Any] {
+        var out: [String: Any] = [
+            "topLeftRadius": topLeftRadius,
+            "topRightRadius": topRightRadius,
+            "bottomRightRadius": bottomRightRadius,
+            "bottomLeftRadius": bottomLeftRadius,
+            "bezelTop": bezelTop,
+            "bezelRight": bezelRight,
+            "bezelBottom": bezelBottom,
+            "bezelLeft": bezelLeft,
+            "quarterTurnsCCW": quarterTurnsCCW,
+        ]
+        if let hingeEdge { out["hingeEdge"] = hingeEdge }
+        if let foldCreaseAxis { out["foldCreaseAxis"] = foldCreaseAxis }
+        if let cutoutKind { out["cutoutKind"] = cutoutKind }
+        if let cutoutEdge { out["cutoutEdge"] = cutoutEdge }
+        return out
+    }
+
+    /// Rotates corners, bezel widths, hinge edge, crease axis, and cutout edge
+    /// by `turns` counter-clockwise 90° quarter-turns.
+    public func rotated(byQuarterTurnsCCW turns: Int) -> SimulatorDisplayChrome {
+        let steps = ((turns % 4) + 4) % 4
+        var result = self
+        result.quarterTurnsCCW = (quarterTurnsCCW + steps) % 4
+        guard steps > 0 else { return result }
+        for _ in 0..<steps {
+            let nextTL = result.topRightRadius
+            let nextTR = result.bottomRightRadius
+            let nextBR = result.bottomLeftRadius
+            let nextBL = result.topLeftRadius
+            result.topLeftRadius = nextTL
+            result.topRightRadius = nextTR
+            result.bottomRightRadius = nextBR
+            result.bottomLeftRadius = nextBL
+
+            let nextTop = result.bezelRight
+            let nextRight = result.bezelBottom
+            let nextBottom = result.bezelLeft
+            let nextLeft = result.bezelTop
+            result.bezelTop = nextTop
+            result.bezelRight = nextRight
+            result.bezelBottom = nextBottom
+            result.bezelLeft = nextLeft
+
+            result.hingeEdge = Self.rotateEdgeCCW(result.hingeEdge)
+            result.cutoutEdge = Self.rotateEdgeCCW(result.cutoutEdge)
+            if let axis = result.foldCreaseAxis {
+                result.foldCreaseAxis = (axis == "horizontal") ? "vertical" : "horizontal"
+            }
+        }
+        return result
+    }
+
+    private static func rotateEdgeCCW(_ edge: String?) -> String? {
+        switch edge {
+        case "top": return "left"
+        case "left": return "bottom"
+        case "bottom": return "right"
+        case "right": return "top"
+        case "topRight": return "topLeft"
+        case "topLeft": return "bottomLeft"
+        case "bottomLeft": return "bottomRight"
+        case "bottomRight": return "topRight"
+        default: return edge
+        }
+    }
+}
+
 /// A source's `config`, read by a viewer. A version 1 app says nothing of the
 /// version 2 fields; they read as an app's screen that takes touches.
 public struct LiveStreamConfig: Sendable, Equatable {
@@ -142,6 +298,8 @@ public struct LiveStreamConfig: Sendable, Equatable {
     public var pixelHeight: Int
     /// The source sends `still` pictures when the screen rests.
     public var stills: Bool
+    /// Optional simulator display curve and bezel chrome metadata.
+    public var chrome: SimulatorDisplayChrome?
 
     public init(json: [String: Any]) {
         version = (json["protocol"] as? NSNumber)?.intValue ?? 1
@@ -153,6 +311,7 @@ public struct LiveStreamConfig: Sendable, Equatable {
         pixelWidth = (json["pixelWidth"] as? NSNumber)?.intValue ?? 0
         pixelHeight = (json["pixelHeight"] as? NSNumber)?.intValue ?? 0
         stills = json["stills"] as? Bool ?? false
+        chrome = (json["chrome"] as? [String: Any]).flatMap(SimulatorDisplayChrome.init(json:))
     }
 
     /// The version 2 fields, for a source to add to the rest of its `config`.
@@ -183,11 +342,13 @@ public struct LiveStreamState: Sendable, Equatable {
     public var height: Double?
     /// The part of the source's own frame the picture shows, in its points: {x, y, width, height}.
     public var crop: [String: Double]?
+    /// Simulator display corner radii and bezel chrome in oriented points.
+    public var chrome: SimulatorDisplayChrome?
 
     public init() {}
 
     static let keys = ["title", "url", "loading", "canGoBack", "canGoForward", "cursor", "locked", "dialog",
-                       "width", "height", "crop"]
+                       "width", "height", "crop", "chrome"]
 
     public init(json: [String: Any]) {
         self.init()
@@ -214,6 +375,9 @@ public struct LiveStreamState: Sendable, Equatable {
         if json.keys.contains("crop") {
             crop = (json["crop"] as? [String: Any])?.compactMapValues { ($0 as? NSNumber)?.doubleValue }
         }
+        if json.keys.contains("chrome") {
+            chrome = (json["chrome"] as? [String: Any]).flatMap(SimulatorDisplayChrome.init(json:))
+        }
     }
 
     public var json: [String: Any] {
@@ -229,6 +393,7 @@ public struct LiveStreamState: Sendable, Equatable {
         if let width { json["width"] = width }
         if let height { json["height"] = height }
         if let crop { json["crop"] = crop }
+        if let chrome { json["chrome"] = chrome.json }
         return json
     }
 

@@ -21,6 +21,9 @@ import AppKit
 public enum FileAttachmentHelper {
     static let word = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
     static let powerPoint = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+    /// Word and PowerPoint 97-2003: the upload endpoint reads their text (files/legacyWord.ts, files/legacyPowerPoint.ts).
+    static let legacyWord = "application/msword"
+    static let legacyPowerPoint = "application/vnd.ms-powerpoint"
     static let spreadsheets = [
         "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         "xls": "application/vnd.ms-excel",
@@ -42,6 +45,7 @@ public enum FileAttachmentHelper {
     public static var allowedContentTypes: [UTType] {
         var types: [UTType] = [.image, .pdf, .text, .sourceCode, .json, .commaSeparatedText, .tabSeparatedText, .spreadsheet, .presentation]
         let documents = ["org.openxmlformats.wordprocessingml.document", "org.openxmlformats.presentationml.presentation",
+                         "com.microsoft.word.doc", "com.microsoft.powerpoint.ppt",
                          "org.openxmlformats.spreadsheetml.sheet", "com.microsoft.excel.xls", "org.oasis-open.opendocument.spreadsheet",
                          "net.daringfireball.markdown"]
         types += documents.compactMap { UTType($0) }
@@ -65,6 +69,8 @@ public enum FileAttachmentHelper {
         case "pdf": return "application/pdf"
         case "docx": return word
         case "pptx": return powerPoint
+        case "doc": return legacyWord
+        case "ppt": return legacyPowerPoint
         default: break
         }
         if let type = spreadsheets[ext] ?? namedText[ext] { return type }
@@ -77,7 +83,9 @@ public enum FileAttachmentHelper {
     /// document stops at 20 MB here: its base64 copy is handed to the page,
     /// and a larger one risks the page's memory on a phone.
     public static func maxBytes(for mediaType: String) -> Int {
-        if mediaType == "application/pdf" || mediaType == word || mediaType == powerPoint { return 20 * 1024 * 1024 }
+        if mediaType == "application/pdf" || mediaType == word || mediaType == powerPoint || mediaType == legacyPowerPoint { return 20 * 1024 * 1024 }
+        // An old Word file is parsed whole on the server, which takes 10 MB at most.
+        if mediaType == legacyWord { return 10 * 1024 * 1024 }
         if spreadsheets.values.contains(mediaType) { return 2 * 1024 * 1024 }
         return 10 * 1024 * 1024
     }
@@ -117,8 +125,8 @@ public enum FileAttachmentHelper {
     /// The symbol shown for a file in the composer.
     public static func symbolName(for mediaType: String, name: String?) -> String {
         if mediaType == "application/pdf" { return "doc.richtext" }
-        if mediaType == word { return "doc.text" }
-        if mediaType == powerPoint { return "rectangle.on.rectangle" }
+        if mediaType == word || mediaType == legacyWord { return "doc.text" }
+        if mediaType == powerPoint || mediaType == legacyPowerPoint { return "rectangle.on.rectangle" }
         if spreadsheets.values.contains(mediaType) || mediaType == "text/csv" || mediaType == "text/tab-separated-values" { return "tablecells" }
         let ext = fileExtension(name ?? "")
         if ext.isEmpty || ["txt", "text", "log", "md", "markdown", "rtf"].contains(ext) { return "doc.plaintext" }

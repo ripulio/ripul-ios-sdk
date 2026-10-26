@@ -61,12 +61,16 @@ final class RemoteThemeClientTests: XCTestCase {
         XCTAssertNotNil(second.lastError)
     }
 
-    func testNotModifiedRestoresServerOverLocalPreview() async throws {
+    // A 304 leaves the live theme alone: re-applying it re-rendered the app root on
+    // every foreground (3b89e5524). A local preview is not refreshed over; it ends
+    // with restoreAuthoritativeTheme, which puts the server's document back.
+    func testNotModifiedKeepsTheLiveThemeAndRestoreEndsALocalPreview() async throws {
         var current = Data()
+        var applied = 0
         var count = 0
         let remote = Data(#"{"title":"server"}"#.utf8)
         let client = RipulRemoteThemeClient(url: url, fallback: fallback, cacheDirectory: directory(),
-            validateAndApply: { current = $0 }, fetch: { request in
+            validateAndApply: { current = $0; applied += 1 }, fetch: { request in
                 count += 1
                 if count == 1 { return (remote, self.response(etag: "v1")) }
                 XCTAssertEqual(request.value(forHTTPHeaderField: "If-None-Match"), "v1")
@@ -74,10 +78,20 @@ final class RemoteThemeClientTests: XCTestCase {
             })
         try client.start()
         await client.refresh()
-        current = Data(#"{"title":"preview"}"#.utf8)
+        XCTAssertEqual(current, remote)
+        let appliedAfterServer = applied
         await client.refresh()
+        XCTAssertEqual(count, 2)
+        XCTAssertEqual(applied, appliedAfterServer, "A 304 re-applied the live theme")
         XCTAssertEqual(current, remote)
         XCTAssertNil(client.lastError)
+
+        try client.preview(Data(#"{"title":"preview"}"#.utf8))
+        await client.refresh()
+        XCTAssertEqual(count, 2, "A refresh ran over a local preview")
+        XCTAssertEqual(current, Data(#"{"title":"preview"}"#.utf8))
+        try client.restoreAuthoritativeTheme()
+        XCTAssertEqual(current, remote)
     }
 
     func testPreviewSurvivesEditorClosureAndRefreshUntilExplicitReset() async throws {

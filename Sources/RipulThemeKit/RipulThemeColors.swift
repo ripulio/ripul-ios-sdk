@@ -112,7 +112,7 @@ extension RipulTheme {
         if let name = value.systemName, let known = swiftUISystemColor(name) { return known }
         // What the host wrote before: `Color("BrandNavy")`.
         if let asset = value.assetName { return Color(asset) }
-        return Color(platformColor(value))
+        return colours.swiftUI(value) { Color(platformColor(value)) }
     }
 
     /// SwiftUI's own colour for a system name, where it has one. These, not a wrapped
@@ -144,11 +144,51 @@ extension RipulTheme {
     package static func platformColor(_ value: RipulColorValue) -> RipulPlatformColor {
         guard let dark = value.dark, dark != value.light else { return platformColor(value.light) }
         let light = value.light
-        #if canImport(UIKit)
-        return UIColor { $0.userInterfaceStyle == .dark ? platformColor(dark).resolvedColor(with: $0) : platformColor(light).resolvedColor(with: $0) }
-        #else
-        return NSColor(name: nil) { $0.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? platformColor(dark) : platformColor(light) }
-        #endif
+        return colours.platform(value) {
+            #if canImport(UIKit)
+            UIColor { $0.userInterfaceStyle == .dark ? platformColor(dark).resolvedColor(with: $0) : platformColor(light).resolvedColor(with: $0) }
+            #else
+            NSColor(name: nil) { $0.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? platformColor(dark) : platformColor(light) }
+            #endif
+        }
+    }
+
+    /// One colour object per value, made once.
+    ///
+    /// A light and dark pair is a dynamic colour, and two made from the same pair do not
+    /// compare equal (each is a new closure). SwiftUI compares a view's
+    /// foreground style with the one it last drew, so a new object from every body reads as a
+    /// change of colour, and inside an animation SwiftUI animates it, drawing the text from an
+    /// interpolated picture that moves on a path of its own. On 23 October 2026 the sidebar's
+    /// labels slid a row away from their icons while a machine opened, and the main thread
+    /// redrew their glyphs every frame. The same value always draws the same colour, and a
+    /// theme names a few, so they are kept for the life of the process.
+    private static let colours = ColourCache()
+
+    private final class ColourCache: @unchecked Sendable {
+        private let lock = NSLock()
+        private var platformColours: [RipulColorValue: RipulPlatformColor] = [:]
+        private var swiftUIColours: [RipulColorValue: Color] = [:]
+
+        func platform(_ value: RipulColorValue, make: () -> RipulPlatformColor) -> RipulPlatformColor {
+            lock.lock(); defer { lock.unlock() }
+            if let made = platformColours[value] { return made }
+            let made = make()
+            platformColours[value] = made
+            return made
+        }
+
+        /// Made outside the lock: making one asks `platform` for its platform colour.
+        func swiftUI(_ value: RipulColorValue, make: () -> Color) -> Color {
+            lock.lock()
+            if let made = swiftUIColours[value] { lock.unlock(); return made }
+            lock.unlock()
+            let made = make()
+            lock.lock(); defer { lock.unlock() }
+            if let other = swiftUIColours[value] { return other }
+            swiftUIColours[value] = made
+            return made
+        }
     }
 
     package static func platformColor(_ literal: RipulColorLiteral) -> RipulPlatformColor {

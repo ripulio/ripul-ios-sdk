@@ -22,13 +22,15 @@ final class FileAttachmentHelperTests: XCTestCase {
         XCTAssertEqual(FileAttachmentHelper.mediaType(forFileNamed: "Report.pdf"), "application/pdf")
         XCTAssertEqual(FileAttachmentHelper.mediaType(forFileNamed: "Notes.docx"), word)
         XCTAssertEqual(FileAttachmentHelper.mediaType(forFileNamed: "Deck.pptx"), powerPoint)
+        XCTAssertEqual(FileAttachmentHelper.mediaType(forFileNamed: "Old rota.doc"), "application/msword")
+        XCTAssertEqual(FileAttachmentHelper.mediaType(forFileNamed: "Old deck.PPT"), "application/vnd.ms-powerpoint")
         XCTAssertEqual(FileAttachmentHelper.mediaType(forFileNamed: "Budget.xlsx"), xlsx)
         XCTAssertEqual(FileAttachmentHelper.mediaType(forFileNamed: "data.csv"), "text/csv")
         XCTAssertEqual(FileAttachmentHelper.mediaType(forFileNamed: "README.md"), "text/markdown")
         for code in ["main.ts", "App.swift", "config.JSON", "Analysis.ipynb", "server.log", ".env"] {
             XCTAssertEqual(FileAttachmentHelper.mediaType(forFileNamed: code), "text/plain", code)
         }
-        for refused in ["logo.svg", "site.zip", "clip.mov", "Old.doc", "Talk.key"] {
+        for refused in ["logo.svg", "site.zip", "clip.mov", "Talk.key"] {
             XCTAssertNil(FileAttachmentHelper.mediaType(forFileNamed: refused), refused)
         }
     }
@@ -37,6 +39,8 @@ final class FileAttachmentHelperTests: XCTestCase {
         let megabyte = 1024 * 1024
         XCTAssertEqual(FileAttachmentHelper.maxBytes(for: "application/pdf"), 20 * megabyte)
         XCTAssertEqual(FileAttachmentHelper.maxBytes(for: word), 20 * megabyte)
+        XCTAssertEqual(FileAttachmentHelper.maxBytes(for: "application/msword"), 10 * megabyte)
+        XCTAssertEqual(FileAttachmentHelper.maxBytes(for: "application/vnd.ms-powerpoint"), 20 * megabyte)
         XCTAssertEqual(FileAttachmentHelper.maxBytes(for: xlsx), 2 * megabyte)
         XCTAssertEqual(FileAttachmentHelper.maxBytes(for: "text/plain"), 10 * megabyte)
     }

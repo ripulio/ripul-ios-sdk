@@ -108,6 +108,13 @@ public struct RemoteActionDescriptor: Identifiable {
     public let outputSchema: OutputSchema?
     public let resultView: String  // "native" | "html"
     public let emphasis: String    // "primary" (square tile) | "secondary" (compact row)
+    /// Whether the machine panel shows this action as a button. Off unless the
+    /// provider turns it on. Remote actions are also how the apps' own screens
+    /// (Dock, Processes, Trainyard, Devices) call the Mac, and those calls are
+    /// not buttons: before this flag the panel drew every one of them, 38 rows
+    /// by October 2026. Listed or not, an action runs by its id.
+    /// chrome-extension/docs/architecture/remoteActions.md has the rule.
+    public let listed: Bool
 
     public init(
         id: String,
@@ -120,7 +127,8 @@ public struct RemoteActionDescriptor: Identifiable {
         timeout: TimeInterval = 30,
         outputSchema: OutputSchema? = nil,
         resultView: String = "native",
-        emphasis: String = "secondary"
+        emphasis: String = "secondary",
+        listed: Bool = false
     ) {
         self.id = id
         self.displayName = displayName
@@ -133,9 +141,17 @@ public struct RemoteActionDescriptor: Identifiable {
         self.outputSchema = outputSchema
         self.resultView = resultView
         self.emphasis = emphasis
+        self.listed = listed
     }
 
     public var isPrimary: Bool { emphasis == "primary" }
+
+    /// A host built before `listed` sends no flag, and listed everything. Of
+    /// what such a host offers, only its scripts and System Info (its one
+    /// intrinsic action) were meant as buttons.
+    static func listedByOlderHost(category: String) -> Bool {
+        category == "script" || category == "intrinsic"
+    }
 
     /// Serialize to a JSON-compatible dictionary for the relay protocol.
     public var toDict: [String: Any] {
@@ -147,6 +163,9 @@ public struct RemoteActionDescriptor: Identifiable {
             "category": category,
             "destructive": destructive,
             "timeout": Int(timeout * 1000),  // convert to ms for the wire
+            // Always sent, false included: a missing flag is how an app
+            // recognises a host built before it.
+            "listed": listed,
         ]
         if let icon { dict["icon"] = icon }
         if let outputSchema { dict["outputSchema"] = outputSchema.toDict }
@@ -179,6 +198,7 @@ public struct RemoteActionDescriptor: Identifiable {
         }
         self.resultView = dict["resultView"] as? String ?? "native"
         self.emphasis = dict["emphasis"] as? String ?? "secondary"
+        self.listed = dict["listed"] as? Bool ?? Self.listedByOlderHost(category: category)
     }
 
     // MARK: - Cache
@@ -228,8 +248,16 @@ public struct RemoteActionDescriptor: Identifiable {
 // MARK: - Provider Protocol
 
 /// A provider that can discover and execute a category of remote actions.
+///
+/// This is the way for a screen in the apps to call the Mac: add a provider,
+/// call `AgentBridge.executeRemoteAction` with the action's id. Execution is
+/// routed by the id's category prefix, so an action runs whether or not it is
+/// discovered or listed.
 @MainActor public protocol RemoteActionProvider {
     var category: String { get }
+    /// Every action this provider runs, described for any caller. Only those
+    /// with `listed` on become buttons in the machine panel; leave it off for
+    /// an action a screen calls.
     func discoverActions() -> [RemoteActionDescriptor]
     func execute(actionId: String, params: [String: Any]) async throws -> [String: Any]
 }

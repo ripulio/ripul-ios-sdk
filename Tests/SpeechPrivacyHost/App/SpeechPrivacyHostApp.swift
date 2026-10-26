@@ -40,7 +40,7 @@ private struct PrivacyHostView: View {
             Spacer()
             NativeChatInput(
                 text: $text, imageAttachments: $images, selectedPhotos: $photos,
-                onSubmit: {}, speechProvider: provider,
+                onSubmit: { _ in }, speechProvider: provider,
                 onEnterVoiceMode: dictation ? nil : { _ in
                     voice.start(bridge: bridge, tokenProvider: nil)
                     return true

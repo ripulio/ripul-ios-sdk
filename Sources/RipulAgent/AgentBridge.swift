@@ -144,6 +144,7 @@ public final class AgentBridge: NSObject {
     public var wantsShowPlanReview = false
     public var sessions: [ChatSession] = ChatSession.loadCached() {
         didSet {
+            rememberActiveChatIdentity()
             receiveHumanReplyActivity(sessions)
             sessionsStream.send(sessions)
         }
@@ -193,6 +194,8 @@ public final class AgentBridge: NSObject {
     public var activeSessionId: String? {
         didSet {
             guard activeSessionId != oldValue else { return }
+            resolvedActiveChatIdentity = nil
+            rememberActiveChatIdentity()
             activeSessionIdStream.send(activeSessionId)
             // Entering a session by ANY route is reading it — the sessions
             // list, a deep link, a notification tap, Siri, the switcher. This
@@ -276,6 +279,7 @@ public final class AgentBridge: NSObject {
         didSet {
             restoreModelCatalogue()
             publishPinnedKeys()
+            restoreShowThinking()
         }
     }
     /// Model-catalogue fetch in flight. Lives in its own store: the flag flips
@@ -608,6 +612,8 @@ public final class AgentBridge: NSObject {
     }
     /// Provider actions projected from the shared composer policy.
     public let composerActions = RipulComposerActionStore()
+    /// Short "working toward" phrase per chat, shown in the composer shimmer while the agent works.
+    public let composerGoals = RipulComposerGoalStore()
 
     /// Whether the agent is currently running (processing) for the active session.
     /// Derived from `chatTurnPhases[activeSourceChatId]` — never set directly.
@@ -644,13 +650,14 @@ public final class AgentBridge: NSObject {
     /// Guard against stale agent:status pushes during web app initialization.
     /// Set to true after the first syncAgentStatus completes post-connection.
     @ObservationIgnored var initialStatusSyncComplete = false
-    /// Polling task that periodically syncs agent status while the agent is running.
-    /// Ensures the button clears even if push notifications are lost.
+    /// Compatibility for hosts predating revisioned run-state pushes. Remove
+    /// with legacy host support; modern hosts recover through revision heads.
+    @ObservationIgnored private var pushStatusChats: Set<String> = []
     @ObservationIgnored private var statusPollingTask: Task<Void, Never>?
-    /// Start polling agent status while the active chat is running. The pull
+    /// Poll only legacy hosts while the active chat is running. The pull
     /// result is applied per-chat by `syncAgentStatus`, so a poll can never
     /// poison another chat's state — it only corrects the chat it's about.
-    private func startStatusPolling() {
+    private func startLegacyStatusPolling() {
         statusPollingTask?.cancel()
         statusPollingTask = Task { [weak self] in
             // Wait 5s before first poll
@@ -674,6 +681,7 @@ public final class AgentBridge: NSObject {
 
     func resetLifecycleState() {
         pendingActiveSourceChatId = nil
+        pushStatusChats = []
         conversationTypingLabels = [:]
         stopStatusPolling()
         chatTurnPhases = [:]
@@ -712,8 +720,8 @@ public final class AgentBridge: NSObject {
         if agentTurnPhase != phase { agentTurnPhase = phase }
         if isAgentRunning != running { isAgentRunning = running }
         if isAgentPaused != paused { isAgentPaused = paused }
-        if phase == .running {
-            if statusPollingTask == nil { startStatusPolling() }
+        if phase == .running && !pushStatusChats.contains(activeSourceChatId ?? "") {
+            if statusPollingTask == nil { startLegacyStatusPolling() }
         } else {
             stopStatusPolling()
         }
@@ -723,10 +731,22 @@ public final class AgentBridge: NSObject {
     /// per-chat phase drives the pause/play buttons via
     /// `refreshActiveAgentFlags()`. A just-created chat that hasn't landed in
     /// `sessions` yet is covered by `pendingActiveSourceChatId`.
+    // Session-list refreshes may temporarily omit the selected row. They must
+    // not turn the current chat into nil and make the composer load an empty
+    // draft. This identity is scoped to the selected tab, never another chat.
+    @ObservationIgnored private var resolvedActiveChatIdentity: (sessionID: String, chatID: String)?
+
+    private func rememberActiveChatIdentity() {
+        guard let activeSessionId,
+              let chatID = sessions.first(where: { $0.id == activeSessionId })?.sourceChatId else { return }
+        resolvedActiveChatIdentity = (activeSessionId, chatID)
+    }
+
     private var activeSourceChatId: String? {
         if let pending = pendingActiveSourceChatId { return pending }
         guard let activeSessionId else { return nil }
-        return sessions.first(where: { $0.id == activeSessionId })?.sourceChatId
+        if let chatID = sessions.first(where: { $0.id == activeSessionId })?.sourceChatId { return chatID }
+        return resolvedActiveChatIdentity?.sessionID == activeSessionId ? resolvedActiveChatIdentity?.chatID : nil
     }
 
     /// The active chat's id, for features that need to ask the web layer about
@@ -791,6 +811,8 @@ public final class AgentBridge: NSObject {
         // "the app is being told about a turn that ended yesterday" is the
         // whole basis of the read watermark below.
         persistWaitingState(chatId: chatId, phase: phase, eventDate: Self.parseEpochMs(timestamp))
+        let previousPhase = chatTurnPhases[chatId]
+        let wasRunning = previousPhase == .running || previousPhase == .awaitingInput
         // The raw phase map keeps completed/failed distinct — the chat box must
         // NOT show the paused/play state for a finished turn.
         if phase == .idle {
@@ -806,6 +828,9 @@ public final class AgentBridge: NSObject {
         // from the previous turn.
         if phase == .idle || phase == .completed || phase == .failed {
             sessionList.latestActivityByChatId.removeValue(forKey: chatId)
+        }
+        if phase == .idle || phase == .completed || phase == .failed || (!wasRunning && phase == .running) {
+            composerGoals.update(chatId: chatId, goal: nil)
         }
         refreshActiveAgentFlags()
     }
@@ -997,8 +1022,8 @@ public final class AgentBridge: NSObject {
     public var voiceProfile: VoiceProfileConfig?
     /// Glass style for the native chat input: "regular", "clear", or "identity".
     public var chatInputGlassStyle: String?
-    /// Layout mode for the native chat input: nil/"single" (default) or "twoRow" (buttons below text area).
-    public var chatInputLayout: String?
+    /// Layout mode for the native chat input: nil/"twoRow" (default, buttons below text area) or "single".
+    public var chatInputLayout: String? = "twoRow"
     public private(set) var conversationModeSwitchers: [String: Bool] = [:]
     public private(set) var conversationModes: [String: String] = [:]
     /// A projection of the room's expiring activity, never persisted in native.
@@ -1046,6 +1071,19 @@ public final class AgentBridge: NSObject {
         _ = await callPage("__ripulClearReplyTarget", [chatId], .orElse("{success:false}"), log: .none)
     }
 
+    func setLocalReplyTarget(chatId: String, correlationId: String, senderDisplayName: String?, excerpt: String, role: String) {
+        guard !chatId.isEmpty else { return }
+        handleReplyTarget([
+            "chatId": chatId,
+            "target": [
+                "correlationId": correlationId,
+                "senderDisplayName": senderDisplayName ?? "",
+                "excerpt": excerpt,
+                "role": role,
+            ],
+        ])
+    }
+
     private func handleReplyTarget(_ dict: [String: Any]) {
         guard let chatId = dict["chatId"] as? String else { return }
         if let raw = dict["target"] as? [String: Any],
@@ -1088,8 +1126,6 @@ public final class AgentBridge: NSObject {
         return nil
     }
 
-    /// Whether to show "New to do" and "Pick to do" in the native chat "+" menu. Default true.
-    public var chatInputShowTodos: Bool = true
     /// Whether to show "Quick Commands" in the native chat "+" menu. Default true.
     public var chatInputShowQuickCommands: Bool = true
     /// A file view request awaiting native sheet presentation.
@@ -1098,7 +1134,8 @@ public final class AgentBridge: NSObject {
     private var nativeToolUIFeatures: [String] {
         let conversationFeatures = BundledAgentRuntime.isEnabled ? [] : ["nativeConversationTyping"]
         #if os(iOS)
-        var features = ["toolCallDetails", "nativeToolStrip"] + defaultToolActions.features + conversationFeatures
+        // claudeAccountLink: the app opens `ripul://claude-account` (a chat that could not sign in).
+        var features = ["toolCallDetails", "nativeToolStrip", "claudeAccountLink"] + defaultToolActions.features + conversationFeatures
         // The agent reaching for a simulator opens its picture here (showSimulatorPreview).
         if #available(iOS 26.0, *) { features.append("simulatorPreview:auto") }
         return features + (toolStripAnchor == nil ? [] : ["nativeToolStripAnchor", "nativeToolStripRows"]) + (nativeEmbeds == nil ? [] : nativeEmbedRenderers.features)
@@ -1112,12 +1149,15 @@ public final class AgentBridge: NSObject {
         #if os(iOS)
         if #available(iOS 26.0, *) {
             actions.register("simulator.preview") { [weak self] request in
-                guard let self, let chatId = request["chatId"] as? String, chatId == self.currentSourceChatId,
+                guard let self, let chatId = request["chatId"] as? String, !chatId.isEmpty,
                       let machineId = request["machineId"] as? String, !machineId.isEmpty,
                       let payload = request["payload"] as? [String: Any], let target = payload["target"],
                       let data = try? JSONSerialization.data(withJSONObject: target),
                       let simulator = try? JSONDecoder().decode(SimulatorTarget.self, from: data),
                       UUID(uuidString: simulator.udid) != nil else { return }
+                if let activeChatId = self.currentSourceChatId ?? (self.nativeChatScrollerEnabled ? self.nativeChat.currentChatId : nil) {
+                    self.simulatorPreview.show(chatId: activeChatId)
+                }
                 self.simulatorPreview.open(simulator, machineId: machineId, chatId: chatId)
             }
         }
@@ -1132,16 +1172,52 @@ public final class AgentBridge: NSObject {
     /// app that has a screen viewer (the Ripul app); without it the panel is a picture.
     public var simulatorLiveContent: ((String, String) -> AnyView)?
 
+    /// Full-screen live video of a simulator on a Mac when maximized from the
+    /// Simulator picture-in-picture: (UDID, Mac) to a view.
+    public var simulatorFullScreenContent: ((String, String) -> AnyView)?
+
+    /// Current screen size and hardware chrome known by the simulator preview panel.
+    public var simulatorPreviewInitialGeometry: (screenSize: CGSize, chrome: SimulatorDisplayChrome) {
+        (simulatorPreview.effectiveScreenSize, simulatorPreview.effectiveChrome)
+    }
+
+    /// Updates the simulator preview panel's logical screen size and hardware chrome
+    /// from the live simulator stream.
+    public func updateSimulatorPreviewGeometry(pointSize: CGSize, chrome: SimulatorDisplayChrome?) {
+        simulatorPreview.updateLiveGeometry(pointSize: pointSize, chrome: chrome)
+    }
+
+    /// Floats a simulator out of the picture-in-picture panel into its own
+    /// dedicated Mac Catalyst window: (UDID, Mac, Name, Foldable) -> Void.
+    public var simulatorFloatWindow: ((String, String, String, Bool) -> Void)?
+
+    /// Ensures the chat's simulator preview FAB button remains available after
+    /// closing a floated simulator window.
+    @available(iOS 26.0, *)
+    public func restoreSimulatorPreviewFAB(udid: String, machineId: String, chatId: String? = nil) {
+        guard let resolvedChatId = chatId ?? currentSourceChatId, !resolvedChatId.isEmpty,
+              !machineId.isEmpty,
+              UUID(uuidString: udid) != nil else { return }
+        simulatorPreview.ensureCollapsedFAB(
+            SimulatorTarget(udid: udid),
+            machineId: machineId,
+            chatId: resolvedChatId
+        )
+    }
+
     /// The web app saw this chat's agent reach for a simulator on its Mac: one
     /// it borrowed from Trainyard, or one a tool call named. Opens the picture
     /// as the browser preview opens for a browser tool.
     @available(iOS 26.0, *)
     func showSimulatorPreview(_ request: [String: Any]) {
-        guard let chatId = request["chatId"] as? String, chatId == currentSourceChatId,
+        guard let chatId = request["chatId"] as? String, !chatId.isEmpty,
               let machineId = request["machineId"] as? String, !machineId.isEmpty,
               let target = request["target"], let data = try? JSONSerialization.data(withJSONObject: target),
               let simulator = try? JSONDecoder().decode(SimulatorTarget.self, from: data),
               UUID(uuidString: simulator.udid) != nil else { return }
+        if let activeChatId = currentSourceChatId ?? (nativeChatScrollerEnabled ? nativeChat.currentChatId : nil) {
+            simulatorPreview.show(chatId: activeChatId)
+        }
         simulatorPreview.open(simulator, machineId: machineId, chatId: chatId, automatic: request["automatic"] as? Bool ?? true)
     }
     let browserPreview = BrowserPreviewState()
@@ -1648,6 +1724,11 @@ public final class AgentBridge: NSObject {
     /// foreground (WKWebView drops loads while suspended).
     @ObservationIgnored var deferredRecoveryReload: (() -> Void)?
 
+    /// The appearance last sent to the page, and the newest one asked for
+    /// while the app was not active (see `setTheme`).
+    @ObservationIgnored var sentTheme: AgentTheme?
+    @ObservationIgnored var deferredTheme: AgentTheme?
+
     @ObservationIgnored var pathMonitor: NWPathMonitor?
     let pathMonitorQueue = DispatchQueue(label: "io.ripul.network-path-monitor")
     /// Fingerprint of the last observed network path (reachability + active
@@ -1777,6 +1858,13 @@ public final class AgentBridge: NSObject {
                let state = try? JSONDecoder().decode(RipulComposerState.self, from: data) {
                 composerActions.update(chatId: chatId, state: state)
             }
+        case "composer:goal":
+            if let chatId = dict["chatId"] as? String {
+                composerGoals.update(chatId: chatId, goal: dict["goal"] as? String)
+            }
+        case "readingList:changed":
+            NotificationCenter.default.post(name: Self.readingListChangedNotification, object: self,
+                                            userInfo: ["chatId": dict["chatId"] as? String ?? ""])
         case "embed:presentation":
             let presentation = (dict["presentation"] as? String).flatMap(EmbeddedChatPresentation.init(rawValue:))
             if embeddedChatPresentation != presentation {
@@ -1786,8 +1874,7 @@ public final class AgentBridge: NSObject {
         case "chatInput:config":
             // Sent on every chat activation, i.e. mid-slide; almost always unchanged.
             setIfChanged(\.chatInputGlassStyle, dict["glassStyle"] as? String)
-            setIfChanged(\.chatInputLayout, dict["layout"] as? String)
-            setIfChanged(\.chatInputShowTodos, dict["showTodos"] as? Bool ?? true)
+            setIfChanged(\.chatInputLayout, (dict["layout"] as? String) ?? "twoRow")
             setIfChanged(\.chatInputShowQuickCommands, dict["showQuickCommands"] as? Bool ?? true)
         case "sessions:list:response":
             handleSessionsListResponse(dict)
@@ -1819,10 +1906,17 @@ public final class AgentBridge: NSObject {
             handleAgentActivity(dict)
         case "todos:update":
             handleTodoStateUpdate(dict)
+        case "accounts:changed":
+            NotificationCenter.default.post(name: .ripulHostAccountsChanged, object: self, userInfo: dict)
         case "sessions:remoteChanged":
             // A Mac pushed a change for a chat that is not in this device's
             // copy of its list, or that the list shows the other way about.
-            NotificationCenter.default.post(name: Self.remoteSessionsChangedNotification, object: self)
+            if let chatId = dict["chatId"] as? String,
+               let patch = dict["patch"] as? [String: Any],
+               let raw = patch["phase"] as? String, let phase = AgentTurnPhase(rawValue: raw) {
+                applySessionPhase(phase, chatId: chatId, sequence: nil, timestamp: dict["timestamp"])
+            }
+            NotificationCenter.default.post(name: Self.remoteSessionsChangedNotification, object: self, userInfo: dict)
         case "session:archived":
             // A host archived a chat (another device, the Mac itself, or an
             // agent). The session list drops the row and closes this device's
@@ -1868,7 +1962,9 @@ public final class AgentBridge: NSObject {
             if let urlString = dict["url"] as? String, let url = URL(string: urlString) {
                 if RipulSecureConnection.open(url) { return }
                 NSLog("[AgentBridge] Link open — url: %@", urlString)
-                if url.scheme == "ripul", url.host == "open-chat" {
+                // App screens the page asks for by link: a chat, or a chat's Claude
+                // account sheet (ClaudeSignInCard, `claudeAccountLink`).
+                if url.scheme == "ripul", url.host == "open-chat" || url.host == "claude-account" {
                     NotificationCenter.default.post(name: .ripulOpenAppURL, object: url)
                 } else {
                     linkOpenDelegate?.agentBridge(self, didRequestOpenLink: url)
@@ -2152,6 +2248,9 @@ public final class AgentBridge: NSObject {
         setIfChanged(\.messageSubmissionError, nil)
         guard attachedWebView != nil else { return false }
         let contextSession = currentSourceChatId
+        if let contextSession {
+            composerGoals.update(chatId: contextSession, goal: nil)
+        }
         let historyTitle = sessions.first { $0.sourceChatId == contextSession }?.displayName ?? "Chat"
         let contextAttachments = composerContexts.attachments(for: contextSession)
         let combinedImages = RipulContextAttachment.images(imageAttachments, attachments: contextAttachments)
@@ -2256,10 +2355,11 @@ public final class AgentBridge: NSObject {
 
     /// Fetch the current show-thinking mode from the web app.
     public func syncShowThinking() async {
-        let reply = await callPage("__ripulGetShowThinking", [], .orElse("{ success: false, mode: 'none' }"))
-        if let mode = reply.dictionary?["mode"] as? String {
-            await MainActor.run { showThinkingMode = mode }
-        }
+        // Only a real answer counts. The stand-in used to carry mode 'none',
+        // so a page that missed the call hid every chat's thinking.
+        let reply = await callPage("__ripulGetShowThinking", [], .orElse("{ success: false }"))
+        guard reply.succeeded, let mode = reply.dictionary?["mode"] as? String else { return }
+        await MainActor.run { takeShowThinking(mode) }
     }
 
     /// Set inline thinking display mode in the web app ("none", "folded", or "open").
@@ -2267,8 +2367,26 @@ public final class AgentBridge: NSObject {
     public func setShowThinking(_ mode: String) async -> Bool {
         let reply = await callPage("__ripulSetShowThinking", [mode], .orElse("{ success: false }"))
         guard reply.succeeded else { return false }
-        await MainActor.run { showThinkingMode = mode }
+        await MainActor.run { takeShowThinking(mode) }
         return true
+    }
+
+    private static let showThinkingKey = "ripul.showThinkingMode"
+
+    /// The page owns the setting. The bridge keeps its last answer so the next
+    /// launch draws the native chat the right way before the page has answered.
+    private func takeShowThinking(_ mode: String) {
+        // Unchanged is the usual answer, often mid-slide: no publish, no write.
+        guard showThinkingMode != mode else { return }
+        showThinkingMode = mode
+        guard ThinkingDisplayMode(rawValue: mode) != nil else { return }
+        sessionCache?.set(mode, forKey: Self.showThinkingKey)
+    }
+
+    private func restoreShowThinking() {
+        guard let mode = sessionCache?.object(forKey: Self.showThinkingKey) as? String,
+              ThinkingDisplayMode(rawValue: mode) != nil, showThinkingMode != mode else { return }
+        showThinkingMode = mode
     }
 
     /// Resume a paused agent, optionally with additional context.
@@ -2311,6 +2429,10 @@ public final class AgentBridge: NSObject {
             // makes a mismatched answer harmless: it updates that chat's
             // row, not the active chat's buttons.
             let respChatId = dict["chatId"] as? String
+            if let respChatId {
+                if dict["pushesRunStates"] as? Bool == true { pushStatusChats.insert(respChatId) }
+                else { pushStatusChats.remove(respChatId) }
+            }
             if let rawPhase = dict["phase"] as? String,
                let phase = AgentTurnPhase(rawValue: rawPhase) {
                 if let respChatId, !respChatId.isEmpty {
@@ -2782,6 +2904,24 @@ public final class AgentBridge: NSObject {
         }
     }
 
+    /// Close the tabs among `ids` this device has not opened for `idleDays`,
+    /// in one change, leaving their chats as they are on their Macs. The page
+    /// keeps any it should (the tab open now, one visited in that time, a
+    /// chat shared with this device). The ids it closed.
+    public func closeQuietSessions(ids: [String], idleDays: Double) async -> [String] {
+        guard !ids.isEmpty else { return [] }
+        let reply = await callPage("__ripulCloseQuietSessions", [ids, idleDays])
+        guard reply.failure() == nil, let closed = reply.dictionary?["closed"] as? [String], !closed.isEmpty else { return [] }
+        let gone = Set(closed)
+        for tab in sessions where gone.contains(tab.id) {
+            sessionList.sessionPhases.removeValue(forKey: tab.sourceChatId)
+            sessionLifecycleSequences.removeValue(forKey: tab.sourceChatId)
+        }
+        sessions.removeAll { gone.contains($0.id) }
+        if let active = activeSessionId, gone.contains(active) { activeSessionId = sessions.first?.id }
+        return closed
+    }
+
     /// End an invited guest's own membership in a shared chat (requires a
     /// fresh owner invitation to rejoin), then close its local tab. Distinct
     /// from `closeSession`, which only ever hides a chat locally.
@@ -3106,7 +3246,9 @@ public final class AgentBridge: NSObject {
     /// metadata id, "" for by itself, nil to forget the choice. Returns true on success.
     @discardableResult
     public func setSessionPlacement(sessionId: String, under: String?) async -> Bool {
-        await callPage("__ripulSetSessionPlacement", [sessionId, under], .ifMissing("{ok:false}")).dictionary?["ok"] as? Bool ?? false
+        let ok = await callPage("__ripulSetSessionPlacement", [sessionId, under], .ifMissing("{ok:false}")).dictionary?["ok"] as? Bool ?? false
+        if ok { NotificationCenter.default.post(name: .ripulSessionListFactsChanged, object: self) }
+        return ok
     }
 
     /// Every id a group chat (one with another person in it) may be listed
@@ -3122,7 +3264,9 @@ public final class AgentBridge: NSObject {
     /// Returns true on success.
     @discardableResult
     public func setSessionTags(sessionId: String, tags: [String]) async -> Bool {
-        await callPage("__ripulSetSessionTags", [sessionId, tags], .ifMissing("{ok:false}")).dictionary?["ok"] as? Bool ?? false
+        let ok = await callPage("__ripulSetSessionTags", [sessionId, tags], .ifMissing("{ok:false}")).dictionary?["ok"] as? Bool ?? false
+        if ok { NotificationCenter.default.post(name: .ripulSessionListFactsChanged, object: self) }
+        return ok
     }
 
     // MARK: - Deleting, opening, creating and renaming sessions
@@ -3393,6 +3537,29 @@ public final class AgentBridge: NSObject {
     // MARK: - Send messages to web app
 
     public func setTheme(_ theme: AgentTheme) {
+        // After the app leaves the foreground, iOS draws its app-switcher
+        // pictures in light and in dark, and each flip of the appearance
+        // arrives here. Passed on, they re-themed the page twice on every
+        // trip away from the app, four messages from the two callers, and
+        // every tool strip lost its place and tried again (23 October 2026:
+        // `toWeb.theme:set=4` with about 230 strip placements a minute on
+        // Peter's phone). Keep the newest request and send it on return.
+        guard isAppActive else { deferredTheme = theme; return }
+        sendTheme(theme)
+    }
+
+    /// Sends the appearance asked for while the app was not active, now that
+    /// it is. Called when the app becomes active.
+    func flushDeferredTheme() {
+        guard let theme = deferredTheme else { return }
+        sendTheme(theme)
+    }
+
+    private func sendTheme(_ theme: AgentTheme) {
+        deferredTheme = nil
+        // Both callers (the app's root and `AgentView`) report the same change.
+        guard theme != sentTheme else { return }
+        sentTheme = theme
         // The app's own page reads the appearance from this value, not from the
         // message below (see `AgentWebView.appearanceScript`).
         if theme == .light || theme == .dark {
@@ -3442,6 +3609,21 @@ public final class AgentBridge: NSObject {
 
     private var toolDefinitions: [[String: Any]] {
         allTools.map { $0.definition }
+    }
+
+    /// Transport-independent projection: discovery and execution share the same
+    /// audience valve. The local simulator adapter must never read raw entries.
+    var nativeToolDefinitions: [[String: Any]] { toolDefinitions }
+
+    @MainActor
+    func invokeNativeTool(named name: String, args: [String: Any]) async throws -> Any {
+        let epoch = SecureInputProtection.epoch
+        try SecureInputProtection.check()
+        guard let tool = tool(named: name) else { throw ToolError.invalidArgs("Tool not found: \(name)") }
+        try Task.checkCancellation()
+        let result = try await tool.execute(args: args)
+        try SecureInputProtection.check(since: epoch)
+        return result
     }
 
     private func tool(named name: String) -> NativeTool? {
@@ -3558,14 +3740,10 @@ public final class AgentBridge: NSObject {
             return
         }
 
-        if let argsData = try? JSONSerialization.data(withJSONObject: args, options: .fragmentsAllowed),
-           let argsJSON = String(data: argsData, encoding: .utf8) {
-            NSLog("[AgentBridge] → Invoking tool: %@ args: %@", toolName, argsJSON)
-        } else {
-            NSLog("[AgentBridge] → Invoking tool: %@ with requestId: %@", toolName, requestId)
-        }
+        // Tool arguments can contain credentials. Log identity, never payloads.
+        NSLog("[AgentBridge] → Invoking tool: %@ with requestId: %@", toolName, requestId)
 
-        guard let tool = tool(named: toolName) else {
+        guard tool(named: toolName) != nil else {
             // Distinguish "gated / not exposed" from "genuinely doesn't exist"
             // in the native log only — the wire error stays a generic "not
             // found" so an .endUser channel never hints that a developer-only
@@ -3600,7 +3778,7 @@ public final class AgentBridge: NSObject {
         Task { @MainActor in
             do {
                 try SecureInputProtection.check(since: privacyEpoch)
-                let result = try await tool.execute(args: args)
+                let result = try await self.invokeNativeTool(named: toolName, args: args)
                 try SecureInputProtection.check(since: privacyEpoch)
                 NSLog("[AgentBridge] Tool %@ succeeded", toolName)
 
@@ -3750,7 +3928,16 @@ public final class AgentBridge: NSObject {
     private func handleNativeChatMessage(_ message: [String: Any]) {
         let kind = message["kind"] as? String ?? "?"
         if kind == "backfill", let messages = message["messages"] as? [[String: Any]] {
-            nativeChat.applyBackfill(messages)
+            let truncatedCount = (message["truncatedCount"] as? NSNumber)?.intValue ?? 0
+            let chatId = message["chatId"] as? String
+            let scrollPosition = message["scrollPosition"] as? [String: Any]
+            nativeChat.applyBackfill(messages, truncatedCount: truncatedCount, chatId: chatId, scrollPosition: scrollPosition)
+            return
+        }
+        if kind == "patch", let messages = message["messages"] as? [[String: Any]] {
+            let removedIds = message["removedIds"] as? [String] ?? []
+            let truncatedCount = (message["truncatedCount"] as? NSNumber)?.intValue ?? nativeChat.truncatedCount
+            nativeChat.applyPatch(messages, removedIds: removedIds, truncatedCount: truncatedCount, chatId: message["chatId"] as? String)
             return
         }
         if kind == "reset" {
@@ -3888,6 +4075,9 @@ public final class AgentBridge: NSObject {
 
     public func scrollToBottom() {
         NSLog("[AgentBridge] scrollToBottom -> JS bridge")
+        if nativeChatScrollerEnabled {
+            nativeChat.scrollCommands.send(.bottom(animated: true))
+        }
         evaluateVoidJavaScript("window.__ripulScrollToBottom?.()")
     }
 
@@ -3895,6 +4085,9 @@ public final class AgentBridge: NSObject {
     /// - Parameter direction: `"up"` for previous, `"down"` for next.
     public func scrollToUserMessage(direction: String = "up") {
         NSLog("[AgentBridge] scrollToUserMessage(\(direction)) -> JS bridge")
+        if nativeChatScrollerEnabled {
+            nativeChat.scrollCommands.send(.userMessage(direction: direction))
+        }
         evaluateVoidJavaScript("window.__ripulScrollToUserMessage?.('\(direction)')")
     }
 
@@ -3986,38 +4179,6 @@ public final class AgentBridge: NSObject {
     /// Toggle word wrap in the Monaco file viewer.
     public func fileViewerToggleWordWrap() {
         evaluateVoidJavaScript("window.__ripulFileViewerToggleWordWrap?.()")
-    }
-
-    /// Emit a TodoItemCreate event in the web app to open the "Add To Do" dialog.
-    public func emitTodoItemCreate() {
-        evaluateVoidJavaScript("window.__ripulCreateTodoItem?.()")
-    }
-
-    /// Fetch the signed-in user's todo items from the web app, along with the
-    /// currently active chat id so the picker can group "this chat" on top.
-    /// Errors are caught internally and surface as an empty result so the
-    /// native picker can show "No items" rather than crash.
-    public func listTodoItems() async -> RipulTodoItemsResult {
-        let reply = await callPage("__ripulListTodoItems", [],
-                                   .ifMissing("{ items: [], currentChatId: null, error: '__ripulListTodoItems not defined' }"))
-        guard let dict = reply.dictionary else { return RipulTodoItemsResult(items: [], currentChatId: nil) }
-        let currentChatId = dict["currentChatId"] as? String
-        let rawItems = dict["items"] as? [[String: Any]] ?? []
-        let items: [RipulTodoItem] = rawItems.compactMap { item in
-            guard let id = item["id"] as? String,
-                  let text = item["text"] as? String else { return nil }
-            let chatId = item["chatId"] as? String
-            let chatName = item["chatName"] as? String
-            let completed = item["completed"] as? Bool ?? false
-            return RipulTodoItem(
-                id: id,
-                chatId: chatId,
-                chatName: chatName,
-                text: text,
-                completed: completed
-            )
-        }
-        return RipulTodoItemsResult(items: items, currentChatId: currentChatId)
     }
 
     /// Open a file in the web file viewer (e.g. from native Saved Files sheet).

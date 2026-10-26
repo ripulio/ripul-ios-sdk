@@ -8,6 +8,7 @@ final class ComposerKeyboardTests: XCTestCase {
     @MainActor private final class Model: ObservableObject {
         @Published var text = "A message"
         var sent: [String] = []
+        var clearImmediately = true
         let contexts = RipulComposerContextStore()
     }
 
@@ -16,7 +17,10 @@ final class ComposerKeyboardTests: XCTestCase {
         var body: some View {
             NativeChatInput(text: $model.text, imageAttachments: .constant([]),
                 selectedPhotos: .constant([]), isAgentRunning: false,
-                onSubmit: { model.sent.append(model.text); model.text = "" },
+                onSubmit: { submitted in
+                    model.sent.append(submitted)
+                    if model.clearImmediately { model.text = "" }
+                },
                 contextStore: model.contexts)
                 .frame(width: 370)
         }
@@ -58,6 +62,31 @@ final class ComposerKeyboardTests: XCTestCase {
             input.insertText("Next message")
             XCTAssertEqual(model.text, "Next message")
             XCTAssertEqual(model.sent.count, 1)
+        }
+    }
+
+    func testMentionSendKeepsVisibleDraftStableWhileAwaitingAcknowledgement() async throws {
+        try await withComposer { model, input in
+            let token = "[context: ripul.chats/YWJj | Example chat]"
+            model.clearImmediately = false
+            model.text = "Read \(token)"
+            try await Task.sleep(for: .milliseconds(250))
+            let draft = model.text
+            XCTAssertEqual(draft, "Read @Example chat")
+            let send = try command([], in: input)
+            _ = UIApplication.shared.sendAction(try XCTUnwrap(send.action), to: input, from: send, for: nil)
+            XCTAssertEqual(model.sent, ["Read \(token)"])
+            XCTAssertEqual(model.text, draft, "Transport encoding must never rewrite the bound draft")
+            try await Task.sleep(for: .milliseconds(250))
+            XCTAssertEqual(input.text, draft)
+            // Retry after a rejected send retains the reference mapping.
+            _ = UIApplication.shared.sendAction(try XCTUnwrap(send.action), to: input, from: send, for: nil)
+            XCTAssertEqual(model.sent.last, "Read \(token)")
+            XCTAssertEqual(model.text, draft)
+            // The accepted draft still matches after SwiftUI has processed updates.
+            if model.text == draft { model.text = "" }
+            try await Task.sleep(for: .milliseconds(250))
+            XCTAssertEqual(input.text, "")
         }
     }
 

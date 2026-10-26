@@ -241,4 +241,20 @@ final class NativeToolRendererTests: XCTestCase {
         let mixed = ToolValue.parse("{\"status\":200,\"result\":\"keep\",\"headers\":{\"ETag\":\"123\"}}")
         XCTAssertEqual(ToolValue.unwrap(mixed), mixed, "An HTTP result with other fields is not a transport envelope")
     }
+
+    func testFieldFlowLayoutPacksShortFieldsInOneRowAndIsolatesWideOrBlockFields() {
+        let rows = NativeToolFieldFlowLayout.packRows(idealWidths: [76, 82, 88, 280], availableWidth: 340, spacing: 8, maxPerRow: 3)
+        XCTAssertEqual(rows.count, 2, "Three narrow fields share the first row while the wide path takes the second row")
+        XCTAssertEqual(rows[0].map(\.index), [0, 1, 2])
+        XCTAssertEqual(rows[0].reduce(0) { $0 + $1.width } + 16, 340, accuracy: 0.01)
+        XCTAssertEqual(rows[1].map(\.index), [3])
+        XCTAssertEqual(rows[1][0].width, 340, accuracy: 0.01)
+
+        XCTAssertTrue(NativeToolValueView.isCompactFieldControl(key: "offset", item: .number(1)))
+        XCTAssertTrue(NativeToolValueView.isCompactFieldControl(key: "followSymlinks", item: .bool(true)))
+        XCTAssertTrue(NativeToolValueView.isCompactFieldControl(key: "path", item: .string("Sources/App.swift")))
+        XCTAssertFalse(NativeToolValueView.isCompactFieldControl(key: "script", item: .string("echo 1\necho 2")))
+        XCTAssertFalse(NativeToolValueView.isCompactFieldControl(key: "nested", item: .object(["a": .number(1)])))
+        XCTAssertFalse(NativeToolValueView.isCompactFieldControl(key: "summary", item: .string("## Heading\n\nA multi-sentence markdown explanation.")))
+    }
 }

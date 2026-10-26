@@ -148,7 +148,7 @@ struct SessionChatColumns<List: View, Chat: View>: View {
         // Keep horizontal slide-over content inside the workspace, but extend
         // the clip itself to the window's vertical edges. Otherwise the chat's
         // full-height web view is cut off behind the top and composer glass.
-        .ignoresSafeArea(.container, edges: .vertical)
+        .ignoresSafeArea(edges: .vertical)
     }
 
     /// The divider's grab area takes the separator's size. Outside a stack a

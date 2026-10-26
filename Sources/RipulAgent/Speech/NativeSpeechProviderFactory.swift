@@ -22,7 +22,12 @@ public enum NativeSpeechProviderFactory {
     }
     public static func speaking(tokenProvider: @escaping () -> String?,
                                 tokenRefresher: (() async -> String?)? = nil) -> any NativeSpeechProviding {
-        if BundledAgentRuntime.isEnabled && !DeviceSpeechCredentials.isConfigured { return AppleSpeechProvider() }
+        if SpeechPreferences.ttsProviderId == "phonon" {
+            return PhononNativeSpeechProvider.shared
+        }
+        if BundledAgentRuntime.isEnabled && !DeviceSpeechCredentials.isConfigured {
+            return PhononNativeSpeechProvider.shared
+        }
         return elevenLabs(tokenProvider: tokenProvider, tokenRefresher: tokenRefresher)
     }
 }

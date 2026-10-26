@@ -4,7 +4,7 @@ import Foundation
 ///  - fetching a CMS definition (pages tree)
 ///  - running saved queries (`POST /v1/cms-definitions/:id/queries/:slug/run`)
 ///
-/// Follows the SDK's established auth pattern (see SessionChannelClientConfig):
+/// Follows the SDK's established auth pattern:
 /// the host app injects a `getToken` closure returning a fresh Clerk JWT and
 /// every request carries it as a Bearer header. The client holds no auth
 /// state of its own.

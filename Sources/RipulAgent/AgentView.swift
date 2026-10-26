@@ -277,21 +277,19 @@ public struct AgentView<TopBar: View>: View {
             if let page { AgentPageView(page: page) }
             #endif
             if let config = readyConfig, !showsOwnedPage {
-                AgentWebView(configuration: config, bridge: bridge)
                 #if os(iOS)
-                    // Native layout owns horizontal avoidance for both full-screen
-                    // and split chat, including embedded native rows. Only extend
-                    // vertically beneath the title/composer glass; CSS must not
-                    // add a second side inset to this already-safe viewport.
-                    .ignoresSafeArea(.container, edges: configuration.respectsContainerSafeArea ? [] : .vertical)
-                    .ignoresSafeArea(.keyboard)
-                    // Slide the entire WKWebView up by the full keyboard frame height.
-                    // Only applies when the native chat input is active — on sign-in and
-                    // other non-chat pages the web view handles keyboard avoidance itself
-                    // (the browser scrolls the focused input into the visual viewport).
-                    // Uses rawHeight (not safe-area-adjusted) because the web view ignores safe areas.
-                    // Animation is driven by withAnimation in KeyboardObserver, not here.
-                    .offset(y: !configuration.respectsContainerSafeArea && bridge.currentPageContext.showNativeChatInput && !bridge.suppressNativeChatInput && bridge.nativeChatInputFocused && keyboard.rawHeight > 0 ? -keyboard.rawHeight : 0)
+                GeometryReader { viewport in
+                    AgentWebView(configuration: config, bridge: bridge,
+                                 keyboardNavigationInset: webKeyboardNavigationInset)
+                        // Pin the viewport before UIKit translates its content.
+                        .frame(width: viewport.size.width, height: viewport.size.height)
+                }
+                // Native layout owns horizontal avoidance, including split chat.
+                // The stationary container extends beneath vertical chrome.
+                .ignoresSafeArea(.container, edges: configuration.respectsContainerSafeArea ? [] : .vertical)
+                .ignoresSafeArea(.keyboard)
+                #else
+                AgentWebView(configuration: config, bridge: bridge)
                 #endif
             }
 
@@ -299,8 +297,12 @@ public struct AgentView<TopBar: View>: View {
             // mounted for comms) but UNDER the top bar and the ChatComposer overlay,
             // so the real native composer + chrome are reused — no throwaway input.
             if bridge.nativeChatScrollerEnabled, readyConfig != nil {
-                NativeChatView(store: bridge.nativeChat)
-                    .padding(.bottom, nativeScrollerBottomInset)
+                NativeChatView(
+                    store: bridge.nativeChat,
+                    bridge: bridge,
+                    topInset: topBar != nil ? 48 : 0,
+                    bottomInset: nativeScrollerBottomInset
+                )
                     .background(nativeScrollerBackground)
                     #if os(iOS)
                     .ignoresSafeArea(.keyboard)
@@ -326,11 +328,39 @@ public struct AgentView<TopBar: View>: View {
         .onReceive(NotificationCenter.default.publisher(for: SecureInputProtection.began)) { _ in voiceMode.stop() }
         .onRipulVoiceModeRequest(isConnected: bridge.isConnected) { honorVoiceModeRequest() }
         .onChange(of: bridge.nativeChatScrollerEnabled) { on in
-            bridge.evaluateJavaScript("window.__ripulSetNativeChatForwarding?.(\(on), 'debug')")
+            if !on, let snapshot = bridge.nativeChat.captureLiveScrollSnapshot?() ?? bridge.nativeChat.lastScrollSnapshot {
+                let dict: [String: Any] = [
+                    "chatId": snapshot.chatId,
+                    "rowId": snapshot.webRowId as Any,
+                    "offset": Double(snapshot.offset),
+                    "following": snapshot.following,
+                ]
+                if let data = try? JSONSerialization.data(withJSONObject: dict),
+                   let json = String(data: data, encoding: .utf8) {
+                    bridge.evaluateJavaScript("window.__ripulSetNativeChatForwarding?.(false, 'debug', \(json))")
+                } else {
+                    bridge.evaluateJavaScript("window.__ripulSetNativeChatForwarding?.(false, 'debug')")
+                }
+            } else {
+                if on {
+                    bridge.nativeChat.markAwaitingWebToggleRestore()
+                }
+                bridge.evaluateJavaScript("window.__ripulSetNativeChatForwarding?.(\(on), 'debug', null, \(NativeChatMessageStore.forwardingFeaturesJSON))")
+            }
             // Suspend/restore the web chat render tree so MessagePipeline + React
             // reconciliation stop when native is rendering. Comms (relay, eventBus,
             // ChatActionsManager) stay alive — only the DOM render is paused.
             bridge.evaluateJavaScript("window.__ripulSetHostRenderSuspended?.(\(on))")
+        }
+        .onChange(of: bridge.isConnected) { connected in
+            guard connected else { return }
+            let on = bridge.nativeChatScrollerEnabled
+            bridge.evaluateJavaScript("window.__ripulSetHostRenderSuspended?.(\(on))")
+            if on { bridge.evaluateJavaScript("window.__ripulSetNativeChatForwarding?.(true, 'debug', null, \(NativeChatMessageStore.forwardingFeaturesJSON))") }
+        }
+        .onChange(of: bridge.currentSourceChatId) { _ in
+            guard bridge.nativeChatScrollerEnabled else { return }
+            bridge.evaluateJavaScript("window.__ripulSetNativeChatForwarding?.(true, 'debug', null, \(NativeChatMessageStore.forwardingFeaturesJSON))")
         }
         .onAppear {
             bridge.composerContexts.availableOptions = configuration.composerContexts
@@ -338,7 +368,7 @@ public struct AgentView<TopBar: View>: View {
             // Always sync render-suspension state on appear — clears crash-while-suspended
             // localStorage so the web never starts suspended when native chat is off.
             bridge.evaluateJavaScript("window.__ripulSetHostRenderSuspended?.(\(on))")
-            if on { bridge.evaluateJavaScript("window.__ripulSetNativeChatForwarding?.(true, 'debug')") }
+            if on { bridge.evaluateJavaScript("window.__ripulSetNativeChatForwarding?.(true, 'debug', null, \(NativeChatMessageStore.forwardingFeaturesJSON))") }
         }
         .overlay(alignment: .bottom) {
             if !bridge.fileViewerExpanded && !bridge.artefactPageExpanded && bridge.currentPageContext.showNativeChatInput && !bridge.suppressNativeChatInput {
@@ -348,6 +378,7 @@ public struct AgentView<TopBar: View>: View {
                 ChatComposer(
                     bridge: bridge,
                     composerActionStore: bridge.composerActions,
+                    composerGoalStore: bridge.composerGoals,
                     turnState: bridge.turnState,
                     contextOptions: configuration.composerContexts,
                     tokenProvider: tokenProvider,
@@ -402,13 +433,6 @@ public struct AgentView<TopBar: View>: View {
             }
         }
         #if os(iOS)
-        .onChange(of: keyboard.rawHeight) { newHeight in
-            // Re-sync web padding once keyboard fully dismisses, in case the
-            // chat input changed size while the keyboard was up.
-            if newHeight == 0 {
-                updateWebBottomPadding()
-            }
-        }
         .ignoresSafeArea(.keyboard)
         #endif
         .onChange(of: bridge.currentPageContext) { context in
@@ -558,6 +582,16 @@ public struct AgentView<TopBar: View>: View {
 
     // MARK: - Chat Input
 
+    #if os(iOS)
+    /// Embedded containers already own their keyboard avoidance. UIKit checks
+    /// native composer focus when the keyboard notification arrives.
+    private var webKeyboardNavigationInset: CGFloat? {
+        guard !configuration.respectsContainerSafeArea,
+              bridge.currentPageContext.showNativeChatInput, !bridge.suppressNativeChatInput else { return nil }
+        return chatNavigationInset
+    }
+    #endif
+
     /// iOS spacing and movement belong to the UIKit keyboard attachment.
     private var composerContentBottomInset: CGFloat {
         #if os(iOS)
@@ -577,9 +611,6 @@ public struct AgentView<TopBar: View>: View {
     private func updateComposerClearance(_ inset: CGFloat) {
         guard chatNavigationInset != inset else { return }
         chatNavigationInset = inset
-        #if os(iOS)
-        guard keyboard.rawHeight == 0 else { return }
-        #endif
         if bridge.currentPageContext.showNativeChatInput && !bridge.suppressNativeChatInput {
             updateWebBottomPadding(navigationInset: inset)
         }
@@ -588,10 +619,6 @@ public struct AgentView<TopBar: View>: View {
     private func updateComposerHeight(_ height: CGFloat) {
         guard height > 0 else { return }
         chatInputMeasuredHeight = height
-        #if os(iOS)
-        // Retain the measurement while typing; refresh the web after dismissal.
-        guard keyboard.rawHeight == 0 else { return }
-        #endif
         updateWebBottomPadding(inputHeight: height)
     }
 
@@ -611,12 +638,8 @@ public struct AgentView<TopBar: View>: View {
 
     /// Opaque backing so the native scroller fully covers the web-rendered chat.
     private var nativeScrollerBackground: some View {
-        #if os(iOS)
-        return (colorScheme == .dark ? Color.ripul(system: .black) : Color.ripul(system: .white))
+        Color.ripul(.canvas)
             .ignoresSafeArea()
-        #else
-        return Color(nsColor: .windowBackgroundColor)
-        #endif
     }
 
     private func updateWebBottomPadding(inputHeight: CGFloat? = nil, navigationInset: CGFloat? = nil) {
@@ -625,7 +648,6 @@ public struct AgentView<TopBar: View>: View {
         let safeBottom: CGFloat
         #if os(iOS)
         safeBottom = configuration.respectsContainerSafeArea ? 0 : (bridge.hostingWindow?.safeAreaInsets.bottom ?? 0)
-        // Resting padding only — keyboard shift is handled natively via WKWebView offset
         #else
         safeBottom = 0
         #endif
@@ -699,6 +721,7 @@ private struct ChatComposer: View {
     @State private var draftChatID: String?
     var bridge: AgentBridge
     @ObservedObject var composerActionStore: RipulComposerActionStore
+    @ObservedObject var composerGoalStore: RipulComposerGoalStore
     @ObservedObject var turnState: RipulAgentTurnState
     var contextOptions: [RipulComposerContext]
     var tokenProvider: (() -> String?)?
@@ -716,6 +739,9 @@ private struct ChatComposer: View {
 
     private struct ArtefactChatTarget: Identifiable { let id: String }
     @State private var artefactChatTarget: ArtefactChatTarget?
+    /// Send Later: the chat and the draft as they were when it was asked for.
+    private struct SendLaterTarget: Identifiable { let id = UUID(); let chatId: String; let text: String; let chatTitle: String? }
+    @State private var sendLaterTarget: SendLaterTarget?
     @State private var composerActionPending = false
     @State private var composerActionError: String?
     @State private var chatMessage = ""
@@ -774,6 +800,14 @@ private struct ChatComposer: View {
                 }
                 .ripulSheet(item: $artefactChatTarget) { target in
                     ArtefactChatPicker(bridge: bridge, chatID: target.id)
+                }
+                .ripulSheet(item: $sendLaterTarget, size: .form) { target in // theme-mapping: a new sheet; nothing is replaced
+                    SendLaterSheet(message: target.text) { date in
+                        if let error = await bridge.scheduleMessage(chatId: target.chatId, text: target.text, at: date, chatTitle: target.chatTitle) { return error }
+                        // Scheduled: the draft is sent, unless it was edited meanwhile.
+                        if chatMessage == target.text { chatMessage = "" }
+                        return nil
+                    }
                 }
                 .alert("Message not confirmed", isPresented: Binding(
                     get: { composerActionError != nil }, set: { if !$0 { composerActionError = nil } }
@@ -885,6 +919,7 @@ private struct ChatComposer: View {
             selectedPhotos: $selectedPhotos,
             isAgentRunning: turnState.isRunning,
             isAgentPaused: turnState.isPaused && !isGroupMode,
+            waitingPlaceholder: isGroupMode ? nil : composerGoalStore.goal(for: bridge.currentSourceChatId),
             onSubmit: handleSubmit,
             onTypingChange: { bridge.setComposerTyping(active: $0) },
             onSubmitNote: BundledAgentRuntime.isEnabled || isGroupMode ? nil : handleNoteSubmit,
@@ -904,8 +939,14 @@ private struct ChatComposer: View {
             onAddArtefact: BundledAgentRuntime.isEnabled ? nil : {
                 if let id = bridge.currentSourceChatId { artefactChatTarget = ArtefactChatTarget(id: id) }
             },
-            onAddTodoItem: bridge.chatInputShowTodos ? { bridge.emitTodoItemCreate() } : nil,
-            onFetchTodoItems: bridge.chatInputShowTodos ? { await bridge.listTodoItems() } : nil,
+            onSendLater: BundledAgentRuntime.isEnabled ? nil : {
+                let text = chatMessage.trimmingCharacters(in: .whitespacesAndNewlines)
+                if let id = bridge.currentSourceChatId, !text.isEmpty {
+                    // Named in the Schedules list, which runs on devices that never loaded this chat.
+                    let title = bridge.sessions.first { $0.sourceChatId == id || $0.id == id }?.displayName
+                    sendLaterTarget = SendLaterTarget(chatId: id, text: chatMessage, chatTitle: title)
+                }
+            },
             messageHistory: messageHistory,
             chatInputGlassStyle: bridge.chatInputGlassStyle,
             chatInputLayout: bridge.chatInputLayout,
@@ -1032,6 +1073,7 @@ private struct ChatComposer: View {
             selectedPhotos: $selectedPhotos,
             isAgentRunning: turnState.isRunning,
             isAgentPaused: turnState.isPaused && !isGroupMode,
+            waitingPlaceholder: isGroupMode ? nil : composerGoalStore.goal(for: bridge.currentSourceChatId),
             onSubmit: handleSubmit,
             onTypingChange: { bridge.setComposerTyping(active: $0) },
             onSubmitNote: BundledAgentRuntime.isEnabled || isGroupMode ? nil : handleNoteSubmit,
@@ -1051,8 +1093,6 @@ private struct ChatComposer: View {
             onAddArtefact: BundledAgentRuntime.isEnabled ? nil : {
                 if let id = bridge.currentSourceChatId { artefactChatTarget = ArtefactChatTarget(id: id) }
             },
-            onAddTodoItem: bridge.chatInputShowTodos ? { bridge.emitTodoItemCreate() } : nil,
-            onFetchTodoItems: bridge.chatInputShowTodos ? { await bridge.listTodoItems() } : nil,
             messageHistory: messageHistory,
             chatInputGlassStyle: bridge.chatInputGlassStyle,
             chatInputLayout: bridge.chatInputLayout,
@@ -1167,7 +1207,7 @@ private struct ChatComposer: View {
 
     // MARK: Submit handlers
 
-    private func handleSubmit() {
+    private func handleSubmit(_ submittedText: String) {
         bridge.setComposerTyping(active: false)
         guard !composerActionPending else { return }
         // Embedded chats can be ready in the web layer before their session is
@@ -1175,7 +1215,7 @@ private struct ChatComposer: View {
         // active conversation; a native ID is only needed for draft storage.
         let chatID = bridge.currentSourceChatId
         let originalText = chatMessage
-        let message = originalText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let message = submittedText.trimmingCharacters(in: .whitespacesAndNewlines)
         let images = imageAttachments
         let modality = messageHistory.composerModality
         let addressed = addressedParticipants

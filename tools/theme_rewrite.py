@@ -340,6 +340,8 @@ CONTROL_IDENTITIES = [
     (re.compile(r"\.ripulThemedList(?:Rows)?\(\)"), ""),
     # Not a token: the notification's name.
     (re.compile(r"\.ripulThemeDidChange\b"), ".themeDidChange"),
+    # Not a token: an environment key path, such as `\.ripulSessionListCanBeSeen`.
+    (re.compile(r"\\\.ripul\w+"), r"\\.environmentKey"),
     (re.compile(r"\.ripulAttributedString\b"), ".attributedString"),
 ]
 

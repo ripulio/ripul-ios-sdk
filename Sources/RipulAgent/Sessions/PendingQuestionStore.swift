@@ -32,6 +32,7 @@ public final class PendingQuestionStore {
     @ObservationIgnored public var openQuestion: ((PendingAgentQuestion) -> Void)?
     @ObservationIgnored private var dismissed: [PendingAgentQuestion] = []
     @ObservationIgnored private var firstByCanonicalChatId: [String: PendingAgentQuestion] = [:]
+    @ObservationIgnored private var mentionIdsByCanonicalChatId: [String: Set<String>] = [:]
     private let defaults: UserDefaults
 
     public init(defaults: UserDefaults = .standard) { self.defaults = defaults }
@@ -44,6 +45,7 @@ public final class PendingQuestionStore {
         self.accountId = accountId
         questions = []
         firstByCanonicalChatId = [:]
+        mentionIdsByCanonicalChatId = [:]
         mentionActivity = accountId.flatMap { defaults.dictionary(forKey: "ripul.mentionActivity.\($0)") as? [String: Double] } ?? [:]
         dismissed = accountId.flatMap { defaults.data(forKey: "ripul.dismissedQuestions.\($0)") }
             .flatMap { try? JSONDecoder().decode([PendingAgentQuestion].self, from: $0) } ?? []
@@ -113,6 +115,21 @@ public final class PendingQuestionStore {
             }
         }
         return earliest
+    }
+
+    /// Unread mentions for this row, excluding agent questions. A shared chat
+    /// can have several local/owner aliases, and push plus inbox delivery can
+    /// repeat a message; count each message only once across all of them.
+    public func unreadMentionCount(anyOf keys: [String]) -> Int {
+        // Observe the live list even though the lookup index itself is ignored.
+        guard !questions.isEmpty else { return 0 }
+        var ids = Set<String>()
+        for key in keys {
+            if let mentions = mentionIdsByCanonicalChatId[Self.canonical(key)] {
+                ids.formUnion(mentions)
+            }
+        }
+        return ids.count
     }
 
     public func isViewing(_ chatId: String) -> Bool {
@@ -212,11 +229,14 @@ public final class PendingQuestionStore {
         let live = incoming.filter { !hidden.contains($0.id) && ($0.expiresAt == nil || $0.expiresAt! > now) }
             .sorted { $0.createdAt < $1.createdAt }
         var byChat: [String: PendingAgentQuestion] = [:]
+        var mentionsByChat: [String: Set<String>] = [:]
         for item in live {
             let key = Self.canonical(item.chatId)
             if byChat[key] == nil { byChat[key] = item }
+            if item.isMention { mentionsByChat[key, default: []].insert(item.questionId) }
         }
         firstByCanonicalChatId = byChat
+        mentionIdsByCanonicalChatId = mentionsByChat
         if live != questions { questions = live }
     }
 

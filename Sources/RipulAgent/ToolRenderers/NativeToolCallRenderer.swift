@@ -104,12 +104,15 @@ private struct NativeEditToolView: View {
             let files = NativeToolFileChange.collect(content.args["changes"])
             if !patch.isEmpty { NativeToolDiffView(lines: NativeToolDiffLine.unified(patch), path: content.filePath, includesPrefix: true) }
             else if !files.isEmpty {
-                ForEach(Array(files.enumerated()), id: \.offset) { _, file in
-                    NativeToolPath(path: file.path)
-                    Text(file.kind).font(.ripul(.caption)).foregroundStyle(.ripul(.textSecondary))
-                    if let lines = file.lines { NativeToolDiffView(lines: lines, path: file.path, includesPrefix: true) }
-                    else { Text("No diff was recorded for this file.").foregroundStyle(.ripul(.textSecondary)) }
-                    NativeToolParameters(args: file.fields)
+                ForEach(Array(files.enumerated()), id: \.offset) { fileIndex, file in
+                    Group {
+                        NativeToolPath(path: file.path)
+                        Text(file.kind).font(.ripul(.caption)).foregroundStyle(.ripul(.textSecondary))
+                        if let lines = file.lines { NativeToolDiffView(lines: lines, path: file.path, includesPrefix: true) }
+                        else { Text("No diff was recorded for this file.").foregroundStyle(.ripul(.textSecondary)) }
+                        NativeToolParameters(args: file.fields)
+                    }
+                    .nativeChatRowStateScope("file:\(fileIndex)")
                 }
             } else { Text(content.running ? "Waiting for file changes…" : "No patch was recorded.").foregroundStyle(.ripul(.textSecondary)) }
         } else if let chunks = content.args["_chunks"]?.toolArray ?? content.args["edits"]?.toolArray {
@@ -119,6 +122,7 @@ private struct NativeEditToolView: View {
                     NativeToolDiffView(lines: NativeToolDiffLine.compare(
                         old: fields.string("old_string") ?? fields.string("TargetContent") ?? "",
                         new: fields.string("new_string") ?? fields.string("ReplacementContent") ?? ""), path: content.filePath)
+                        .nativeChatRowStateScope("chunk:\(index)")
                 }
             }
         } else {
@@ -132,22 +136,24 @@ private struct NativeEditToolView: View {
     }
 }
 
-private struct NativeToolDiffView: View {
+struct NativeToolDiffView: View {
     let lines: [NativeToolDiffLine]
     var path: String
     var includesPrefix = false
-    @State private var visibleLines = 100
+    @NativeRowState("diff.visibleLines") private var visibleLines = 100
     @State private var highlighted: [AttributedString] = []
     @State private var highlightedRequest: NativeDiffHighlightRequest?
     @Environment(\.colorScheme) private var colorScheme
+    var diffScopeKey: String { path }
     var body: some View {
-        let request = NativeDiffHighlightRequest(lines: Array(lines.prefix(visibleLines)), path: path, includesPrefix: includesPrefix, dark: colorScheme == .dark)
+        let currentVisibleLines = _visibleLines.value(subscope: diffScopeKey)
+        let request = NativeDiffHighlightRequest(lines: Array(lines.prefix(currentVisibleLines)), path: path, includesPrefix: includesPrefix, dark: colorScheme == .dark)
         let added = lines.filter { $0.kind == .added }.count
         let removed = lines.filter { $0.kind == .removed }.count
         NativeToolSection(title: "Changes") {
             Text(added == 0 && removed == 0 ? "No changes" : "\(added) added · \(removed) removed").font(.ripul(.caption)).foregroundStyle(.ripul(.textSecondary))
             LazyVStack(alignment: .leading, spacing: 0) {
-                ForEach(Array(lines.prefix(visibleLines).enumerated()), id: \.offset) { index, line in
+                ForEach(Array(lines.prefix(currentVisibleLines).enumerated()), id: \.offset) { index, line in
                     let color: Color = line.kind == .added ? .green : line.kind == .removed ? .red : .ripul(.textSecondary) // theme-exempt: diff colours are data
                     HStack(alignment: .top, spacing: 8) {
                         if !includesPrefix { Text(line.kind == .added ? "+" : line.kind == .removed ? "−" : " ").foregroundStyle(color) }
@@ -156,7 +162,11 @@ private struct NativeToolDiffView: View {
                     .font(.ripul(.caption, family: .code)).padding(.horizontal, 8).padding(.vertical, 3)
                     .background(line.kind == .context ? Color.clear : color.opacity(0.12))
                 }
-                if lines.count > visibleLines { Button("Show more changes") { visibleLines += 200 }.padding(8) }
+                if lines.count > currentVisibleLines {
+                    Button("Show more changes") {
+                        _visibleLines.setValue(currentVisibleLines + 200, subscope: diffScopeKey)
+                    }.padding(8)
+                }
             }.accessibilityIdentifier("NativeTool.diff")
         }
         .task(id: request) {
@@ -170,8 +180,9 @@ private struct NativeToolDiffView: View {
 
 private struct NativeSearchToolView: View {
     let content: NativeToolContent
-    @State private var visibleRows = 100
+    @NativeRowState("search.visibleRows") private var visibleRows = 100
     var body: some View {
+        let currentVisibleRows = _visibleRows.value(subscope: content.call.id)
         let pattern = content.string("pattern", "Query", "query")
         Label(pattern.isEmpty ? "All files" : pattern, systemImage: "magnifyingglass").font(.ripul(.body, family: .code)).textSelection(.enabled)
         let path = content.string("path", "SearchPath", "DirectoryPath")
@@ -182,11 +193,15 @@ private struct NativeSearchToolView: View {
             NativeToolSection(title: "Matches") {
                 Text(lines.isEmpty ? "No matches found" : "\(lines.count) results").font(.ripul(.caption)).foregroundStyle(.ripul(.textSecondary))
                 LazyVStack(alignment: .leading, spacing: 10) {
-                    ForEach(Array(lines.prefix(visibleRows).enumerated()), id: \.offset) { _, line in
+                    ForEach(Array(lines.prefix(currentVisibleRows).enumerated()), id: \.offset) { _, line in
                         Label { Text(line).font(.ripul(.caption, family: .code)).textSelection(.enabled) }
                             icon: { Image(systemName: content.kind == .glob ? "doc" : "text.magnifyingglass").foregroundStyle(.ripul(.textSecondary)) }
                     }
-                    if lines.count > visibleRows { Button("Show more matches") { visibleRows += 200 } }
+                    if lines.count > currentVisibleRows {
+                        Button("Show more matches") {
+                            _visibleRows.setValue(currentVisibleRows + 200, subscope: content.call.id)
+                        }
+                    }
                 }.accessibilityIdentifier("NativeTool.matches")
             }
         } else { NativeToolResultView(content: content, title: "Matches", textSyntax: .automatic) }

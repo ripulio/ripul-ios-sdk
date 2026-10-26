@@ -157,6 +157,7 @@ extension AgentBridge {
         isThemeReady = false
         initialStatusSyncComplete = false
         composerActions.clear()
+        composerGoals.clear()
         resetLifecycleState()
         jsErrorMessages = []
         jsErrorDebounce?.cancel()

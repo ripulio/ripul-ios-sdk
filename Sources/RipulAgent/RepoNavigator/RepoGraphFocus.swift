@@ -20,7 +20,10 @@ public enum RepoGraphFocus {
     /// children: each stub follows its merge, chain order otherwise kept).
     /// Empty when the tip isn't in the loaded window.
     public static func firstParentHeritage(commits: [GraphCommit], tipSha: String) -> [GraphCommit] {
-        let bySha = Dictionary(uniqueKeysWithValues: commits.map { ($0.sha, $0) })
+        let bySha = Dictionary(
+            commits.map { ($0.sha, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
         guard bySha[tipSha] != nil else { return [] }
 
         // The chain first, so a merge whose side-parent is itself further

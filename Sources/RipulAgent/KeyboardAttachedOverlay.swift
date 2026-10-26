@@ -9,6 +9,15 @@ enum ComposerKeyboardLayout {
               !bounds.intersection(keyboard).isEmpty else { return resting }
         return max(resting, bounds.maxY - max(bounds.minY, keyboard.minY))
     }
+
+    /// Move only the distance the composer travels from its resting baseline.
+    /// Keeping the web's resting padding avoids a second, asynchronous DOM
+    /// inset change while the native surfaces are animating.
+    static func webShift(bounds: CGRect, safeBottom: CGFloat, navigationInset: CGFloat,
+                         keyboard: CGRect?, docked: Bool) -> CGFloat {
+        let resting = max(0, safeBottom) + max(0, navigationInset)
+        return max(0, bottomInset(bounds: bounds, safeBottom: resting, keyboard: keyboard, docked: docked) - resting)
+    }
 }
 
 /// The chat's resting content clearance has two independent measurements:
@@ -64,6 +73,22 @@ enum ComposerChromeLayout {
 #if os(iOS)
 import UIKit
 import Combine
+
+@MainActor
+enum ComposerKeyboardAnimation {
+    static func perform(_ note: Notification, changes: @escaping () -> Void) {
+        let duration = note.name == UIResponder.keyboardDidChangeFrameNotification ? 0
+            : (note.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double ?? 0)
+        let curve = note.userInfo?[UIResponder.keyboardAnimationCurveUserInfoKey] as? UInt ?? 0
+        if duration > 0 {
+            UIView.animate(withDuration: duration, delay: 0,
+                           options: [UIView.AnimationOptions(rawValue: curve << 16), .beginFromCurrentState, .allowUserInteraction],
+                           animations: changes)
+        } else {
+            UIView.performWithoutAnimation(changes)
+        }
+    }
+}
 
 /// UIKit owns positioning and uses the keyboard's frame, duration and curve.
 /// No per-frame SwiftUI state or second spring is involved. Keyboard layout
@@ -270,17 +295,7 @@ final class KeyboardAttachedOverlayController: UIViewController {
         keyboardFrame = note.name == UIResponder.keyboardWillHideNotification ? nil
             : note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect
         guard updateBottomConstraint() else { return }
-        let duration = note.name == UIResponder.keyboardDidChangeFrameNotification ? 0
-            : (note.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double ?? 0)
-        let curve = note.userInfo?[UIResponder.keyboardAnimationCurveUserInfoKey] as? UInt ?? 0
-        if duration > 0 {
-            UIView.animate(withDuration: duration, delay: 0,
-                           options: [UIView.AnimationOptions(rawValue: curve << 16), .beginFromCurrentState, .allowUserInteraction]) {
-                self.view.layoutIfNeeded()
-            }
-        } else {
-            UIView.performWithoutAnimation { self.view.layoutIfNeeded() }
-        }
+        ComposerKeyboardAnimation.perform(note) { self.view.layoutIfNeeded() }
     }
 }
 

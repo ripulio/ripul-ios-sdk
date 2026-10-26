@@ -143,7 +143,6 @@ public final class VoiceModeController: ObservableObject {
     /// provider can still complete asynchronously after listening has restarted.
     private var listeningID: UUID?
     private var ttsProvider: Any?
-    private var ttsFallback: Any?
     private var runningSink: AnyCancellable?
     private var lastRunning = false
     private var silenceTicker: Task<Void, Never>?
@@ -252,6 +251,20 @@ public final class VoiceModeController: ObservableObject {
     private var pausedFrom: PausedContext = .listening
     /// Reply that completed while paused — spoken on resume.
     private var pendingReply: String?
+    /// A spoken message sent while the agent was working: it steers the
+    /// running task, and the agent's `answer: true` speech ends it.
+    private(set) var steer = VoiceSteerExchange()
+    /// Agent speech that arrived while the user was mid-sentence after a
+    /// steer's answer reopened the mic; played once their message is sent.
+    private var heldAgentSpeech: [String] = []
+    /// Tests stand in for the bridge's running state.
+    var agentRunningProbe: (() -> Bool)?
+    private var agentRunning: Bool { agentRunningProbe?() ?? bridge?.isAgentRunning ?? false }
+    /// The user has started an utterance that is not sent yet.
+    private var userIsSpeaking: Bool {
+        isFinalizingTranscription
+            || !(committedText + partialText).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
 
     /// Registered remote-command targets, removed precisely on deactivate.
     private var commandTargets: [(MPRemoteCommand, Any)] = []
@@ -330,11 +343,10 @@ public final class VoiceModeController: ObservableObject {
         sttFallback = AppleSpeechProvider()
         sttProviderID = (sttProvider as? any NativeSpeechProviding)?.id ?? "unknown"
         ttsProvider = NativeSpeechProviderFactory.speaking(tokenProvider: tokens, tokenRefresher: mintToken)
-        ttsFallback = AppleSpeechProvider()
 
         // Reply text rides native chat forwarding — enabled here explicitly;
         // the debug scroller has its own toggle for the same channel.
-        bridge.evaluateJavaScript("window.__ripulSetNativeChatForwarding?.(true, 'voice')")
+        bridge.evaluateJavaScript("window.__ripulSetNativeChatForwarding?.(true, 'voice', null, \(NativeChatMessageStore.forwardingFeaturesJSON))")
 
         sttFellBack = false
         cloudConnectedThisConversation = false
@@ -358,8 +370,8 @@ public final class VoiceModeController: ObservableObject {
         }
 
         // Agent-authored speech: the `speak` tool publishes here.
-        VoiceModeCoordinator.shared.beginSession { [weak self] text in
-            self?.handleAgentSpeech(text)
+        VoiceModeCoordinator.shared.beginSession { [weak self] text, answer in
+            self?.handleAgentSpeech(text, answer: answer)
         }
 
         activateRemoteCommands()
@@ -400,6 +412,8 @@ public final class VoiceModeController: ObservableObject {
             VoiceAudioSession.end()
         }
         pendingReply = nil
+        steer.reset()
+        heldAgentSpeech = []
         narratedMessageIds = []
         narrationQueue = []
         if !partialText.isEmpty { partialText = "" }
@@ -646,20 +660,17 @@ public final class VoiceModeController: ObservableObject {
         guard #available(iOS 26.0, macOS 26.0, *) else { return }
         (sttProvider as? any NativeSpeechProviding)?.stopTranscription()
         (ttsProvider as? any NativeSpeechProviding)?.stopSpeaking()
-        (ttsFallback as? any NativeSpeechProviding)?.stopSpeaking()
     }
 
     /// Freeze playback mid-utterance on whichever provider owns it.
     private func pauseAllSpeech() {
         guard #available(iOS 26.0, macOS 26.0, *) else { return }
         (ttsProvider as? any NativeSpeechProviding)?.pauseSpeaking()
-        (ttsFallback as? any NativeSpeechProviding)?.pauseSpeaking()
     }
 
     private func resumeAllSpeech() {
         guard #available(iOS 26.0, macOS 26.0, *) else { return }
         (ttsProvider as? any NativeSpeechProviding)?.resumeSpeaking()
-        (ttsFallback as? any NativeSpeechProviding)?.resumeSpeaking()
     }
 
     // MARK: - Listening
@@ -1050,6 +1061,9 @@ public final class VoiceModeController: ObservableObject {
             (sttProvider as? any NativeSpeechProviding)?.stopTranscription()
         }
         baselineIds = Set(bridge?.nativeChat.messages.map(\.id) ?? [])
+        // Sent while the agent works, the message steers the running task:
+        // the turn will not end on its answer (VoiceSteerExchange).
+        let steering = agentRunning
         Task { @MainActor [weak self] in
             guard let self, self.phase == .sending else { return }
             var text = text
@@ -1086,6 +1100,7 @@ public final class VoiceModeController: ObservableObject {
             else { ok = await self.bridge?.submitMessage(text, modality: "voice") ?? false }
             guard self.phase == .sending else { return }
             if ok {
+                self.steer.sent(whileAgentRunning: steering && self.commandRouter == nil)
                 self.enterThinking()
             } else {
                 self.showNotice("Send failed")
@@ -1108,6 +1123,10 @@ public final class VoiceModeController: ObservableObject {
         // most disorienting moment of a voice session.
         playSendAccepted()
         startThinkingTicker()
+        // The agent spoke while the user was mid-sentence: play it now.
+        let held = heldAgentSpeech
+        heldAgentSpeech = []
+        for text in held { handleAgentSpeech(text, answer: false) }
     }
 
     private func startThinkingTicker() {
@@ -1126,8 +1145,20 @@ public final class VoiceModeController: ObservableObject {
     /// Speech the agent authored via the `speak` tool. It preempts our
     /// canned acks and round-ups — agent-written narration is always better
     /// than a client-side guess at what's happening.
-    private func handleAgentSpeech(_ text: String) {
+    func handleAgentSpeech(_ text: String, answer: Bool = false) {
         guard isActive, phase != .speaking, phase != .paused else { return }
+        // The mic reopened after a steer's answer and the task is still
+        // running: the agent speaking again (a progress note, a closing
+        // answer) closes it for the length of the speech, then it reopens.
+        // Never over a sentence the user has started.
+        let interruptsListening = phase == .listening && steer.listeningMidTask
+        if interruptsListening {
+            if userIsSpeaking {
+                heldAgentSpeech.append(text)
+                return
+            }
+            leaveListeningForAgent()
+        }
         // The agent has taken over narration for this turn; drop anything the
         // prose pump had queued rather than reading it out behind the agent's
         // own words (pumpNarration stops feeding the queue from here on).
@@ -1135,6 +1166,21 @@ public final class VoiceModeController: ObservableObject {
         lastNarrationSecond = thinkingSeconds
         stopAmbientSpeech()
         speakAmbient(text, force: true)
+        let endsExchange = steer.agentSpoke(answer: answer, agentRunning: agentRunning)
+        if endsExchange || interruptsListening { listenAfterAgentSpeech() }
+    }
+
+    /// Close the mic so the agent can be heard; `listenAfterAgentSpeech`
+    /// opens it again. Phase first: it invalidates capture callbacks before
+    /// the provider, stopping, delivers its last events.
+    private func leaveListeningForAgent() {
+        setCaptureLive(false, reason: "agent-speech")
+        phase = .thinking
+        if #available(iOS 26.0, macOS 26.0, *) {
+            (sttProvider as? any NativeSpeechProviding)?.stopTranscription()
+        }
+        partialText = ""
+        committedText = ""
     }
 
     /// "Sent, and it's working" — the bookend to `announceMicLive()`.
@@ -1235,7 +1281,6 @@ public final class VoiceModeController: ObservableObject {
         clearAmbientState()
         guard #available(iOS 26.0, macOS 26.0, *) else { return }
         (ttsProvider as? any NativeSpeechProviding)?.stopSpeaking()
-        (ttsFallback as? any NativeSpeechProviding)?.stopSpeaking()
     }
 
     /// Forget ambient speech without touching the players — for callers that
@@ -1305,19 +1350,9 @@ public final class VoiceModeController: ObservableObject {
                                     modelId: SpeechPreferences.ttsModelId(for: .acknowledgement), onPlaybackEnd: done)
                 began()
             } catch {
-                // Skipped or replaced mid-synthesis: the provider cancels, and
-                // falling back to Apple would read out what the user skipped.
                 guard self.ambientGeneration == generation else { return }
-                nerror("[VOICE] ambient TTS failed, falling back to Apple: \(error.localizedDescription)")
-                do {
-                    guard let fallback = self.ttsFallback as? any NativeSpeechProviding else { throw error }
-                    try await fallback.speak(text: text, voiceId: nil, onPlaybackEnd: done)
-                    began()
-                } catch {
-                    nerror("[VOICE] ambient Apple fallback failed: \(error.localizedDescription)")
-                    guard self.ambientGeneration == generation else { return }
-                    self.ambientBusy = false
-                }
+                nerror("[VOICE] ambient TTS failed: \(error.localizedDescription)")
+                self.ambientBusy = false
             }
         }
     }
@@ -1336,16 +1371,29 @@ public final class VoiceModeController: ObservableObject {
                 if !finished { self?.stopAmbientSpeech() }
             } catch { return }
             guard !Task.isCancelled, let self, self.phase == .thinking else { return }
+            // Reopening while the task runs: what the agent says or writes
+            // from here belongs to the task, so its end is handled as a turn
+            // ends today (spoken, or the written reply read). Done after the
+            // speech, so a task ending mid-answer doesn't read over it.
+            if self.steer.listeningMidTask { VoiceModeCoordinator.shared.markTurnStarted() }
             self.beginListening(keepText: false)
         }
     }
 
-    private func handleRunningChange(_ running: Bool) {
+    func handleRunningChange(_ running: Bool) {
         let wasRunning = lastRunning
         lastRunning = running
         // Note: awaitingInput (permission prompts) keeps isAgentRunning true,
         // so this edge only fires on genuine turn completion.
         guard wasRunning, !running else { return }
+        // The task a spoken message steered has ended while the mic was open
+        // again: end it as a turn ends today, unless the user is mid-sentence
+        // (what they are saying will start a turn of its own).
+        if steer.taskEnded(), phase == .listening {
+            guard !userIsSpeaking else { return }
+            leaveListeningForAgent()
+        }
+        heldAgentSpeech = []
         if phase == .paused, pausedFrom == .thinking {
             // The agent answered through `speak`: there is no written reply to
             // read, and resume finishes whatever the pause froze.
@@ -1499,15 +1547,8 @@ public final class VoiceModeController: ObservableObject {
                 playbackBegan()
             } catch {
                 guard self.phase == .speaking else { return }
-                nerror("[VOICE] reply TTS failed, falling back to Apple: \(error.localizedDescription)")
-                do {
-                    guard let fallback = self.ttsFallback as? any NativeSpeechProviding else { throw error }
-                    try await fallback.speak(text: spoken, voiceId: nil, onPlaybackEnd: resume)
-                    playbackBegan()
-                } catch {
-                    nerror("[VOICE] Apple fallback failed: \(error.localizedDescription)")
-                    self.showNotice("Speech failed: \(error.localizedDescription)")
-                }
+                nerror("[VOICE] reply TTS failed: \(error.localizedDescription)")
+                self.showNotice("Speech failed: \(error.localizedDescription)")
             }
         }
     }

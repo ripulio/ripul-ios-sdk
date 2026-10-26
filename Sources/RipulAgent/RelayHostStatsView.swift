@@ -998,7 +998,10 @@ public struct RelayHostStatsView: View {
                 lastProbe = nil
             }
             if let nextRooms {
-                previousRooms = Dictionary(uniqueKeysWithValues: nextRooms.map { ($0.roomId, $0) })
+                previousRooms = Dictionary(
+                    nextRooms.map { ($0.roomId, $0) },
+                    uniquingKeysWith: { first, _ in first }
+                )
             }
             if let nextSelf {
                 previousSelf = nextSelf

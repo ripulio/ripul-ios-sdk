@@ -148,6 +148,10 @@ final class DeviceSpeechTransportTests: XCTestCase {
     @MainActor func testKeychainIsProfileScopedAndRemovable() throws {
         let oldScope = DeviceSpeechCredentials.profileScope
         let oldStore = SpeechPreferences.store
+        // A standalone (bundled-runtime) app: with no device key it must not fall back
+        // to a Ripul token. Set here rather than read from whatever this machine holds.
+        let oldStandalone = UserDefaults.standard.object(forKey: BundledAgentRuntime.modeKey)
+        UserDefaults.standard.set(true, forKey: BundledAgentRuntime.modeKey)
         let suite = "speech-test-" + UUID().uuidString
         DeviceSpeechCredentials.profileScope = suite
         SpeechPreferences.store = UserDefaults(suiteName: suite)!
@@ -155,12 +159,17 @@ final class DeviceSpeechTransportTests: XCTestCase {
             DeviceSpeechCredentials.profileScope = suite; try? DeviceSpeechCredentials.remove()
             DeviceSpeechCredentials.profileScope = oldScope
             SpeechPreferences.store.removePersistentDomain(forName: suite); SpeechPreferences.store = oldStore
+            UserDefaults.standard.set(oldStandalone, forKey: BundledAgentRuntime.modeKey)
         }
         SpeechPreferences.store.set("elevenlabs", forKey: SpeechPreferences.dictationProviderKey)
         XCTAssertEqual(NativeSpeechProviderFactory.dictation(tokenProvider: { "unused-ripul-token" }).id, "apple")
-        XCTAssertEqual(NativeSpeechProviderFactory.speaking(tokenProvider: { "unused-ripul-token" }).id, "apple")
+        XCTAssertEqual(NativeSpeechProviderFactory.speaking(tokenProvider: { "unused-ripul-token" }).id, "phonon")
         try DeviceSpeechCredentials.save("test-keychain-key")
         XCTAssertEqual(NativeSpeechProviderFactory.dictation(tokenProvider: { nil }).id, "elevenlabs")
+        XCTAssertEqual(NativeSpeechProviderFactory.speaking(tokenProvider: { nil }).id, "elevenlabs")
+        SpeechPreferences.store.set("phonon", forKey: SpeechPreferences.ttsProviderKey)
+        XCTAssertEqual(NativeSpeechProviderFactory.speaking(tokenProvider: { nil }).id, "phonon")
+        SpeechPreferences.store.set("elevenlabs", forKey: SpeechPreferences.ttsProviderKey)
         XCTAssertEqual(NativeSpeechProviderFactory.speaking(tokenProvider: { nil }).id, "elevenlabs")
         XCTAssertEqual(try DeviceSpeechCredentials.read(), "test-keychain-key")
         XCTAssertFalse(SpeechPreferences.store.dictionaryRepresentation().values.contains { ($0 as? String) == "test-keychain-key" })
@@ -169,5 +178,26 @@ final class DeviceSpeechTransportTests: XCTestCase {
         DeviceSpeechCredentials.profileScope = suite
         try DeviceSpeechCredentials.remove()
         XCTAssertNil(try DeviceSpeechCredentials.read())
+    }
+
+    @MainActor func testAppleTTSRemovedAndPhononVoiceSelectionWorks() async throws {
+        let apple = AppleSpeechProvider()
+        let appleVoices = try await apple.listVoices()
+        XCTAssertTrue(appleVoices.isEmpty)
+        do {
+            try await apple.speak(text: "Should never speak with Apple", voiceId: nil, onPlaybackEnd: nil)
+            XCTFail("Expected AppleSpeechProvider.speak to throw ttsUnsupported")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("Phonon"))
+        }
+
+        let phononVoices = PhononNativeSpeechProvider.shared.listVoicesSync()
+        XCTAssertEqual(phononVoices.count, 37)
+        XCTAssertEqual(phononVoices.first?.id, "Zoey")
+        XCTAssertEqual(phononVoices.first?.displayLabel, "Zoey (US · Female)")
+        XCTAssertTrue(phononVoices.contains { $0.id == "Alfie" && $0.displayLabel == "Alfie (UK · Male)" })
+        XCTAssertTrue(phononVoices.allSatisfy { $0.region != nil && $0.gender != nil })
+        XCTAssertEqual(PhononNativeSpeechProvider.resolveVoiceName("Juniper"), "Juniper")
+        XCTAssertEqual(PhononNativeSpeechProvider.resolveVoiceName("nonexistent-elevenlabs-id"), PhononNativeSpeechProvider.defaultVoiceId)
     }
 }

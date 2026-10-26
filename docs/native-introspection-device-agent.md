@@ -95,7 +95,7 @@ Everything except the raw log buffer is exposed as a `NativeTool` (the existing 
 | Localhost MCP server (`host_*`, macOS) | extraction Ph3 (pending) | `DevToolsMCPServer.swift` (planned) |
 | Relay peer:query dispatcher | ✅ exists **in JS** | `peerQueryHandlers.ts`, `createMessageRouter.ts` |
 | `device_*` discovery/prefix/cache | ✅ exists | `FrameMCPBridge.ts` |
-| Native WS transport (heartbeat, reconnect/backoff, stable clientId) | ✅ exists (for session sync) | `SessionChannelClient.swift` |
+| Native WS transport (heartbeat, reconnect/backoff, stable clientId) | ❌ deleted 25 Oct 2026: the Swift session client had no callers. Its last version is at commit `0bb21badc` | `SessionChannelClient.swift` (in git history) |
 | View-hierarchy capture w/ reflection (text, image, control actions, property/ivar names, VC chain) | ✅ exists, **no network exit** | `ViewInspectorOverlay.swift` (`InspectedView`), `RipulViewExplorer.swift` |
 | Native `NSLog` tee | ⚠️ exists but **module-private, SDK-only** | `NativeLogTee.swift` |
 | **Public host log buffer** (`RipulLog`) | ❌ net-new | Phase A |
@@ -144,7 +144,7 @@ Ordered for incremental value: A–B deliver to Ripul immediately over the *exis
 **Goal:** the app process is a relay peer with **no web app required**. This is the piece that makes WAC (and any native app) a CLI-selectable device and is the largest net-new chunk.
 
 **What ships**
-- `DeviceAgentClient.swift` — outbound WS to the relay, registering as a **peer** (not host). Reuse `SessionChannelClient.swift`'s transport (heartbeat, exponential-backoff reconnect, stable `clientId`); swap the session-sync framing for the peer-presence + `peer:query` framing.
+- `DeviceAgentClient.swift` — outbound WS to the relay, registering as a **peer** (not host). Port the transport of the web `SessionChannelClient.ts`/`WebSocketTransport.ts` (heartbeat, exponential-backoff reconnect, stable `clientId`; the unused Swift copy was deleted on 25 Oct 2026, last version at `0bb21badc`); swap the session-sync framing for the peer-presence + `peer:query` framing.
 - `DeviceIntrospectionRouter.swift` — Swift twin of `peerQueryHandlers.ts`: dispatch `peer:query` by type, self-skip (mirror `__ripulHostBridgeClientId`), stamp `responderClientId`, honor `peerTarget`. `consoleLogs`/`networkLogs` read the buffers; `listTools`/`invokeTool` hit the NativeTool registry; native types resolve to the Phase-B tools.
 - `RipulDeviceAgent` facade — `configure`/`register*`/`start`/`stop`, gating (below), capability opt-in.
 

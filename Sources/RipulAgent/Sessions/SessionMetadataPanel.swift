@@ -21,10 +21,15 @@ public struct SessionMetadataPanel: View {
     @State private var loading = false
     @State private var storage: AgentBridge.SessionStorageBreakdown?
     @State private var anchorList: (chatId: String, anchors: [AgentBridge.HumanChatAnchor])?
+    @State private var scheduleList: (chatId: String, schedules: [AgentBridge.ChatSchedule])?
+    @State private var attentionList: (chatId: String, items: [AgentBridge.ReadingItem])?
 
     // Section expansion
+    @State private var attentionExpanded = true
     @State private var milestonesExpanded = true
     @State private var shortcutsExpanded = true
+    @State private var observationsExpanded = true
+    @State private var schedulesExpanded = true
     @State private var messagesExpanded = true
     @State private var messagesSearch = ""
     @State private var filesExpanded = true
@@ -50,9 +55,13 @@ public struct SessionMetadataPanel: View {
     public var body: some View {
         ScrollView {
             VStack(spacing: 12) {
-                // First, since "where am I?" is the question a long chat raises.
+                // Messages flagged for the viewer, while there are any.
+                attentionSection
+                // Then milestones, since "where am I?" is the question a long chat raises.
                 milestonesSection
                 shortcutsSection
+                observationsSection
+                schedulesSection
                 descriptionSection
                 messagesSection
                 modelSection
@@ -88,13 +97,37 @@ public struct SessionMetadataPanel: View {
             guard let chatId = session?.sourceChatId else { return }
             await loadAnchors(chatId, waitForChat: true)
         }
+        .task(id: session?.sourceChatId) {
+            guard let chatId = session?.sourceChatId else { return }
+            await loadSchedules(chatId)
+        }
+        .task(id: session?.sourceChatId) {
+            guard let chatId = session?.sourceChatId else { return }
+            await loadAttention(chatId)
+        }
         // A turn starting means a message was just sent; ending means the
-        // chat settled. Either way the anchor list may have grown, and the
-        // agent may have recorded a milestone or made commits.
+        // chat settled. Either way the anchor list may have grown, the agent
+        // may have recorded a milestone, made commits or set a schedule, and
+        // a schedule's run may have started.
         .onChange(of: bridge.isAgentRunning) {
             guard let chatId = session?.sourceChatId else { return }
             Task { await loadAnchors(chatId) }
             Task { await refreshMetadata(chatId) }
+            Task { await loadSchedules(chatId) }
+            Task { await loadAttention(chatId) }
+        }
+        // Someone flagged a message for the viewer while the panel is open. The
+        // page's id for the chat can differ from the session's (a shared chat),
+        // and only the person flagged is told, so read this chat's list again.
+        .onReceive(NotificationCenter.default.publisher(for: AgentBridge.readingListChangedNotification)) { note in
+            guard (note.object as? AgentBridge) === bridge, let chatId = session?.sourceChatId else { return }
+            Task { await loadAttention(chatId) }
+        }
+        // Send Later, or a change from the Schedules section.
+        .onReceive(NotificationCenter.default.publisher(for: AgentBridge.schedulesChangedNotification)) { note in
+            guard (note.object as? AgentBridge) === bridge, let chatId = session?.sourceChatId,
+                  note.userInfo?["chatId"] as? String == chatId else { return }
+            Task { await loadSchedules(chatId) }
         }
         .onChange(of: debugExpanded) { _, expanded in
             if expanded && storage == nil {
@@ -111,6 +144,37 @@ public struct SessionMetadataPanel: View {
         guard !Task.isCancelled else { return }
         metadata = loaded
         loading = false
+    }
+
+    /// A reply that lands after the chat changed is dropped.
+    private func loadSchedules(_ chatId: String) async {
+        guard let loaded = await bridge.getChatSchedules(chatId: chatId) else { return }
+        guard !Task.isCancelled, session?.sourceChatId == chatId else { return }
+        if scheduleList?.chatId != chatId || scheduleList?.schedules != loaded {
+            scheduleList = (chatId, loaded)
+        }
+    }
+
+    /// A reply that lands after the chat changed is dropped.
+    private func loadAttention(_ chatId: String) async {
+        guard let loaded = await bridge.getReadingList(chatId: chatId) else { return }
+        guard !Task.isCancelled, session?.sourceChatId == chatId else { return }
+        if attentionList?.chatId != chatId || attentionList?.items != loaded {
+            attentionList = (chatId, loaded)
+        }
+    }
+
+    /// Gone at once; the page's reply says what is left.
+    private func clearAttention(_ ids: [String]?) {
+        guard let chatId = session?.sourceChatId, let list = attentionList, list.chatId == chatId else { return }
+        attentionList = (chatId, ids.map { ids in list.items.filter { !ids.contains($0.id) } } ?? [])
+        Task {
+            if let left = await bridge.clearReadingList(chatId: chatId, ids: ids), session?.sourceChatId == chatId {
+                attentionList = (chatId, left)
+            } else {
+                await loadAttention(chatId)
+            }
+        }
     }
 
     /// Reload without the loading state, so the panel does not blink. A reply
@@ -150,12 +214,30 @@ public struct SessionMetadataPanel: View {
     private func patch(_ patch: [String: Any]) {
         guard let sessionId = session?.sourceChatId else { return }
         Task {
-            if let updated = await bridge.patchSessionMetadata(sessionId: sessionId, patch: patch) {
+            if var updated = await bridge.patchSessionMetadata(sessionId: sessionId, patch: patch) {
+                // A patch's reply does not say whose chat it is; that has not changed.
+                updated.isChatMember = metadata?.isChatMember ?? false
+                updated.viewerId = metadata?.viewerId
                 metadata = updated
                 if patch.keys.contains(where: { $0.hasSuffix("Shortcut") || $0 == "removeShortcutId" }) {
                     NotificationCenter.default.post(name: .ripulChatShortcutsChanged, object: nil)
                 }
             }
+        }
+    }
+
+    // MARK: - For your attention
+
+    /// Left out while the viewer has nothing flagged in this chat.
+    @ViewBuilder
+    private var attentionSection: some View {
+        if let chatId = session?.sourceChatId, let list = attentionList, list.chatId == chatId, !list.items.isEmpty {
+            SessionAttentionSection(
+                items: list.items,
+                isExpanded: $attentionExpanded,
+                onJump: { bridge.scrollToMessage($0) },
+                onClear: clearAttention
+            )
         }
     }
 
@@ -182,7 +264,39 @@ public struct SessionMetadataPanel: View {
             SessionShortcutsSection(
                 shortcuts: metadata.shortcuts,
                 isExpanded: $shortcutsExpanded,
-                patch: patch
+                patch: patch,
+                canEditLinks: !metadata.isChatMember,
+                canUnpin: metadata.canUnpin,
+                onJump: { bridge.scrollToMessage($0) }
+            )
+        }
+    }
+
+    // MARK: - Observations
+
+    @ViewBuilder
+    private var observationsSection: some View {
+        if let chatId = session?.sourceChatId {
+            SessionObservationsSection(
+                bridge: bridge,
+                chatId: chatId,
+                turnRunning: bridge.isAgentRunning,
+                isExpanded: $observationsExpanded
+            )
+        }
+    }
+
+    // MARK: - Schedules
+
+    /// Left out while the chat has none.
+    @ViewBuilder
+    private var schedulesSection: some View {
+        if let chatId = session?.sourceChatId, let list = scheduleList, list.chatId == chatId, !list.schedules.isEmpty {
+            SessionSchedulesSection(
+                bridge: bridge,
+                chatId: chatId,
+                schedules: list.schedules,
+                isExpanded: $schedulesExpanded
             )
         }
     }

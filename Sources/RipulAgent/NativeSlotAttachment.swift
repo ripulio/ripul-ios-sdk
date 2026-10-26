@@ -1,4 +1,5 @@
 #if os(iOS)
+import Combine
 import UIKit
 import WebKit
 
@@ -106,6 +107,13 @@ final class NativeSlotAttachment {
         return parent.convert(frameInScroller, from: target)
     }
 
+    /// Waiting to see, once the app is back, whether a view that left the
+    /// window in the background came back with WebKit's layers.
+    private var returnCheck: AnyCancellable?
+    /// Whether the app is in the background, where WebKit's layers are off the
+    /// screen. Replaceable for tests.
+    static var appIsInBackground: () -> Bool = { UIApplication.shared.applicationState == .background }
+
     init(webView: WKWebView, label: String) {
         self.webView = webView
         self.label = label
@@ -113,13 +121,44 @@ final class NativeSlotAttachment {
         container.onLeftWindow = { [weak self] in
             DispatchQueue.main.async {
                 guard let self, !self.unmounting, self.scroller != nil, self.container.window == nil else { return }
-                #if DEBUG
-                NSLog("[SLOT] %@ dropped by WebKit; placing again", self.label)
-                #endif
-                self.slotView = nil
-                self.onDropped?()
+                // In the background WebKit takes its layers off the screen once
+                // the app-switcher pictures are drawn, and every mounted view
+                // leaves the window with them: nothing has been dropped yet.
+                // Placing again from there failed on every try until each strip
+                // gave up, on every trip away from the app (23 October 2026:
+                // about 230 placements a minute on Peter's phone).
+                if Self.appIsInBackground() {
+                    self.checkOnReturn()
+                    return
+                }
+                self.dropped()
             }
         }
+        container.onEnteredWindow = { [weak self] in self?.returnCheck = nil }
+    }
+
+    private func dropped() {
+        #if DEBUG
+        NSLog("[SLOT] %@ dropped by WebKit; placing again", label)
+        #endif
+        slotView = nil
+        onDropped?()
+    }
+
+    /// Back in the foreground, WebKit puts its layers on the screen again, and
+    /// with them every view still mounted in them (`onEnteredWindow` ends the
+    /// wait). One still off the screen a moment later was dropped while away.
+    private func checkOnReturn() {
+        guard returnCheck == nil else { return }
+        returnCheck = NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)
+            .first()
+            .delay(for: .milliseconds(300), scheduler: DispatchQueue.main)
+            .sink { [weak self] _ in
+                guard let self else { return }
+                self.returnCheck = nil
+                guard !self.unmounting, self.scroller != nil, self.container.window == nil else { return }
+                self.dropped()
+            }
     }
 
     var isMounted: Bool { container.superview != nil && scroller != nil }
@@ -473,6 +512,7 @@ final class NativeSlotAttachment {
     /// Takes the content out of WebKit's hierarchy. `controller` is also
     /// removed from its parent when given.
     func unmount(removing controller: UIViewController? = nil) {
+        returnCheck = nil
         unmounting = true
         controller?.willMove(toParent: nil)
         container.removeFromSuperview()
@@ -488,9 +528,10 @@ final class NativeSlotAttachment {
 /// empty area belongs to the web content beneath.
 final class SlotMountView: UIView {
     var onLeftWindow: (() -> Void)?
+    var onEnteredWindow: (() -> Void)?
     override func didMoveToWindow() {
         super.didMoveToWindow()
-        if window == nil { onLeftWindow?() }
+        if window == nil { onLeftWindow?() } else { onEnteredWindow?() }
     }
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
         let hit = super.hitTest(point, with: event)

@@ -228,7 +228,7 @@ private struct NativeInteractionPanel: View {
     }
     .onChange(of: focused) { _, value in state.editing = value; state.sizeChanged?() }
     .onChange(of: state.snapshot?.disabled) { _, value in if value == true { focused = false } }
-    .toolbar { ToolbarItemGroup(placement: .keyboard) { Spacer(); Button("Done") { focused = false } } }
+    .keyboardDoneButton(when: focused) { focused = false }
   }
 
   @ViewBuilder private func tabContent(_ snapshot: NativeInteractionSnapshot) -> some View {

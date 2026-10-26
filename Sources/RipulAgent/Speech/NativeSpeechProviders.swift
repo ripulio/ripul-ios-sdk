@@ -398,7 +398,33 @@ public final class ElevenLabsNativeSpeechProvider: NSObject, NativeSpeechProvidi
     // MARK: Voices + TTS
 
     public func listVoices() async throws -> [SpeechService.Voice] {
-        try await catalog().map { SpeechService.Voice(id: $0.id, name: $0.name) }
+        try await catalog().map { voice in
+            SpeechService.Voice(
+                id: voice.id,
+                name: voice.name,
+                region: Self.formatRegionLabel(voice.labels?["accent"]),
+                gender: Self.formatGenderLabel(voice.labels?["gender"])
+            )
+        }
+    }
+
+    private static func formatRegionLabel(_ raw: String?) -> String? {
+        guard let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmed.isEmpty else { return nil }
+        switch trimmed.lowercased() {
+        case "american", "us", "en-us", "united states": return "US"
+        case "british", "uk", "en-gb", "english", "united kingdom": return "UK"
+        case "australian", "au", "en-au": return "AU"
+        case "canadian", "ca", "en-ca": return "CA"
+        case "irish", "ie", "en-ie": return "IE"
+        case "indian", "in", "en-in": return "IN"
+        case "scottish": return "Scotland"
+        default: return trimmed.capitalized
+        }
+    }
+
+    private static func formatGenderLabel(_ raw: String?) -> String? {
+        guard let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmed.isEmpty else { return nil }
+        return trimmed.capitalized
     }
 
     private struct CatalogVoice: Decodable {

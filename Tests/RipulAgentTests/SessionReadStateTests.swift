@@ -34,6 +34,25 @@ final class SessionReadStateTests: XCTestCase {
                        cachedIsOpen: false, ripulSession: tab)
     }
 
+    func testSelectedChatIdentitySurvivesPartialListRefreshButNotNavigation() {
+        let bridge = bridge(cache())
+        let first = ChatSession(id: "tab-a", sourceChatId: "chat-a", displayName: "A", createdAt: .distantPast)
+        let second = ChatSession(id: "tab-b", sourceChatId: "chat-b", displayName: "B", createdAt: .distantPast)
+        bridge.sessions = [first, second]
+        bridge.activeSessionId = first.id
+        XCTAssertEqual(bridge.currentSourceChatId, "chat-a")
+        bridge.sessions = [second]
+        XCTAssertEqual(bridge.currentSourceChatId, "chat-a")
+        bridge.sessions = []
+        XCTAssertEqual(bridge.currentSourceChatId, "chat-a")
+        bridge.activeSessionId = second.id
+        XCTAssertNil(bridge.currentSourceChatId, "Never borrow the previous tab's draft")
+        bridge.sessions = [first, second]
+        XCTAssertEqual(bridge.currentSourceChatId, "chat-b")
+        bridge.activeSessionId = nil
+        XCTAssertNil(bridge.currentSourceChatId)
+    }
+
     // MARK: - What makes a chat wait
 
     func testHumanRepliesAdvanceUnreadAndRecencyWithoutAnAgentTurn() {

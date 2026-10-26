@@ -44,6 +44,8 @@ final class SimulatorPreviewState: ObservableObject {
     typealias Invoke = (String, String, [Any], String) async -> [String: Any]
     /// Live video of a simulator that takes fingers: (UDID, Mac) to a view, from the host app.
     typealias LiveContent = (String, String) -> AnyView
+    /// Floats the simulator into a dedicated window on Mac Catalyst: (UDID, Mac, Name, Foldable).
+    typealias FloatWindow = (String, String, String, Bool) -> Void
     @Published private(set) var selection: Selection?
     /// The chat's simulators, oldest first; more than one offers a switch between them.
     @Published private(set) var targets: [SimulatorTarget] = []
@@ -52,8 +54,10 @@ final class SimulatorPreviewState: ObservableObject {
     let frame = HostScreenPreviewFrame()
     var image: UIImage? { frame.image }
     @Published private(set) var imageSize: CGSize = .zero
+    @Published private(set) var logicalScreenSize: CGSize = .zero
     private var lastJPEG: String?
     @Published private(set) var appearance: WindowPreviewAppearance?
+    @Published private(set) var chrome: SimulatorDisplayChrome?
     @Published private(set) var error: String?
     /// The simulator's name, once its Mac has said it.
     @Published private(set) var title = "Simulator"
@@ -67,8 +71,15 @@ final class SimulatorPreviewState: ObservableObject {
     @Published var collapsed = false
     /// The person is driving the simulator: live video that takes their fingers.
     @Published var live = false
+    /// The simulator is maximized to fill the whole screen, as in the Simulators pane.
+    @Published var maximized = false
+    @Published private(set) var fullScreenGeneration = UUID()
     @Published var allowed = true
     var liveContent: LiveContent?
+    var fullScreenContent: LiveContent?
+    var floatWindow: FloatWindow?
+
+    var canMaximize: Bool { fullScreenContent != nil || liveContent != nil }
     /// The simulator this app runs in, when it does.
     var ownSimulatorUdid = ProcessInfo.processInfo.environment["SIMULATOR_UDID"]
     private var kept: [String: Kept] = [:]
@@ -93,6 +104,32 @@ final class SimulatorPreviewState: ObservableObject {
 
     var aspectRatio: CGFloat { imageSize.height > 0 ? imageSize.width / imageSize.height : 0.47 }
 
+    var effectiveChrome: SimulatorDisplayChrome {
+        if let chrome { return chrome }
+        if imageSize.width > imageSize.height { return .defaultLandscapePhone }
+        return .defaultPhone
+    }
+
+    var effectiveScreenSize: CGSize {
+        if logicalScreenSize.width > 0, logicalScreenSize.height > 0 {
+            return logicalScreenSize
+        }
+        if imageSize.width > 0, imageSize.height > 0 {
+            let shortSide = min(imageSize.width, imageSize.height)
+            let scale = 393.0 / max(shortSide, 1)
+            return CGSize(width: imageSize.width * scale, height: imageSize.height * scale)
+        }
+        return CGSize(width: 393, height: 852)
+    }
+
+    var chassisAspectRatio: CGFloat {
+        let screen = effectiveScreenSize
+        let outsets = SimulatorChromePath.totalOutsets(for: effectiveChrome, includesButtonPadding: true)
+        let totalW = screen.width + outsets.left + outsets.right
+        let totalH = screen.height + outsets.top + outsets.bottom
+        return totalH > 0 ? totalW / totalH : aspectRatio
+    }
+
     /// `automatic` is the agent reaching for the simulator (a borrowed one, a
     /// tool call that names it), not the person asking. As with the browser
     /// preview, a later automatic open in the same chat keeps the person's
@@ -116,7 +153,7 @@ final class SimulatorPreviewState: ObservableObject {
         let hadPanel = selection != nil
         if !targets.contains(target) { targets.append(target) }
         if selection != next {
-            if automatic, live, selection != nil { return }
+            if automatic, (live || maximized), selection != nil { return }
             select(next)
         } else if !automatic, error != nil {
             retry()
@@ -134,8 +171,54 @@ final class SimulatorPreviewState: ObservableObject {
     func close() {
         if let chat = visibleChatId { kept[chat] = nil }
         generation = UUID()
-        selection = nil; targets = []; live = false
+        selection = nil; targets = []; live = false; maximized = false
         resetFrame(); error = nil; appearance = nil; title = "Simulator"; foldable = false
+    }
+
+    func maximize() {
+        guard selection != nil, canMaximize else { return }
+        collapsed = false
+        fullScreenGeneration = UUID()
+        maximized = true
+    }
+
+    func restoreFromMaximize() {
+        guard maximized else { return }
+        maximized = false
+        if !live { retry() }
+    }
+
+    func floatOut() {
+        guard let selection, let floatWindow else { return }
+        let udid = selection.target.udid
+        let resolvedName = names[udid] ?? (title == "Simulator" ? "Simulator \(udid.prefix(8))" : title)
+        floatWindow(udid, selection.machineId, resolvedName, foldable)
+        live = false
+        maximized = false
+        collapsed = true
+    }
+
+    /// Restores or ensures the collapsed simulator FAB button for `chatId`
+    /// without auto-expanding the preview panel (for example after a popped-out
+    /// simulator window is closed).
+    func ensureCollapsedFAB(_ target: SimulatorTarget, machineId: String, chatId: String) {
+        if let own = ownSimulatorUdid, own.caseInsensitiveCompare(target.udid) == .orderedSame { return }
+        if visibleChatId == nil { visibleChatId = chatId }
+        guard chatId == visibleChatId else {
+            var away = kept[chatId] ?? Kept(
+                selection: Selection(target: target, machineId: machineId, chatId: chatId),
+                targets: [],
+                collapsed: true
+            )
+            if !away.targets.contains(target) { away.targets.append(target) }
+            kept[chatId] = away
+            return
+        }
+        if !targets.contains(target) { targets.append(target) }
+        if selection == nil {
+            select(Selection(target: target, machineId: machineId, chatId: chatId))
+            collapsed = true
+        }
     }
 
     func retry() {
@@ -151,7 +234,7 @@ final class SimulatorPreviewState: ObservableObject {
         }
         visibleChatId = chatId
         generation = UUID()
-        resetFrame(); error = nil; appearance = nil; live = false; foldable = false
+        resetFrame(); error = nil; appearance = nil; live = false; maximized = false; foldable = false
         if let chatId, let back = kept.removeValue(forKey: chatId) {
             selection = back.selection; targets = back.targets; collapsed = back.collapsed
             title = names[back.selection.target.udid] ?? "Simulator"
@@ -191,9 +274,17 @@ final class SimulatorPreviewState: ObservableObject {
         // Control stays on. A fold moves the picture to the other screen, so the
         // live video starts again on it once the fold has settled; a turn
         // changes nothing the video holds. The pictures take a fresh one.
-        guard action.hasPrefix("rotate") || Self.foldControls.contains(where: { $0.action == action }) else { return }
-        guard live, Self.foldControls.contains(where: { $0.action == action }) else {
-            if !live { retry() }
+        let isFold = Self.foldControls.contains(where: { $0.action == action })
+        guard action.hasPrefix("rotate") || isFold else { return }
+        if maximized, isFold {
+            let folded = generation
+            try? await Task.sleep(for: foldSettles)
+            guard generation == folded, self.selection == selection, allowed else { return }
+            fullScreenGeneration = UUID()
+            return
+        }
+        guard live, isFold else {
+            if !live && !maximized { retry() }
             return
         }
         live = false
@@ -219,17 +310,18 @@ final class SimulatorPreviewState: ObservableObject {
         generation = UUID()
         selection = next
         live = false
+        fullScreenGeneration = UUID()
         resetFrame(); error = nil; appearance = nil; foldable = false
         title = names[next.target.udid] ?? "Simulator"
     }
 
     func refresh(invoke: Invoke) async {
-        guard let selection, allowed, !collapsed, !live, !inFlight else { return }
+        guard let selection, allowed, !collapsed, !live, !maximized, !inFlight else { return }
         if error != nil, let failedAt, clock().timeIntervalSince(failedAt) < Self.askAgainAfterFailure { return }
         inFlight = true
         defer { inFlight = false }
         let version = generation
-        func current() -> Bool { version == generation && allowed && !collapsed && !live && !Task.isCancelled }
+        func current() -> Bool { version == generation && allowed && !collapsed && !live && !maximized && !Task.isCancelled }
         do {
             // Small, view-only pictures over the Dock's authenticated remoting path.
             // One request at a time; the UI's timer waits a second AFTER it finishes.
@@ -247,6 +339,14 @@ final class SimulatorPreviewState: ObservableObject {
             }
             let nextAppearance = WindowPreviewAppearance(frame["appearance"])
             if appearance != nextAppearance { appearance = nextAppearance }
+            let nextChrome = (frame["chrome"] as? [String: Any]).flatMap(SimulatorDisplayChrome.init(json:))
+            if chrome != nextChrome { chrome = nextChrome }
+            if let w = (frame["width"] as? NSNumber)?.doubleValue,
+               let h = (frame["height"] as? NSNumber)?.doubleValue,
+               w > 0, h > 0 {
+                let nextLogical = CGSize(width: w, height: h)
+                if logicalScreenSize != nextLogical { logicalScreenSize = nextLogical }
+            }
             guard let base64 = frame["jpegB64"] as? String else {
                 throw PreviewError.message("The Mac returned an unreadable preview. Retry to reconnect.")
             }
@@ -278,11 +378,20 @@ final class SimulatorPreviewState: ObservableObject {
         names[unnamed.udid] = name
     }
 
+    func updateLiveGeometry(pointSize: CGSize, chrome nextChrome: SimulatorDisplayChrome?) {
+        if pointSize.width > 0, pointSize.height > 0, logicalScreenSize != pointSize {
+            logicalScreenSize = pointSize
+        }
+        if let nextChrome, chrome != nextChrome {
+            chrome = nextChrome
+        }
+    }
+
     func setAllowed(_ value: Bool) {
         guard allowed != value else { return }
         allowed = value
         // Hidden under a sheet or the keyboard's own screen: the live video stops too.
-        if !value { live = false }
+        if !value { live = false; maximized = false }
     }
 
     /// What a failed request means to the person looking at it.
@@ -302,6 +411,8 @@ final class SimulatorPreviewState: ObservableObject {
         lastJPEG = nil
         if frame.image != nil { frame.image = nil }
         if imageSize != .zero { imageSize = .zero }
+        if logicalScreenSize != .zero { logicalScreenSize = .zero }
+        if chrome != nil { chrome = nil }
     }
 
     private enum PreviewError: LocalizedError {
@@ -312,9 +423,14 @@ final class SimulatorPreviewState: ObservableObject {
 
 private struct SimulatorPreviewImage: View {
     @ObservedObject var frame: HostScreenPreviewFrame
+    let chrome: SimulatorDisplayChrome
+    let viewportSize: CGSize
     var body: some View {
-        if let image = frame.image { Image(uiImage: image).resizable().scaledToFit() }
-        else { Color.ripul(system: .black) }
+        SimulatorChromePreviewSurface(
+            image: frame.image,
+            chrome: chrome,
+            viewportSize: viewportSize
+        )
     }
 }
 
@@ -328,43 +444,65 @@ struct SimulatorPreviewPanel: View {
     var body: some View {
         GeometryReader { geometry in
             if let selection = state.selection {
-                let ratio = state.aspectRatio
+                let ratio = state.chassisAspectRatio
                 RipulFloatingPanel(storageKey: "ripul.simulatorPreview", defaultSize: CGSize(width: min(geometry.size.width / 3, 300), height: min(geometry.size.width / 3, 300) / ratio),
                     minSize: CGSize(width: 120, height: 120 / ratio), showsResizeGrip: !state.collapsed,
                     aspectRatio: ratio, contentInsets: UIEdgeInsets(top: 52, left: 0, bottom: 88, right: 0), avoidsKeyboard: true,
                     movesFromTopStrip: state.live ? 52 : nil, keepsTrailingEdge: true) { size in
                     let width = min(size.width, geometry.size.width - 24, max(120, (geometry.size.height - 156) * ratio))
                     let displaySize = CGSize(width: width, height: width / ratio)
-                    let radius = state.appearance?.cornerRadius(for: displaySize) ?? 16
-                    // Three 44-point buttons and their margin are wider than a panel
-                    // a third of a 402-point phone: they shrink to fit instead.
-                    let inset = max(2, radius / 4)
-                    let side = min(44, ((width - inset * 2) / (state.liveContent == nil ? 3 : 4)).rounded(.down))
-                    let outline = RoundedRectangle(cornerRadius: radius, style: .continuous)
+                    let screenRect = SimulatorChromePath.screenRect(
+                        in: displaySize,
+                        screenSize: state.effectiveScreenSize,
+                        chrome: state.effectiveChrome,
+                        includesButtonPadding: true
+                    )
+                    let screenPadding = EdgeInsets(
+                        top: max(6, screenRect.minY + 4),
+                        leading: max(6, screenRect.minX + 4),
+                        bottom: max(6, displaySize.height - screenRect.maxY + 4),
+                        trailing: max(6, displaySize.width - screenRect.maxX + 4)
+                    )
+                    // Buttons fit inside the simulator screen width inside the hardware bezel.
+                    let hasExpandButton = state.floatWindow != nil || state.canMaximize
+                    let buttonCount: CGFloat = 3 + (state.liveContent == nil ? 0 : 1) + (hasExpandButton ? 1 : 0)
+                    let availableButtonWidth = max(80, width - screenPadding.leading - screenPadding.trailing)
+                    let side = min(44, (availableButtonWidth / buttonCount).rounded(.down))
                     // Minimising shrinks the panel into its minimise button at the
                     // top-right, and expanding grows it back out (`keepsTrailingEdge`).
                     FloatingPanelCollapse(collapsed: state.collapsed, expanded: displaySize, animation: spring) {
                         ZStack(alignment: .topTrailing) {
-                            if state.live, let liveContent = state.liveContent {
+                            if state.live && !state.maximized, let liveContent = state.liveContent {
                                 // The person's fingers go to the simulator; the panel moves from its top strip.
                                 liveContent(selection.target.udid, selection.machineId)
                                     .accessibilityIdentifier("SimulatorPreview.live")
                             } else {
-                                SimulatorPreviewImage(frame: state.frame).allowsHitTesting(false)
+                                SimulatorPreviewImage(
+                                    frame: state.frame,
+                                    chrome: state.effectiveChrome,
+                                    viewportSize: state.effectiveScreenSize
+                                ).allowsHitTesting(false)
                             }
                             if !state.live, let error = state.error {
                                 VStack(spacing: 8) {
                                     Text(error).ripulText().font(.ripul(.caption)).multilineTextAlignment(.center)
                                     Button("Retry") { state.retry() }.buttonStyle(.bordered)
-                                }.padding(8).padding(.top, 44).frame(maxWidth: .infinity, maxHeight: .infinity)
+                                }
+                                .padding(8).padding(.top, 44)
+                                .padding(screenPadding)
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
                             } else if !state.live, state.imageSize == .zero {
-                                ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity).accessibilityLabel("Connecting to Simulator")
+                                ProgressView()
+                                    .padding(screenPadding)
+                                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                    .accessibilityLabel("Connecting to Simulator")
                             }
                             if let notice = state.notice {
                                 Text(notice).ripulText().font(.ripul(.caption)).multilineTextAlignment(.center) // theme-mapping: a control's notice, set as the panel's error text
                                     .padding(.horizontal, 10).padding(.vertical, 6)
                                     .glassEffect(.regular, in: Capsule())
                                     .padding(.horizontal, 8).padding(.bottom, 44)
+                                    .padding(screenPadding)
                                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
                                     .allowsHitTesting(false)
                                     .accessibilityIdentifier("SimulatorPreview.notice")
@@ -375,12 +513,25 @@ struct SimulatorPreviewPanel: View {
                             if !state.live, state.targets.count > 1 {
                                 switcher(showing: selection.target)
                                     .padding(.horizontal, 8).padding(.bottom, 8)
+                                    .padding(screenPadding)
                                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
                             }
                             HStack(spacing: 0) {
-                                control("xmark", label: "Close simulator preview", id: "close", size: side) { state.close() }
+                                control("xmark", label: "Close simulator preview", id: "close", size: side) {
+                                    state.live = false
+                                    state.collapsed = true
+                                }
                                 controlsMenu(size: side)
                                 Spacer(minLength: 0)
+                                if state.floatWindow != nil {
+                                    control("macwindow.badge.plus", label: "Float simulator in new window", id: "float", size: side) {
+                                        state.floatOut()
+                                    }
+                                } else if state.canMaximize {
+                                    control("arrow.up.left.and.arrow.down.right", label: "Maximize simulator", id: "maximize", size: side) {
+                                        state.maximize()
+                                    }
+                                }
                                 if state.liveContent != nil {
                                     if state.live {
                                         control("hand.raised.slash", label: "Stop controlling the simulator", id: "watch", size: side) { state.live = false }
@@ -392,12 +543,9 @@ struct SimulatorPreviewPanel: View {
                                     state.live = false
                                     state.collapsed = true
                                 }
-                            }.padding(inset)
+                            }.padding(screenPadding)
                         }
                         .frame(width: width, height: width / ratio)
-                        .clipShape(outline)
-                        .glassEffect(.regular, in: outline)
-                        .shadow(color: Color.ripul(system: .black).opacity(0.2), radius: 10, y: 3) // theme-mapping: the panel's shadow unchanged, now on the panel and on its minimised button apart
                         .accessibilityElement(children: .contain)
                         .accessibilityLabel(state.title)
                         .accessibilityIdentifier("SimulatorPreview.surface")
@@ -406,14 +554,110 @@ struct SimulatorPreviewPanel: View {
                         }
                     } minimised: {
                         control("pip", label: "Expand simulator preview", id: "expand", size: 56) { state.collapsed = false }
-                            .contextMenu { MenuIcons { Button("Close preview", role: .destructive) { state.close() } }}
+                            .contextMenu { MenuIcons {
+                                Button { state.collapsed = false } label: { Label("Expand Simulator", systemImage: "pip.exit") }
+                                if state.canMaximize {
+                                    Button { state.maximize() } label: { Label("Maximize Simulator", systemImage: "arrow.up.left.and.arrow.down.right") }
+                                }
+                                if state.floatWindow != nil {
+                                    Button { state.floatOut() } label: { Label("Float in New Window", systemImage: "macwindow.badge.plus") }
+                                }
+                            }}
                             .clipShape(Circle())
                             .glassEffect(.regular, in: Circle())
                             .shadow(color: Color.ripul(system: .black).opacity(0.2), radius: 10, y: 3) // theme-mapping: the panel's shadow unchanged, now on the panel and on its minimised button apart
                     }
                 }
             }
-        }.ignoresSafeArea(.container)
+        }
+        .ignoresSafeArea(.container)
+        .fullScreenCover(
+            isPresented: Binding(
+                get: { state.maximized && state.selection != nil && state.canMaximize },
+                set: { if !$0 { state.restoreFromMaximize() } }
+            )
+        ) {
+            if let selection = state.selection {
+                fullScreenView(for: selection)
+            }
+        }
+    }
+
+    private func fullScreenView(for selection: SimulatorPreviewState.Selection) -> some View {
+        ZStack {
+            Color.ripul(system: .black).ignoresSafeArea()
+            if let content = state.fullScreenContent ?? state.liveContent {
+                content(selection.target.udid, selection.machineId)
+                    .id("\(selection.machineId)-\(selection.target.udid)-\(state.fullScreenGeneration)")
+            }
+        }
+        .overlay(alignment: .top) {
+            HStack {
+                Menu {
+                    MenuIcons {
+                        ForEach(SimulatorPreviewState.controls) { item in
+                            Button { Task { await state.control(item.action) } } label: { Label(item.title, systemImage: item.symbol) }
+                        }
+                        if state.foldable {
+                            Divider()
+                            ForEach(SimulatorPreviewState.foldControls) { item in
+                                Button { Task { await state.control(item.action) } } label: { Label(item.title, systemImage: item.symbol) }
+                            }
+                        }
+                        if state.targets.count > 1 {
+                            Divider()
+                            ForEach(state.targets, id: \.udid) { target in
+                                Button {
+                                    state.switchTo(target)
+                                } label: {
+                                    if target == selection.target {
+                                        Label(name(of: target), systemImage: "checkmark")
+                                    } else {
+                                        Text(name(of: target))
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.ripulIcon(size: 18, weight: .semibold))
+                        .frame(width: 44, height: 44)
+                        .glassEffect(.regular.interactive(), in: Circle())
+                }
+                .accessibilityLabel("Simulator Controls")
+                .uiKitIdentifier("SimulatorPreview.fullScreen.controls")
+
+                Spacer()
+
+                Button { state.restoreFromMaximize() } label: {
+                    Image(systemName: "arrow.down.right.and.arrow.up.left")
+                        .font(.ripulIcon(size: 18, weight: .semibold))
+                        .frame(width: 44, height: 44)
+                        .glassEffect(.regular.interactive(), in: Circle())
+                }
+                .accessibilityLabel("Restore Simulator View")
+                .uiKitIdentifier("SimulatorPreview.fullScreen.restore")
+            }
+            .buttonStyle(.plain)
+            .padding(12)
+        }
+        .overlay(alignment: .bottom) {
+            if let notice = state.notice {
+                Text(notice)
+                    .font(.ripul(.caption))
+                    .padding(12)
+                    .background(.ultraThinMaterial, in: Capsule())
+                    .padding(12)
+                    .allowsHitTesting(false)
+            }
+        }
+        .statusBarHidden()
+        .persistentSystemOverlays(.hidden)
+        .ignoresSafeArea(.keyboard)
+        .interactiveDismissDisabled()
+        .accessibilityAction(.escape) { state.restoreFromMaximize() }
+        .uiKitIdentifier("SimulatorPreview.fullScreen")
     }
 
     /// The simulator's hardware, as its Mac offers it: Home, the app switcher,
@@ -422,6 +666,15 @@ struct SimulatorPreviewPanel: View {
         let drawn = min(size, 36)
         return Menu {
             MenuIcons {
+                if state.canMaximize {
+                    Button { state.maximize() } label: { Label("Maximize Simulator", systemImage: "arrow.up.left.and.arrow.down.right") }
+                }
+                if state.floatWindow != nil {
+                    Button { state.floatOut() } label: { Label("Float in New Window", systemImage: "macwindow.badge.plus") }
+                }
+                if state.canMaximize || state.floatWindow != nil {
+                    Divider()
+                }
                 ForEach(SimulatorPreviewState.controls) { item in
                     Button { Task { await state.control(item.action) } } label: { Label(item.title, systemImage: item.symbol) }
                 }
@@ -512,8 +765,10 @@ final class SimulatorPreviewController: UIViewController {
         host.view.frame = view.bounds; host.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         host.didMove(toParent: self)
         state.$selection.combineLatest(state.$collapsed, state.$allowed, state.$live)
-            .sink { [weak self] selection, collapsed, allowed, live in
-                self?.requested = selection != nil && !collapsed && allowed && !live
+            .combineLatest(state.$maximized)
+            .sink { [weak self] combined, maximized in
+                let (selection, collapsed, allowed, live) = combined
+                self?.requested = selection != nil && !collapsed && allowed && !live && !maximized
                 self?.syncCapture()
             }.store(in: &observations)
         for name in [UIApplication.didBecomeActiveNotification, UIApplication.willResignActiveNotification] {
@@ -565,9 +820,12 @@ private struct SimulatorPreviewOverlay: UIViewControllerRepresentable {
     }
     func updateUIViewController(_ controller: SimulatorPreviewController, context: Context) {
         controller.state.liveContent = bridge.simulatorLiveContent
+        controller.state.fullScreenContent = bridge.simulatorFullScreenContent
+        controller.state.floatWindow = bridge.simulatorFloatWindow
         controller.state.setAllowed(!bridge.suppressNativeChatInput)
         // Another chat: this one's panel is put away, and that one's comes back.
-        controller.state.show(chatId: bridge.currentSourceChatId)
+        let activeChatId = bridge.currentSourceChatId ?? (bridge.nativeChatScrollerEnabled ? bridge.nativeChat.currentChatId : nil)
+        controller.state.show(chatId: activeChatId)
     }
 }
 

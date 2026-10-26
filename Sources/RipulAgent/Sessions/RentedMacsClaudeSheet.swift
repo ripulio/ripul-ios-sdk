@@ -12,8 +12,9 @@ import SwiftUI
 /// Mac is given it when it is set up and loses it when it is handed back.
 ///
 /// The steps are the ones `HostSignInSheet` has: the Mac gives an address,
-/// this device opens it in the system browser, the page shows a code, the code
-/// goes back as shown. The token itself never reaches this device: only
+/// this device opens it in Ripul's browser, and the code the page would show
+/// is read from its address and goes back as shown (`ClaudeSignInBrowser`).
+/// Safari and a pasted code stay as the fallback. The token itself never reaches this device: only
 /// whether one is kept, and until about when.
 public struct RentedMacsClaudeSheet: View {
     let machine: RemoteMachine
@@ -40,6 +41,7 @@ public struct RentedMacsClaudeSheet: View {
     @State private var code = ""
     @State private var didCopyLink = false
     @State private var confirmForget = false
+    @State private var signInPage: ClaudeSignInPage?
 
     public var body: some View {
         NavigationStack {
@@ -62,6 +64,11 @@ public struct RentedMacsClaudeSheet: View {
             }
         }
         .ripulSheet(.page, detents: [.medium, .large])
+        .ripulSheet(item: $signInPage) { page in
+            ClaudeSignInBrowserSheet(authUrl: page.url, machineName: machine.displayName,
+                                     onOpenElsewhere: { signInPage = nil; openInSystemBrowser(page.url.absoluteString) },
+                                     onFinish: { finishInBrowser($0) })
+        }
         .task { await refresh() }
     }
 
@@ -150,24 +157,37 @@ public struct RentedMacsClaudeSheet: View {
                     Button {
                         open(authUrl)
                     } label: {
-                        Label("Open Claude's approval page", systemImage: "safari")
+                        Label("Open Claude's approval page", systemImage: "person.badge.key")
                             .frame(maxWidth: .infinity)
                     }
                     .ripulProminentButtonStyle()
                     .controlSize(.large)
                     .uiKitIdentifier("RentedMacsClaudeSheet.awaiting.open")
-                    Button {
-                        copy(authUrl)
-                    } label: {
-                        Label(didCopyLink ? "Link copied" : "Copy link instead", systemImage: didCopyLink ? "checkmark" : "doc.on.doc")
-                            .font(.ripul(.caption))
+                    Text("Sign in and tap Authorize. The approval finishes by itself. The page stays good for ten minutes.")
+                        .font(.ripul(.subheadline))
+                        .foregroundStyle(.ripul(.textSecondary))
+                    HStack(spacing: 16) {
+                        Button {
+                            openInSystemBrowser(authUrl)
+                        } label: {
+                            Label("Open in Safari", systemImage: "safari")
+                                .font(.ripul(.caption))
+                        }
+                        .buttonStyle(.borderless)
+                        .uiKitIdentifier("RentedMacsClaudeSheet.awaiting.openElsewhere")
+                        Button {
+                            copy(authUrl)
+                        } label: {
+                            Label(didCopyLink ? "Link copied" : "Copy link", systemImage: didCopyLink ? "checkmark" : "doc.on.doc")
+                                .font(.ripul(.caption))
+                        }
+                        .buttonStyle(.borderless)
+                        .uiKitIdentifier("RentedMacsClaudeSheet.awaiting.copy")
                     }
-                    .buttonStyle(.borderless)
-                    .uiKitIdentifier("RentedMacsClaudeSheet.awaiting.copy")
                 }
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Step 2").font(.ripul(.caption, weight: .semibold)).foregroundStyle(.ripul(.textSecondary))
-                    Text("Approve, then copy the code the page shows and paste it here. The page stays good for ten minutes.")
+                    Text("From Safari").font(.ripul(.caption, weight: .semibold)).foregroundStyle(.ripul(.textSecondary))
+                    Text("An approval finished in Safari shows a code. Copy it and paste it here.")
                         .font(.ripul(.subheadline))
                         .foregroundStyle(.ripul(.textSecondary))
                     codeEntry(sessionId: sessionId)
@@ -226,7 +246,7 @@ public struct RentedMacsClaudeSheet: View {
             .textFieldStyle(.roundedBorder)
             .uiKitIdentifier("RentedMacsClaudeSheet.codeField")
         Button {
-            Task { await submit(sessionId: sessionId) }
+            Task { await submit(sessionId: sessionId, code: code) }
         } label: {
             Text("Finish").frame(maxWidth: .infinity)
         }
@@ -265,7 +285,7 @@ public struct RentedMacsClaudeSheet: View {
         await begin()
     }
 
-    private func submit(sessionId: String) async {
+    private func submit(sessionId: String, code: String) async {
         phase = .submitting
         let done = await bridge.rentedMacsClaudeToken(machineId: machine.machineId, step: .code(sessionId: sessionId, code: code))
         if done.ok { await refresh() }
@@ -278,9 +298,24 @@ public struct RentedMacsClaudeSheet: View {
         await refresh()
     }
 
-    /// The system browser, not one inside the app: Claude's page checks for a
-    /// real browser with the person's own cookies (see HostSignInSheet).
+    /// Ripul's browser, over this sheet. Its callback lands in `finishInBrowser`.
     private func open(_ authUrl: String) {
+        guard let url = URL(string: authUrl) else { return }
+        signInPage = ClaudeSignInPage(url: url)
+    }
+
+    /// The code read from the page's address goes the way a pasted one does,
+    /// and is never put in the field.
+    private func finishInBrowser(_ outcome: ClaudeSignInBrowser.Outcome?) {
+        signInPage = nil
+        guard case .awaitingCode(let sessionId, _) = phase, let outcome else { return }
+        switch outcome {
+        case .code(let found): Task { await submit(sessionId: sessionId, code: found) }
+        case .refused(let message), .denied(let message): phase = .failed(message)
+        }
+    }
+
+    private func openInSystemBrowser(_ authUrl: String) {
         guard let url = URL(string: authUrl) else { return }
         #if os(iOS)
         UIApplication.shared.open(url)

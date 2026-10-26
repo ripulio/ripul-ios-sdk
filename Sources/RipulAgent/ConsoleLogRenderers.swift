@@ -194,7 +194,7 @@ private struct HostPingDetail: View {
 
 // MARK: - ripul/sync Renderer
 
-/// Catch-up / snapshot lifecycle events emitted by SessionChannelClient via
+/// Catch-up / snapshot lifecycle events emitted by the web app's SessionChannelClient via
 /// `logSyncEvent`. The summary stays one-line (pill + event verb + chat tail);
 /// the detail panel breaks out the full JSON payload in a fixed, narrative
 /// order so a glance answers "did the snapshot truncate, and where?".

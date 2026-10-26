@@ -32,6 +32,15 @@ extension AgentBridge {
         await mirrorCall("__ripulMirrorInvoke", [machineId, capability, method, args, chatId])
     }
 
+    /// Payloads use the ephemeral clipboard channel, never the replayed RPC
+    /// channel or bridge console diagnostics.
+    public func simulatorClipboardExchange(machineId: String, udid: String, request: [String: Any]) async -> [String: Any] {
+        let reply = await callPage("__ripulMirrorInvoke",
+            [machineId, "screenWindows", "simulatorClipboardExchange", [["udid": udid], request]],
+            .orElse("{success:false,error:'CLIPBOARD_DISCONNECTED'}"), log: .none)
+        return reply.dictionary ?? ["success": false, "error": "CLIPBOARD_DISCONNECTED"]
+    }
+
     /// A mirrored app's whole menu tree, children nested under their parent.
     ///
     /// One call rather than one per level, because a real menu needs its

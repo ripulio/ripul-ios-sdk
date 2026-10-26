@@ -69,6 +69,14 @@ public extension StoredDefault where Value == Double {
     }
 }
 
+public extension StoredDefault where Value == Set<String> {
+    init(wrappedValue: Set<String> = [], _ key: String, store: UserDefaults? = nil) {
+        self.init(key: key, store: store,
+                  read: { $0.stringArray(forKey: key).map(Set.init) ?? wrappedValue },
+                  write: { $0.set(Array($1).sorted(), forKey: key) })
+    }
+}
+
 public extension StoredDefault where Value: RawRepresentable, Value.RawValue == String {
     init(wrappedValue: Value, _ key: String, store: UserDefaults? = nil) {
         self.init(key: key, store: store,

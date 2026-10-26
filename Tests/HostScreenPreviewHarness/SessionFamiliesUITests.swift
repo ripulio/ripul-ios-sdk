@@ -9,16 +9,12 @@ final class SessionFamiliesUITests: XCTestCase {
         let dragged = app.staticTexts["Thermals"], target = app.staticTexts["Tool panel renders"]
         XCTAssertTrue(dragged.waitForExistence(timeout: 5))
         XCTAssertEqual(dragged.frame.minX, target.frame.minX, "Two chats by themselves start level")
-        let marks = app.images.matching(NSPredicate(format: "label == %@", "Under the chat above"))
-        let before = marks.count
 
         // The system's drag: a long press lifts the row, and it is let go over the other.
         dragged.press(forDuration: 1.0, thenDragTo: target, withVelocity: .slow, thenHoldForDuration: 0.8)
-        let under = NSPredicate { _, _ in app.staticTexts["Thermals"].frame.minX > app.staticTexts["Tool panel renders"].frame.minX }
-        wait(for: [XCTNSPredicateExpectation(predicate: under, object: nil)], timeout: 5)
-        XCTAssertEqual(marks.count, before + 1, "It gets the mark of a chat under another")
+        XCTAssertTrue(app.buttons["Hide 1 chat under it"].waitForExistence(timeout: 5), "The chat it was dropped on is the head of a family")
         XCTAssertGreaterThan(app.staticTexts["Thermals"].frame.minY, app.staticTexts["Tool panel renders"].frame.minY)
-        XCTAssertTrue(app.buttons["Hide 1 chat under it"].exists, "And the chat it was dropped on is the head of a family")
+        XCTAssertEqual(app.staticTexts["Thermals"].frame.minX, app.staticTexts["Tool panel renders"].frame.minX)
         let dropped = XCTAttachment(screenshot: app.screenshot())
         dropped.name = "Session families after a drag"; dropped.lifetime = .keepAlways; add(dropped)
 
@@ -29,13 +25,31 @@ final class SessionFamiliesUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Hide 1 chat under it"].waitForExistence(timeout: 3))
 
         // A chat cannot be dropped on one that is under it: nothing moves.
-        let order = { ["Tool panel renders", "Thermals"].map { app.staticTexts[$0].frame.minX } }
+        let order = { ["Tool panel renders", "Thermals"].map { app.staticTexts[$0].frame.minY } }
         let was = order()
         app.staticTexts["Tool panel renders"].press(forDuration: 1.0, thenDragTo: app.staticTexts["Thermals"], withVelocity: .slow, thenHoldForDuration: 0.8)
         XCTAssertEqual(order(), was)
         // And a drag that is refused leaves the list as usable as one that is taken.
         app.buttons["Hide 1 chat under it"].tap()
         XCTAssertTrue(app.buttons["Show 1 chat under it"].waitForExistence(timeout: 3))
+        app.buttons["Show 1 chat under it"].tap()
+        XCTAssertTrue(app.buttons["Hide 1 chat under it"].waitForExistence(timeout: 3))
+
+        // Dragging another chat into the existing group places it under the same head.
+        app.staticTexts["Port the parser to the new grammar"].press(
+            forDuration: 1.0, thenDragTo: app.staticTexts["Tool panel renders"], withVelocity: .slow, thenHoldForDuration: 0.8)
+        XCTAssertTrue(app.buttons["Hide 2 chats under it"].waitForExistence(timeout: 5), "A second chat can be dropped onto an existing group")
+        app.terminate()
+
+        // Selecting multiple rows and dragging one of them drags all selected rows into the parent.
+        app.launch()
+        XCTAssertTrue(app.staticTexts["Thermals"].waitForExistence(timeout: 5))
+        app.buttons["Select"].tap()
+        app.staticTexts["Thermals"].tap()
+        app.staticTexts["Port the parser to the new grammar"].tap()
+        app.staticTexts["Thermals"].press(
+            forDuration: 1.0, thenDragTo: app.staticTexts["Tool panel renders"], withVelocity: .slow, thenHoldForDuration: 0.8)
+        XCTAssertTrue(app.buttons["Hide 2 chats under it"].waitForExistence(timeout: 5), "Dragging one selected row places all selected rows under the parent")
         app.terminate()
     }
 
@@ -66,12 +80,12 @@ final class SessionFamiliesUITests: XCTestCase {
                 "Theme: settings screens", "Tool panel renders", "Thermals", "Port the parser to the new grammar",
             ])
             let marks = app.images.matching(NSPredicate(format: "label == %@", "Under the chat above"))
-            XCTAssertEqual(marks.count, 5, "One mark for each started chat that is shown")
-            // A started chat sits further in than its starter, and one it started further still.
+            XCTAssertEqual(marks.count, 0, "Grouped rows sit inside a shared border without indented connector arrows")
+            // Started chats align cleanly with their starter inside the group border.
             let lead = app.staticTexts["Design alignment"].frame.minX
             let started = app.staticTexts["Theme: chat panels"].frame.minX
-            XCTAssertGreaterThan(started, lead)
-            XCTAssertGreaterThan(app.staticTexts["Check the bubble colours for contrast"].frame.minX, started)
+            XCTAssertEqual(started, lead)
+            XCTAssertEqual(app.staticTexts["Check the bubble colours for contrast"].frame.minX, started)
             XCTAssertEqual(app.staticTexts["Thermals"].frame.minX, lead)
             XCTAssertFalse(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "Task from agent")).firstMatch.exists)
             // A started chat says where it works only when that differs from the chat above it.
@@ -132,5 +146,52 @@ final class SessionFamiliesUITests: XCTestCase {
             XCTAssertTrue(isOnRow(app.staticTexts["1h"], of: "Design alignment"), "And the head's time is its own again")
             app.terminate()
         }
+    }
+
+    /// A list as long as a real one: 165 chats in fifteen families. The list
+    /// must build only the rows on screen. On 22 October 2026 the session list
+    /// was put in a stack that built every row: with 165 the first row took 85
+    /// seconds to be reachable and each swipe 29, against under 1 and 3 for
+    /// the List. This would have stopped it before it reached the phone.
+    func testALongListBuildsOnlyTheRowsOnScreenAndStillOpensAndCloses() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--session-families-ui-tests", "--light-appearance", "--many-sessions"]
+        let launched = Date()
+        app.launch()
+        XCTAssertTrue(app.staticTexts["Design alignment"].waitForExistence(timeout: 15))
+        XCTAssertLessThan(Date().timeIntervalSince(launched), 15, "A long list is on screen at once")
+
+        // The deterministic part: of fifteen families, only the rows on screen
+        // (and a few the list prepares next) exist. A list that builds every
+        // row has all fifteen of these.
+        let lastRows = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Port the parser to the new grammar"))
+        XCTAssertLessThan(lastRows.count, 8, "The list builds only the rows on screen, not all 165")
+
+        // Scrolling a long list keeps up. Generous, for a busy shared Mac: the
+        // stack took 29 seconds a swipe.
+        let list = app.collectionViews.firstMatch
+        XCTAssertTrue(list.exists, "The rows are in a List, whose cells are reused")
+        let scrolled = Date()
+        list.swipeUp(velocity: .fast)
+        list.swipeUp(velocity: .fast)
+        list.swipeDown(velocity: .fast)
+        list.swipeDown(velocity: .fast)
+        XCTAssertLessThan(Date().timeIntervalSince(scrolled), 20, "Four swipes of a long list")
+
+        // Families still open and close in a long list.
+        XCTAssertTrue(app.staticTexts["Design alignment"].waitForExistence(timeout: 5))
+        app.buttons["Hide 7 chats under it"].firstMatch.tap()
+        XCTAssertTrue(app.buttons["Show 7 chats under it"].firstMatch.waitForExistence(timeout: 3))
+        app.terminate()
+
+        // Closed families stay closed across a restart, and can be opened again.
+        app.launchArguments = ["--session-families-ui-tests", "--light-appearance", "--many-sessions", "--keep-closed-families"]
+        app.launch()
+        XCTAssertTrue(app.buttons["Show 7 chats under it"].firstMatch.waitForExistence(timeout: 5), "Closed family stays closed after restart")
+        XCTAssertFalse(app.staticTexts["Theme: chat panels"].exists)
+        app.buttons["Show 7 chats under it"].firstMatch.tap()
+        XCTAssertTrue(app.staticTexts["Theme: chat panels"].waitForExistence(timeout: 3))
+        app.terminate()
     }
 }

@@ -75,6 +75,9 @@ extension AgentBridge {
                                           machineId: machineId, missing: "{ ok: false, error: 'not ready' }")
         if let reason = reply.failure() { return (false, reason) }
         guard let dict = reply.dictionary else { return (false, "Unexpected result") }
+        if dict["ok"] as? Bool == true, dict["pushesAccountChanges"] as? Bool != true {
+            NotificationCenter.default.post(name: .ripulHostAccountsChanged, object: self, userInfo: ["machineId": machineId])
+        }
         return (dict["ok"] as? Bool ?? false, dict["error"] as? String)
     }
 
@@ -114,6 +117,9 @@ extension AgentBridge {
                                           machineId: machineId, missing: "{ ok: false, error: 'not ready' }")
         if let reason = reply.failure() { return (false, nil, nil, reason) }
         guard let dict = reply.dictionary else { return (false, nil, nil, "Unexpected result") }
+        if dict["ok"] as? Bool == true, dict["pushesAccountChanges"] as? Bool != true {
+            NotificationCenter.default.post(name: .ripulHostAccountsChanged, object: self, userInfo: ["machineId": machineId])
+        }
         return (dict["ok"] as? Bool ?? false, dict["slug"] as? String, dict["name"] as? String, dict["error"] as? String)
     }
 
@@ -127,6 +133,9 @@ extension AgentBridge {
                                           machineId: machineId, missing: "{ ok: false, error: 'not ready' }")
         if let reason = reply.failure() { return failed(reason) }
         guard let dict = reply.dictionary else { return failed("Unexpected result") }
+        if dict["ok"] as? Bool == true, dict["pushesAccountChanges"] as? Bool != true {
+            NotificationCenter.default.post(name: .ripulHostAccountsChanged, object: self, userInfo: ["machineId": machineId])
+        }
         return ClaudeAccountSwitchInfo(
             ok: dict["ok"] as? Bool ?? false,
             active: dict["active"] as? String,
@@ -143,6 +152,9 @@ extension AgentBridge {
                                           machineId: machineId, missing: "{ ok: false, error: 'not ready' }")
         if let reason = reply.failure() { return (false, nil, reason) }
         guard let dict = reply.dictionary else { return (false, nil, "Unexpected result") }
+        if dict["ok"] as? Bool == true, dict["pushesAccountChanges"] as? Bool != true {
+            NotificationCenter.default.post(name: .ripulHostAccountsChanged, object: self, userInfo: ["machineId": machineId])
+        }
         return (dict["ok"] as? Bool ?? false, dict["active"] as? String, dict["error"] as? String)
     }
 }

@@ -43,6 +43,41 @@ final class ToolRegistryTests: XCTestCase {
 
     // MARK: - Registry contract
 
+    func testNativeTransportUsesTheSameAudienceGate() async throws {
+        let registry = RipulToolRegistry()
+        let developerTool = PlainTool(name: "dev_action")
+        registry.register([developerTool], audience: .developer)
+        registry.register([MarkedTool(name: "mistagged")], audience: .endUser)
+        let user = AgentBridge(registry: registry, audience: .endUser)
+        XCTAssertTrue(user.nativeToolDefinitions.isEmpty)
+        for name in ["dev_action", "mistagged"] {
+            do {
+                _ = try await user.invokeNativeTool(named: name, args: [:])
+                XCTFail("native transport bypassed the audience gate")
+            } catch { }
+        }
+        XCTAssertFalse(developerTool.executed)
+        let developer = AgentBridge(registry: registry, audience: .developer)
+        _ = try await developer.invokeNativeTool(named: "dev_action", args: [:])
+        XCTAssertTrue(developerTool.executed)
+    }
+
+    func testNativeTransportDoesNotSilentlyAbsorbBusinessTools() async throws {
+        let registry = RipulToolRegistry()
+        let tool = PlainTool(name: "user_action")
+        registry.register([tool], audience: .endUser)
+        let developer = AgentBridge(registry: registry, audience: .developer)
+        XCTAssertTrue(developer.nativeToolDefinitions.isEmpty)
+        do {
+            _ = try await developer.invokeNativeTool(named: "user_action", args: [:])
+            XCTFail("business tool exposed without testing mode")
+        } catch { }
+        XCTAssertFalse(tool.executed)
+        developer.setEndUserTesting(true)
+        _ = try await developer.invokeNativeTool(named: "user_action", args: [:])
+        XCTAssertTrue(tool.executed)
+    }
+
     func testRegistrationOrderAndAudienceProjection() {
         let registry = RipulToolRegistry()
         registry.register([PlainTool(name: "a"), PlainTool(name: "b")], audience: .endUser)

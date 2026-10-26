@@ -19,8 +19,10 @@ public final class VoiceModeCoordinator {
     /// learns not to keep calling it in typed sessions.
     public private(set) var isListening = false
 
-    /// Set by the active VoiceModeController; receives agent-authored speech.
-    var onAgentSpeech: ((String) -> Void)?
+    /// Set by the active VoiceModeController; receives agent-authored speech,
+    /// and whether the agent marked it as the answer to the user's latest
+    /// spoken message (`answer: true` on the speak call).
+    var onAgentSpeech: ((String, Bool) -> Void)?
 
     /// Whether the agent has spoken at least once during the current turn.
     /// The loop uses this to decide whether to also read the completion
@@ -29,7 +31,7 @@ public final class VoiceModeCoordinator {
 
     private init() {}
 
-    func beginSession(onAgentSpeech: @escaping (String) -> Void) {
+    func beginSession(onAgentSpeech: @escaping (String, Bool) -> Void) {
         self.onAgentSpeech = onAgentSpeech
         isListening = true
         spokeThisTurn = false
@@ -50,10 +52,10 @@ public final class VoiceModeCoordinator {
     /// Invoked by the `speak` tool. Returns false when no voice conversation
     /// is active, so the tool can tell the agent its speech wasn't heard.
     @discardableResult
-    func deliver(_ text: String) -> Bool {
+    func deliver(_ text: String, answer: Bool = false) -> Bool {
         guard isListening, let onAgentSpeech else { return false }
         spokeThisTurn = true
-        onAgentSpeech(text)
+        onAgentSpeech(text, answer)
         return true
     }
 }

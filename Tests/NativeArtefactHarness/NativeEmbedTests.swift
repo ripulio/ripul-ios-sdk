@@ -127,6 +127,60 @@ import XCTest
     XCTAssertTrue(layered.superview?.superview === mount, "the empty mount is chosen")
     host.clear()
   }
+  /// In the background WebKit takes its layers off the screen, and mounted
+  /// content leaves the window with them: not a drop. Nothing is placed again
+  /// while away; once back, only content that did not come back is.
+  func testNothingIsPlacedAgainWhileTheAppIsInTheBackground() async throws {
+    let registry = NativeEmbedRegistry()
+    var made: [Renderer] = []
+    registry.register("unrelated.test/v1") { let r = Renderer(); made.append(r); return r }
+    let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 800))
+    let web = WKWebView(frame: window.bounds)
+    window.addSubview(web)
+    window.isHidden = false
+    let scroller = UIScrollView(frame: web.bounds)
+    scroller.contentSize = CGSize(width: 390, height: 1400)
+    web.scrollView.addSubview(scroller)
+    let slot = UIView(frame: CGRect(x: 10, y: 450, width: 370, height: 137))
+    scroller.addSubview(slot)
+    let host = NativeEmbedController(webView: web, registry: registry, send: { _ in })
+    var background = false
+    NativeSlotAttachment.appIsInBackground = { background }
+    defer { NativeSlotAttachment.appIsInBackground = { UIApplication.shared.applicationState == .background } }
+    host.receive(["ownerId": "away", "elementId": "e", "token": "one", "type": "agent-framework:nativeEmbed:update",
+                  "renderer": "unrelated.test/v1", "snapshot": [:]])
+    host.receive(["ownerId": "away", "elementId": "e", "token": "one", "type": "agent-framework:nativeEmbed:anchor",
+                  "anchor": ["x": 10, "y": 450, "width": 370, "height": 137],
+                  "viewport": ["x": 0, "y": 0, "width": 390, "height": 800],
+                  "contentHeight": 1400, "viewportWidth": 390])
+    try await Task.sleep(for: .milliseconds(150))
+    let view = try XCTUnwrap(made.first?.viewController.view)
+    XCTAssertTrue(view.superview?.superview === slot)
+    // Away and back, with WebKit's layers (here the whole web view) leaving and returning.
+    background = true
+    web.removeFromSuperview()
+    try await Task.sleep(for: .milliseconds(150))
+    window.addSubview(web)
+    background = false
+    NotificationCenter.default.post(name: UIApplication.didBecomeActiveNotification, object: nil)
+    try await Task.sleep(for: .milliseconds(500))
+    XCTAssertTrue(view.superview?.superview === slot, "came back in its slot view; nothing placed")
+    XCTAssertNotNil(view.window)
+    // Away again, and WebKit rebuilds the slot's view meanwhile.
+    background = true
+    web.removeFromSuperview()
+    slot.removeFromSuperview()
+    let rebuilt = UIView(frame: slot.frame)
+    scroller.addSubview(rebuilt)
+    try await Task.sleep(for: .milliseconds(150))
+    XCTAssertTrue(view.superview?.superview === slot, "nothing placed while away")
+    window.addSubview(web)
+    background = false
+    NotificationCenter.default.post(name: UIApplication.didBecomeActiveNotification, object: nil)
+    try await Task.sleep(for: .milliseconds(600))
+    XCTAssertTrue(view.superview?.superview === rebuilt, "placed on the rebuilt slot view once back")
+    host.clear()
+  }
   func testMapContractAndInteractionAreIndependentOfPlaces() throws {
     let renderer = NativeMapRenderer()
     let snapshot: [String: Any] = [

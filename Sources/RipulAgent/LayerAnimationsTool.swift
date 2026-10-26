@@ -31,13 +31,38 @@ public struct LayerAnimationsTool: NativeTool {
         + "it again. match narrows any action to animations whose key, key path, owner or id contains the text. "
         + "action \"changing\" watches for a few seconds what the app's main thread itself changes on screen, wake "
         + "by wake (a SwiftUI animation re-renders on the main thread every frame, and no loop above shows it): how "
-        + "often the main thread woke and for how long, and the views whose layers changed most often."
+        + "often the main thread woke and for how long, and the views whose layers changed most often. "
+        + "action \"trace\" samples 120Hz presentation-layer trajectories (x, y, w, h, opacity, scale, scroll) "
+        + "with an optional inline `touch` gesture fired after the display link is armed, reporting exact motion "
+        + "start/settle times, keyframes, frame hitches (with SwiftUI body/setter culprits), and anomalies "
+        + "(single_frame_spike, mid_flight_freeze, reversal)."
     public let inputSchema: [String: Any] = ToolSchema.object(
-        .string("action", "list (default), pause, resume or changing"),
-        .string("match", "Only animations whose key, key path, layer class, owning view or id contains this (case-insensitive)"),
+        .stringEnum("action", "list (default), pause, resume, changing or trace",
+                    values: ["list", "pause", "resume", "changing", "trace"]),
+        .string("match", "Only animations or views whose key, key path, layer class, owning view or id contains this (case-insensitive; comma-separated for several)"),
         .bool("includeFinite", "Also list animations that end by themselves, and the system's own that only keep one layer in step with another (default: only loops)"),
-        .number("seconds", "changing: how long to watch, 1-10 seconds (default 3)"),
-        .integer("limit", "changing: how many views to report (default 15)")
+        .number("seconds", "changing/trace: how long to watch, 0.2-10 seconds (default 3 for changing, 1.5 for trace)"),
+        .integer("limit", "changing/trace: how many views to report (default 15 for changing, 10 for trace)"),
+        ToolSchema.Property(
+            name: "touch",
+            type: "object",
+            description: "trace: optional finger gesture (same fields as device_touch: action, x, y, toX, toY, duration) fired immediately after the 120Hz tracer arms at +0ms",
+            isRequired: false,
+            extra: [
+                "properties": [
+                    "action": ["type": "string", "enum": ["tap", "double_tap", "long_press", "swipe", "pinch"], "description": "What the finger does"],
+                    "x": ["type": "number", "description": "Where the finger lands: x in window points"],
+                    "y": ["type": "number", "description": "Where the finger lands: y in window points"],
+                    "toX": ["type": "number", "description": "swipe: where the finger lifts, x"],
+                    "toY": ["type": "number", "description": "swipe: where the finger lifts, y"],
+                    "duration": ["type": "number", "description": "Seconds: long_press hold (default 0.8), swipe or pinch travel (default 0.25)"],
+                    "from": ["type": "number", "description": "pinch: starting finger distance in points"],
+                    "to": ["type": "number", "description": "pinch: ending finger distance in points"],
+                    "angle": ["type": "number", "description": "pinch: angle in degrees"],
+                ],
+                "required": ["action", "x", "y"],
+            ]
+        )
     )
 
     /// SDK-internal — see `RipulDeveloperOnlyTool`.
@@ -49,11 +74,18 @@ public struct LayerAnimationsTool: NativeTool {
     @MainActor
     public func execute(args: [String: Any]) async throws -> Any {
         let action = (args["action"] as? String ?? "list").lowercased()
-        guard ["list", "pause", "resume", "changing"].contains(action) else {
-            return ["success": false, "error": "action is list, pause, resume or changing"]
+        guard ["list", "pause", "resume", "changing", "trace"].contains(action) else {
+            return ["success": false, "error": "action is list, pause, resume, changing or trace"]
         }
         let match = (args["match"] as? String).flatMap { $0.isEmpty ? nil : $0.lowercased() }
         let includeFinite = args["includeFinite"] as? Bool ?? false
+
+        if action == "trace" {
+            let seconds = min(10, max(0.2, (args["seconds"] as? NSNumber)?.doubleValue ?? 1.5))
+            let limit = min(30, max(1, (args["limit"] as? NSNumber)?.intValue ?? 10))
+            let touch = args["touch"] as? [String: Any]
+            return await LayerMotionTracer.trace(seconds: seconds, limit: limit, match: match, touch: touch)
+        }
 
         if action == "changing" {
             let seconds = min(10, max(1, (args["seconds"] as? NSNumber)?.doubleValue ?? 3))

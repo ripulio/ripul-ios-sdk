@@ -117,7 +117,8 @@ public struct ExpandedChatTitleContent: View {
                             .font(.ripul(.caption, weight: .medium))
                             .lineLimit(1)
                         Spacer(minLength: 0)
-                        Image(systemName: "arrow.up.right")
+                        // A pinned message jumps within the chat; a link leaves it.
+                        Image(systemName: AgentBridge.messageAnchor(from: shortcut.url) != nil ? "arrow.down.to.line" : "arrow.up.right")
                             .font(.ripulIcon(size: 9, weight: .semibold))
                             .foregroundStyle(.ripul(.textSecondary))
                     }

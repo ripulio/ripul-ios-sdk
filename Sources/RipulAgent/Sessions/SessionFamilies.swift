@@ -59,6 +59,52 @@ struct SessionFamilies: Equatable {
     /// Of those, the ones on the same branch too. A branch is only the same
     /// branch in the same folder: `main` in another repository is not.
     let sharesBranch: Set<String>
+    /// Where each visible row sits in an expanded family card: `.top` for the
+    /// head, `.middle` for intermediate children, `.bottom` for the last shown
+    /// child. A standalone chat or a closed family head has no entry.
+    let groupSlices: [String: GlassRowGroupSlice]
+    /// Everything above, hashed once as the families are arranged.
+    private let contents: Int
+
+    init(all: [UnifiedSession], visible: [UnifiedSession], depth: [String: Int], folds: [String: Fold],
+         heads: [String: Head], under: [String: [UnifiedSession]], above: [String: UnifiedSession],
+         sharesFolder: Set<String>, sharesBranch: Set<String>, groupSlices: [String: GlassRowGroupSlice]) {
+        self.all = all
+        self.visible = visible
+        self.depth = depth
+        self.folds = folds
+        self.heads = heads
+        self.under = under
+        self.above = above
+        self.sharesFolder = sharesFolder
+        self.sharesBranch = sharesBranch
+        self.groupSlices = groupSlices
+        // The chats' own fields once, from `all`, which holds every chat the
+        // rest names; the rest by the chats' ids.
+        var hasher = Hasher()
+        for session in all { session.hashDisplayedFields(into: &hasher) }
+        hasher.combine(visible.map(\.id))
+        hasher.combine(depth)
+        hasher.combine(folds.mapValues { [$0.parentId, String($0.count), String($0.isOpen)] })
+        hasher.combine(heads.mapValues { [String($0.started), String($0.isClosed), String($0.needsLooking)] + $0.putAway.map(\.id) })
+        hasher.combine(under.mapValues { $0.map(\.id) })
+        hasher.combine(above.mapValues(\.id))
+        hasher.combine(sharesFolder)
+        hasher.combine(sharesBranch)
+        hasher.combine(groupSlices)
+        contents = hasher.finalize()
+    }
+
+    /// Two arrangements are equal when everything in them hashes the same.
+    ///
+    /// SwiftUI compares the families a list's row closure holds once a row on
+    /// every update of the list. Compared field by field (every chat, several
+    /// times over) that was 29% of the main thread while a family opened and
+    /// closed with 165 rows (23 October 2026), and paid again on every tool
+    /// event that redrew the list. Hashed once, it is one comparison.
+    static func == (lhs: SessionFamilies, rhs: SessionFamilies) -> Bool {
+        lhs.contents == rhs.contents
+    }
 
     /// Quiet started chats shown under a parent before the rest fold away. One
     /// that is working, or has stopped to ask something, is always shown.
@@ -192,6 +238,7 @@ struct SessionFamilies: Equatable {
         var above: [String: UnifiedSession] = [:]
         var sharesFolder: Set<String> = []
         var sharesBranch: Set<String> = []
+        var groupSlices: [String: GlassRowGroupSlice] = [:]
         all.reserveCapacity(sessions.count)
         visible.reserveCapacity(sessions.count)
 
@@ -201,6 +248,7 @@ struct SessionFamilies: Equatable {
             let session = sessions[index]
             all.append(session)
             let firstUnder = all.count
+            let headVisibleIndex = visible.count
             if shown { visible.append(session) }
             if level > 0 { depth[session.id] = min(level, deepest) }
 
@@ -211,7 +259,7 @@ struct SessionFamilies: Equatable {
             guard !started.isEmpty else { return 0 }
 
             // Put away by the person. A search still shows every match.
-            let isClosed = level == 0 && foldsFamilies && closed.contains(session.id)
+            let isClosed = level == 0 && foldsFamilies && (closed.contains(session.id) || closed.contains(session.metadataKey))
 
             // Only the head of a family folds: one control a family, after its last row.
             var folded: Set<Int> = []
@@ -243,13 +291,20 @@ struct SessionFamilies: Equatable {
                 headsById[session.id] = Head(started: count, isClosed: isClosed,
                                              needsLooking: isClosed && started.contains { staysShown[$0] },
                                              putAway: isClosed ? chatsUnder : [])
+                if shown, visible.count - headVisibleIndex >= 2 {
+                    groupSlices[visible[headVisibleIndex].id] = .top
+                    for middleIndex in (headVisibleIndex + 1)..<(visible.count - 1) {
+                        groupSlices[visible[middleIndex].id] = .middle
+                    }
+                    groupSlices[visible[visible.count - 1].id] = .bottom
+                }
             }
             return count
         }
         for head in heads { place(head, level: 0, shown: true) }
 
         return SessionFamilies(all: all, visible: visible, depth: depth, folds: folds, heads: headsById, under: under,
-                               above: above, sharesFolder: sharesFolder, sharesBranch: sharesBranch)
+                               above: above, sharesFolder: sharesFolder, sharesBranch: sharesBranch, groupSlices: groupSlices)
     }
 }
 
@@ -260,13 +315,36 @@ extension SessionFamilies {
         id != target && !(under[id]?.contains { $0.id == target } ?? false)
     }
 
+    /// Whether all of the carried chats may be put under `target`.
+    func canPlace(_ ids: [String], under target: String) -> Bool {
+        !ids.isEmpty && ids.allSatisfy { canPlace($0, under: target) }
+    }
+
     /// What a session row carries when it is dragged. A prefix of our own, so
     /// text dragged in from elsewhere is not taken for a chat.
     static func dragPayload(for session: UnifiedSession) -> String { dragPrefix + session.id }
 
-    /// The id of the chat a drag carries, or nil for anything else.
+    /// What a set of selected session rows carries when one of them is dragged.
+    static func dragPayload(for sessions: [UnifiedSession]) -> String {
+        sessions.map { dragPrefix + $0.id }.joined(separator: "\n")
+    }
+
+    /// Every chat id a drag carries, in order, or empty for anything else.
+    static func draggedSessionIds(_ payload: String) -> [String] {
+        var seen = Set<String>()
+        var ids: [String] = []
+        for line in payload.split(whereSeparator: \.isNewline) {
+            guard line.hasPrefix(dragPrefix) else { return [] }
+            let id = String(line.dropFirst(dragPrefix.count))
+            guard !id.isEmpty else { return [] }
+            if seen.insert(id).inserted { ids.append(id) }
+        }
+        return ids
+    }
+
+    /// The id of the first chat a drag carries, or nil for anything else.
     static func draggedSessionId(_ payload: String) -> String? {
-        payload.hasPrefix(dragPrefix) ? String(payload.dropFirst(dragPrefix.count)) : nil
+        draggedSessionIds(payload).first
     }
 
     private static let dragPrefix = "ripul-session:"
@@ -302,7 +380,66 @@ extension SessionFamilies {
     }
 }
 
-/// The control at the end of a family that has more started chats than it shows.
+extension SessionFamilies {
+    /// The start of the id of a family's fold control as a row of its own.
+    static let foldRowPrefix = "family-fold:"
+
+    /// The rows to draw, each family's fold control in a row of its own after
+    /// the last chat it shows. In the chat's own row it moved from one chat to
+    /// another as the fold opened and closed, and the chat's row changed height
+    /// on the frame the rows round it began to move (22 October 2026). In a row
+    /// of its own it moves down and up with the chats it opens and closes.
+    ///
+    /// The row is named for the family, not for the chat it follows, so it is
+    /// the same row whichever chat that is.
+    func rowsWithFolds(_ rows: [UnifiedSession]) -> [UnifiedSession] {
+        guard !folds.isEmpty else { return rows }
+        return rows.flatMap { row in folds[row.id].map { [row, Self.foldRow(of: $0, after: row)] } ?? [row] }
+    }
+
+    /// The fold a row of `rowsWithFolds` is the control of, or nil for a chat.
+    func fold(ofRow id: String) -> Fold? {
+        guard id.hasPrefix(Self.foldRowPrefix) else { return nil }
+        let parentId = String(id.dropFirst(Self.foldRowPrefix.count))
+        return folds.values.first { $0.parentId == parentId }
+    }
+
+    /// The fold a row of `rowsWithFolds` was made for, read from the row
+    /// itself: a row on its way out, its family closed, still draws as the
+    /// control it was.
+    static func foldDrawn(by row: UnifiedSession) -> Fold? {
+        guard row.id.hasPrefix(foldRowPrefix) else { return nil }
+        return Fold(parentId: String(row.id.dropFirst(foldRowPrefix.count)), count: row.messageCount ?? 0,
+                    isOpen: row.title == Self.openFoldTitle)
+    }
+
+    private static let openFoldTitle = "open"
+
+    /// Where a row of `rowsWithFolds` sits in its family's border: the fold
+    /// control closes the border, so the chat before it does not.
+    func groupSlice(ofRow id: String) -> GlassRowGroupSlice? {
+        if id.hasPrefix(Self.foldRowPrefix) { return fold(ofRow: id) == nil ? nil : .bottom }
+        let slice = groupSlices[id]
+        return slice == .bottom && folds[id] != nil ? .middle : slice
+    }
+
+    /// The chat a fold control follows, which draws no divider above it: the
+    /// control reads as the end of that chat's family, not as another chat.
+    func isJoinedToFold(_ id: String) -> Bool {
+        folds[id] != nil
+    }
+
+    private static func foldRow(of fold: Fold, after row: UnifiedSession) -> UnifiedSession {
+        UnifiedSession(
+            id: foldRowPrefix + fold.parentId, title: fold.isOpen ? openFoldTitle : "",
+            lastUsed: row.lastUsed, hasKnownActivity: false,
+            gitBranch: nil, messageCount: fold.count, projectName: nil, provider: nil, providerLabel: nil,
+            machineName: nil, matchKeys: [], cachedIsOpen: false, ripulSession: nil)
+    }
+}
+
+/// The control at the end of a family that has more started chats than it
+/// shows, in a row of its own.
 struct SessionFamilyFoldButton: View {
     let fold: SessionFamilies.Fold
     let action: () -> Void
@@ -313,8 +450,7 @@ struct SessionFamilyFoldButton: View {
                 .font(.ripul(.caption, weight: .medium))
                 .foregroundStyle(.ripul(.textSecondary))
                 // In line with the started chats above it.
-                .padding(.leading, 26)
-                .padding(.top, 8)
+                .padding(.leading, 6)
                 .padding(.bottom, 2)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())

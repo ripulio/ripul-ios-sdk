@@ -13,7 +13,7 @@ public struct SpeechSandboxScreen: View {
     public init(tokenProvider: @escaping () -> String?) { self.tokenProvider = tokenProvider }
 
     @State private var providers: [any NativeSpeechProviding] = []
-    @State private var selectedProviderId = "apple"
+    @State private var selectedProviderId = "phonon"
 
     @State private var voices: [SpeechService.Voice] = []
     @State private var selectedVoiceId = ""
@@ -47,7 +47,7 @@ public struct SpeechSandboxScreen: View {
                 } else {
                     Picker("Voice", selection: $selectedVoiceId) {
                         ForEach(voices) { voice in
-                            Text(voice.name).tag(voice.id)
+                            Text(voice.displayLabel).tag(voice.id)
                         }
                     }
                     .uiKitIdentifier("SpeechSandboxScreen.voicePicker")
@@ -111,8 +111,9 @@ public struct SpeechSandboxScreen: View {
         #endif
         .task {
             providers = [
-                AppleSpeechProvider(),
+                PhononNativeSpeechProvider.shared,
                 NativeSpeechProviderFactory.elevenLabs(tokenProvider: tokenProvider),
+                AppleSpeechProvider(),
             ]
             await loadVoices()
         }

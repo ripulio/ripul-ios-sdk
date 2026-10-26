@@ -143,7 +143,7 @@ public struct RipulColorRole: Hashable, RawRepresentable, CaseIterable, Sendable
 }
 
 /// One side of a colour: a platform system colour by name, or fixed components.
-public enum RipulColorLiteral: Equatable, Sendable {
+public enum RipulColorLiteral: Hashable, Sendable {
     /// `system:label`. Live: it follows light, dark and increased contrast.
     case system(String)
     case rgba(red: Double, green: Double, blue: Double, alpha: Double)
@@ -189,7 +189,7 @@ extension RipulColorLiteral {
 }
 
 /// A resolved colour: a light value and, when the theme gives one, a different dark value.
-public struct RipulColorValue: Equatable, Sendable {
+public struct RipulColorValue: Hashable, Sendable {
     public var light: RipulColorLiteral
     public var dark: RipulColorLiteral?
     public init(light: RipulColorLiteral, dark: RipulColorLiteral? = nil) { self.light = light; self.dark = dark }

@@ -42,3 +42,70 @@ extension View {
         modifier(RipulShimmerModifier(base: base, highlight: highlight, duration: duration))
     }
 }
+
+/// Claude Code-style working status for the chat composer: a cycling ASCII
+/// star glyph (`✢ ✳ ✶ ✻ ✽`), a character-by-character typewriter reveal when
+/// the phrase changes, and a dimmer monospaced shimmer so it never looks like
+/// text the user typed into the input.
+struct ComposerWaitingStatusLabel: View {
+    var text: String?
+    var base: Color
+    var highlight: Color
+
+    private static let frames = ["✢", "✳", "✶", "✻", "✽", "✻", "✶", "✳"]
+    @State private var frameIndex = 0
+    @State private var revealedCount = 0
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private var cleanPhrase: String {
+        let raw = (text?.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap { $0.isEmpty ? nil : $0 } ?? "Waiting on agent"
+        var trimmed = raw
+        while trimmed.hasSuffix("…") || trimmed.hasSuffix(".") {
+            trimmed.removeLast()
+        }
+        return trimmed.isEmpty ? "Waiting on agent" : trimmed
+    }
+
+    private var displayedText: String {
+        let target = cleanPhrase
+        if reduceMotion || PerfSwitch.isOff("shimmer") {
+            return "✶ \(target)…"
+        }
+        let glyph = Self.frames[frameIndex % Self.frames.count]
+        let count = min(revealedCount, target.count)
+        let prefix = String(target.prefix(count))
+        let suffix = count < target.count ? "▌" : "…"
+        return "\(glyph) \(prefix)\(suffix)"
+    }
+
+    var body: some View {
+        Text(displayedText).ripulText()
+            .font(.ripul(size: 13.5, weight: .regular, family: .code))
+            .lineLimit(1)
+            .truncationMode(.tail)
+            .ripulShimmer(base: base, highlight: highlight, duration: 2.2)
+            .task(id: cleanPhrase) {
+                let targetCount = cleanPhrase.count
+                if reduceMotion || PerfSwitch.isOff("shimmer") {
+                    revealedCount = targetCount
+                    return
+                }
+                revealedCount = 0
+                var step = 0
+                while !Task.isCancelled && revealedCount < targetCount {
+                    try? await Task.sleep(nanoseconds: 18_000_000)
+                    guard !Task.isCancelled else { return }
+                    revealedCount += 1
+                    step += 1
+                    if step % 8 == 0 {
+                        frameIndex = (frameIndex + 1) % Self.frames.count
+                    }
+                }
+                while !Task.isCancelled {
+                    try? await Task.sleep(nanoseconds: 150_000_000)
+                    guard !Task.isCancelled else { return }
+                    frameIndex = (frameIndex + 1) % Self.frames.count
+                }
+            }
+    }
+}

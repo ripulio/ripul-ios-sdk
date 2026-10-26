@@ -125,19 +125,23 @@ struct NativeToolProse: View {
     var identifier = "NativeTool.prose"
     /// Adds a Raw button beside Copy. Off unless a caller asks: prose is shown rendered.
     var rawToggle = false
-    @State private var raw = false
+    @NativeRowState("prose.raw") private var raw = false
     @Environment(\.openURL) private var openURL
     @State private var fullHeight: CGFloat = 0
-    @State private var expanded = false
+    @NativeRowState("prose.expanded") private var expanded = false
     @ScaledMetric private var scale: CGFloat = 1
 
+    var proseScopeKey: String { identifier }
+
     var body: some View {
+        let isRaw = _raw.value(subscope: proseScopeKey)
+        let isExpanded = _expanded.value(subscope: proseScopeKey)
         let limit = collapsedHeight * scale
         // Before the first measurement, guess from the text so a long one does
         // not open at full height and then fold. A line or two hidden is not
         // worth a control.
         let overflows = fullHeight > 0 ? fullHeight > limit + 44 * scale : text.count > Int(limit) * 5
-        let folded = overflows && !expanded
+        let folded = overflows && !isExpanded
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 12) {
                 Spacer()
@@ -150,12 +154,12 @@ struct NativeToolProse: View {
                     #endif
                 }.accessibilityIdentifier("\(identifier).copy")
                 if rawToggle {
-                    Button(raw ? "Rendered" : "Raw") { raw.toggle() }
+                    Button(isRaw ? "Rendered" : "Raw") { _raw.setValue(!isRaw, subscope: proseScopeKey) }
                         .accessibilityIdentifier("\(identifier).raw")
                 }
             }.font(.ripul(.caption))
             Group {
-                if rawToggle && raw { Text(text).font(.ripul(.callout, family: .code)) }
+                if rawToggle && isRaw { Text(text).font(.ripul(.callout, family: .code)) }
                 else {
                     Markdown(text)
                         .environment(\.openURL, OpenURLAction { url in
@@ -175,7 +179,7 @@ struct NativeToolProse: View {
                     else { Rectangle() }
                 }
             if overflows {
-                Button(expanded ? "Show less" : "Show more") { expanded.toggle() }
+                Button(isExpanded ? "Show less" : "Show more") { _expanded.setValue(!isExpanded, subscope: proseScopeKey) }
                     .font(.ripul(.callout))
                     .accessibilityIdentifier("\(identifier).toggle")
             }
@@ -190,10 +194,9 @@ struct NativeAgentDetailRows: View {
     let rows: [AgentCommsPresentation.Detail]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        NativeToolFieldFlowLayout(spacing: 8) {
             ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(row.label).font(.ripul(.caption)).foregroundStyle(.ripul(.textSecondary))
+                NativeToolFieldControl(label: row.label, isLiteral: NativeToolNarrative.isLiteralField(row.label)) {
                     Text(row.value).textSelection(.enabled)
                 }
             }
@@ -317,9 +320,10 @@ struct NativeAgentList {
 
 struct NativeAgentListToolView: View {
     let content: NativeToolContent
-    @State private var visibleRows = 20
+    @NativeRowState("agentList.visibleRows") private var visibleRows = 20
 
     var body: some View {
+        let currentVisibleRows = _visibleRows.value(subscope: content.call.id)
         if let list = NativeAgentList(content.output) {
             // Times are told as of the call: this is a record, not a live list.
             let asOf = content.call.timestamp > 0 ? Date(timeIntervalSince1970: content.call.timestamp / 1000) : Date()
@@ -330,13 +334,15 @@ struct NativeAgentListToolView: View {
             }
             if !list.agents.isEmpty {
                 VStack(alignment: .leading, spacing: 14) {
-                    ForEach(Array(list.agents.prefix(visibleRows).enumerated()), id: \.element.id) { index, agent in
+                    ForEach(Array(list.agents.prefix(currentVisibleRows).enumerated()), id: \.element.id) { index, agent in
                         NativeAgentRow(agent: agent, asOf: asOf)
                             .accessibilityIdentifier("NativeTool.agentList.row.\(index)")
-                        if index < min(list.agents.count, visibleRows) - 1 { Divider() }
+                        if index < min(list.agents.count, currentVisibleRows) - 1 { Divider() }
                     }
-                    if list.agents.count > visibleRows {
-                        Button("Show more (\(list.agents.count - visibleRows) remaining)") { visibleRows += 40 }
+                    if list.agents.count > currentVisibleRows {
+                        Button("Show more (\(list.agents.count - currentVisibleRows) remaining)") {
+                            _visibleRows.setValue(currentVisibleRows + 40, subscope: content.call.id)
+                        }
                     }
                 }
             }

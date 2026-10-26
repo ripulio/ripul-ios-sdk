@@ -17,6 +17,7 @@ public struct ClaudeAccountSwitcherSheet: View {
     let machine: RemoteMachine
     let bridge: AgentBridge
     var chatId: String? = nil
+    var startsAddingAccount = false
     /// Fires after a successful switch so the caller can refresh its label.
     var onSwitched: ((ClaudeAccountProfile?) -> Void)? = nil
 
@@ -24,11 +25,12 @@ public struct ClaudeAccountSwitcherSheet: View {
     @State private var signIn: ClaudeAccountSignInRequest?
     @State private var refreshToken = UUID()
 
-    public init(machine: RemoteMachine, bridge: AgentBridge, chatId: String? = nil, onSwitched: ((ClaudeAccountProfile?) -> Void)? = nil) {
+    public init(machine: RemoteMachine, bridge: AgentBridge, chatId: String? = nil, onSwitched: ((ClaudeAccountProfile?) -> Void)? = nil, startsAddingAccount: Bool = false) {
         self.machine = machine
         self.bridge = bridge
         self.chatId = chatId
         self.onSwitched = onSwitched
+        self.startsAddingAccount = startsAddingAccount
     }
 
     public var body: some View {
@@ -36,7 +38,7 @@ public struct ClaudeAccountSwitcherSheet: View {
             List {
                 ClaudeAccountSection(machine: machine, bridge: bridge, chatId: chatId,
                     onSignIn: { signIn = ClaudeAccountSignInRequest(machine: machine, profile: $0) },
-                    onSwitched: onSwitched, refreshToken: refreshToken)
+                    onSwitched: onSwitched, refreshToken: refreshToken, startsAddingAccount: startsAddingAccount)
             }.ripulThemedList()
                 .navigationTitle(chatId == nil ? "Claude accounts" : "Chat account")
                 #if os(iOS)
@@ -52,10 +54,11 @@ public struct ClaudeAccountSwitcherSheet: View {
         .frame(minWidth: 480, minHeight: 420)
         #endif
         .ripulSheet(.page, detents: [.medium, .large])
+        .dismissesKeyboardOnTapAway()
         .ripulSheet(item: $signIn, onDismiss: { refreshToken = UUID() }) { request in
             HostSignInSheet(machine: request.machine, bridge: bridge,
                 profile: request.profile.slug, profileName: request.profile.name,
-                startSignInImmediately: request.profile.loggedIn)
+                startSignInImmediately: request.profile.loggedIn || request.profile.signInEnded)
         }
     }
 }
@@ -75,6 +78,8 @@ struct ClaudeAccountSection: View {
     let onSignIn: (ClaudeAccountProfile) -> Void
     var onSwitched: ((ClaudeAccountProfile?) -> Void)? = nil
     var refreshToken: UUID? = nil
+    var startsAddingAccount = false
+    @State private var openedAddAccount = false
     @Environment(\.scenePhase) private var scenePhase
 
     @State private var accounts: [ClaudeAccountProfile] = []
@@ -153,6 +158,10 @@ struct ClaudeAccountSection: View {
             }
         } }.ripulThemedListRows()
         .task(id: refreshToken) {
+            if startsAddingAccount && !openedAddAccount {
+                openedAddAccount = true
+                addingAccount = true
+            }
             repeat {
                 await refresh()
                 do { try await Task.sleep(nanoseconds: 60_000_000_000) } catch { break }
@@ -184,11 +193,13 @@ struct ClaudeAccountSection: View {
         // A usage error is almost always an expired sign-in, so it is offered in place of Switch.
         let action: CodingAccountRowAction =
             switchingTo == account.slug ? .busy
+            : account.signInEnded || (account.loggedIn && account.usage?.error != nil) ? .signIn("Sign in again", { onSignIn(account) })
             : !account.loggedIn ? .signIn("Sign in", { onSignIn(account) })
-            : account.usage?.error != nil ? .signIn("Sign in again", { onSignIn(account) })
             : isActive ? .active
             : .switchTo({ Task { await selectAccount(account.slug) } })
-        let detail = [account.email ?? (account.loggedIn ? "Signed in" : "Not signed in"),
+        let ends = ClaudeSignInEnd.text(endsAt: account.signInEndsAt, ended: account.signInEnded)
+        let detail = [account.email ?? (account.loggedIn ? "Signed in" : ends == nil ? "Not signed in" : nil),
+                      ends?.text,
                       account.isDefault ? "This Mac's login" : nil].compactMap { $0 }.joined(separator: " · ")
         CodingAccountRow(name: account.name, detail: detail, isActive: isActive,
             usage: account.usage, plan: account.plan, showsUsage: account.loggedIn,

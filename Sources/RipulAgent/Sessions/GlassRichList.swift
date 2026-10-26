@@ -1,5 +1,11 @@
 import SwiftUI
 import UniformTypeIdentifiers
+#if targetEnvironment(macCatalyst)
+import CoreGraphics
+#endif
+#if canImport(AppKit) && !targetEnvironment(macCatalyst)
+import AppKit
+#endif
 
 // MARK: - Row activity
 
@@ -17,6 +23,14 @@ public enum GlassRowActivity: Equatable {
     case opening
     case archiving
     case deleting
+}
+
+/// Where a row sits in a contiguous group of related rows (a chat and the
+/// chats shown under it). Nil for a row that stands by itself.
+public enum GlassRowGroupSlice: Equatable, Sendable {
+    case top
+    case middle
+    case bottom
 }
 
 // MARK: - Empty states
@@ -158,6 +172,18 @@ private struct BatchCapsuleBackground: ViewModifier {
 /// iOS 17 rather than 26: nothing in here is liquid glass. The name follows the
 /// `Glass*` family it sits beside, not an API requirement — and the plans list,
 /// which is not gated at 26, has to be able to use it.
+///
+/// **The `.list` layout must stay a `List`, one row per item.** The sessions
+/// list holds 130 chats and more on a phone, and only a List builds just the
+/// rows on screen and reuses their cells. On 22 October 2026 it was put in a
+/// `ScrollView` over a `VStack` to animate families opening, and the iPhone app
+/// stopped: with 165 rows the first took 85 seconds to be reachable and each
+/// swipe 29, against under 1 and 3. Rows that open and close are moved over the
+/// List by Core Animation (`revealsRowChanges`), not by changing their heights.
+/// When the List seems to fight an animation, measure the cells (their height
+/// on each frame) before replacing it.
+/// `SessionFamiliesUITests.testALongListBuildsOnlyTheRowsOnScreenAndStillOpensAndCloses`
+/// fails on a list that builds every row.
 @available(iOS 17.0, macOS 14.0, *)
 public struct GlassRichList<Item: Identifiable, Row: View, Swipe: View, RowMenu: View>: View {
     private let items: [Item]
@@ -166,13 +192,18 @@ public struct GlassRichList<Item: Identifiable, Row: View, Swipe: View, RowMenu:
     private let activity: (Item) -> GlassRowActivity
     private let isSelecting: Bool
     private let selectedIds: Set<Item.ID>
-    /// Whether this row is the CONFIRMED active row — a master-detail concept
-    /// (the Mac split). A closure rather than an id because the sessions list
-    /// matches on two identities (the unified row's own id and its live web
-    /// tab's), and flattening that to one would silently stop highlighting
-    /// half the rows. The iPhone navigates away on open and always returns
-    /// false, so no row stays highlighted there.
-    private let isActive: (Item) -> Bool
+    /// Whether this row is the CONFIRMED active row: the one whose detail is on
+    /// screen beside the list (a split layout). A closure rather than an id
+    /// because the sessions list matches on two identities (the unified row's
+    /// own id and its live web tab's), and flattening that to one would
+    /// silently stop highlighting half the rows.
+    ///
+    /// Nil for a list whose rows open over it (an iPhone's sessions list, Plans).
+    /// No row is marked there, and a tap marks none either: the mark would
+    /// still be on the row when the person came back to the list, and nothing
+    /// would ever clear it (Peter, 23 October 2026: on an iPhone the selected
+    /// row is distracting once you have swiped back to the list).
+    private let isActive: ((Item) -> Bool)?
     /// The owner's confirmed active identifier, observed ONLY to know when to
     /// drop the optimistic override. Opaque on purpose — the component never
     /// compares it to a row, that is `isActive`'s job.
@@ -186,6 +217,32 @@ public struct GlassRichList<Item: Identifiable, Row: View, Swipe: View, RowMenu:
     private let rowMenu: (Item) -> RowMenu
     /// Set by `draggableRows`: nil for a list whose rows stay where they are.
     private var dragging: RowDragging?
+    /// Set by `unhighlightedRows`: rows a tap leaves as they are.
+    private var leavesUnhighlighted: ((Item) -> Bool)?
+    /// Set by `groupedRows`: where a row sits in a bordered family group.
+    private var groupSlice: ((Item) -> GlassRowGroupSlice?)?
+    /// Set by `groupedRows`: a row that draws no divider above the row after it.
+    private var joinsNext: ((Item) -> Bool)?
+    /// Set by `revealsRowChanges`: moves when the owner opens or closes rows.
+    private var revealToken: AnyHashable?
+
+    /// The rows the list last drew. A class, so that keeping it up to date
+    /// from the body redraws nothing.
+    @State private var revealMemory = RevealMemory()
+    /// Draws rows opening and closing (`revealsRowChanges`).
+    @State private var drawer = RowDrawer()
+    /// On an iPhone the list stays behind an open chat: nothing moves there.
+    @Environment(\.ripulSessionListCanBeSeen) private var listCanBeSeen
+
+    private final class RevealMemory {
+        /// The rows' ids as the list last drew them: a change of the owner's
+        /// token is drawn from these to the rows it gives now.
+        var ids: [AnyHashable] = []
+        /// The owner's token the rows on screen were drawn for.
+        var appliedToken: AnyHashable?
+        /// The list has been drawn once, so there is something to open from.
+        var primed = false
+    }
 
     /// What a list needs to let one row be dropped on another.
     struct RowDragging {
@@ -216,6 +273,13 @@ public struct GlassRichList<Item: Identifiable, Row: View, Swipe: View, RowMenu:
         /// A row is in the air. Kept here as well as in `isDragging` because a
         /// row is asked what it carries before the view has been drawn again.
         var inTheAir = false
+        /// Incremented each time a drag begins, so a late release of an older
+        /// drag's `DragEndItemProvider` (kept on the Mac drag pasteboard until
+        /// the next drag replaces it) never ends the new drag.
+        var generation: Int = 0
+        /// The active drag's item provider, so `endDrag()` can clear `onEnd`
+        /// immediately and never fire it later on `deinit`.
+        weak var activeProvider: DragEndItemProvider?
     }
 
     /// The drag is over: the drop surface comes off the list. Reached three
@@ -223,8 +287,12 @@ public struct GlassRichList<Item: Identifiable, Row: View, Swipe: View, RowMenu:
     /// so. A drag let go of anywhere else is known by what it carried being
     /// released, which was seen to come late, or not at all, after a drop. And
     /// a surface that is somehow still there takes itself off at a touch.
-    private func endDrag() {
+    private func endDrag(generation: Int? = nil) {
+        if let generation, generation != dropGeometry.generation { return }
+        dropGeometry.activeProvider?.onEnd = nil
+        dropGeometry.activeProvider = nil
         dropGeometry.inTheAir = false
+        dropGeometry.rows.removeAll()
         if isDragging { isDragging = false }
         if dropTargetId != nil { dropTargetId = nil }
         if draggedPayload != nil { draggedPayload = nil }
@@ -233,8 +301,25 @@ public struct GlassRichList<Item: Identifiable, Row: View, Swipe: View, RowMenu:
     /// The row under a point of the list, as the drop delegate gives it.
     private func row(at location: CGPoint) -> Item? {
         let point = CGPoint(x: dropGeometry.listOrigin.x + location.x, y: dropGeometry.listOrigin.y + location.y)
-        guard let id = dropGeometry.rows.first(where: { $0.value.contains(point) })?.key else { return nil }
-        return items.first { $0.id == id }
+        #if canImport(UIKit)
+        if let collectionView = drawer.locateList(), let window = collectionView.window,
+           collectionView.numberOfSections == 1 {
+            let inCollection = collectionView.convert(point, from: window)
+            if let indexPath = collectionView.indexPathForItem(at: inCollection),
+               items.indices.contains(indexPath.item) {
+                return items[indexPath.item]
+            }
+        }
+        #endif
+        if let id = dropGeometry.rows.first(where: { $0.value.contains(point) })?.key {
+            return items.first { $0.id == id }
+        }
+        if let id = dropGeometry.rows
+            .filter({ $0.value.insetBy(dx: -16, dy: -6).contains(point) })
+            .min(by: { abs($0.value.midY - point.y) < abs($1.value.midY - point.y) })?.key {
+            return items.first { $0.id == id }
+        }
+        return nil
     }
 
     /// Optimistic active-row override: set on tap so the highlight snaps to
@@ -251,7 +336,7 @@ public struct GlassRichList<Item: Identifiable, Row: View, Swipe: View, RowMenu:
         activity: @escaping (Item) -> GlassRowActivity = { _ in .idle },
         isSelecting: Bool = false,
         selectedIds: Set<Item.ID> = [],
-        isActive: @escaping (Item) -> Bool = { _ in false },
+        isActive: ((Item) -> Bool)? = nil,
         activeToken: String? = nil,
         onTap: @escaping (Item) -> Void,
         onToggleSelect: @escaping (Item) -> Void = { _ in },
@@ -304,15 +389,83 @@ public struct GlassRichList<Item: Identifiable, Row: View, Swipe: View, RowMenu:
         return list
     }
 
+    /// Rows that are a control rather than something a tap opens (Older Chats
+    /// at the end of the sessions list): a tap does not highlight them.
+    public func unhighlightedRows(_ test: @escaping (Item) -> Bool) -> GlassRichList {
+        var list = self
+        list.leavesUnhighlighted = test
+        return list
+    }
+
+    /// Frames contiguous groups of related rows (a chat and the chats shown
+    /// under it) inside a shared rounded border.
+    ///
+    /// - Parameter joinsNext: A row inside a group that draws no divider
+    ///   between itself and the row after it (a chat and the control that
+    ///   ends its family).
+    public func groupedRows(_ slice: @escaping (Item) -> GlassRowGroupSlice?,
+                            joinsNext: ((Item) -> Bool)? = nil) -> GlassRichList {
+        var list = self
+        list.groupSlice = slice
+        list.joinsNext = joinsNext
+        return list
+    }
+
+    /// Rows that arrive or leave when `token` moves open and close instead of
+    /// appearing and vanishing: rows coming in slide down out of the row above
+    /// them, rows going fold up into it, the rows below move with them, and a
+    /// group's border stays whole. The owner moves `token` when the reader
+    /// opens or closes something (a family, a fold); rows that change for any
+    /// other reason change as before.
+    ///
+    /// The list takes the new rows at once and Core Animation moves its cells
+    /// and pictures of it (`RowDrawer`), so no row changes height on any frame.
+    /// Changing the rows' heights a frame at a time had the list measure every
+    /// cell on screen again on each frame, and jittered on a phone (23 October
+    /// 2026). The rows stay in a `List`, one row each: drawing them by hand in
+    /// a stack cost every row of a long list at once (22 October 2026).
+    public func revealsRowChanges(when token: AnyHashable) -> GlassRichList {
+        var list = self
+        list.revealToken = token
+        return list
+    }
+
+    private var isControlClickActive: Bool {
+        #if targetEnvironment(macCatalyst)
+        if CGEventSource.flagsState(.combinedSessionState).contains(.maskControl) { return true }
+        #endif
+        #if canImport(AppKit) && !targetEnvironment(macCatalyst)
+        if NSEvent.modifierFlags.contains(.control) { return true }
+        #endif
+        return false
+    }
+
+    private func tapped(_ item: Item) {
+        if isControlClickActive {
+            onToggleSelect(item)
+        } else if isSelecting {
+            onToggleSelect(item)
+        } else {
+            if isActive != nil, leavesUnhighlighted?(item) != true { optimisticActiveId = item.id }
+            onTap(item)
+        }
+    }
+
     /// Whether the drag over this row may be dropped on it.
     private func takesDrop(_ item: Item) -> Bool {
-        guard let dragging, !isSelecting, dropTargetId == item.id else { return false }
+        guard let dragging, dropTargetId == item.id else { return false }
         return draggedPayload.map { dragging.canDrop($0, item) } ?? true
     }
 
     public var body: some View {
         if let emptyState {
-            emptyView(emptyState)
+            switch layout {
+            case .list:
+                emptyView(emptyState)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            case .stack:
+                emptyView(emptyState)
+            }
         } else {
             switch layout {
             case .list: list
@@ -355,39 +508,101 @@ public struct GlassRichList<Item: Identifiable, Row: View, Swipe: View, RowMenu:
             .uiKitIdentifier("\(identifierPrefix).\(identifier)")
     }
 
+    private struct RowSlot: Identifiable {
+        let item: Item
+        let slice: GlassRowGroupSlice?
+        let hidesBottomSeparator: Bool
+        /// Draws its group's divider along its foot.
+        var divider = true
+        var id: Item.ID { item.id }
+        /// A row of a group with more of the group below it, and not joined
+        /// to the row after it.
+        var showsGroupDivider: Bool { slice != nil && slice != .bottom && divider }
+    }
+
+    /// The owner has moved `revealToken` since the list last drew its rows.
+    private var rowsOpenOrClose: Bool {
+        revealToken != nil && revealMemory.primed && revealToken != revealMemory.appliedToken
+    }
+
+    private var rowSlots: [RowSlot] {
+        if revealToken != nil { noteRowChanges() }
+        let hiddenBottomSeparatorIds = idsBeforeOrInsideGroup
+        return items.map { item in
+            RowSlot(item: item, slice: groupSlice?(item), hidesBottomSeparator: hiddenBottomSeparatorIds.contains(item.id),
+                    divider: joinsNext?(item) != true)
+        }
+    }
+
+    /// Keeps up with the rows the list draws. When the owner has opened or
+    /// closed some since, the drawer pictures the list before it changes:
+    /// this runs while the body is built, and the list on screen is still the
+    /// list as it was.
+    private func noteRowChanges() {
+        let ids = items.map { AnyHashable($0.id) }
+        defer {
+            revealMemory.ids = ids
+            revealMemory.appliedToken = revealToken
+            revealMemory.primed = true
+        }
+        guard revealMemory.primed else { return }
+        #if canImport(UIKit)
+        if revealToken != revealMemory.appliedToken {
+            if layout == .list && listCanBeSeen { drawer.begin(old: revealMemory.ids, new: ids) }
+        } else if drawer.isRunning && ids != revealMemory.ids {
+            // Rows moved for some other reason while the drawer ran: they
+            // are where they go.
+            drawer.finish()
+        }
+        #endif
+    }
+
+    /// Rows that change places move there: a chat that has just spoken slides
+    /// up to the top, and a new one comes in. Not as rows open and close,
+    /// which the drawer draws: the list animating the same change again made
+    /// the rows overlap (22 October 2026). Lost that day with the families'
+    /// border, and missed (Peter, 23 October 2026).
+    private func reorderAnimation(rowsOpenOrClose: Bool) -> Animation? {
+        rowsOpenOrClose || drawer.isRunning || isSelecting ? nil : .easeInOut(duration: 0.3)
+    }
+
+    /// A `List`, and it has to stay one: see the type's note. Not a stack,
+    /// lazy or not, which loses swipe actions, cell reuse and the system's
+    /// drag, and builds rows the List would not.
     private var list: some View {
-        List {
-            ForEach(items) { item in
+        let opensOrCloses = rowsOpenOrClose
+        let slots = rowSlots
+        return List {
+            ForEach(slots) { slot in
+                let item = slot.item
+                let slice = slot.slice
                 row(item)
+                    .glassRowGroupDivider(slot.showsGroupDivider)
                     .contentShape(Rectangle())
-                    .onTapGesture {
-                        if isSelecting {
-                            onToggleSelect(item)
-                        } else {
-                            optimisticActiveId = item.id
-                            onTap(item)
-                        }
-                    }
+                    .onTapGesture { tapped(item) }
                     .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                         if !isSelecting { swipe(item) }
                     }
                     .contextMenu { MenuIcons { if !isSelecting { DeferredRowMenu { rowMenu(item) } } }}
                     .modifier(RowDrag(
-                        payload: isSelecting ? nil : dragging?.payload(item),
-                        enabled: dragging != nil && !isSelecting,
+                        payload: dragging?.payload(item),
+                        enabled: dragging != nil,
                         pickedUp: { carried in
                             // One row is in the air at a time. As it passes over
                             // other rows the system asks them what they carry
                             // too (seen 11 October 2026: the answer of the row
                             // it was held over replaced what was being carried,
                             // and the drop was refused as a chat under itself).
-                            guard !dropGeometry.inTheAir else { return false }
+                            guard !dropGeometry.inTheAir else { return nil }
+                            dropGeometry.generation &+= 1
+                            let generation = dropGeometry.generation
                             dropGeometry.inTheAir = true
                             draggedPayload = carried
                             isDragging = true
-                            return true
+                            return generation
                         },
-                        ended: { endDrag() }))
+                        registerProvider: { dropGeometry.activeProvider = $0 },
+                        ended: { generation in endDrag(generation: generation) }))
                     // Only while a row is being dragged: a row that says where
                     // it is on every frame of a scroll would cost the scroll.
                     .background {
@@ -400,10 +615,23 @@ public struct GlassRichList<Item: Identifiable, Row: View, Swipe: View, RowMenu:
                             }
                         }
                     }
-                    .listRowBackground(background(for: item))
-                    .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+                    .listRowBackground(GlassRowGroupBackground(slice: slice, rowTint: background(for: item))
+                        // A family's first chat, its family folded away, lets its
+                        // border go rather than dropping it. The drawer fades it
+                        // itself, and the list's animations are off while it runs.
+                        .animation(.easeOut(duration: 0.2), value: slice))
+                    .listRowInsets(GlassRowGroupBackground.listRowInsets(for: slice))
+                    .listRowSeparator(slot.hidesBottomSeparator ? .hidden : .automatic,
+                                      edges: slice == .top ? .all : .bottom)
             }
         }
+        #if canImport(UIKit)
+        .background { RowDrawerProbe(drawer: drawer) }
+        #endif
+        // While the drawer moves the rows, nothing in the list animates as
+        // well: a family's box is whole from the first frame, and no row is
+        // drawn a frame at a time by the main thread.
+        .transaction { if drawer.isRunning { $0.disablesAnimations = true } }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
         .onChange(of: activeToken) { _, _ in
@@ -414,7 +642,7 @@ public struct GlassRichList<Item: Identifiable, Row: View, Swipe: View, RowMenu:
         #if os(iOS)
         .scrollDismissesKeyboard(.interactively)
         #endif
-        .animation(.easeInOut(duration: 0.3), value: items.map(\.id))
+        .animationWhileSessionListSeen(reorderAnimation(rowsOpenOrClose: opensOrCloses), value: items.map(\.id))
         .refreshable {
             if let onRefresh { await onRefresh() }
         }
@@ -427,9 +655,33 @@ public struct GlassRichList<Item: Identifiable, Row: View, Swipe: View, RowMenu:
             // a row of this list is in the air, so it never takes a touch
             // meant for the list.
             if isDragging, dragging != nil {
-                ListDropSurface(delegate: dropDelegate, origin: { dropGeometry.listOrigin = $0 },
-                                touched: { endDrag() })
+                ListDropSurface(
+                    delegate: dropDelegate,
+                    origin: { dropGeometry.listOrigin = $0 },
+                    touched: { endDrag() },
+                    sessionEnded: {
+                        let generation = dropGeometry.generation
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.95) {
+                            endDrag(generation: generation)
+                        }
+                    }
+                )
             }
+            #if targetEnvironment(macCatalyst)
+            if !isDragging {
+                ControlClickSurface { point, view in
+                    guard let collectionView = drawer.locateList(),
+                          collectionView.numberOfSections == 1 else { return }
+                    let inCollection = collectionView.convert(point, from: view)
+                    let indexPath = collectionView.indexPathForItem(at: inCollection)
+                        ?? collectionView.indexPathsForVisibleItems.first(where: { path in
+                            collectionView.layoutAttributesForItem(at: path)?.frame.insetBy(dx: 0, dy: -6).contains(inCollection) == true
+                        })
+                    guard let indexPath, items.indices.contains(indexPath.item) else { return }
+                    onToggleSelect(items[indexPath.item])
+                }
+            }
+            #endif
         }
     }
 
@@ -463,47 +715,68 @@ public struct GlassRichList<Item: Identifiable, Row: View, Swipe: View, RowMenu:
     /// menu as `list` — only the container and the separators differ, plus the
     /// absence of swipe (which `List` alone provides).
     private var stack: some View {
-        LazyVStack(spacing: 0) {
-            ForEach(items) { item in
+        let opensOrCloses = rowsOpenOrClose
+        let slots = rowSlots
+        return LazyVStack(spacing: 0) {
+            ForEach(slots) { slot in
+                let item = slot.item
+                let slice = slot.slice
+                let bottomPadding: CGFloat = slice == .bottom ? 16 : 10
                 row(item)
+                    .glassRowGroupDivider(slot.showsGroupDivider, footInset: bottomPadding)
                     .padding(.horizontal, 16)
-                    .padding(.vertical, 10)
+                    .padding(.top, slice == .top ? 14 : 10)
+                    .padding(.bottom, bottomPadding)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(background(for: item))
+                    .background(GlassRowGroupBackground(slice: slice, rowTint: background(for: item)))
                     .contentShape(Rectangle())
-                    .onTapGesture {
-                        if isSelecting {
-                            onToggleSelect(item)
-                        } else {
-                            optimisticActiveId = item.id
-                            onTap(item)
-                        }
-                    }
+                    .onTapGesture { tapped(item) }
                     .contextMenu { MenuIcons { if !isSelecting { DeferredRowMenu { rowMenu(item) } } }}
 
-                if item.id != items.last?.id {
+                if item.id != items.last?.id && !slot.hidesBottomSeparator {
                     Divider().padding(.leading, 16)
                 }
             }
         }
+        .animationWhileSessionListSeen(reorderAnimation(rowsOpenOrClose: opensOrCloses), value: items.map(\.id))
         .onChange(of: activeToken) { _, _ in optimisticActiveId = nil }
-        .animation(.easeInOut(duration: 0.3), value: items.map(\.id))
+    }
+
+    /// Rows whose native bottom separator is suppressed: any row inside a
+    /// bordered family group (the group draws its own internal dividers and
+    /// bottom border) and the standalone row immediately above a group's top.
+    private var idsBeforeOrInsideGroup: Set<Item.ID> {
+        Self.idsBeforeOrInsideGroup(items, groupSlice)
+    }
+
+    private static func idsBeforeOrInsideGroup(_ items: [Item], _ groupSlice: ((Item) -> GlassRowGroupSlice?)?) -> Set<Item.ID> {
+        guard let groupSlice else { return [] }
+        var ids = Set<Item.ID>()
+        for index in items.indices {
+            let item = items[index]
+            if groupSlice(item) != nil {
+                ids.insert(item.id)
+            } else if index + 1 < items.count, groupSlice(items[index + 1]) == .top {
+                ids.insert(item.id)
+            }
+        }
+        return ids
     }
 
     /// Selection beats activity beats rest — a row being archived while
     /// selected should read as selected, because that is the state the user is
     /// acting through.
     private func background(for item: Item) -> Color {
-        if isSelecting && selectedIds.contains(item.id) {
-            return Color.accentColor.opacity(0.08)
-        }
         // Where what is being dragged would land.
         if takesDrop(item) {
             return Color.accentColor.opacity(0.28)
         }
+        if selectedIds.contains(item.id) {
+            return Color.accentColor.opacity(0.08)
+        }
         // The optimistic pick wins over the confirmed one so the highlight
         // snaps on tap instead of waiting for the round-trip.
-        if optimisticActiveId == item.id || (optimisticActiveId == nil && isActive(item)) {
+        if let isActive, optimisticActiveId == item.id || (optimisticActiveId == nil && isActive(item)) {
             return Color.accentColor.opacity(0.18)
         }
         switch activity(item) {
@@ -512,6 +785,205 @@ public struct GlassRichList<Item: Identifiable, Row: View, Swipe: View, RowMenu:
         case .deleting: return Color.ripul(.danger).opacity(0.12)
         case .idle: return Color.clear
         }
+    }
+}
+
+// MARK: - Group framing
+
+/// Background and outer border segment for a row in a grouped family card, or a
+/// plain fill for a row by itself. The dividers between a group's rows are the
+/// rows' own (`glassRowGroupDivider`): a background cannot see where a row's
+/// text starts.
+@available(iOS 17.0, macOS 14.0, *)
+public struct GlassRowGroupBackground: View {
+    private let slice: GlassRowGroupSlice?
+    private let rowTint: Color
+
+    public init(slice: GlassRowGroupSlice?, rowTint: Color = .clear) {
+        self.slice = slice
+        self.rowTint = rowTint
+    }
+
+    public var body: some View {
+        if let slice {
+            let fillShape = GroupSliceFillShape(slice: slice)
+            fillShape
+                .fill(Color.ripul(.text).opacity(0.03))
+                .overlay {
+                    if rowTint != .clear {
+                        fillShape.fill(rowTint)
+                    }
+                }
+                .overlay {
+                    GroupSliceStrokeShape(slice: slice)
+                        .stroke(Color.ripul(.text).opacity(0.16), lineWidth: 1)
+                }
+                .accessibilityIdentifier("GlassRichList.groupSlice.\(Self.sliceName(slice))")
+        } else {
+            rowTint
+        }
+    }
+
+    public static func listRowInsets(for slice: GlassRowGroupSlice?) -> EdgeInsets {
+        EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16)
+    }
+
+    private static func sliceName(_ slice: GlassRowGroupSlice) -> String {
+        switch slice {
+        case .top: return "top"
+        case .middle: return "middle"
+        case .bottom: return "bottom"
+        }
+    }
+}
+
+@available(iOS 17.0, macOS 14.0, *)
+public extension View {
+    /// The divider between this row and the next in a group, along the foot
+    /// of the row's cell: from where the row's text starts to its trailing edge.
+    ///
+    /// Where the text starts is the row's `listRowSeparatorLeading` guide, the
+    /// one the list's own separator follows under a row by itself, so a row
+    /// that sets it once has both start there (Peter, 23 October 2026: under
+    /// the text, not under the icon). A row that sets none has its divider from
+    /// its leading edge. It fades as the group's border does.
+    ///
+    /// - Parameters:
+    ///   - shows: The row has a divider below it.
+    ///   - footInset: How far below the row its cell ends.
+    func glassRowGroupDivider(_ shows: Bool,
+                              footInset: CGFloat = GlassRowGroupBackground.listRowInsets(for: nil).bottom) -> some View {
+        GroupFootDividerLayout(footInset: footInset) {
+            self
+            Rectangle()
+                .fill(Color.ripul(.text).opacity(0.08)) // theme-mapping: GlassRowGroupBackground's divider, moved here unchanged
+                .opacity(shows ? 1 : 0)
+                .animation(.easeOut(duration: 0.2), value: shows)
+                .allowsHitTesting(false)
+        }
+    }
+}
+
+/// A row as it is, and its divider `footInset` below it, from the row's
+/// `listRowSeparatorLeading` guide to its trailing edge. Only the row has a
+/// size and guides, so the list still finds the row's separator and baselines.
+@available(iOS 17.0, macOS 14.0, *)
+private struct GroupFootDividerLayout: Layout {
+    let footInset: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        subviews.first?.sizeThatFits(proposal) ?? .zero
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard let row = subviews.first else { return }
+        let rowProposal = ProposedViewSize(bounds.size)
+        row.place(at: bounds.origin, proposal: rowProposal)
+        guard subviews.count > 1 else { return }
+        let leading = min(bounds.width, max(0, row.dimensions(in: rowProposal)[HorizontalAlignment.listRowSeparatorLeading]))
+        subviews[1].place(at: CGPoint(x: bounds.minX + leading, y: bounds.maxY + footInset), anchor: .bottomLeading,
+                          proposal: ProposedViewSize(width: bounds.width - leading, height: 0.5))
+    }
+
+    func explicitAlignment(of guide: HorizontalAlignment, in bounds: CGRect, proposal: ProposedViewSize,
+                           subviews: Subviews, cache: inout ()) -> CGFloat? {
+        subviews.first?.dimensions(in: ProposedViewSize(bounds.size))[explicit: guide]
+    }
+
+    func explicitAlignment(of guide: VerticalAlignment, in bounds: CGRect, proposal: ProposedViewSize,
+                           subviews: Subviews, cache: inout ()) -> CGFloat? {
+        subviews.first?.dimensions(in: ProposedViewSize(bounds.size))[explicit: guide]
+    }
+}
+
+private struct GroupSliceFillShape: Shape {
+    let slice: GlassRowGroupSlice
+
+    func path(in rect: CGRect) -> Path {
+        let r = GroupSliceGeometry.insetRect(in: rect, for: slice)
+        let radius = min(GroupSliceGeometry.cornerRadius, min(r.width, r.height) * 0.5)
+        switch slice {
+        case .top:
+            var path = Path()
+            path.move(to: CGPoint(x: r.minX, y: r.maxY))
+            path.addLine(to: CGPoint(x: r.minX, y: r.minY + radius))
+            path.addArc(center: CGPoint(x: r.minX + radius, y: r.minY + radius),
+                        radius: radius, startAngle: .degrees(180), endAngle: .degrees(270), clockwise: false)
+            path.addLine(to: CGPoint(x: r.maxX - radius, y: r.minY))
+            path.addArc(center: CGPoint(x: r.maxX - radius, y: r.minY + radius),
+                        radius: radius, startAngle: .degrees(270), endAngle: .degrees(0), clockwise: false)
+            path.addLine(to: CGPoint(x: r.maxX, y: r.maxY))
+            path.closeSubpath()
+            return path
+        case .middle:
+            return Path(r)
+        case .bottom:
+            var path = Path()
+            path.move(to: CGPoint(x: r.minX, y: r.minY))
+            path.addLine(to: CGPoint(x: r.minX, y: r.maxY - radius))
+            path.addArc(center: CGPoint(x: r.minX + radius, y: r.maxY - radius),
+                        radius: radius, startAngle: .degrees(180), endAngle: .degrees(90), clockwise: true)
+            path.addLine(to: CGPoint(x: r.maxX - radius, y: r.maxY))
+            path.addArc(center: CGPoint(x: r.maxX - radius, y: r.maxY - radius),
+                        radius: radius, startAngle: .degrees(90), endAngle: .degrees(0), clockwise: true)
+            path.addLine(to: CGPoint(x: r.maxX, y: r.minY))
+            path.closeSubpath()
+            return path
+        }
+    }
+}
+
+private struct GroupSliceStrokeShape: Shape {
+    let slice: GlassRowGroupSlice
+
+    func path(in rect: CGRect) -> Path {
+        let r = GroupSliceGeometry.insetRect(in: rect, for: slice)
+        let radius = min(GroupSliceGeometry.cornerRadius, min(r.width, r.height) * 0.5)
+        var path = Path()
+        switch slice {
+        case .top:
+            path.move(to: CGPoint(x: r.minX, y: r.maxY))
+            path.addLine(to: CGPoint(x: r.minX, y: r.minY + radius))
+            path.addArc(center: CGPoint(x: r.minX + radius, y: r.minY + radius),
+                        radius: radius, startAngle: .degrees(180), endAngle: .degrees(270), clockwise: false)
+            path.addLine(to: CGPoint(x: r.maxX - radius, y: r.minY))
+            path.addArc(center: CGPoint(x: r.maxX - radius, y: r.minY + radius),
+                        radius: radius, startAngle: .degrees(270), endAngle: .degrees(0), clockwise: false)
+            path.addLine(to: CGPoint(x: r.maxX, y: r.maxY))
+        case .middle:
+            path.move(to: CGPoint(x: r.minX, y: r.minY))
+            path.addLine(to: CGPoint(x: r.minX, y: r.maxY))
+            path.move(to: CGPoint(x: r.maxX, y: r.minY))
+            path.addLine(to: CGPoint(x: r.maxX, y: r.maxY))
+        case .bottom:
+            path.move(to: CGPoint(x: r.minX, y: r.minY))
+            path.addLine(to: CGPoint(x: r.minX, y: r.maxY - radius))
+            path.addArc(center: CGPoint(x: r.minX + radius, y: r.maxY - radius),
+                        radius: radius, startAngle: .degrees(180), endAngle: .degrees(90), clockwise: true)
+            path.addLine(to: CGPoint(x: r.maxX - radius, y: r.maxY))
+            path.addArc(center: CGPoint(x: r.maxX - radius, y: r.maxY - radius),
+                        radius: radius, startAngle: .degrees(90), endAngle: .degrees(0), clockwise: true)
+            path.addLine(to: CGPoint(x: r.maxX, y: r.minY))
+        }
+        return path
+    }
+}
+
+private enum GroupSliceGeometry {
+    static let horizontalInset: CGFloat = 4
+    static let topMargin: CGFloat = 1
+    static let bottomMargin: CGFloat = 2
+    static let cornerRadius: CGFloat = 12
+
+    static func insetRect(in rect: CGRect, for slice: GlassRowGroupSlice) -> CGRect {
+        let top = slice == .top ? topMargin : 0
+        let bottom = slice == .bottom ? bottomMargin : 0
+        return CGRect(
+            x: rect.minX + horizontalInset,
+            y: rect.minY + top,
+            width: max(0, rect.width - horizontalInset * 2),
+            height: max(0, rect.height - top - bottom)
+        )
     }
 }
 
@@ -524,20 +996,22 @@ private struct RowDrag: ViewModifier {
     /// What this row carries, or nil when it cannot be picked up.
     let payload: String?
     let enabled: Bool
-    /// A row was picked up. False when another row is already in the air,
+    /// A row was picked up. Nil when another row is already in the air,
     /// and this one is to give the system nothing to add to it.
-    let pickedUp: (String) -> Bool
+    let pickedUp: (String) -> Int?
+    let registerProvider: (DragEndItemProvider) -> Void
     /// The drag is over, whether it was dropped or let go of.
-    let ended: () -> Void
+    let ended: (Int) -> Void
 
     func body(content: Content) -> some View {
         if enabled {
             content.onDrag {
                 // Called as the row is picked up. A row that cannot be picked
                 // up gives the system nothing to carry, and nothing is dragged.
-                guard let payload, pickedUp(payload) else { return NSItemProvider() }
+                guard let payload, let generation = pickedUp(payload) else { return NSItemProvider() }
                 let carried = DragEndItemProvider(object: payload as NSString)
-                carried.onEnd = ended
+                carried.onEnd = { ended(generation) }
+                registerProvider(carried)
                 return carried
             }
         } else {
@@ -566,7 +1040,107 @@ private final class DragEndItemProvider: NSItemProvider, @unchecked Sendable {
 private let listDropTypes: [UTType] = [.utf8PlainText, .plainText, .text]
 
 /// The invisible surface over a list that takes a drop for it.
-@available(iOS 17.0, macOS 14.0, *)
+#if canImport(UIKit)
+@available(iOS 17.0, *)
+private struct ListDropSurface: UIViewRepresentable {
+    let delegate: ListDropDelegate
+    /// The list's place on screen, to turn a point of the surface into one a row can be found by.
+    let origin: (CGPoint) -> Void
+    /// A finger came down on the surface. While a row is in the air the finger
+    /// belongs to the drag and never reaches this, so a touch here means the
+    /// drag is over and the surface was left behind.
+    let touched: () -> Void
+    let sessionEnded: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(delegate: delegate, origin: origin, touched: touched, sessionEnded: sessionEnded)
+    }
+
+    func makeUIView(context: Context) -> SurfaceView {
+        let view = SurfaceView()
+        view.backgroundColor = .clear
+        view.onLayout = { [weak coordinator = context.coordinator] point in
+            coordinator?.origin(point)
+        }
+        view.onTouch = { [weak coordinator = context.coordinator] in
+            coordinator?.touched()
+        }
+        view.addInteraction(UIDropInteraction(delegate: context.coordinator))
+        return view
+    }
+
+    func updateUIView(_ uiView: SurfaceView, context: Context) {
+        context.coordinator.delegate = delegate
+        context.coordinator.origin = origin
+        context.coordinator.touched = touched
+        context.coordinator.sessionEnded = sessionEnded
+        if uiView.window != nil {
+            origin(uiView.convert(CGPoint.zero, to: nil))
+        }
+    }
+
+    final class SurfaceView: UIView {
+        var onLayout: ((CGPoint) -> Void)?
+        var onTouch: (() -> Void)?
+
+        override func layoutSubviews() {
+            super.layoutSubviews()
+            if window != nil { onLayout?(convert(CGPoint.zero, to: nil)) }
+        }
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            if window != nil { onLayout?(convert(CGPoint.zero, to: nil)) }
+        }
+
+        override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+            super.touchesBegan(touches, with: event)
+            onTouch?()
+        }
+    }
+
+    final class Coordinator: NSObject, UIDropInteractionDelegate {
+        var delegate: ListDropDelegate
+        var origin: (CGPoint) -> Void
+        var touched: () -> Void
+        var sessionEnded: () -> Void
+
+        init(delegate: ListDropDelegate, origin: @escaping (CGPoint) -> Void, touched: @escaping () -> Void,
+             sessionEnded: @escaping () -> Void) {
+            self.delegate = delegate
+            self.origin = origin
+            self.touched = touched
+            self.sessionEnded = sessionEnded
+        }
+
+        func dropInteraction(_ interaction: UIDropInteraction, canHandle session: any UIDropSession) -> Bool {
+            session.hasItemsConforming(toTypeIdentifiers: listDropTypes.map(\.identifier))
+        }
+
+        func dropInteraction(_ interaction: UIDropInteraction, sessionDidUpdate session: any UIDropSession) -> UIDropProposal {
+            guard let view = interaction.view else { return UIDropProposal(operation: .forbidden) }
+            origin(view.convert(CGPoint.zero, to: nil))
+            let allowed = delegate.moved(session.location(in: view))
+            return UIDropProposal(operation: allowed ? .move : .forbidden)
+        }
+
+        func dropInteraction(_ interaction: UIDropInteraction, sessionDidExit session: any UIDropSession) {
+            delegate.exited()
+        }
+
+        func dropInteraction(_ interaction: UIDropInteraction, performDrop session: any UIDropSession) {
+            guard let view = interaction.view else { return }
+            origin(view.convert(CGPoint.zero, to: nil))
+            _ = delegate.dropped(session.location(in: view), session.items.map(\.itemProvider))
+        }
+
+        func dropInteraction(_ interaction: UIDropInteraction, sessionDidEnd session: any UIDropSession) {
+            sessionEnded()
+        }
+    }
+}
+#else
+@available(macOS 14.0, *)
 private struct ListDropSurface: View {
     let delegate: ListDropDelegate
     /// The list's place on screen, to turn a point of the surface into one a row can be found by.
@@ -575,6 +1149,7 @@ private struct ListDropSurface: View {
     /// belongs to the drag and never reaches this, so a touch here means the
     /// drag is over and the surface was left behind.
     let touched: () -> Void
+    var sessionEnded: () -> Void = {}
 
     var body: some View {
         GeometryReader { geometry in
@@ -587,6 +1162,7 @@ private struct ListDropSurface: View {
         }
     }
 }
+#endif
 
 @available(iOS 17.0, macOS 14.0, *)
 private struct ListDropDelegate: DropDelegate {
@@ -602,6 +1178,104 @@ private struct ListDropDelegate: DropDelegate {
     func dropExited(info: DropInfo) { exited() }
     func performDrop(info: DropInfo) -> Bool { dropped(info.location, info.itemProviders(for: listDropTypes)) }
 }
+
+#if targetEnvironment(macCatalyst)
+/// Intercepts Control-clicks above a `List` on Mac Catalyst before
+/// `UICollectionView`'s context-menu interaction can lift the row or open a
+/// menu. Invisible to hit-testing unless the Control key is held.
+private struct ControlClickSurface: UIViewRepresentable {
+    let onControlClick: (CGPoint, UIView) -> Void
+
+    func makeUIView(context: Context) -> SurfaceView {
+        let view = SurfaceView()
+        view.backgroundColor = .clear
+        view.onControlClick = onControlClick
+        return view
+    }
+
+    func updateUIView(_ view: SurfaceView, context: Context) {
+        view.onControlClick = onControlClick
+    }
+
+    final class SurfaceView: UIView, UIContextMenuInteractionDelegate {
+        var onControlClick: ((CGPoint, UIView) -> Void)?
+        private var lastTriggerTime: CFTimeInterval = 0
+        private var wasButtonDown = false
+
+        override init(frame: CGRect) {
+            super.init(frame: frame)
+            addInteraction(UIContextMenuInteraction(delegate: self))
+        }
+
+        required init?(coder: NSCoder) {
+            fatalError("init(coder:) has not been implemented")
+        }
+
+        override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+            guard bounds.contains(point) else { return nil }
+            if event?.type == .scroll || event?.type == .hover {
+                if !CGEventSource.buttonState(.combinedSessionState, button: .left) {
+                    wasButtonDown = false
+                }
+                return nil
+            }
+            let isLeftDown = CGEventSource.buttonState(.combinedSessionState, button: .left)
+            if !isLeftDown {
+                wasButtonDown = false
+            }
+            let controlHeld = (event?.modifierFlags.contains(.control) == true)
+                || CGEventSource.flagsState(.combinedSessionState).contains(.maskControl)
+            guard controlHeld else { return nil }
+            if isLeftDown {
+                notePressAndTrigger(at: point)
+            }
+            return self
+        }
+
+        override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+            guard let touch = touches.first else { return }
+            notePressAndTrigger(at: touch.location(in: self))
+        }
+
+        override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+            wasButtonDown = false
+        }
+
+        override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+            wasButtonDown = false
+        }
+
+        func contextMenuInteraction(_ interaction: UIContextMenuInteraction,
+                                    configurationForMenuAtLocation location: CGPoint) -> UIContextMenuConfiguration? {
+            notePressAndTrigger(at: location)
+            return nil
+        }
+
+        private func notePressAndTrigger(at point: CGPoint) {
+            let now = CACurrentMediaTime()
+            guard !wasButtonDown, now - lastTriggerTime > 0.15 else { return }
+            wasButtonDown = true
+            lastTriggerTime = now
+            pollButtonRelease()
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.onControlClick?(point, self)
+            }
+        }
+
+        private func pollButtonRelease() {
+            guard wasButtonDown else { return }
+            if !CGEventSource.buttonState(.combinedSessionState, button: .left) {
+                wasButtonDown = false
+                return
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.04) { [weak self] in
+                self?.pollButtonRelease()
+            }
+        }
+    }
+}
+#endif
 
 /// A row's menu, built when SwiftUI asks for the menu and not when it builds
 /// the row. Written inline, the menu's whole content was constructed for every

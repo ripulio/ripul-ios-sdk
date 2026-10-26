@@ -121,6 +121,26 @@ final class SessionFamiliesTests: XCTestCase {
         XCTAssertTrue(searching.folds.isEmpty)
     }
 
+    func testTheFoldControlIsARowOfItsOwnThatClosesTheBorderAndKeepsItsName() {
+        var sessions = [chat("lead", minutesAgo: 100)]
+        for index in 1...6 { sessions.append(chat("task\(index)", minutesAgo: Double(index), startedBy: "lead")) }
+        let closed = arrange(sessions)
+        let rows = closed.rowsWithFolds(closed.visible)
+        XCTAssertEqual(rows.map(\.id).suffix(2), ["claude-cli:task3", "family-fold:claude-cli:lead"])
+        XCTAssertEqual(closed.groupSlice(ofRow: "claude-cli:task3"), .middle, "The chat before the control leaves the border open")
+        XCTAssertEqual(closed.groupSlice(ofRow: "family-fold:claude-cli:lead"), .bottom)
+        XCTAssertTrue(closed.isJoinedToFold("claude-cli:task3"))
+        XCTAssertEqual(SessionFamilies.foldDrawn(by: rows.last!), .init(parentId: "claude-cli:lead", count: 3, isOpen: false))
+
+        // Opened, the control is the same row after a different chat, so it moves rather than being replaced.
+        let open = arrange(sessions, open: ["claude-cli:lead"])
+        let openRows = open.rowsWithFolds(open.visible)
+        XCTAssertEqual(openRows.map(\.id).suffix(2), ["claude-cli:task6", "family-fold:claude-cli:lead"])
+        XCTAssertEqual(open.fold(ofRow: "family-fold:claude-cli:lead"), .init(parentId: "claude-cli:lead", count: 3, isOpen: true))
+        XCTAssertEqual(SessionFamilies.foldDrawn(by: openRows.last!)?.isOpen, true)
+        XCTAssertNil(open.fold(ofRow: "claude-cli:task6"))
+    }
+
     func testAChatThatIsWorkingIsNeverFoldedAway() {
         var sessions = [chat("lead", minutesAgo: 100)]
         for index in 1...7 { sessions.append(chat("task\(index)", minutesAgo: Double(index), startedBy: "lead")) }
@@ -416,5 +436,116 @@ final class SessionFamiliesTests: XCTestCase {
         XCTAssertNil(SessionStartedBy(wire: ["title": "No id"]))
         XCTAssertEqual(SessionStartedBy(wire: ["agentId": "cli_design", "sessionId": "claude-cli:design", "title": "Design"]),
                        SessionStartedBy(agentId: "cli_design", sessionId: "claude-cli:design", title: "Design"))
+    }
+
+    func testExpandedFamilyRowsCarryTopMiddleAndBottomGroupSlices() {
+        let sessions = [
+            chat("alone", minutesAgo: 1),
+            chat("lead", minutesAgo: 100),
+            chat("first", minutesAgo: 2, startedBy: "lead"),
+            chat("deep", minutesAgo: 3, startedBy: "first"),
+            chat("last", minutesAgo: 4, startedBy: "lead"),
+            chat("after", minutesAgo: 50),
+        ]
+        let open = arrange(sessions)
+        XCTAssertEqual(open.groupSlices, [
+            "claude-cli:lead": .top,
+            "claude-cli:first": .middle,
+            "claude-cli:deep": .middle,
+            "claude-cli:last": .bottom,
+        ])
+        XCTAssertNil(open.groupSlices["claude-cli:alone"])
+        XCTAssertNil(open.groupSlices["claude-cli:after"])
+
+        // A closed family is a single row and needs no group border.
+        let closed = arrange(sessions, closed: ["claude-cli:lead"])
+        XCTAssertTrue(closed.groupSlices.isEmpty)
+    }
+
+    @MainActor
+    func testClosedFamiliesStayClosedAcrossRestartsAndRowIdChanges() throws {
+        let suiteName = "io.ripul.tests.closed-families.\(UUID().uuidString)"
+        let suite = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { suite.removePersistentDomain(forName: suiteName) }
+
+        let stored = StoredDefault<Set<String>>(wrappedValue: [], "ripulClosedSessionFamilies", store: suite)
+        XCTAssertTrue(stored.wrappedValue.isEmpty)
+        stored.wrappedValue.insert("claude-cli:design")
+        stored.wrappedValue.insert("design")
+
+        // A fresh StoredDefault reading the same UserDefaults suite after a restart sees the saved set.
+        let afterRestart = StoredDefault<Set<String>>(wrappedValue: [], "ripulClosedSessionFamilies", store: suite)
+        XCTAssertEqual(afterRestart.wrappedValue, ["claude-cli:design", "design"])
+
+        // Whether the head row is loaded from a remote scan (id: "claude-cli:design", metadataKey: "design")
+        // or as an orphan local tab before the Mac answers (id: "cli_design", metadataKey: "design"),
+        // it stays closed.
+        let orphanHead = UnifiedSession(
+            id: "cli_design", title: "Design alignment", lastUsed: now, gitBranch: "main", messageCount: 5,
+            projectName: "ripul", provider: "claude-cli", providerLabel: "Claude Code", machineName: "mac",
+            machineId: "mac", matchKeys: [], metadataKey: "design", startedBy: nil, ripulSession: nil
+        )
+        let child = chat("panels", minutesAgo: 1, startedBy: "design", rowKnown: false)
+        let layout = arrange([orphanHead, child], closed: ["claude-cli:design", "design"])
+        XCTAssertEqual(layout.visible.map(\.title), ["Design alignment"])
+        XCTAssertEqual(layout.heads["cli_design"]?.isClosed, true)
+        XCTAssertEqual(layout.heads["cli_design"]?.putAway.map(\.title), ["panels"])
+    }
+
+    /// Families compare by a hash of everything in them, taken once when they
+    /// are arranged: the same rows arranged twice are equal, and a change a row
+    /// would show, or a family opening or closing, is not.
+    func testFamiliesAreEqualExactlyWhenWhatTheyHoldIsTheSame() {
+        let sessions = [chat("design", minutesAgo: 60), chat("panels", minutesAgo: 1, startedBy: "design"),
+                        chat("rows", minutesAgo: 4, startedBy: "design"), chat("tools", minutesAgo: 14)]
+        XCTAssertEqual(arrange(sessions), arrange(sessions))
+        XCTAssertNotEqual(arrange(sessions), arrange(sessions, closed: ["claude-cli:design"]))
+
+        // A put-away chat's own change reaches its head's row through the families.
+        var later = sessions
+        later[1] = chat("panels", minutesAgo: 0.5, startedBy: "design")
+        XCTAssertNotEqual(arrange(sessions, closed: ["claude-cli:design"]), arrange(later, closed: ["claude-cli:design"]))
+
+        // A chat under a new head, and a fold opened, are other families.
+        var moved = sessions
+        moved[3] = chat("tools", minutesAgo: 14, startedBy: "design")
+        XCTAssertNotEqual(arrange(sessions), arrange(moved))
+        let big = [chat("head", minutesAgo: 60)] + (1...6).map { chat("child\($0)", minutesAgo: Double($0) * 10, startedBy: "head") }
+        XCTAssertNotEqual(arrange(big), arrange(big, open: ["claude-cli:head"]))
+    }
+
+    func testMultiSessionDragPayloadAndPlacementIntoExistingGroup() {
+        let a = chat("parent", minutesAgo: 30)
+        let b = chat("firstChild", minutesAgo: 20)
+        let c = chat("secondChild", minutesAgo: 10)
+        let d = chat("thirdChild", minutesAgo: 5)
+
+        let singlePayload = SessionFamilies.dragPayload(for: b)
+        XCTAssertEqual(SessionFamilies.draggedSessionIds(singlePayload), [b.id])
+        XCTAssertEqual(SessionFamilies.draggedSessionId(singlePayload), b.id)
+
+        let multiPayload = SessionFamilies.dragPayload(for: [c, d])
+        XCTAssertEqual(SessionFamilies.draggedSessionIds(multiPayload), [c.id, d.id])
+        XCTAssertEqual(SessionFamilies.draggedSessionId(multiPayload), c.id)
+        XCTAssertTrue(SessionFamilies.draggedSessionIds("plain text\n\(singlePayload)").isEmpty)
+
+        // First drop creates an existing group under `a`.
+        var placed: [String: String] = [b.id: a.id]
+        let afterFirst = SessionFamilies.arrange([a, b, c, d], folds: false, recency: { _ in 0 }, placedUnder: { placed[$0.id] })
+        XCTAssertEqual(afterFirst.heads[a.id]?.started, 1)
+
+        // Subsequent single and multi-row drops into the existing group `a` are permitted.
+        XCTAssertTrue(afterFirst.canPlace(c.id, under: a.id))
+        XCTAssertTrue(afterFirst.canPlace([c.id, d.id], under: a.id))
+        // Cannot drop a group's head (plus another row) onto its own child.
+        XCTAssertFalse(afterFirst.canPlace([a.id, c.id], under: b.id))
+        XCTAssertFalse(afterFirst.canPlace([c.id, a.id], under: a.id))
+
+        for id in SessionFamilies.draggedSessionIds(multiPayload) {
+            placed[id] = a.id
+        }
+        let afterMulti = SessionFamilies.arrange([a, b, c, d], folds: false, recency: { _ in 0 }, placedUnder: { placed[$0.id] })
+        XCTAssertEqual(afterMulti.heads[a.id]?.started, 3)
+        XCTAssertEqual(afterMulti.under[a.id]?.map(\.title), ["thirdChild", "secondChild", "firstChild"])
     }
 }

@@ -1,5 +1,62 @@
 import SwiftUI
 
+// MARK: - Machine Vitals
+
+public enum MachineVitalsPreferences {
+    public static let defaultsKey = "ripul.showMachineVitals"
+}
+
+public struct MachineVitals: Equatable {
+    public let cpuPercent: Int
+    public let memUsedGB: Double
+    public let memTotalGB: Double
+    public let swapUsedGB: Double
+    public let swapTotalGB: Double
+    public let pressure: String
+
+    public init?(from dict: [String: Any]) {
+        guard (dict["status"] as? String) == "ok",
+              let cpu = (dict["cpuPct"] as? NSNumber)?.intValue,
+              let memUsed = (dict["memUsedGB"] as? NSNumber)?.doubleValue,
+              let memTotal = (dict["memTotalGB"] as? NSNumber)?.doubleValue,
+              memTotal > 0 else {
+            return nil
+        }
+        self.cpuPercent = max(0, min(100, cpu))
+        self.memUsedGB = memUsed
+        self.memTotalGB = memTotal
+        self.swapUsedGB = (dict["swapUsedGB"] as? NSNumber)?.doubleValue ?? 0
+        self.swapTotalGB = (dict["swapTotalGB"] as? NSNumber)?.doubleValue ?? 0
+        self.pressure = (dict["pressure"] as? String) ?? "normal"
+    }
+
+    public var isCritical: Bool {
+        cpuPercent >= 90 || pressure == "critical"
+    }
+
+    public var isWarning: Bool {
+        !isCritical && (cpuPercent >= 75 || pressure == "warn" || swapUsedGB >= 4.0)
+    }
+
+    public var summaryText: String {
+        let used = Int(memUsedGB.rounded())
+        let total = Int(memTotalGB.rounded())
+        var text = "CPU \(cpuPercent)% · Mem \(used)/\(total)G"
+        if pressure == "critical" {
+            text += " (Crit)"
+        } else if swapUsedGB >= 1.0 && (isWarning || isCritical) {
+            text += " (Swap \(Int(swapUsedGB.rounded()))G)"
+        }
+        return text
+    }
+
+    public var tint: Color {
+        if isCritical { return Color.ripul(.danger) } // theme-mapping: a new control, nothing is replaced
+        if isWarning { return Color.ripul(.warning) } // theme-mapping: a new control, nothing is replaced
+        return Color.ripul(.textSecondary) // theme-mapping: a new control, nothing is replaced
+    }
+}
+
 // MARK: - Machine Row (Expandable)
 
 /// Expandable machine row: header (name, online status, active-session count,
@@ -189,16 +246,61 @@ public struct MachineRowExpandable: View {
     }
 
     @State private var showCodexAccounts = false
+    @State private var showAntigravityAccounts = false
     @State private var showHostSettings = false
     @State private var showAlerts = false
+    /// A sign-in alert's Sign in again: the profile, held until the alerts sheet has gone.
+    @State private var alertSignInProfile: String?
+    @State private var alertSignIn: AlertSignIn?
+    private struct AlertSignIn: Identifiable { let profile: String; var id: String { profile } }
+    @State private var vitals: MachineVitals?
+    @AppStorage(MachineVitalsPreferences.defaultsKey) private var showMachineVitals = false
+    @Environment(\.ripulSessionListModel) private var listModel
+    @Environment(\.ripulSessionListCanBeSeen) private var listCanBeSeen
+    @Environment(\.scenePhase) private var scenePhase
+
+    private struct VitalsPollKey: Equatable {
+        let active: Bool
+        let machineId: String
+    }
+
+    private var shouldPollVitals: Bool {
+        showMachineVitals
+            && listCanBeSeen
+            && scenePhase == .active
+            && machine.isOnline
+            && !isMachineDisabled
+            && (hostAuthBridge != nil || onExecuteAction != nil)
+    }
+
+    private func refreshVitals() async {
+        let result: [String: Any]
+        if let hostAuthBridge {
+            result = await hostAuthBridge.executeRemoteAction(machineId: machine.machineId, actionId: "intrinsic:vitals")
+        } else if let onExecuteAction {
+            let desc = RemoteActionDescriptor(id: "intrinsic:vitals", displayName: "Vitals", description: "", category: "intrinsic")
+            result = await onExecuteAction(desc, [:])
+        } else {
+            return
+        }
+        if let parsed = MachineVitals(from: result) {
+            vitals = parsed
+        }
+    }
 
     /// What this Mac is warning about (low disk, a missing drive), from its
     /// registry meta. An offline Mac's last list is stale, so it shows none.
     private var hostAlerts: [HostAlert] { machine.isOnline ? machine.alerts : [] }
 
     private func refreshHostAuthStatus() {
-        guard let hostAuthBridge, machine.isOnline, !isMachineDisabled else { return }
+        guard let hostAuthBridge, listCanBeSeen, machine.isOnline, !isMachineDisabled else { return }
         Task {
+            if let listModel {
+                let summary = await listModel.accountSummary(machineId: machine.machineId)
+                hostAuthStatus = summary.status
+                activeAccount = summary.active
+                return
+            }
             async let statusFetch = hostAuthBridge.fetchHostAuthStatus(machineId: machine.machineId)
             async let accountsFetch = hostAuthBridge.fetchClaudeAccounts(machineId: machine.machineId)
             let (status, accounts) = await (statusFetch, accountsFetch)
@@ -221,8 +323,29 @@ public struct MachineRowExpandable: View {
             }
             if !expanded { loadingTile = nil }
         }
-        .onAppear {
-            refreshHostAuthStatus()
+        .onAppear { refreshHostAuthStatus() }
+        .onChange(of: listCanBeSeen) { _, visible in
+            if visible { refreshHostAuthStatus() }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .ripulHostAccountsChanged)) { note in
+            guard note.object as? AgentBridge === hostAuthBridge,
+                  note.userInfo?["machineId"] as? String == machine.machineId
+                    || note.userInfo?["roomId"] as? String == machine.roomId else { return }
+            // The model invalidates first; defer the read until notifications drain.
+            Task { @MainActor in
+                await Task.yield()
+                refreshHostAuthStatus()
+            }
+        }
+        .task(id: VitalsPollKey(active: shouldPollVitals, machineId: machine.machineId)) {
+            guard shouldPollVitals else { return }
+            while !Task.isCancelled {
+                await refreshVitals()
+                try? await Task.sleep(nanoseconds: 15_000_000_000)
+            }
+        }
+        .onChange(of: machine.isOnline) { online in
+            if !online { vitals = nil }
         }
         .onChange(of: activeSessions.count) { _ in
             loadingTile = nil
@@ -260,14 +383,32 @@ public struct MachineRowExpandable: View {
                     direct: machine.meta?["connection"] == "direct", bridge: hostAuthBridge)
             }
         }
+        .ripulSheet(isPresented: $showAntigravityAccounts) {
+            if let hostAuthBridge {
+                AntigravityAccountSwitcherSheet(machine: machine, bridge: hostAuthBridge)
+            }
+        }
         .ripulSheet(isPresented: $showRentedMacsClaude) { // theme-mapping: a new sheet, nothing is replaced
             if let hostAuthBridge {
                 RentedMacsClaudeSheet(machine: machine, bridge: hostAuthBridge)
             }
         }
-        .ripulSheet(isPresented: $showAlerts) { // theme-mapping: a new sheet, nothing is replaced
+        .ripulSheet(isPresented: $showAlerts, onDismiss: {
+            // One sheet at a time: sign-in opens once the alerts have gone.
+            if let profile = alertSignInProfile {
+                alertSignInProfile = nil
+                alertSignIn = AlertSignIn(profile: profile)
+            }
+        }) { // theme-mapping: a new sheet, nothing is replaced
             HostAlertsSheet(machineName: machine.displayName, alerts: hostAlerts,
-                            onExecute: onExecuteAction.map { execute in { action in await execute(action, [:]) } })
+                            onExecute: onExecuteAction.map { execute in { action in await execute(action, [:]) } },
+                            onSignIn: hostAuthBridge == nil ? nil : { alertSignInProfile = $0 })
+        }
+        .ripulSheet(item: $alertSignIn, onDismiss: { refreshHostAuthStatus() }) { request in
+            if let hostAuthBridge {
+                HostSignInSheet(machine: machine, bridge: hostAuthBridge, profile: request.profile,
+                                startSignInImmediately: true)
+            }
         }
         .ripulSheet(isPresented: $showHostSettings) {
             if let hostAuthBridge {
@@ -378,6 +519,20 @@ public struct MachineRowExpandable: View {
                         Text("Offline")
                             .font(.ripul(.caption))
                             .foregroundStyle(.ripul(.textSecondary))
+                    } else if showMachineVitals, let vitals {
+                        HStack(spacing: 4) {
+                            Text(activeSessions.isEmpty
+                                 ? "Online ·"
+                                 : "\(activeSessions.count) active ·")
+                                .font(.ripul(.caption)) // theme-mapping: a new control, nothing is replaced
+                                .foregroundStyle(.ripul(.textSecondary)) // theme-mapping: a new control, nothing is replaced
+                            Text(vitals.summaryText)
+                                .font(.ripul(.caption, weight: vitals.isCritical ? .semibold : .regular).monospacedDigit()) // theme-mapping: a new control, nothing is replaced
+                                .foregroundStyle(vitals.tint)
+                        }
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
+                        .uiKitIdentifier("MachineRowExpandable.vitals")
                     } else {
                         Text(activeSessions.isEmpty
                              ? "Online"
@@ -494,7 +649,8 @@ public struct MachineRowExpandable: View {
             // Long-press the New Session pill → the account switcher. Same
             // sheet as the expanded row's Claude account row.
             onSwitchAccount: hostAuthBridge != nil ? { showSignInSheet = true } : nil,
-            onSwitchCodexAccount: hostAuthBridge != nil ? { showCodexAccounts = true } : nil
+            onSwitchCodexAccount: hostAuthBridge != nil ? { showCodexAccounts = true } : nil,
+            onSwitchAntigravityAccount: hostAuthBridge != nil ? { showAntigravityAccounts = true } : nil
         )
         }
     }
@@ -688,9 +844,11 @@ public struct MachineRowExpandable: View {
             })
         }
 
-        // Host-advertised actions. The host's own emphasis is the default
-        // placement; a user override outranks it.
-        for action in remoteActions {
+        // The host's actions it lists as buttons: its scripts and System Info.
+        // The rest are the calls behind the apps' own screens (Dock,
+        // Processes, Trainyard, Devices) and stay off the panel. The host's
+        // own emphasis is the default placement; a user override outranks it.
+        for action in remoteActions where action.listed {
             entries.append(MachinePanelEntry(
                 id: "action:\(action.id)",
                 icon: action.icon ?? "bolt",
@@ -744,6 +902,18 @@ public struct MachineRowExpandable: View {
             available: actionable && hostAuthBridge != nil
         ) {
             showCodexAccounts = true
+        })
+
+        entries.append(MachinePanelEntry(
+            id: "builtin:antigravityAccounts",
+            icon: "person.2",
+            label: "Antigravity accounts",
+            subtitle: "Switch the host’s Antigravity account",
+            tint: Color.ripul(.textSecondary),
+            defaultPlacement: .row,
+            available: actionable && hostAuthBridge != nil
+        ) {
+            showAntigravityAccounts = true
         })
 
         // The owner's one approval that signs Claude Code in on every Mac

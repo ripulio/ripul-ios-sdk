@@ -833,4 +833,109 @@ final class ToolCallDetailsUITests: XCTestCase {
             app.buttons["ToolCallDetails.done"].tap()
         }
     }
+
+    func testNativeChatViewInteractiveParity() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--native-chat-ui-tests"]
+        app.launch()
+
+        // 1. Scene 1: User quote, context tags, tool strip, sub-agent task row, code block, respondent & thinking
+        let swiftTool = app.buttons["NativeToolStrip.tool.call-bash-1"]
+        XCTAssertTrue(swiftTool.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["NativeToolStrip.tool.call-read-1"].exists)
+        XCTAssertTrue(app.staticTexts["Compare V2MessageRow and NativeChatView"].waitForExistence(timeout: 5))
+
+        // Tap tool lozenge -> opens ToolCallDetailsSheet
+        swiftTool.tap()
+        let doneButton = app.buttons["ToolCallDetails.done"]
+        XCTAssertTrue(doneButton.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["ToolCallDetails.summary.call-bash-1"].exists)
+        let sheetShot = XCTAttachment(screenshot: app.screenshot())
+        sheetShot.name = "NativeChat ToolCallDetails Sheet"
+        sheetShot.lifetime = .keepAlways
+        add(sheetShot)
+        doneButton.tap()
+
+        // The respondent lozenge is in the reply's toolbar, which a tap on the
+        // card opens (since 02af849b8). The notch's texts all carry its id.
+        let notch = app.descendants(matching: .any).matching(identifier: "NativeChat.respondentNotch.a-1").firstMatch
+        XCTAssertTrue(notch.waitForExistence(timeout: 5))
+        notch.tap()
+
+        // Tap respondent lozenge -> expands turn metadata tray
+        let respondent = app.buttons["NativeChat.respondentLozenge.a-1"]
+        XCTAssertTrue(respondent.waitForExistence(timeout: 5))
+        respondent.tap()
+        XCTAssertTrue(app.staticTexts["claude-opus-4-6"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["NativeChat.rewind.a-1"].exists)
+
+        // Thinking is open by default, as the web chat shows it: in a reply's
+        // card and in a row of its own, each with the button that folds them.
+        let thinkingText = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "Checking how V2MessageRow")).firstMatch
+        let standaloneThinking = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "Deciding whether the strip")).firstMatch
+        let thinkingToggle = app.buttons["NativeChat.thinking.toggle"]
+        XCTAssertTrue(thinkingText.waitForExistence(timeout: 3))
+        XCTAssertTrue(standaloneThinking.exists)
+        XCTAssertEqual(app.buttons.matching(identifier: "NativeChat.thinking.fold").count, 2)
+        XCTAssertFalse(thinkingToggle.exists)
+        let openShot = XCTAttachment(screenshot: app.screenshot())
+        openShot.name = "NativeChat Thinking Open"
+        openShot.lifetime = .keepAlways
+        add(openShot)
+
+        // Folded: a lozenge in place of each, which opens its own
+        app.buttons["NativeChatHarness.thinkingFolded"].tap()
+        XCTAssertTrue(thinkingToggle.waitForExistence(timeout: 3))
+        XCTAssertEqual(app.buttons.matching(identifier: "NativeChat.thinking.toggle").count, 2)
+        XCTAssertFalse(thinkingText.exists)
+        XCTAssertFalse(standaloneThinking.exists)
+        let foldedShot = XCTAttachment(screenshot: app.screenshot())
+        foldedShot.name = "NativeChat Thinking Folded"
+        foldedShot.lifetime = .keepAlways
+        add(foldedShot)
+        // The reply's lozenge opens the reply's thinking and leaves the other folded.
+        XCTAssertFalse(app.buttons["NativeChat.thinking.pin"].exists)
+        app.otherElements["NativeChat.assistantMessage.a-1"].buttons["NativeChat.thinking.toggle"].tap()
+        XCTAssertTrue(thinkingText.waitForExistence(timeout: 3))
+        XCTAssertFalse(standaloneThinking.exists)
+        // The opened lozenge, and only that one, offers the pin that switches to Open.
+        XCTAssertEqual(app.buttons.matching(identifier: "NativeChat.thinking.pin").count, 1)
+        XCTAssertTrue(app.otherElements["NativeChat.assistantMessage.a-1"].buttons["NativeChat.thinking.pin"].exists)
+        let pinShot = XCTAttachment(screenshot: app.screenshot())
+        pinShot.name = "NativeChat Thinking Folded, One Opened"
+        pinShot.lifetime = .keepAlways
+        add(pinShot)
+
+        // None: no thinking at all
+        app.buttons["NativeChatHarness.thinkingNone"].tap()
+        XCTAssertTrue(thinkingToggle.waitForNonExistence(timeout: 3))
+        XCTAssertFalse(thinkingText.exists)
+        XCTAssertFalse(standaloneThinking.exists)
+        let noneShot = XCTAttachment(screenshot: app.screenshot())
+        noneShot.name = "NativeChat Thinking None"
+        noneShot.lifetime = .keepAlways
+        add(noneShot)
+
+        app.buttons["NativeChatHarness.thinkingOpen"].tap()
+        XCTAssertTrue(thinkingText.waitForExistence(timeout: 3))
+
+        // 2. Scene 2: Interactive askUser card + structured table
+        app.buttons["NativeChatHarness.scene2"].tap()
+        let option = app.buttons["NativeChat.askUser.option.strip"]
+        XCTAssertTrue(option.waitForExistence(timeout: 5))
+        option.tap()
+        // An answered card keeps the chosen option lit and disables them all; the
+        // "Answered:" line is only for a typed answer that matches no option.
+        expectation(for: NSPredicate(format: "isEnabled == false"), evaluatedWith: option)
+        waitForExpectations(timeout: 3)
+
+        // 3. Scene 3: Group chat avatar, conversation gap, note, artefact card, CLI seams, error card
+        app.buttons["NativeChatHarness.scene3"].tap()
+        XCTAssertTrue(app.staticTexts["Alex Rivera"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["native-chat-architecture"].exists)
+        XCTAssertTrue(app.staticTexts["GIT COMMIT"].exists)
+        XCTAssertTrue(app.staticTexts["CONTEXT COMPACTED"].exists)
+        XCTAssertTrue(app.staticTexts["Upstream Rate Limit (429)"].exists)
+    }
 }

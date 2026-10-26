@@ -18,7 +18,7 @@ struct ArtefactChatPickerHarness: View {
       Text(model.receipt).accessibilityIdentifier("PickerHarness.receipt")
       Spacer()
       NativeChatInput(text: $draft, imageAttachments: $images, selectedPhotos: $photos,
-        onSubmit: { modelRequests += 1 }, onAddArtefact: { show = true })
+        onSubmit: { _ in modelRequests += 1 }, onAddArtefact: { show = true })
     }
     .sheet(isPresented: $show, onDismiss: { Task { await model.refresh() } }) {
       ArtefactChatPicker(bridge: model.bridge, chatID: "picker-fixture-chat")

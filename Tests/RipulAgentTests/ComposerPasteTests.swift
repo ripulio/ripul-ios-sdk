@@ -18,7 +18,7 @@ final class ComposerPasteTests: XCTestCase {
         var body: some View {
             NativeChatInput(text: $model.text, imageAttachments: $model.images,
                             selectedPhotos: .constant([]), isAgentRunning: false,
-                            onSubmit: {}, contextStore: model.contexts)
+                            onSubmit: { _ in }, contextStore: model.contexts)
                 .frame(width: 370)
         }
     }

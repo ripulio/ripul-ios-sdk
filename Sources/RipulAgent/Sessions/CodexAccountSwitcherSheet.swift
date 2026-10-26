@@ -62,14 +62,18 @@ public struct CodexAccountSwitcherSheet: View {
     let machineName: String
     let direct: Bool
     let bridge: AgentBridge
+    let signInAccountId: String?
+    let startsAddingAccount: Bool
     @Environment(\.dismiss) private var dismiss
 
-    public init(machineId: String, machineName: String, direct: Bool = false, bridge: AgentBridge) {
+    public init(machineId: String, machineName: String, direct: Bool = false, bridge: AgentBridge, signInAccountId: String? = nil, startsAddingAccount: Bool = false) {
         self.machineId = machineId; self.machineName = machineName; self.direct = direct; self.bridge = bridge
+        self.signInAccountId = signInAccountId
+        self.startsAddingAccount = startsAddingAccount
     }
     public var body: some View {
         NavigationStack {
-            List { CodexAccountSection(machineId: machineId, machineName: machineName, direct: direct, bridge: bridge) }.ripulThemedList()
+            List { CodexAccountSection(machineId: machineId, machineName: machineName, direct: direct, bridge: bridge, signInAccountId: signInAccountId, startsAddingAccount: startsAddingAccount) }.ripulThemedList()
                 .navigationTitle("Codex accounts")
                 #if os(iOS)
                 .navigationBarTitleDisplayMode(.inline)
@@ -80,6 +84,7 @@ public struct CodexAccountSwitcherSheet: View {
         .frame(minWidth: 480, minHeight: 420)
         #endif
         .ripulSheet(.page, detents: [.medium, .large])
+        .dismissesKeyboardOnTapAway()
     }
 }
 
@@ -91,6 +96,9 @@ struct CodexAccountSection: View {
     let bridge: AgentBridge
     var isOnline = true
     var refreshToken: UUID? = nil
+    var signInAccountId: String? = nil
+    var startsAddingAccount = false
+    @State private var startedSignIn = false
     @Environment(\.scenePhase) private var scenePhase
     @State private var state: CodexAccountsState?
     @State private var error: String?
@@ -130,6 +138,10 @@ struct CodexAccountSection: View {
         } }.ripulThemedListRows()
         .task(id: refreshToken) {
             guard isOnline else { return }
+            if (signInAccountId != nil || startsAddingAccount) && !startedSignIn {
+                startedSignIn = true
+                await perform("login", accountId: signInAccountId)
+            }
             while !Task.isCancelled {
                 await refresh()
                 do { try await Task.sleep(nanoseconds: state?.operation?.isPending == true ? 1_500_000_000 : 8_000_000_000) } catch { break }
@@ -218,32 +230,13 @@ struct CodexAccountSection: View {
 public struct CodexAccountsSettingsScreen: View {
     let bridge: AgentBridge
     let suppliedMachines: [RemoteMachine]?
-    @State private var machines: [RemoteMachine] = []
-    @State private var refreshToken = UUID()
-    @State private var loading = true
-    public init(bridge: AgentBridge, machines: [RemoteMachine]? = nil) { self.bridge = bridge; self.suppliedMachines = machines }
-    public var body: some View {
-        List {
-            if loading { ProgressView("Loading Macs…") }
-            else if machines.isEmpty { NoPairedMacView("See and switch the Codex accounts on your Mac.") }
-            ForEach(machines) { machine in
-                CodexAccountSection(machineId: machine.machineId, machineName: machine.displayName,
-                    direct: machine.meta?["connection"] == "direct", bridge: bridge,
-                    isOnline: machine.isOnline, refreshToken: refreshToken)
-            }
-        }.ripulThemedList()
-        .modifier(CodingAccountsListWidth())
-        .navigationTitle("Codex accounts")
-        #if os(iOS)
-        .navigationBarTitleDisplayMode(.inline)
-        #endif
-        .task { await load() }
-        .refreshable { await load(); refreshToken = UUID() }
-        .onChange(of: suppliedMachines) { _, _ in Task { await load() } }
+
+    public init(bridge: AgentBridge, machines: [RemoteMachine]? = nil) {
+        self.bridge = bridge
+        self.suppliedMachines = machines
     }
-    private func load() async {
-        if let suppliedMachines { machines = suppliedMachines.filter { $0.can("cli") } }
-        else { machines = await bridge.listMachines().filter { $0.can("cli") } }
-        loading = false
+
+    public var body: some View {
+        CodingAccountsSettingsList(provider: .codex, bridge: bridge, machines: suppliedMachines)
     }
 }

@@ -30,7 +30,7 @@ struct InspectorAttachmentHarness: View {
             // The production composer and its @ menu, mounted over the page
             // the way AgentView mounts it, so the menu has room to grow.
             if model.usesComposer {
-                NativeChatInput(text: $draft, imageAttachments: $images, selectedPhotos: $photos, onSubmit: {},
+                NativeChatInput(text: $draft, imageAttachments: $images, selectedPhotos: $photos, onSubmit: { _ in },
                                 onPickElement: { await model.pickForChat() },
                                 contextStore: model.bridge.composerContexts, contextSessionID: "attachment-conversation",
                                 contextOptions: model.bridge.composerContexts.availableOptions)

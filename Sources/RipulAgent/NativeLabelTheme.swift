@@ -68,7 +68,10 @@ enum NativeLabelTheme {
         return record
     }
     private static var rules: [NativeLabelOverride] {
-        var combined = Dictionary(uniqueKeysWithValues: NativeTextRuntime.current.labels.map { ($0.id, $0) })
+        var combined = Dictionary(
+            NativeTextRuntime.current.labels.map { ($0.id, $0) },
+            uniquingKeysWith: { _, last in last }
+        )
         combined.merge(previews) { _, trial in trial }
         return Array(combined.values)
     }

@@ -42,7 +42,10 @@ public struct ChatSession: Identifiable, Equatable, Codable {
     public var displayName: String
     public let createdAt: Date
     /// Name of the remote machine this session is paired to, or nil for local sessions.
+    /// The name it had when the tab was paired: a Mac renamed since keeps its old one here.
     public var remoteMachineName: String?
+    /// Id of the machine this session is paired to: what finds a renamed Mac.
+    public var remoteMachineId: String?
     /// CLI provider for this session (e.g. "claude-cli", "codex-cli"), or nil for non-CLI sessions.
     public var provider: String?
     /// Human-readable provider label (e.g. "Claude Code", "Codex"), or nil.
@@ -88,7 +91,7 @@ public struct ChatSession: Identifiable, Equatable, Codable {
     public var typingNames: [String] = []
 
     private enum CodingKeys: String, CodingKey {
-        case id, sourceChatId, displayName, createdAt, remoteMachineName
+        case id, sourceChatId, displayName, createdAt, remoteMachineName, remoteMachineId
         case provider, providerLabel, model, hostChatId, sizeBytes
         case displayNameSource, displayNameRenamedAt, projectName, gitBranch
         case isSharedGuest, latestReplyAuthorName, latestHumanReplyAt
@@ -100,6 +103,7 @@ public struct ChatSession: Identifiable, Equatable, Codable {
         displayName: String,
         createdAt: Date,
         remoteMachineName: String? = nil,
+        remoteMachineId: String? = nil,
         provider: String? = nil,
         providerLabel: String? = nil,
         model: String? = nil,
@@ -119,6 +123,7 @@ public struct ChatSession: Identifiable, Equatable, Codable {
         self.displayName = displayName
         self.createdAt = createdAt
         self.remoteMachineName = remoteMachineName
+        self.remoteMachineId = remoteMachineId
         self.provider = provider
         self.providerLabel = providerLabel
         self.model = model
@@ -171,6 +176,7 @@ public struct ChatSession: Identifiable, Equatable, Codable {
             displayName: displayName,
             createdAt: Date(timeIntervalSince1970: createdAtMs / 1000),
             remoteMachineName: item["remoteMachineName"] as? String,
+            remoteMachineId: item["remoteMachineId"] as? String,
             provider: item["provider"] as? String,
             providerLabel: item["providerLabel"] as? String,
             model: item["modelId"] as? String,
@@ -408,25 +414,6 @@ public struct RemoteSessionInfo: Identifiable, Equatable, Codable {
     public var aiTitle: String? = nil
 }
 
-/// A todo item owned by the signed-in user, surfaced to the native "Pick to do"
-/// picker. Shape matches `TodoItem` in chrome-extension/src/api/services/todoItemsService.ts.
-public struct RipulTodoItem: Identifiable, Equatable, Hashable {
-    public let id: String
-    /// Chat the item was created from. Nullable because older rows may lack one.
-    public let chatId: String?
-    public let chatName: String?
-    public let text: String
-    public let completed: Bool
-}
-
-/// Result of listing todo items, returned by `AgentBridge.listTodoItems()`.
-/// `currentChatId` is the web app's active chat, used by the picker to put
-/// "this chat" items on top.
-public struct RipulTodoItemsResult {
-    public let items: [RipulTodoItem]
-    public let currentChatId: String?
-}
-
 /// A single grep hit across the remote host's tracked files.
 public struct RipulGrepHit: Equatable, Hashable, Identifiable {
     public let path: String
@@ -655,6 +642,11 @@ public struct ClaudeAccountProfile: Identifiable, Equatable {
     public let isDefault: Bool
     public var plan: String? = nil
     public var usage: CodingAccountUsage? = nil
+    /// When the sign-in stops working, from the item Claude Code keeps in the
+    /// Mac's Keychain (ClaudeSignInExpiry). Nil from a host that does not say.
+    public var signInEndsAt: Date? = nil
+    /// The sign-in has ended: it needs signing in again before it can reply.
+    public var signInEnded: Bool = false
 
     public var id: String { slug }
 
@@ -669,8 +661,24 @@ public struct ClaudeAccountProfile: Identifiable, Equatable {
             usage: (dict["usage"] as? [String: Any]).flatMap { value in
                 guard let data = try? JSONSerialization.data(withJSONObject: value) else { return nil }
                 return try? JSONDecoder().decode(CodingAccountUsage.self, from: data)
-            }
+            },
+            signInEndsAt: (dict["signInEndsAt"] as? NSNumber).map { Date(timeIntervalSince1970: $0.doubleValue) },
+            signInEnded: dict["signInEnded"] as? Bool ?? false
         )
+    }
+}
+
+/// How the account rows say when a Claude sign-in ends. Claude Code's own
+/// notice starts three days out ("Your login expires in N days"), so that is
+/// when the text counts days and turns to a warning.
+public enum ClaudeSignInEnd {
+    public static func text(endsAt: Date?, ended: Bool, now: Date = Date()) -> (text: String, soon: Bool)? {
+        if ended { return ("Sign-in ended", true) }
+        guard let endsAt else { return nil }
+        let days = Int((endsAt.timeIntervalSince(now) / 86_400).rounded(.up))
+        if days <= 0 { return ("Sign-in ended", true) }
+        if days <= 3 { return ("Sign-in ends in \(days) \(days == 1 ? "day" : "days")", true) }
+        return ("Sign-in ends \(endsAt.formatted(.dateTime.day().month(.abbreviated)))", false)
     }
 }
 

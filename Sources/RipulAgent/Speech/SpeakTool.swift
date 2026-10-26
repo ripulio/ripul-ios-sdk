@@ -38,13 +38,20 @@ public struct SpeakTool: NativeTool {
         at all during a turn, finish by speaking the answer — your written \
         reply is not read aloud when you have spoken for yourself.
 
+        A spoken message can also reach you while you are already working \
+        on a task. Answer it with a speak call passing answer=true, then \
+        carry on with the task: the user can talk again as soon as that \
+        answer has been spoken. Pass answer=true only on the call that \
+        answers their latest spoken message, never on a progress note.
+
         Returns spoken=false when no voice conversation is active. That means \
         nobody heard it: stop calling this for the rest of the turn and put \
         your answer in the written reply as normal.
         """
 
     public let inputSchema: [String: Any] = ToolSchema.object(
-        .string("text", "The words to speak aloud. Plain conversational prose, no markup.", required: true)
+        .string("text", "The words to speak aloud. Plain conversational prose, no markup.", required: true),
+        .bool("answer", "True on the call that answers the user's latest spoken message. It ends that exchange: the user's microphone reopens once it has been spoken, even while your task carries on.")
     )
 
     public let outputSchema: [String: Any]? = ToolSchema.object(
@@ -61,7 +68,7 @@ public struct SpeakTool: NativeTool {
         guard !trimmed.isEmpty else {
             return ["spoken": false, "reason": "Empty text — nothing to speak."]
         }
-        guard VoiceModeCoordinator.shared.deliver(trimmed) else {
+        guard VoiceModeCoordinator.shared.deliver(trimmed, answer: bool("answer", from: args)) else {
             return [
                 "spoken": false,
                 "reason": "No voice conversation is active — the user is reading, not listening. Put your answer in the written reply instead.",

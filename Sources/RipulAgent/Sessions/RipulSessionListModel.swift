@@ -1,6 +1,7 @@
 import Combine
 import Foundation
 import Observation
+import SwiftUI
 #if os(iOS)
 import UIKit
 #endif
@@ -21,6 +22,43 @@ public final class RipulSessionListModel {
     /// prefixes the human message with `code: `, so a prefix match classifies
     /// without string-sniffing the message itself.
     private static let sessionNotFoundPrefix = "session-not-found:"
+
+    struct HostAccountSummary {
+        let status: HostAuthStatusInfo
+        let active: ClaudeAccountProfile?
+        let cacheable: Bool
+    }
+    @ObservationIgnored private var hostAccounts: [String: HostAccountSummary] = [:]
+    @ObservationIgnored private var hostAccountReads: [String: Task<HostAccountSummary, Never>] = [:]
+    @ObservationIgnored private var hostAccountVersions: [String: Int] = [:]
+
+    func accountSummary(machineId: String) async -> HostAccountSummary {
+        if let cached = hostAccounts[machineId] { return cached }
+        let version = hostAccountVersions[machineId, default: 0]
+        if let pending = hostAccountReads[machineId] {
+            let summary = await pending.value
+            if hostAccountVersions[machineId, default: 0] != version { return await accountSummary(machineId: machineId) }
+            return summary
+        }
+        let task = Task {
+            async let auth = bridge.fetchHostAuthStatus(machineId: machineId)
+            async let list = bridge.fetchClaudeAccounts(machineId: machineId)
+            let (status, accounts) = await (auth, list)
+            return HostAccountSummary(status: status, active: accounts.accounts.first { $0.slug == accounts.active }, cacheable: status.error == nil && accounts.error == nil)
+        }
+        hostAccountReads[machineId] = task
+        let summary = await task.value
+        guard hostAccountVersions[machineId, default: 0] == version else { return await accountSummary(machineId: machineId) }
+        hostAccountReads.removeValue(forKey: machineId)
+        if summary.cacheable { hostAccounts[machineId] = summary }
+        return summary
+    }
+
+    func invalidateAccounts(machineId: String) {
+        hostAccountVersions[machineId, default: 0] += 1
+        hostAccounts.removeValue(forKey: machineId)
+        hostAccountReads.removeValue(forKey: machineId)
+    }
 
     // MARK: - Published (view observes these)
 
@@ -184,9 +222,25 @@ public final class RipulSessionListModel {
     public private(set) var sessionPlacements: [String: String] = [:]
     /// Machines whose latest scan was a real answer, not a failure. Their lists
     /// are authoritative, so a tab for one of their chats that the list no
-    /// longer includes is a chat archived or deleted elsewhere, not a missing
-    /// scan — see `UnifiedSession.build(confirmedMachineNames:)`.
+    /// longer includes is a chat archived or deleted elsewhere, or quiet for
+    /// two weeks (Older Chats brings it back), not a missing scan — see
+    /// `UnifiedSession.build(confirmedMachineNames:)`.
     @ObservationIgnored private var answeredMachineIds: Set<String> = []
+    /// Chats past each Mac's newest list, by machine, fetched a page at a time
+    /// by Older Chats at the end of the list. For this run only and never
+    /// cached: a launch shows each Mac's newest list, and the list stays that
+    /// size until the person asks for more.
+    @ObservationIgnored private var olderSessionsByMachineId: [String: [RemoteSessionInfo]] = [:]
+    /// Where each Mac's next older page starts. A Mac with none starts now.
+    @ObservationIgnored private var olderCursorByMachineId: [String: Date] = [:]
+    /// Rows only an older page gave, which the row cache leaves out.
+    @ObservationIgnored private var olderOnlyIds: Set<String> = []
+    /// Macs that have given all their older chats.
+    public private(set) var olderExhaustedMachineIds: Set<String> = []
+    public private(set) var isLoadingOlderSessions = false
+    /// Said under Older Chats when the last load brought nothing new because
+    /// a Mac did not answer or cannot list older chats yet.
+    public private(set) var olderSessionsNote: String?
     /// Local ChatSession IDs we just closed via bridge.closeSession. Keeps them
     /// hidden from the unified list until the web app removes the tab, so a
     /// flaky archive-all can't resurrect rows as orphan locals.
@@ -229,12 +283,17 @@ public final class RipulSessionListModel {
     @ObservationIgnored private var lifecycleObservers: [NSObjectProtocol] = []
     /// The read a Mac's pushed change asked for, and whether another change came during it.
     @ObservationIgnored private var remoteChangeReload: Task<Void, Never>?
-    @ObservationIgnored private var remoteChangePending = false
+    @ObservationIgnored private var dirtyMachineIds: Set<String> = []
+    @ObservationIgnored private var listCanBeSeen = false
+    @ObservationIgnored private var refreshOnVisible = false
+    @ObservationIgnored private var factsDirty = true
+    @ObservationIgnored private var factsTask: Task<Void, Never>?
 
     private static let lastActiveTimeCacheKey = "ripulLastActiveTimeByChatId"
     /// Resolved last-active times keyed by UnifiedSession.id — stable across
     /// restarts (unlike chatId which requires ripulSession to resolve).
     private static let lastActiveBySessionIdCacheKey = "ripulLastActiveBySessionId"
+    private static let sessionPlacementsCacheKey = "ripulSessionPlacements"
     /// Resolved last-active times, in their own store. They advance every ~2s
     /// while any agent runs; published from this model they re-rendered
     /// everything observing it (RipulAgentScreen, the app's ContentView) for
@@ -249,6 +308,32 @@ public final class RipulSessionListModel {
     /// which was last-writer-wins and never pruned) is abandoned, not
     /// migrated — display names can't be re-keyed to ids safely.
     nonisolated private static let remoteSessionsCacheKey = "ripulRemoteSessionsByMachineIdV2"
+    nonisolated private static let unfinishedLaunchesKey = "ripul.sessionListUnfinishedLaunches"
+    private static var didCheckLaunchCrashThisProcess = false
+
+    /// Records the start of a cold launch and clears the volatile session-list
+    /// caches (`ripulUnifiedSessionsCacheV2` and `ripulRemoteSessionsByMachineIdV2`)
+    /// if the previous `threshold` launches crashed before surviving startup.
+    /// Returns `true` when the circuit breaker tripped and cleared the caches.
+    @discardableResult
+    public static func recordLaunchStart(cache: RipulSessionCache, threshold: Int = 2) -> Bool {
+        let previous = (cache.object(forKey: unfinishedLaunchesKey) as? Int) ?? 0
+        if previous >= threshold {
+            UnifiedSession.clearCache(cache: cache)
+            cache.removeObject(forKey: remoteSessionsCacheKey)
+            cache.set(1, forKey: unfinishedLaunchesKey)
+            NSLog("[RipulSessionListModel] Launch crash circuit breaker tripped after %d unfinished launches — cleared volatile session caches", previous)
+            return true
+        }
+        cache.set(previous + 1, forKey: unfinishedLaunchesKey)
+        return false
+    }
+
+    /// Marks the current launch as having survived initial session-list rendering,
+    /// resetting the consecutive unfinished-launch counter.
+    public static func markLaunchSurvived(cache: RipulSessionCache) {
+        cache.removeObject(forKey: unfinishedLaunchesKey)
+    }
 
     // MARK: - Init
 
@@ -266,6 +351,16 @@ public final class RipulSessionListModel {
         self.hasSuccessfulMachinesResponse =
             cache.bool(forKey: "ripul.hasSuccessfulMachinesFetch")
 
+        if !Self.didCheckLaunchCrashThisProcess {
+            Self.didCheckLaunchCrashThisProcess = true
+            Self.recordLaunchStart(cache: cache)
+            Task { @MainActor [weak cache] in
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                guard !Task.isCancelled, let cache else { return }
+                Self.markLaunchSurvived(cache: cache)
+            }
+        }
+
         let cached = UnifiedSession.loadCached(cache: cache)
         let openCount = cached.filter(\.cachedIsOpen).count
         self.unifiedSessions = cached
@@ -276,6 +371,9 @@ public final class RipulSessionListModel {
         // rebuilds from an EMPTY remote set and every row that isn't an open
         // local tab disappears until its machine answers.
         restoreRemoteSessionsFromCache()
+        if let savedPlacements = cache.dictionary(forKey: Self.sessionPlacementsCacheKey) as? [String: String] {
+            self.sessionPlacements = savedPlacements
+        }
 
         // Restore persisted last-active timestamps so sort order is
         // correct immediately on launch, before any live events arrive.
@@ -376,36 +474,144 @@ public final class RipulSessionListModel {
         lifecycleObservers.append(NotificationCenter.default.addObserver(
             forName: AgentBridge.remoteSessionsChangedNotification,
             object: bridge, queue: .main
+        ) { [weak self] note in
+            MainActor.assumeIsolated { self?.remoteSessionsChanged(note.userInfo ?? [:]) }
+        })
+        lifecycleObservers.append(NotificationCenter.default.addObserver(
+            forName: .ripulHostAccountsChanged, object: bridge, queue: .main
+        ) { [weak self] note in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                let machineId = note.userInfo?["machineId"] as? String
+                    ?? self.machines.first(where: { $0.roomId == note.userInfo?["roomId"] as? String })?.machineId
+                if let machineId { self.invalidateAccounts(machineId: machineId) }
+            }
+        })
+        lifecycleObservers.append(NotificationCenter.default.addObserver(
+            forName: .ripulSessionListFactsChanged, object: bridge, queue: .main
         ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.remoteSessionsChanged() }
+            MainActor.assumeIsolated {
+                self?.factsDirty = true
+                Task { await self?.refreshSessionListFacts() }
+            }
         })
     }
 
-    /// A Mac's chats changed in a way this device's copy of its list does not
-    /// show: a chat was started there, or one this device has never opened
-    /// started or stopped. Read the lists again.
-    ///
-    /// One read for a burst of changes, and not more often than every few
-    /// seconds: a busy Mac changes state many times a minute, and each read
-    /// rebuilds the list. A change that arrives while a read is under way or
-    /// just done is not lost; one more read follows.
-    private func remoteSessionsChanged() {
-        // Both show in the once-a-minute [PERFMIN] line: how often a Mac asked, and how often it cost a read.
+    /// The same visibility the session/chat columns use, including split view.
+    public func setListVisible(_ visible: Bool) {
+        guard visible != listCanBeSeen else { return }
+        listCanBeSeen = visible
+        if visible {
+            Task { [weak self] in
+                guard let self else { return }
+                if self.refreshOnVisible { self.refreshOnVisible = false; await self.refresh() }
+                else { await self.refreshSessionListFacts() }
+                self.scheduleDirtyMachines()
+            }
+        }
+    }
+
+    private func remoteSessionsChanged(_ event: [AnyHashable: Any]) {
         MainThreadSampler.count("list.remoteChanged")
-        if remoteChangeReload != nil {
-            remoteChangePending = true
+        guard let roomId = event["roomId"] as? String,
+              let machine = machines.first(where: { $0.roomId == roomId }) else {
+            // Compatibility with older web pages that did not identify a Mac.
+            dirtyMachineIds.formUnion(machines.filter(\.isOnline).map(\.machineId))
+            scheduleDirtyMachines()
             return
         }
-        remoteChangeReload = Task { [weak self] in
-            repeat {
-                self?.remoteChangePending = false
-                try? await Task.sleep(nanoseconds: 600_000_000)
-                MainThreadSampler.count("list.remoteReload")
-                await self?.loadRemoteSessions(force: true)
-                try? await Task.sleep(nanoseconds: 4_000_000_000)
-            } while self?.remoteChangePending == true
-            self?.remoteChangeReload = nil
+        if let chatId = event["chatId"] as? String, let patch = event["patch"] as? [String: Any] {
+            let key = UnifiedSession.canonicalKey(chatId)
+            var changed = false
+            if var rows = remoteSessionsByMachineId[machine.machineId] {
+                for index in rows.indices {
+                    let row = rows[index]
+                    guard [row.id, row.sourceChatId, row.hostChatId ?? ""].contains(where: { UnifiedSession.canonicalKey($0) == key }) else { continue }
+                    let next = Self.patching(row, patch: patch)
+                    if next != row { rows[index] = next; changed = true }
+                }
+                if changed {
+                    remoteSessionsByMachineId[machine.machineId] = rows
+                    reflowRemoteSessions()
+                    rebuildUnifiedSessions()
+                }
+            }
         }
+        if event["needsScan"] as? Bool == true { dirtyMachineIds.insert(machine.machineId) }
+        scheduleDirtyMachines()
+    }
+
+    private static func patching(_ row: RemoteSessionInfo, patch: [String: Any]) -> RemoteSessionInfo {
+        var custom = row.customTitle
+        var renamedAt = row.customTitleRenamedAt
+        var auto = row.aiTitle
+        var name = patch["displayName"] as? String ?? row.displayName
+        if let title = patch["title"] as? [String: Any], let text = title["text"] as? String, !text.isEmpty {
+            if title["source"] as? String == "custom", let version = title["version"] as? Double,
+               version >= (renamedAt ?? 0) {
+                custom = text; renamedAt = version; name = text
+            } else if title["source"] as? String == "auto", custom == nil {
+                if title["kind"] as? String == "generated" { auto = text }
+                if auto == nil || auto == text { name = text }
+            }
+        }
+        var next = RemoteSessionInfo(id: row.id, sourceChatId: row.sourceChatId,
+            displayName: custom ?? auto ?? name, createdAt: row.createdAt, lastModified: row.lastModified,
+            isRunning: patch["isRunning"] as? Bool ?? row.isRunning, projectName: row.projectName,
+            cwd: row.cwd, gitBranch: row.gitBranch, messageCount: row.messageCount,
+            provider: row.provider, providerLabel: row.providerLabel, model: row.model,
+            hostChatId: row.hostChatId, machineId: row.machineId)
+        next.teamVisibility = row.teamVisibility; next.creatorUserId = row.creatorUserId; next.startedBy = row.startedBy
+        next.customTitle = custom; next.customTitleRenamedAt = renamedAt; next.aiTitle = auto
+        return next
+    }
+
+    private func scheduleDirtyMachines() {
+        guard listCanBeSeen, !dirtyMachineIds.isEmpty, remoteChangeReload == nil else { return }
+        remoteChangeReload = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 600_000_000)
+            guard let self else { return }
+            defer { self.remoteChangeReload = nil }
+            while self.listCanBeSeen && !self.dirtyMachineIds.isEmpty {
+                // A foreground/full scan already owns the buckets. Retain dirt
+                // until it finishes instead of dropping a push during the await.
+                if self.remoteScanInFlight {
+                    try? await Task.sleep(nanoseconds: 200_000_000)
+                    if Task.isCancelled { return }
+                    continue
+                }
+                let ids = self.dirtyMachineIds
+                self.dirtyMachineIds.subtract(ids)
+                MainThreadSampler.count("list.remoteReload")
+                await self.loadRemoteSessions(force: true, machineIds: ids)
+            }
+        }
+    }
+
+    private func refreshSessionListFacts() async {
+        guard listCanBeSeen, factsDirty else { return }
+        if let factsTask { await factsTask.value; return }
+        let task = Task { [weak self] in
+            guard let self else { return }
+            // An edit during the await dirties the facts again. Read once more
+            // after it, so a pre-edit response cannot become the final answer.
+            while listCanBeSeen && factsDirty {
+                factsDirty = false
+                guard let facts = await bridge.getSessionListFacts() else {
+                    // Compatibility with a web page predating the combined facts API.
+                    sessionTagsByKey = await bridge.getSessionTags()
+                    factsDirty = true
+                    break
+                }
+                sessionTagsByKey = facts.tags
+                sessionPlacements = facts.placedUnder
+                cache.set(facts.placedUnder, forKey: Self.sessionPlacementsCacheKey)
+                rebuildUnifiedSessions()
+            }
+        }
+        factsTask = task
+        await task.value
+        factsTask = nil
     }
 
     /// A chat was archived somewhere else — another device, the Mac, or an
@@ -557,6 +763,8 @@ public final class RipulSessionListModel {
         // relay connected, producing sessions without hostChatId dedup keys.
         await bridge.fetchSessions()
         hasCompletedAuthRefresh = true
+        factsDirty = true
+        await refreshSessionListFacts()
         // Load remote sessions in background — don't block the session list on relay connections.
         // loadRemoteSessions already does incremental rebuildUnifiedSessions() as each machine
         // responds, so local sessions appear immediately and remote ones trickle in.
@@ -571,6 +779,9 @@ public final class RipulSessionListModel {
     /// pull-to-refresh asks it alongside this (`RipulSessionsView`).
     public func refresh() async {
         if dataSource != nil { await loadDirectSessions(); return }
+        factsDirty = true
+        guard listCanBeSeen else { refreshOnVisible = true; return }
+        await refreshSessionListFacts()
         await loadMachinesFromAPI()
         // A user with no reachable machine (an invited guest, or an owner whose
         // Mac is asleep) has exactly one live source of rows: the web app's tab
@@ -582,7 +793,7 @@ public final class RipulSessionListModel {
 
     // MARK: - Remote sessions
 
-    public func loadRemoteSessions(force: Bool = false) async {
+    public func loadRemoteSessions(force: Bool = false, machineIds: Set<String>? = nil) async {
         if dataSource != nil { await loadDirectSessions(); return }
         bridge.logSessionStartMarker("ios.sessions_load_enter", extra: "force=\(force) machines=\(machines.count) isLoading=\(remoteScanInFlight)")
         guard !machines.isEmpty else {
@@ -631,17 +842,6 @@ public final class RipulSessionListModel {
             )
         }
 
-        // Refresh the tag map up front so the per-machine rebuilds below already
-        // carry lozenges. Cheap (one authed request) and failure-tolerant.
-        // The same request brings where the person has put each chat. A web
-        // build without it still gives the tags, and placements stay as they were.
-        if let facts = await bridge.getSessionListFacts() {
-            sessionTagsByKey = facts.tags
-            if sessionPlacements != facts.placedUnder { sessionPlacements = facts.placedUnder }
-        } else {
-            sessionTagsByKey = await bridge.getSessionTags()
-        }
-
         var onlineMachines = machines.filter { $0.isOnline && !$0.isDisabled(cache: cache) }
         let disabledCount = machines.filter { $0.isDisabled(cache: cache) }.count
         log("loadRemoteSessions: \(machines.count) machines (\(onlineMachines.count) online, \(disabledCount) disabled)")
@@ -660,6 +860,8 @@ public final class RipulSessionListModel {
                 return
             }
         }
+
+        if let machineIds { onlineMachines = onlineMachines.filter { machineIds.contains($0.machineId) } }
 
         // Rebuild once per PASS, not once per machine — unless there is nothing
         // on screen yet.
@@ -735,21 +937,306 @@ public final class RipulSessionListModel {
         // rebuild once so the list reflects the empty state. (The coalesced
         // rebuild above already reflowed to empty in that case, so this only
         // fires on the progressive path or when nothing was marked dirty.)
-        if remoteSessionsByMachineId.values.allSatisfy({ $0.isEmpty }) && !remoteSessions.isEmpty {
-            remoteSessions = []
+        if remoteSessionsByMachineId.values.allSatisfy({ $0.isEmpty }) && remoteSessions.contains(where: { !olderOnlyIds.contains($0.id) }) {
+            reflowRemoteSessions()
             rebuildUnifiedSessions()
         }
+
+        // Tabs for chats quiet for two weeks, judged only on Macs that answered
+        // this pass. It used to wait for every Mac to answer, and a browser
+        // host that timed out on every pass kept it from ever running on
+        // Peter's phone (21 October 2026).
+        Task { await tidyQuietTabs() }
     }
 
     /// Flatten every machine's bucket into the working array, minus anything
     /// archived out from under us. O(all sessions) — which is why the pass above
-    /// runs it once rather than per answering machine.
+    /// runs it once rather than per answering machine. Older pages come after,
+    /// less any chat a newest list holds: the newest list's row is the live one.
     private func reflowRemoteSessions() {
-        var flat = remoteSessionsByMachineId.values.flatMap { $0 }
-        if !recentlyArchivedIds.isEmpty {
-            flat.removeAll { recentlyArchivedIds.contains($0.id) }
+        let merged = Self.flatten(newest: remoteSessionsByMachineId, older: olderSessionsByMachineId, archived: recentlyArchivedIds)
+        olderOnlyIds = merged.olderOnly
+        remoteSessions = merged.sessions
+    }
+
+    /// Every machine's newest list, then the older pages less any chat a newest
+    /// list holds, minus what was archived here. Cross-machine duplicates of the
+    /// same session id are collapsed (matching web `useUnifiedSessions`), keeping
+    /// the entry whose emitting machine stamped itself as owner and preferring a
+    /// real CLI scan (`provider`/`lastModified`) over a tab-fallback echo.
+    static func flatten(newest: [String: [RemoteSessionInfo]], older: [String: [RemoteSessionInfo]],
+                        archived: Set<String>) -> (sessions: [RemoteSessionInfo], olderOnly: Set<String>) {
+        func rank(_ s: RemoteSessionInfo, bucketMachineId: String) -> (Int, Int, Date) {
+            let score = (s.machineId == bucketMachineId ? 4 : 0)
+                + (s.provider != nil ? 2 : 0)
+                + (s.lastModified != nil ? 1 : 0)
+            return (score, s.isRunning ? 1 : 0, s.lastModified ?? s.createdAt)
         }
-        remoteSessions = flat
+        var flat: [RemoteSessionInfo] = []
+        var indexById: [String: (index: Int, bucketMachineId: String)] = [:]
+        for (machineId, list) in newest.sorted(by: { $0.key < $1.key }) {
+            for session in list {
+                if let existing = indexById[session.id] {
+                    let incumbent = flat[existing.index]
+                    if rank(session, bucketMachineId: machineId) > rank(incumbent, bucketMachineId: existing.bucketMachineId) {
+                        flat[existing.index] = session
+                        indexById[session.id] = (existing.index, machineId)
+                    }
+                } else {
+                    indexById[session.id] = (flat.count, machineId)
+                    flat.append(session)
+                }
+            }
+        }
+        var olderOnly = Set<String>()
+        if !older.isEmpty {
+            let listed = Set(flat.map(\.id))
+            for (_, page) in older.sorted(by: { $0.key < $1.key }) {
+                for session in page where !listed.contains(session.id) && olderOnly.insert(session.id).inserted {
+                    flat.append(session)
+                }
+            }
+        }
+        if !archived.isEmpty {
+            flat.removeAll { archived.contains($0.id) }
+        }
+        return (flat, olderOnly)
+    }
+
+    // MARK: - Quiet tabs
+
+    /// How long a chat goes unused, on its Mac and here, before this device
+    /// closes its tab.
+    static let quietTabDays: Double = 14
+    /// When the next tidy may run (seconds since 1970): six hours after one
+    /// that reached a Mac able to page, half an hour after one that did not,
+    /// so a Mac app updated in between is used soon.
+    /// Versioned: a tidy that judged tabs by their rows found none on Peter's
+    /// phone and put the next one six hours off; the one judging by each Mac's
+    /// own list should not wait for that.
+    static let quietTabsNextTidyKey = "ripul.quietTabsNextTidyAt.v2"
+    @ObservationIgnored private var isTidyingQuietTabs = false
+
+    /// Close this device's tabs for chats on a Mac nobody has used for two
+    /// weeks. Every chat opened here kept a tab: Peter's phone held 462, 309
+    /// of them unopened for over two weeks, and each change to them rewrote
+    /// 288 KB (21 October 2026). Only tabs on Macs that answer older pages are
+    /// closed, so each chat stays a page of Older Chats away, and nothing on
+    /// the Mac is stopped. After a refresh, at most every six hours, on the
+    /// Macs that answered it.
+    func tidyQuietTabs(now: Date = Date()) async {
+        guard dataSource == nil, bridge.isSessionsReady, !isTidyingQuietTabs else { return }
+        if let next = cache.object(forKey: Self.quietTabsNextTidyKey) as? Double, now.timeIntervalSince1970 < next { return }
+        let answered = scannableMachines.filter { answeredMachineIds.contains($0.machineId) }
+        guard !answered.isEmpty else { return }
+        isTidyingQuietTabs = true
+        defer { isTidyingQuietTabs = false }
+        cache.set(now.timeIntervalSince1970 + 30 * 60, forKey: Self.quietTabsNextTidyKey)
+        // A Mac pages when it answers a one-chat page with a chat. A host with
+        // no CLI chats (a browser host) answers an empty page and no error,
+        // and an older page will never bring its chats back.
+        var paging: [RemoteMachine] = []
+        for machine in answered {
+            let probe = await bridge.listOlderRemoteSessions(machineId: machine.machineId, before: now, limit: 1)
+            if probe.error == nil, !probe.sessions.isEmpty { paging.append(machine) }
+        }
+        guard !paging.isEmpty else {
+            bridge.handleConsoleLog("LOG: [QuietTabs] no Mac answers older pages; next try in 30 min")
+            return
+        }
+        cache.set(now.timeIntervalSince1970 + 6 * 3600, forKey: Self.quietTabsNextTidyKey)
+        let store = bridge.sessionList
+        let activeId = bridge.activeSessionId
+        let pagingMachines = Dictionary(paging.map { ($0.machineId, $0.displayName) }, uniquingKeysWith: { first, _ in first })
+        let candidates = Self.quietTabCandidates(tabs: bridge.sessions, listed: remoteSessionsByMachineId,
+                                                 pagingMachines: pagingMachines, now: now) { tab in
+            let keys = [tab.id, tab.sourceChatId, tab.hostChatId].compactMap { $0 }
+            return tab.id == activeId || store.isPinned(anyOf: keys) || store.isUnread(anyOf: keys)
+                || keys.contains(where: store.isWorkingOrAsking) || PendingQuestionStore.shared.first(anyOf: keys) != nil
+        }
+        let tabs = bridge.sessions.count
+        let closed = candidates.isEmpty ? [] : await bridge.closeQuietSessions(ids: candidates, idleDays: Self.quietTabDays)
+        bridge.handleConsoleLog("LOG: [QuietTabs] \(tabs) tabs, paging: \(paging.map(\.displayName).sorted().joined(separator: ", ")); "
+            + "\(candidates.count) quiet, \(closed.count) closed; next in 6 h")
+        guard !closed.isEmpty else { return }
+        recentlyClosedLocalIds.formUnion(closed)
+        rebuildUnifiedSessions()
+    }
+
+    /// The tabs to close for being quiet: a chat on a Mac that answers older
+    /// pages, opened here and last replied to over two weeks ago, not in use,
+    /// and which that Mac's two-week list leaves out or lists as quiet. Judged
+    /// on the Mac's own list (`listed`, by machine id), by chat: a tab keeps the
+    /// name its Mac had when it was paired (311 of Peter's 462 tabs carried two
+    /// old names, 21 October 2026), and a renamed Mac's tab is drawn as a row of
+    /// its own that says nothing about the chat. A tab from before machine ids
+    /// were sent is matched to a Mac by name. `pagingMachines` is id to name.
+    static func quietTabCandidates(tabs: [ChatSession], listed: [String: [RemoteSessionInfo]],
+                                   pagingMachines: [String: String], now: Date,
+                                   inUse: (ChatSession) -> Bool) -> [String] {
+        let since = now.addingTimeInterval(-quietTabDays * 86_400)
+        let idByName = Dictionary(pagingMachines.map { ($0.value, $0.key) }, uniquingKeysWith: { first, _ in first })
+        // Each paging Mac's listed chats, by the conversation's uuid.
+        var chatsByMac: [String: [String: RemoteSessionInfo]] = [:]
+        for machineId in pagingMachines.keys {
+            var byChat: [String: RemoteSessionInfo] = [:]
+            for chat in listed[machineId] ?? [] {
+                for key in [chat.sourceChatId, chat.hostChatId].compactMap({ $0 }) {
+                    byChat[UnifiedSession.cliUuid(for: key)] = chat
+                }
+            }
+            chatsByMac[machineId] = byChat
+        }
+        return tabs.compactMap { tab in
+            let machineId = tab.remoteMachineId ?? tab.remoteMachineName.flatMap { idByName[$0] }
+            guard let machineId, let chats = chatsByMac[machineId],
+                  tab.isSharedGuest != true, tab.hostChatId != nil,
+                  tab.createdAt < since, (tab.latestHumanReplyAt ?? .distantPast) < since,
+                  !inUse(tab) else { return nil }
+            let keys = [tab.hostChatId, tab.sourceChatId].compactMap { $0 }.map(UnifiedSession.cliUuid(for:))
+            if let chat = keys.lazy.compactMap({ chats[$0] }).first {
+                // Listed: it goes only if the Mac says it has been quiet.
+                guard !chat.isRunning, (chat.lastModified ?? chat.createdAt) < since else { return nil }
+            }
+            return tab.id
+        }
+    }
+
+    // MARK: - Older chats
+
+    /// How many chats one page asks a Mac for.
+    static let olderPageSize = 50
+
+    /// Whether Older Chats has anything left to fetch: a Mac this device can
+    /// reach that has not given all its chats.
+    public var hasMoreOlderSessions: Bool {
+        dataSource == nil && scannableMachines.contains { !olderExhaustedMachineIds.contains($0.machineId) }
+    }
+
+    /// Whether Older Chats has fetched every reachable Mac's chats.
+    public var hasLoadedAllOlderSessions: Bool {
+        !olderExhaustedMachineIds.isEmpty && !hasMoreOlderSessions
+    }
+
+    /// Fetch the next page of older chats from every Mac that has more, and add
+    /// them to the list. A page can hold only chats the list shows already (an
+    /// open tab keeps its chat in the newest list however old it is), so a Mac
+    /// is asked again, up to four pages, until it gives half a page of new ones.
+    /// With a search (`matching`), a Mac is read on until a chat it gives
+    /// matches, up to twenty pages: the person is looking for one chat, and a
+    /// tap that stopped at four pages took three taps to reach three weeks back
+    /// on Studio (21 October 2026).
+    public func loadOlderSessions(matching query: String? = nil) async {
+        guard dataSource == nil, !isLoadingOlderSessions else { return }
+        let targets = scannableMachines.filter { !olderExhaustedMachineIds.contains($0.machineId) }
+        guard !targets.isEmpty else { return }
+        isLoadingOlderSessions = true
+        defer { isLoadingOlderSessions = false }
+        let listed = Set(remoteSessions.map(\.id))
+        let matches = Self.searchMatcher(query)
+        let started = Date()
+        var added = 0
+        var unanswered: [String] = []
+        var needUpdate: [String] = []
+        await withTaskGroup(of: OlderFetch.self) { group in
+            for machine in targets {
+                let start = olderCursorByMachineId[machine.machineId] ?? started
+                group.addTask { await self.fetchOlder(machineId: machine.machineId, from: start, listed: listed, matching: matches) }
+            }
+            for await fetch in group {
+                if !fetch.sessions.isEmpty {
+                    var bucket = olderSessionsByMachineId[fetch.machineId] ?? []
+                    let held = Set(bucket.map(\.id))
+                    bucket += fetch.sessions.filter { !held.contains($0.id) }
+                    olderSessionsByMachineId[fetch.machineId] = bucket
+                }
+                added += fetch.newCount
+                if let cursor = fetch.cursor { olderCursorByMachineId[fetch.machineId] = cursor }
+                if fetch.exhausted { olderExhaustedMachineIds.insert(fetch.machineId) }
+                if let error = fetch.error {
+                    let name = machines.first { $0.machineId == fetch.machineId }?.displayName ?? "A Mac"
+                    // The host's own words for a Mac app from before older pages.
+                    if error.contains("Ripul Host") { needUpdate.append(name) } else { unanswered.append(name) }
+                }
+            }
+        }
+        let note = added > 0 ? nil : Self.olderSessionsNote(needUpdate: needUpdate.sorted(), unanswered: unanswered.sorted())
+        if olderSessionsNote != note { olderSessionsNote = note }
+        bridge.handleConsoleLog("LOG: [OlderChats] \(targets.count) machines\(query == nil ? "" : " (search)"), \(added) new rows, "
+            + "\(needUpdate.count) need an update, \(unanswered.count) unanswered, \(Int(Date().timeIntervalSince(started) * 1000))ms")
+        reflowRemoteSessions()
+        rebuildUnifiedSessions()
+    }
+
+    /// Why a tap on Older Chats brought nothing, in one or two sentences.
+    static func olderSessionsNote(needUpdate: [String], unanswered: [String]) -> String? {
+        func names(_ list: [String]) -> String {
+            list.count < 2 ? list.joined() : list.dropLast().joined(separator: ", ") + " and " + list.last!
+        }
+        var sentences: [String] = []
+        if !needUpdate.isEmpty {
+            sentences.append("\(names(needUpdate)) \(needUpdate.count == 1 ? "lists" : "list") older chats once Ripul Host is updated.")
+        }
+        if !unanswered.isEmpty {
+            sentences.append("\(names(unanswered)) did not answer.")
+        }
+        return sentences.isEmpty ? nil : sentences.joined(separator: " ")
+    }
+
+    struct OlderFetch {
+        let machineId: String
+        var sessions: [RemoteSessionInfo] = []
+        /// How many of `sessions` the list did not hold.
+        var newCount = 0
+        /// Where the Mac's next page starts; nil when this fetch moved nowhere.
+        var cursor: Date?
+        var exhausted = false
+        var error: String?
+    }
+
+    private func fetchOlder(machineId: String, from start: Date, listed: Set<String>,
+                            matching: ((RemoteSessionInfo) -> Bool)?) async -> OlderFetch {
+        let bridge = self.bridge
+        return await Self.pageOlder(machineId: machineId, from: start, listed: listed, pageSize: Self.olderPageSize,
+                                    matching: matching) { cursor in
+            await bridge.listOlderRemoteSessions(machineId: machineId, before: cursor, limit: Self.olderPageSize)
+        }
+    }
+
+    /// What a search of the list finds a chat by: its title, folder or branch.
+    static func searchMatcher(_ query: String?) -> ((RemoteSessionInfo) -> Bool)? {
+        guard let q = query?.trimmingCharacters(in: .whitespaces).lowercased(), !q.isEmpty else { return nil }
+        return { s in
+            [s.customTitle, s.aiTitle, s.displayName, s.projectName, s.gitBranch].contains { $0?.lowercased().contains(q) ?? false }
+        }
+    }
+
+    /// One Mac's pages for one tap: from `start` back, until the pages have
+    /// brought half a page the list did not hold (four pages at most), or with
+    /// a search, one it did not hold that matches (twenty at most); or the Mac
+    /// has no more, or does not answer.
+    static func pageOlder(machineId: String, from start: Date, listed: Set<String>, pageSize: Int,
+                          matching: ((RemoteSessionInfo) -> Bool)? = nil,
+                          page: (Date) async -> AgentBridge.OlderSessionsPage) async -> OlderFetch {
+        var fetch = OlderFetch(machineId: machineId)
+        var cursor = start
+        for _ in 0..<(matching == nil ? 4 : 20) {
+            let answer = await page(cursor)
+            if let error = answer.error { fetch.error = error; break }
+            fetch.sessions += answer.sessions
+            let fresh = answer.sessions.filter { !listed.contains($0.id) }
+            fetch.newCount += fresh.count
+            // A next page that starts no earlier would read this one again.
+            guard let next = answer.next, next < cursor else { fetch.exhausted = true; break }
+            cursor = next
+            fetch.cursor = next
+            if let matching {
+                if fresh.contains(where: matching) { break }
+            } else if fetch.newCount >= pageSize / 2 {
+                break
+            }
+        }
+        return fetch
     }
 
     // MARK: - Machines
@@ -769,6 +1256,11 @@ public final class RipulSessionListModel {
         machines = []
         unifiedSessions = []
         remoteSessionsByMachineId = [:]
+        olderSessionsByMachineId = [:]
+        olderCursorByMachineId = [:]
+        olderOnlyIds = []
+        olderExhaustedMachineIds = []
+        olderSessionsNote = nil
         remoteSessions = []
         archivedSessions = []
         hasSuccessfulMachinesResponse = false
@@ -856,7 +1348,7 @@ public final class RipulSessionListModel {
             if machines != snapshot.machines { machines = snapshot.machines }
             if !hasSuccessfulMachinesResponse { hasSuccessfulMachinesResponse = true }
             hasLoadedRemoteSessions = true
-            remoteSessions = remoteSessionsByMachineId.values.flatMap { $0 }
+            reflowRemoteSessions()
             RemoteMachine.saveToCache(machines, cache: cache)
             cache.set(true, forKey: "ripul.hasSuccessfulMachinesFetch")
             rebuildUnifiedSessions()
@@ -1098,10 +1590,12 @@ public final class RipulSessionListModel {
         let before = sessionPlacements[key]
         guard before != value else { return }
         sessionPlacements[key] = value
+        cache.set(sessionPlacements, forKey: Self.sessionPlacementsCacheKey)
 
         Task {
             guard await bridge.setSessionPlacement(sessionId: key, under: value) else {
                 sessionPlacements[key] = before
+                cache.set(sessionPlacements, forKey: Self.sessionPlacementsCacheKey)
                 openSessionError = "Could not move “\(session.title)”. It is back where it was."
                 return
             }
@@ -1421,6 +1915,9 @@ public final class RipulSessionListModel {
     private func removeFromRemoteBuckets(sessionId: String) {
         for key in remoteSessionsByMachineId.keys {
             remoteSessionsByMachineId[key]?.removeAll { $0.id == sessionId }
+        }
+        for key in olderSessionsByMachineId.keys {
+            olderSessionsByMachineId[key]?.removeAll { $0.id == sessionId }
         }
     }
 
@@ -1810,7 +2307,7 @@ public final class RipulSessionListModel {
             byMachine = byMachine.filter { visible.contains($0.key) }
         }
         remoteSessionsByMachineId = byMachine
-        remoteSessions = byMachine.values.flatMap { $0 }
+        reflowRemoteSessions()
         log("debug_timeline \(elapsed()) restored \(remoteSessions.count) remote sessions across \(byMachine.count) machines")
     }
 
@@ -1822,9 +2319,23 @@ public final class RipulSessionListModel {
     /// keeps the row's previously-known label.
     private func derivedMachineNames() -> [String: String] {
         var names: [String: String] = [:]
+        // Prefer the winning entry in `remoteSessions` when two machines reported the same id.
+        for s in remoteSessions {
+            if let machineId = s.machineId,
+               let display = machines.first(where: { $0.machineId == machineId })?.displayName {
+                names[s.id] = display
+            }
+        }
         for (machineId, list) in remoteSessionsByMachineId {
             guard let display = machines.first(where: { $0.machineId == machineId })?.displayName else { continue }
-            for s in list {
+            for s in list where names[s.id] == nil {
+                names[s.id] = display
+            }
+        }
+        // A chat a newest list holds keeps that list's machine.
+        for (machineId, list) in olderSessionsByMachineId {
+            guard let display = machines.first(where: { $0.machineId == machineId })?.displayName else { continue }
+            for s in list where names[s.id] == nil {
                 names[s.id] = display
             }
         }
@@ -2028,8 +2539,10 @@ public final class RipulSessionListModel {
             // work the list doesn't wait on: write from a serial queue, in order.
             let cache = self.cache
             let buckets = remoteSessionsByMachineId
+            // Older pages are for this run; the next launch starts from the newest lists.
+            let olderOnly = olderOnlyIds
             Self.cacheWriteQueue.async {
-                UnifiedSession.saveToCache(updated, cache: cache)
+                UnifiedSession.saveToCache(olderOnly.isEmpty ? updated : updated.filter { !olderOnly.contains($0.id) }, cache: cache)
                 Self.saveRemoteSessions(buckets, cache: cache)
             }
             rowsPersisted = true
@@ -2084,7 +2597,7 @@ public final class RipulSessionListModel {
         ).filter { Set($0.mergeKeys).isDisjoint(with: known) }
         guard !additions.isEmpty else { return }
         log("debug_timeline \(elapsed()) appended \(additions.count) local row(s) ahead of the scan")
-        unifiedSessions = (unifiedSessions + additions).sorted { $0.lastUsed > $1.lastUsed }
+        unifiedSessions = UnifiedSession.deduplicatingById((unifiedSessions + additions).sorted { $0.lastUsed > $1.lastUsed })
     }
 
     /// Re-match ripulSession on cached items without full rebuild.
@@ -2357,5 +2870,21 @@ public final class RipulSessionListModel {
             }
         }
         return map
+    }
+}
+
+
+extension Notification.Name {
+    static let ripulHostAccountsChanged = Notification.Name("ripulHostAccountsChanged")
+    static let ripulSessionListFactsChanged = Notification.Name("ripulSessionListFactsChanged")
+}
+
+private struct RipulSessionListModelKey: EnvironmentKey {
+    static let defaultValue: RipulSessionListModel? = nil
+}
+extension EnvironmentValues {
+    var ripulSessionListModel: RipulSessionListModel? {
+        get { self[RipulSessionListModelKey.self] }
+        set { self[RipulSessionListModelKey.self] = newValue }
     }
 }

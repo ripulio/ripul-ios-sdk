@@ -313,7 +313,7 @@ struct VoiceProfileEditorScreen: View {
         let provider = ElevenLabsNativeSpeechProvider(tokenProvider: tokenProvider)
         let catalog = (try? await provider.listVoices()) ?? []
         voices = catalog
-            .map { VoiceOption(id: $0.id, name: $0.name) }
+            .map { VoiceOption(id: $0.id, name: $0.displayLabel) }
             .sorted { $0.name < $1.name }
     }
 

@@ -281,17 +281,25 @@ extension AgentBridge {
     /// that couldn't be asked. The host lists every session it has, so an
     /// answered scan is authoritative about what exists there.
     public func listRemoteSessionsAnswer(machineId: String) async -> (sessions: [RemoteSessionInfo], answered: Bool) {
+        // The phone and Catalyst lists end with Older Chats, so a Mac may leave
+        // out the chats quiet for two weeks. The Mac host's own window has no
+        // such row and is sent every chat.
+        #if os(iOS)
+        let olderPages = true
+        #else
+        let olderPages = false
+        #endif
         let reply = await runPage(
             """
             if (!window.__ripulListRemoteSessions) return {sessions:[], error:'not ready'};
-            const result = await window.__ripulListRemoteSessions(machineId);
+            const result = await window.__ripulListRemoteSessions(machineId, olderPages ? { olderPages: true } : undefined);
             if (!result.sessions || result.sessions.length === 0) {
                 console.log('[listRemoteSessions] empty for ' + machineId +
                     ', error=' + (result.error || 'none'));
             }
             return result;
             """,
-            arguments: ["machineId": machineId], caller: "listRemoteSessions")
+            arguments: ["machineId": machineId, "olderPages": olderPages], caller: "listRemoteSessions")
         if reply.isDetached { NSLog("[AgentBridge] listRemoteSessions: webView is nil") }
         guard reply.failure() == nil else { return ([], false) }
         guard let dict = reply.dictionary, let rawSessions = dict["sessions"] as? [[String: Any]] else {
@@ -308,7 +316,41 @@ extension AgentBridge {
             NSLog("[AgentBridge] listRemoteSessions error from JS: %@", error)
             handleConsoleLog("LOG: [AgentBridge] listRemoteSessions(\(machineId)) JS error: \(error)")
         }
-        let parsed = rawSessions.compactMap { item -> RemoteSessionInfo? in
+        let parsed = Self.remoteSessions(from: rawSessions, machineId: machineId)
+        NSLog("[AgentBridge] listRemoteSessions: %d sessions on %@", parsed.count, machineId)
+        return (parsed, errorText?.isEmpty ?? true)
+    }
+
+    /// A page of a machine's chats last active before some time, newest first.
+    public struct OlderSessionsPage {
+        public let sessions: [RemoteSessionInfo]
+        /// Where the next page starts; nil when the machine has nothing older.
+        public let next: Date?
+        /// Why there is no page: the machine could not be asked, or its host
+        /// cannot list older chats yet. Nil when the page came back.
+        public let error: String?
+    }
+
+    /// A page of a machine's chats older than `before`: the chats past the
+    /// newest ones its ordinary list carries. Nothing is pinned into it.
+    public func listOlderRemoteSessions(machineId: String, before: Date, limit: Int) async -> OlderSessionsPage {
+        let beforeMs = (before.timeIntervalSince1970 * 1000).rounded(.down)
+        let reply = await callPage("__ripulListOlderRemoteSessions", [machineId, beforeMs, limit],
+                                   .ifMissing("{ sessions: [], next: null, error: 'not ready' }"))
+        if let failure = reply.failure() { return OlderSessionsPage(sessions: [], next: nil, error: failure) }
+        guard let dict = reply.dictionary, let rawSessions = dict["sessions"] as? [[String: Any]] else {
+            return OlderSessionsPage(sessions: [], next: nil, error: "unexpected reply")
+        }
+        if let error = dict["error"] as? String, !error.isEmpty {
+            handleConsoleLog("LOG: [AgentBridge] listOlderRemoteSessions(\(machineId)) error: \(error)")
+            return OlderSessionsPage(sessions: [], next: nil, error: error)
+        }
+        let next = (dict["next"] as? Double).map { Date(timeIntervalSince1970: $0 / 1000) }
+        return OlderSessionsPage(sessions: Self.remoteSessions(from: rawSessions, machineId: machineId), next: next, error: nil)
+    }
+
+    private static func remoteSessions(from rawSessions: [[String: Any]], machineId: String) -> [RemoteSessionInfo] {
+        rawSessions.compactMap { item -> RemoteSessionInfo? in
             guard let id = item["id"] as? String,
                   let sourceChatId = item["sourceChatId"] as? String,
                   let displayName = item["displayName"] as? String,
@@ -345,8 +387,6 @@ extension AgentBridge {
                 aiTitle: item["aiTitle"] as? String
             )
         }
-        NSLog("[AgentBridge] listRemoteSessions: %d sessions on %@", parsed.count, machineId)
-        return (parsed, errorText?.isEmpty ?? true)
     }
 
     /// Fetch Claude Code CLI account info from a remote machine via the relay bridge.

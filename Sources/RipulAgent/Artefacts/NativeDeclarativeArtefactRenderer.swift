@@ -145,12 +145,7 @@
         state.sizeChanged?()
       }
       .onChange(of: state.snapshot?.outputRows.count) { _, _ in state.sizeChanged?() }
-      .toolbar {
-        ToolbarItemGroup(placement: .keyboard) {
-          Spacer()
-          Button("Done") { focused = nil }
-        }
-      }
+      .keyboardDoneButton(when: focused != nil) { focused = nil }
     }
   }
 #endif

@@ -27,6 +27,9 @@ extension AgentBridge {
     ///      failure mode.
     public func notifyWebViewBecameVisible() {
         appIsForeground = true
+        // An appearance change while away (the app-switcher's light and dark
+        // pictures, or Control Centre's switch) is sent now, once.
+        flushDeferredTheme()
         // ROOT-CAUSE FIX for the network-switch / background wedge:
         //
         // While the app is backgrounded, iOS can suspend or jettison the
@@ -80,6 +83,8 @@ extension AgentBridge {
         nc.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
                 self?.startupBudget.sample(at: ProcessInfo.processInfo.systemUptime, isActive: true)
+                // Also for a host that never calls notifyWebViewBecameVisible.
+                self?.flushDeferredTheme()
             }
         }
         // Geometry backstop for the "came back mid-rotation" report: every window

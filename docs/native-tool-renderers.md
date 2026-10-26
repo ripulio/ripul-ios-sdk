@@ -76,7 +76,7 @@ progress indicators, and image sheets rather than mounting the web components.
 | Agent comms: list | One row per agent: state, CLI and model, last active as of the call, what it is doing, folder and branch; messages in flight and other Macs; ids and the rest under Details |
 | Tool discovery, host status | Tool names/descriptions or machine/relay state with expandable fields |
 | Screenshots/images | Image preview and enlargement |
-| Other tools | Labelled values and expandable structured fields |
+| Other tools | MUI-style field controls (`NativeToolFieldControl`) in an adaptive multi-column row layout (`NativeToolFieldFlowLayout`, up to 3 narrow fields per row, full-width wrapping for wide values) with expandable structured fields and multiline blocks below |
 
 This is a read-only historical detail view. Opening it must never execute a tool,
 answer a question, repeat speech, or change live task progress. Workflow-specific

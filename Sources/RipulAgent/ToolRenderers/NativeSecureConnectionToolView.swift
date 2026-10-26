@@ -5,7 +5,7 @@ import SwiftUI
 struct NativeSecureConnectionToolView: View {
     let content: NativeToolContent
     @Environment(\.openURL) private var openURL
-    @State private var saved = false
+    @NativeRowState("secureConnection.saved") private var saved = false
 
     private var payload: [String: CmsJSON]? {
         var value = content.output
@@ -23,13 +23,15 @@ struct NativeSecureConnectionToolView: View {
         if let payload, let raw = payload.string("captureUrl"), let url = URL(string: raw),
            SecureConnectionRequest.recognizes(url) {
             let connection = payload["connection"]?.objectValue
+            let connectionId = connection?.string("id") ?? content.call.id
+            let isSaved = _saved.value(subscope: connectionId) || NativeChatRowStateRegistry.savedSecureConnectionIds.contains(connectionId)
             let permissions = payload.string("requestKind") == "permissions"
             VStack(alignment: .leading, spacing: 14) {
-                Label(connection?.string("name") ?? "Secure connection", systemImage: saved ? "checkmark.shield.fill" : "lock.shield")
+                Label(connection?.string("name") ?? "Secure connection", systemImage: isSaved ? "checkmark.shield.fill" : "lock.shield")
                     .font(.ripul(.headline))
-                Text(saved ? (permissions ? "Your API access has been updated." : "Your key has been saved privately.") : (permissions ? "Review API access for your saved credential. No need to enter the key again." : "Save your API key privately. You can configure API access later."))
+                Text(isSaved ? (permissions ? "Your API access has been updated." : "Your key has been saved privately.") : (permissions ? "Review API access for your saved credential. No need to enter the key again." : "Save your API key privately. You can configure API access later."))
                     .font(.ripul(.subheadline)).foregroundStyle(.ripul(.textSecondary))
-                if !saved {
+                if !isSaved {
                     Button(permissions ? "Review API access" : "Save credential securely") {
                         if !RipulSecureConnection.open(url) { openURL(url) }
                     }
@@ -38,7 +40,10 @@ struct NativeSecureConnectionToolView: View {
                 }
             }
             .onReceive(NotificationCenter.default.publisher(for: RipulSecureConnection.didSave)) { note in
-                if note.object as? String == connection?.string("id") { saved = true }
+                if let savedId = connection?.string("id"), note.object as? String == savedId {
+                    NativeChatRowStateRegistry.savedSecureConnectionIds.insert(savedId)
+                    _saved.setValue(true, subscope: connectionId)
+                }
             }
         } else {
             Text(content.running ? "Preparing a private connection…" : "A secure connection link is not available. Request a new one in the chat.")

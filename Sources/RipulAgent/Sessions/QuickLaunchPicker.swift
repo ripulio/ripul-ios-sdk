@@ -80,6 +80,7 @@ struct QuickLaunchPickerButton: View {
     /// Nil ⇒ no context menu.
     var onSwitchAccount: (() -> Void)? = nil
     var onSwitchCodexAccount: (() -> Void)? = nil
+    var onSwitchAntigravityAccount: (() -> Void)? = nil
 
     @State private var isPresented = false
     @Environment(\.newChatAction) private var newChatAction
@@ -132,6 +133,10 @@ struct QuickLaunchPickerButton: View {
             if let onSwitchCodexAccount {
                 Button("Switch Codex account…", systemImage: "person.2", action: onSwitchCodexAccount)
                     .uiKitIdentifier("\(identifierPrefix).quickModelPicker.switchCodexAccount")
+            }
+            if let onSwitchAntigravityAccount {
+                Button("Switch Antigravity account…", systemImage: "person.2", action: onSwitchAntigravityAccount)
+                    .uiKitIdentifier("\(identifierPrefix).quickModelPicker.switchAntigravityAccount")
             }
             if let onSwitchAccount {
                 Button {

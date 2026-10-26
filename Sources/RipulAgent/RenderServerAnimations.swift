@@ -72,13 +72,27 @@ struct RenderServerPulsingSymbol: View {
     var color: Color
     /// False where the symbol cannot be seen: it is then drawn still.
     var animates = true
+    /// Draws the symbol so that what it draws meets the box's trailing edge,
+    /// instead of sitting in its middle, for a column whose items end on one
+    /// edge (the session list's time, spinner and icons). Symbols differ in
+    /// width and carry blank space inside their images (`SymbolInk`), so a
+    /// centred one stopped short of the time above it: by 2 points for a Mac,
+    /// 5 for a phone.
+    var hugsTrailingEdge = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.layoutDirection) private var layoutDirection
 
     var body: some View {
-        PulsingSymbolRepresentable(systemName: systemName, color: color, animates: animates && !reduceMotion)
+        PulsingSymbolRepresentable(systemName: systemName, color: color, animates: animates && !reduceMotion,
+                                   placement: !hugsTrailingEdge ? .centre : layoutDirection == .rightToLeft ? .left : .right)
             .frame(width: 18, height: 16)
             .allowsHitTesting(false)
     }
+}
+
+/// Where a symbol sits across the box it is drawn in.
+private enum SymbolPlacement {
+    case centre, left, right
 }
 
 /// The most frames a second a turn-long loop asks the render server for.
@@ -115,7 +129,8 @@ private final class PulsingSymbolLayerView: PlatformLayerView {
     let glyph = CALayer()
     var systemName = ""
     var animates = true
-    private var drawn: (name: String, size: CGSize)?
+    var placement = SymbolPlacement.centre
+    private var drawn: (name: String, size: CGSize, placement: SymbolPlacement)?
 
     override func setUpLayer() {
         tint.mask = glyph
@@ -129,9 +144,9 @@ private final class PulsingSymbolLayerView: PlatformLayerView {
         CATransaction.setDisableActions(true)
         tint.frame = bounds
         glyph.frame = tint.bounds
-        if drawn?.name != systemName || drawn?.size != bounds.size {
-            glyph.contents = rasterisedSymbol(systemName, pointSize: 12, canvas: bounds.size)
-            drawn = (systemName, bounds.size)
+        if drawn?.name != systemName || drawn?.size != bounds.size || drawn?.placement != placement {
+            glyph.contents = rasterisedSymbol(systemName, pointSize: 12, canvas: bounds.size, placement: placement)
+            drawn = (systemName, bounds.size, placement)
         }
         tint.opacity = animates ? 0.35 : 1
         CATransaction.commit()
@@ -151,13 +166,21 @@ private final class PulsingSymbolLayerView: PlatformLayerView {
     }
 }
 
-/// Where a symbol of `size` sits in `canvas`: centred, and scaled down only
-/// when it would not otherwise fit.
-private func symbolRect(_ size: CGSize, in canvas: CGSize) -> CGRect {
+/// Where a symbol's image sits in `canvas`: centred top to bottom, across as
+/// `placement` says, and scaled down only when it would not otherwise fit.
+/// Against a side, it is what the symbol draws that meets the side, not its
+/// image: the image's own blank there (`SymbolInk`) hangs outside the canvas.
+private func symbolRect(_ image: PlatformImage, in canvas: CGSize, placement: SymbolPlacement) -> CGRect {
+    let size = image.size
     guard size.width > 0, size.height > 0 else { return .zero }
     let fit = min(1, canvas.width / size.width, canvas.height / size.height)
     let width = size.width * fit, height = size.height * fit
-    return CGRect(x: (canvas.width - width) / 2, y: (canvas.height - height) / 2, width: width, height: height)
+    let x: CGFloat = switch placement {
+    case .centre: (canvas.width - width) / 2
+    case .left: -SymbolInk.blanks(of: image).left * fit
+    case .right: canvas.width - width + SymbolInk.blanks(of: image).right * fit
+    }
+    return CGRect(x: x, y: (canvas.height - height) / 2, width: width, height: height)
 }
 
 private final class PulseStrokeLayerView: PlatformLayerView {
@@ -343,22 +366,22 @@ private struct PulseStrokeRepresentable: UIViewRepresentable {
 }
 
 private struct PulsingSymbolRepresentable: UIViewRepresentable {
-    var systemName: String, color: Color, animates: Bool
+    var systemName: String, color: Color, animates: Bool, placement: SymbolPlacement
     func makeUIView(context: Context) -> PulsingSymbolLayerView { PulsingSymbolLayerView(frame: .zero) }
     func updateUIView(_ view: PulsingSymbolLayerView, context: Context) {
         view.tint.backgroundColor = UIColor(color).cgColor
-        if view.systemName != systemName || view.animates != animates {
-            view.systemName = systemName; view.animates = animates; view.setNeedsLayout()
+        if view.systemName != systemName || view.animates != animates || view.placement != placement {
+            view.systemName = systemName; view.animates = animates; view.placement = placement; view.setNeedsLayout()
         }
     }
 }
 
 /// The symbol drawn into a `canvas`-sized image at screen scale, for use as a
 /// mask: only its alpha matters.
-private func rasterisedSymbol(_ name: String, pointSize: CGFloat, canvas: CGSize) -> CGImage? {
+private func rasterisedSymbol(_ name: String, pointSize: CGFloat, canvas: CGSize, placement: SymbolPlacement) -> CGImage? {
     let configuration = UIImage.SymbolConfiguration(pointSize: pointSize, weight: .medium)
     guard let symbol = UIImage(systemName: name, withConfiguration: configuration) else { return nil }
-    let rect = symbolRect(symbol.size, in: canvas)
+    let rect = symbolRect(symbol, in: canvas, placement: placement)
     return UIGraphicsImageRenderer(size: canvas).image { _ in
         symbol.withTintColor(.black, renderingMode: .alwaysOriginal).draw(in: rect)  // theme-exempt: a mask, only its alpha is used
     }.cgImage
@@ -409,19 +432,19 @@ private struct PulseStrokeRepresentable: NSViewRepresentable {
 }
 
 private struct PulsingSymbolRepresentable: NSViewRepresentable {
-    var systemName: String, color: Color, animates: Bool
+    var systemName: String, color: Color, animates: Bool, placement: SymbolPlacement
     func makeNSView(context: Context) -> PulsingSymbolLayerView { PulsingSymbolLayerView(frame: .zero) }
     func updateNSView(_ view: PulsingSymbolLayerView, context: Context) {
         view.tint.backgroundColor = NSColor(color).cgColor
-        if view.systemName != systemName || view.animates != animates {
-            view.systemName = systemName; view.animates = animates; view.needsLayout = true
+        if view.systemName != systemName || view.animates != animates || view.placement != placement {
+            view.systemName = systemName; view.animates = animates; view.placement = placement; view.needsLayout = true
         }
     }
 }
 
 /// The symbol drawn into a `canvas`-sized image at screen scale, for use as a
 /// mask: only its alpha matters.
-private func rasterisedSymbol(_ name: String, pointSize: CGFloat, canvas: CGSize) -> CGImage? {
+private func rasterisedSymbol(_ name: String, pointSize: CGFloat, canvas: CGSize, placement: SymbolPlacement) -> CGImage? {
     let configuration = NSImage.SymbolConfiguration(pointSize: pointSize, weight: .medium)
     guard let symbol = NSImage(systemSymbolName: name, accessibilityDescription: nil)?
         .withSymbolConfiguration(configuration) else { return nil }
@@ -433,7 +456,7 @@ private func rasterisedSymbol(_ name: String, pointSize: CGFloat, canvas: CGSize
     bitmap.scaleBy(x: scale, y: scale)
     NSGraphicsContext.saveGraphicsState()
     NSGraphicsContext.current = NSGraphicsContext(cgContext: bitmap, flipped: false)
-    symbol.draw(in: symbolRect(symbol.size, in: canvas))
+    symbol.draw(in: symbolRect(symbol, in: canvas, placement: placement))
     NSGraphicsContext.restoreGraphicsState()
     return bitmap.makeImage()
 }

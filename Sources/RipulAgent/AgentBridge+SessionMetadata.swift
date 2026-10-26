@@ -83,31 +83,73 @@ extension AgentBridge {
     /// A chat's milestones, newest first, and the work since the last one.
     public struct ChatStory: Hashable {
         public let goal: String?
+        public let composerGoal: String?
         public let openSummary: String
         public let milestones: [StoryMilestone]
 
-        public var isEmpty: Bool { goal == nil && openSummary.isEmpty && milestones.isEmpty }
+        public init(goal: String?, composerGoal: String? = nil, openSummary: String, milestones: [StoryMilestone]) {
+            self.goal = goal
+            self.composerGoal = composerGoal
+            self.openSummary = openSummary
+            self.milestones = milestones
+        }
+
+        public var isEmpty: Bool { goal == nil && composerGoal == nil && openSummary.isEmpty && milestones.isEmpty }
     }
 
-    /// A link the chat keeps to hand: an artefact it made, a page it deployed.
-    /// The agent keeps them with the `shortcut` tool; a `key` one also shows in
-    /// the chat's header lozenge.
+    /// A message in the chat: its correlationId, and its time (epoch ms) when known.
+    public struct MessageAnchor: Hashable {
+        public let correlationId: String
+        public let ts: Double?
+    }
+
+    /// A link the chat keeps to hand: an artefact it made, a page it deployed,
+    /// or a message someone pinned. The agent keeps links with the `shortcut`
+    /// tool; anyone in the chat pins a message from its bubble. A `key` one
+    /// also shows in the chat's header lozenge.
     public struct ChatShortcut: Hashable, Identifiable {
         public let id: String
         public let title: String
+        /// A link's address. A pinned message has none: its `url` is
+        /// `ripul-message:<correlationId>` (`messageAnchor(from:)` reads it back),
+        /// so places that only carry a URL can still jump to it.
         public let url: URL
         public let kind: String
         public let key: Bool
         /// A person added or changed it.
         public let persons: Bool
+        /// A pinned message: where it is, who wrote it and who pinned it.
+        public var anchor: MessageAnchor? = nil
+        public var sender: String? = nil
+        public var pinnedBy: String? = nil
+        public var pinnedById: String? = nil
 
         public var isArtefact: Bool { kind == "artefact" }
+        public var isMessage: Bool { anchor != nil }
         /// The address's host, for a second line under the title.
         public var host: String {
             let host = url.host ?? url.absoluteString
             return host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
         }
-        public var symbol: String { isArtefact ? "square.grid.2x2" : "link" }
+        /// The second line under the title: a link's host, or who wrote and who pinned a message.
+        public var subtitle: String {
+            guard isMessage else { return host }
+            return [sender, pinnedBy.map { "pinned by \($0)" } ?? "pinned message"].compactMap { $0 }.joined(separator: " · ")
+        }
+        public var symbol: String { isMessage ? "quote.bubble" : isArtefact ? "square.grid.2x2" : "link" }
+    }
+
+    /// The scheme a pinned message's `url` carries.
+    static let messageShortcutScheme = "ripul-message"
+
+    /// The message a pinned message's `url` points at, or nil for a link.
+    public static func messageAnchor(from url: URL) -> MessageAnchor? {
+        guard url.scheme == messageShortcutScheme,
+              let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return nil }
+        let id = components.path.removingPercentEncoding ?? components.path
+        guard !id.isEmpty else { return nil }
+        let ts = components.queryItems?.first(where: { $0.name == "ts" })?.value.flatMap(Double.init)
+        return MessageAnchor(correlationId: id, ts: ts)
     }
 
     /// How many key shortcuts the header shows. The panel shows them all.
@@ -130,6 +172,17 @@ extension AgentBridge {
         public let story: ChatStory?
         /// Key ones first, then the newest first.
         public let shortcuts: [ChatShortcut]
+        /// The chat is someone else's (an invitation, or a team's Mac): its
+        /// links are the owner's, and a pinned message is unpinned only by
+        /// whoever pinned it.
+        public var isChatMember = false
+        /// The viewer as a participant (`human-<account>`).
+        public var viewerId: String?
+
+        /// Whether the viewer may unpin this pinned message.
+        public func canUnpin(_ shortcut: ChatShortcut) -> Bool {
+            !isChatMember || (viewerId != nil && shortcut.pinnedById == viewerId)
+        }
 
         /// The ones the header lozenge shows.
         public var headerShortcuts: [ChatShortcut] {
@@ -141,7 +194,69 @@ extension AgentBridge {
     public func getSessionMetadata(sessionId: String) async -> SessionMetadata? {
         let reply = await callPage("__ripulGetSessionMetadata", [sessionId], .ifMissing("{ error: 'not ready' }"))
         guard let raw = reply.dictionary?["metadata"] as? [String: Any] else { return nil }
-        return Self.parseSessionMetadata(raw, story: reply.dictionary?["story"] as? [String: Any])
+        var metadata = Self.parseSessionMetadata(raw, story: reply.dictionary?["story"] as? [String: Any])
+        metadata.isChatMember = reply.dictionary?["chatRole"] as? String == "member"
+        metadata.viewerId = reply.dictionary?["viewerId"] as? String
+        return metadata
+    }
+
+    /// A message someone replied to and @'d the viewer on: on the viewer's
+    /// "For your attention" list in the chat until they clear it.
+    /// Docs: chatAttentionList.md.
+    public struct ReadingItem: Hashable, Identifiable {
+        public let id: String
+        /// The message flagged, and its time when the reply carried it.
+        public let anchor: MessageAnchor
+        public let messageSender: String?
+        public let excerpt: String
+        /// What the reply said.
+        public let note: String?
+        public let fromName: String?
+        public let createdAt: Date
+
+        /// "Peter Maude flagged this for you".
+        public var flaggedBy: String { fromName.map { "\($0) flagged this for you" } ?? "Flagged for you" }
+    }
+
+    /// Posted when the page says the viewer's list grew while the chat is open
+    /// (`readingList:changed`, from a `session.readingList` frame sent only to
+    /// the person flagged). `chatId` is the page's id for the chat.
+    public static let readingListChangedNotification = Notification.Name("ripulReadingListChanged")
+
+    /// The viewer's list in a chat, newest first. Nil when the page could not say.
+    public func getReadingList(chatId: String) async -> [ReadingItem]? {
+        let reply = await callPage("__ripulGetReadingList", [chatId], .ifMissing("{ error: 'not ready' }"))
+        guard let raw = reply.dictionary?["items"] as? [[String: Any]] else { return nil }
+        return Self.parseReadingItems(raw)
+    }
+
+    /// Clear items from the viewer's list (`ids`), or all of them (nil). Answers with what is left.
+    public func clearReadingList(chatId: String, ids: [String]?) async -> [ReadingItem]? {
+        let reply = await callPage("__ripulClearReadingList", [chatId, ids], .ifMissing("{ error: 'not ready' }"))
+        guard let raw = reply.dictionary?["items"] as? [[String: Any]] else { return nil }
+        return Self.parseReadingItems(raw)
+    }
+
+    static func parseReadingItems(_ raw: [[String: Any]]) -> [ReadingItem] {
+        raw.compactMap { item in
+            guard let id = item["id"] as? String, let messageId = item["messageId"] as? String,
+                  let excerpt = item["excerpt"] as? String else { return nil }
+            let created = (item["createdAt"] as? NSNumber)?.doubleValue ?? 0
+            return ReadingItem(
+                id: id,
+                anchor: MessageAnchor(correlationId: messageId, ts: (item["messageTs"] as? NSNumber)?.doubleValue),
+                messageSender: item["messageSender"] as? String,
+                excerpt: excerpt,
+                note: item["note"] as? String,
+                fromName: item["fromName"] as? String,
+                createdAt: Date(timeIntervalSince1970: created / 1000)
+            )
+        }
+    }
+
+    /// Scroll the chat to a message: a pinned one, or one flagged for the viewer.
+    public func scrollToMessage(_ anchor: MessageAnchor) {
+        scrollToChatAnchor(correlationId: anchor.correlationId, ts: anchor.ts)
     }
 
     /// Per-chat storage breakdown — total bytes + top buckets by tool/method.
@@ -352,14 +467,16 @@ extension AgentBridge {
             )
         } ?? []
         let goal = (raw["goal"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+        let composerGoal = (raw["composerGoal"] as? String).flatMap { $0.isEmpty ? nil : $0 }
         let open = raw["open"] as? [String: Any]
-        return ChatStory(goal: goal, openSummary: open?["summary"] as? String ?? "", milestones: milestones)
+        return ChatStory(goal: goal, composerGoal: composerGoal, openSummary: open?["summary"] as? String ?? "", milestones: milestones)
     }
 
     /// Parse the chat's shortcuts, key ones first, then the newest first:
     /// the order `shortcutsInOrder` gives on the page.
     static func parseShortcuts(_ raw: Any?) -> [ChatShortcut] {
         let parsed = (raw as? [[String: Any]] ?? []).compactMap { entry -> ChatShortcut? in
+            if entry["kind"] as? String == "message" { return parseMessageShortcut(entry) }
             guard let id = entry["id"] as? String, let title = entry["title"] as? String,
                   let address = entry["url"] as? String, let url = URL(string: address),
                   let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" else { return nil }
@@ -373,6 +490,31 @@ extension AgentBridge {
             )
         }
         return parsed.reversed().filter(\.key) + parsed.reversed().filter { !$0.key }
+    }
+
+    /// A pinned message: an anchor in place of an address.
+    private static func parseMessageShortcut(_ entry: [String: Any]) -> ChatShortcut? {
+        guard let id = entry["id"] as? String, let title = entry["title"] as? String,
+              let anchor = entry["anchor"] as? [String: Any],
+              let correlationId = anchor["correlationId"] as? String, !correlationId.isEmpty else { return nil }
+        let ts = (anchor["ts"] as? NSNumber)?.doubleValue
+        var components = URLComponents()
+        components.scheme = messageShortcutScheme
+        components.path = correlationId
+        if let ts { components.queryItems = [URLQueryItem(name: "ts", value: String(Int64(ts)))] }
+        guard let url = components.url else { return nil }
+        return ChatShortcut(
+            id: id,
+            title: title,
+            url: url,
+            kind: "message",
+            key: entry["key"] as? Bool ?? false,
+            persons: entry["author"] as? String != "agent" || entry["editedByPerson"] as? Bool == true,
+            anchor: MessageAnchor(correlationId: correlationId, ts: ts),
+            sender: entry["sender"] as? String,
+            pinnedBy: entry["pinnedBy"] as? String,
+            pinnedById: entry["pinnedById"] as? String
+        )
     }
 
     /// Parse a raw JSON dictionary into a SessionMetadata.

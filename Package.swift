@@ -26,7 +26,8 @@ let package = Package(
         .plugin(name: "RipulThemeRedirect", targets: ["RipulThemeRedirect"]),
     ],
     dependencies: [
-        .package(url: "https://github.com/gonzalezreal/swift-markdown-ui.git", from: "2.4.1"),
+        // See docs/native-chat-markdown.md and the fork's RIPUL.md.
+        .package(url: "https://github.com/ripulio/swift-markdown-ui.git", exact: "2.4.2-ripul.3"),
         // 0.2.0 added the frame limit the voice orb needs (VoiceModeOverlay.swift).
         .package(url: "https://github.com/ripulio/thinking-orbs-swift.git", from: "0.2.0"),
         .package(url: "https://github.com/appstefan/HighlightSwift.git", from: "1.1.0"),

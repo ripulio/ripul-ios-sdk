@@ -25,15 +25,15 @@ public struct CodingAccountUsage: Codable, Equatable, Sendable {
     public static func planName(_ value: String?) -> String? {
         guard let value, !value.isEmpty else { return nil }
         switch value.lowercased() {
-        case "free", "free_workspace": return "Free"
-        case "pro": return "Pro"
-        case "plus": return "Plus"
-        case "max": return "Max"
+        case "free", "free_workspace", "claude_free": return "Free"
+        case "pro", "claude_pro", "default_claude_ai": return "Pro"
+        case "plus", "chatgpt_plus": return "Plus"
+        case "max", "claude_max": return "Max"
         case "max_5x", "default_claude_max_5x": return "Max 5×"
         case "max_20x", "default_claude_max_20x": return "Max 20×"
-        case "team": return "Team"
+        case "team", "claude_team": return "Team"
         case "self_serve_business_prolite", "self_serve_business_usage_based": return "Business"
-        case "enterprise", "enterprise_cbp_usage_based", "enterprise_cbp_automation": return "Enterprise"
+        case "enterprise", "claude_enterprise", "enterprise_cbp_usage_based", "enterprise_cbp_automation": return "Enterprise"
         case "edu", "education", "edu_plus", "edu_pro": return "Education"
         default: return value.replacingOccurrences(of: "_", with: " ").capitalized
         }

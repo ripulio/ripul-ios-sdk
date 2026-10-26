@@ -9,18 +9,18 @@ import SwiftUI
 /// credential lands in the host's Keychain. The flow:
 ///
 /// 1. `beginHostAuth` — host spawns the login, we get the authorize URL
-/// 2. User signs in (browser on this device) and the callback page shows a code
+/// 2. User signs in in Ripul's own browser (`ClaudeSignInBrowser`), which
+///    catches the callback page's address and reads the code from it
 /// 3. `submitHostAuthCode` — code goes back VERBATIM; host redeems it
 ///
-/// The code renders as `<code>#<state>` and must not be split on `#` — the
+/// The code is `<code>#<state>` and must not be split on `#` — the
 /// CLI silently rejects the left half alone. It is also single-use: submission
 /// is never retried, and a failed attempt requires starting over.
 ///
-/// The browser half always opens in the OS browser, never an in-app controller: the claude.ai
-/// OAuth page's bot checks fail to render inside SFSafariViewController — an embedded
-/// controller shares no cookies with Safari, so the check runs against a cold store, and
-/// on Catalyst the controller rendered the page blank in practice. Both fixed by handing
-/// the URL to the OS browser, which has the user's real cookies and a full browser engine.
+/// Ripul's browser has the cookies of the Browser screen and passed claude.ai's
+/// checks on 23 October 2026 (SFSafariViewController did not: it shares no
+/// cookies and rendered the page blank on Catalyst). Safari and the paste field
+/// stay as the fallback.
 public struct HostSignInSheet: View {
     let machine: RemoteMachine
     let bridge: AgentBridge
@@ -60,6 +60,7 @@ public struct HostSignInSheet: View {
     @State private var phase: Phase = .loading
     @State private var code: String = ""
     @State private var didCopyLink = false
+    @State private var signInPage: ClaudeSignInPage?
 
     public var body: some View {
         NavigationStack {
@@ -82,6 +83,11 @@ public struct HostSignInSheet: View {
             }
         }
         .ripulSheet(.page, detents: [.medium, .large])
+        .ripulSheet(item: $signInPage) { page in
+            ClaudeSignInBrowserSheet(authUrl: page.url, machineName: machine.displayName,
+                                     onOpenElsewhere: { signInPage = nil; openInSystemBrowser(page.url.absoluteString) },
+                                     onFinish: { finishInBrowser($0) })
+        }
         .task {
             if startSignInImmediately { await begin() }
             else { await refreshStatus() }
@@ -265,26 +271,39 @@ public struct HostSignInSheet: View {
                 Button {
                     openAuthUrl(authUrl)
                 } label: {
-                    Label("Open the sign-in page", systemImage: "safari")
+                    Label("Open the sign-in page", systemImage: "person.badge.key")
                         .frame(maxWidth: .infinity)
                 }
                 .ripulProminentButtonStyle()
                 .controlSize(.large)
                 .uiKitIdentifier("HostSignInSheet.awaiting.openUrl")
+                Text("Sign in and tap Authorize. The sign-in finishes by itself.")
+                    .font(.ripul(.subheadline))
+                    .foregroundStyle(.ripul(.textSecondary))
 
-                Button {
-                    copyLink(authUrl)
-                } label: {
-                    Label(didCopyLink ? "Link copied" : "Copy link instead", systemImage: didCopyLink ? "checkmark" : "doc.on.doc")
-                        .font(.ripul(.caption))
+                HStack(spacing: 16) {
+                    Button {
+                        openInSystemBrowser(authUrl)
+                    } label: {
+                        Label("Open in Safari", systemImage: "safari")
+                            .font(.ripul(.caption))
+                    }
+                    .buttonStyle(.borderless)
+                    .uiKitIdentifier("HostSignInSheet.awaiting.openElsewhere")
+                    Button {
+                        copyLink(authUrl)
+                    } label: {
+                        Label(didCopyLink ? "Link copied" : "Copy link", systemImage: didCopyLink ? "checkmark" : "doc.on.doc")
+                            .font(.ripul(.caption))
+                    }
+                    .buttonStyle(.borderless)
+                    .uiKitIdentifier("HostSignInSheet.awaiting.copyUrl")
                 }
-                .buttonStyle(.borderless)
-                .uiKitIdentifier("HostSignInSheet.awaiting.copyUrl")
             }
 
             VStack(alignment: .leading, spacing: 8) {
-                Text("Step 2").font(.ripul(.caption, weight: .semibold)).foregroundStyle(.ripul(.textSecondary))
-                Text("Sign in, then copy the code the page shows and paste it here.")
+                Text("From Safari").font(.ripul(.caption, weight: .semibold)).foregroundStyle(.ripul(.textSecondary))
+                Text("A sign-in finished in Safari shows a code. Copy it and paste it here.")
                     .font(.ripul(.subheadline))
                     .foregroundStyle(.ripul(.textSecondary))
                 codeEntry(sessionId: sessionId)
@@ -318,7 +337,7 @@ public struct HostSignInSheet: View {
             .uiKitIdentifier("HostSignInSheet.codeField")
 
         Button {
-            Task { await submit(sessionId: sessionId) }
+            Task { await submit(sessionId: sessionId, code: code) }
         } label: {
             Text("Submit Code")
                 .frame(maxWidth: .infinity)
@@ -362,7 +381,7 @@ public struct HostSignInSheet: View {
         await begin()
     }
 
-    private func submit(sessionId: String) async {
+    private func submit(sessionId: String, code: String) async {
         phase = .submitting
         let (ok, error) = await bridge.submitHostAuthCode(
             machineId: machine.machineId,
@@ -378,13 +397,28 @@ public struct HostSignInSheet: View {
         }
     }
 
+    /// Ripul's browser, over this sheet. Its callback lands in `finishInBrowser`.
     private func openAuthUrl(_ authUrl: String) {
         guard let url = URL(string: authUrl) else { return }
+        signInPage = ClaudeSignInPage(url: url)
+    }
+
+    /// The page's callback, read from its address: the code goes the same way a
+    /// pasted one does, and is never put in the field.
+    private func finishInBrowser(_ outcome: ClaudeSignInBrowser.Outcome?) {
+        signInPage = nil
+        guard case .awaitingCode(let sessionId, _) = phase, let outcome else { return }
+        switch outcome {
+        case .code(let found): Task { await submit(sessionId: sessionId, code: found) }
+        case .refused(let message), .denied(let message): phase = .failed(message)
+        }
+    }
+
+    private func openInSystemBrowser(_ authUrl: String) {
+        guard let url = URL(string: authUrl) else { return }
         #if os(iOS)
-        // OS browser, not the in-app SFSafariViewController — see the struct doc: the OAuth page's bot checks
-        // need the real Safari/WebKit with the user's cookies; embedded controllers fail
-        // the check and render blank (observed on Catalyst). UIApplication.open is the
-        // system handoff on iOS, and on Catalyst it reaches the Mac's default browser.
+        // UIApplication.open is the system handoff on iOS, and on Catalyst it
+        // reaches the Mac's default browser.
         UIApplication.shared.open(url)
         #elseif os(macOS)
         NSWorkspace.shared.open(url)

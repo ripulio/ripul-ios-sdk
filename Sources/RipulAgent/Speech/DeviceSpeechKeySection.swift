@@ -33,7 +33,7 @@ struct DeviceSpeechKeySection: View {
                 if !voices.isEmpty {
                     Picker("ElevenLabs voice", selection: $voiceID) {
                         Text("Automatic").tag("")
-                        ForEach(voices) { Text($0.name).tag($0.id) }
+                        ForEach(voices) { Text($0.displayLabel).tag($0.id) }
                     }.uiKitIdentifier("VoiceSettings.deviceKey.voice")
                 }
                 Button("Refresh voices") { Task { await refresh() } }.disabled(busy)

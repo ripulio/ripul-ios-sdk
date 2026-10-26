@@ -23,6 +23,9 @@ struct PreviewTestHost: App {
             } else if ProcessInfo.processInfo.arguments.contains("--tool-details-ui-tests") {
                 ToolDetailsHarnessSurface()
                     .preferredColorScheme(ProcessInfo.processInfo.arguments.contains("--light-appearance") ? .light : .dark)
+            } else if ProcessInfo.processInfo.arguments.contains("--native-chat-ui-tests") {
+                NativeChatHarnessSurface()
+                    .preferredColorScheme(ProcessInfo.processInfo.arguments.contains("--light-appearance") ? .light : .dark)
             } else if ProcessInfo.processInfo.arguments.contains("--preview-ui-tests") {
                 PreviewHarnessSurface().ignoresSafeArea()
             } else {
@@ -273,5 +276,420 @@ private struct NativeToolStripHarnessSurface: View {
             }.padding(.horizontal, 12)
         }
         .modifier(ToolCallDetailsPresenter(store: details, onDismiss: { _ in }))
+    }
+}
+
+private struct NativeChatHarnessSurface: View {
+    @State private var bridge = AgentBridge()
+    @State private var scene: Int = {
+        if ProcessInfo.processInfo.arguments.contains("--scene=2") { return 2 }
+        if ProcessInfo.processInfo.arguments.contains("--scene=3") { return 3 }
+        return 1
+    }()
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Button("Scene 1: Turns & Tools") { loadScene(1) }
+                    .accessibilityIdentifier("NativeChatHarness.scene1")
+                Button("Scene 2: Ask & Meta") { loadScene(2) }
+                    .accessibilityIdentifier("NativeChatHarness.scene2")
+                Button("Scene 3: Seams & Notes") { loadScene(3) }
+                    .accessibilityIdentifier("NativeChatHarness.scene3")
+            }
+            .font(.system(size: 12, weight: .semibold))
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+
+            // The page owns the thinking setting; with no page here, set the
+            // bridge's copy of it directly.
+            HStack(spacing: 8) {
+                Button("Thinking: None") { bridge.showThinkingMode = "none" }
+                    .accessibilityIdentifier("NativeChatHarness.thinkingNone")
+                Button("Folded") { bridge.showThinkingMode = "folded" }
+                    .accessibilityIdentifier("NativeChatHarness.thinkingFolded")
+                Button("Open") { bridge.showThinkingMode = "open" }
+                    .accessibilityIdentifier("NativeChatHarness.thinkingOpen")
+            }
+            .font(.system(size: 12, weight: .semibold))
+            .padding(.horizontal, 12)
+            .padding(.bottom, 8)
+
+            Divider()
+
+            NativeChatView(store: bridge.nativeChat, bridge: bridge)
+        }
+        .modifier(ToolCallDetailsPresenter(store: bridge.toolCallDetails, onDismiss: { _ in }))
+        .onAppear {
+            loadScene(scene)
+        }
+    }
+
+    private func loadScene(_ index: Int) {
+        scene = index
+        switch index {
+        case 2:
+            bridge.nativeChat.applyBackfill(Self.scene2Entries())
+        case 3:
+            bridge.nativeChat.applyBackfill(Self.scene3Entries())
+        default:
+            bridge.nativeChat.applyBackfill(Self.scene1Entries())
+        }
+    }
+
+    private static func scene1Entries() -> [[String: Any]] {
+        let t0: Double = Date().timeIntervalSince1970 * 1000
+        var u1: [String: Any] = [
+            "messageId": "u-1",
+            "chatId": "chat-demo",
+            "role": "user",
+            "kind": "user",
+            "content": "Can you inspect `NativeChatView.swift` and port the web chat tool strip and code blocks?",
+            "timestamp": t0,
+            "isOwnMessage": true,
+        ]
+        u1["replyQuote"] = [
+            "correlationId": "a-0",
+            "senderDisplayName": "Opus 4.6",
+            "excerpt": "I'm ready to inspect the native chat implementation.",
+        ] as [String: Any]
+        u1["contextTags"] = [
+            ["id": "ct-1", "tagName": "ide_opened_file", "label": "NativeChatView.swift", "content": "ripul-ios-sdk/Sources/RipulAgent/NativeChatView.swift"],
+            ["id": "ct-2", "tagName": "ide_selection", "label": "Selection", "content": "public struct NativeChatView: View"],
+        ] as [[String: Any]]
+
+        let readCall1: [String: Any] = [
+            "id": "call-read-1",
+            "toolName": "Read",
+            "label": "Read",
+            "rendererName": "Read",
+            "symbol": "doc.text",
+            "status": "success",
+            "timestamp": t0 + 1_000,
+            "arguments": "{\"file_path\":\"Sources/RipulAgent/NativeChatView.swift\"}",
+            "result": "import SwiftUI\npublic struct NativeChatView: View { ... }",
+            "diagnostics": "{}",
+        ]
+        let t1: [String: Any] = [
+            "messageId": "call-read-1",
+            "chatId": "chat-demo",
+            "role": "tool",
+            "kind": "toolCall",
+            "toolName": "Read",
+            "toolStatus": "success",
+            "timestamp": t0 + 1_000,
+            "toolCall": readCall1,
+        ]
+
+        let readCall2: [String: Any] = [
+            "id": "call-read-2",
+            "toolName": "Read",
+            "label": "Read",
+            "rendererName": "Read",
+            "symbol": "doc.text",
+            "status": "success",
+            "timestamp": t0 + 2_000,
+            "arguments": "{\"file_path\":\"Sources/RipulAgent/NativeChatMessageStore.swift\"}",
+            "result": "public final class NativeChatMessageStore: ObservableObject { ... }",
+            "diagnostics": "{}",
+        ]
+        let t2: [String: Any] = [
+            "messageId": "call-read-2",
+            "chatId": "chat-demo",
+            "role": "tool",
+            "kind": "toolCall",
+            "toolName": "Read",
+            "toolStatus": "success",
+            "timestamp": t0 + 2_000,
+            "toolCall": readCall2,
+        ]
+
+        let bashCall: [String: Any] = [
+            "id": "call-bash-1",
+            "toolName": "Bash",
+            "label": "Swift",
+            "rendererName": "terminal",
+            "symbol": "swift",
+            "status": "success",
+            "timestamp": t0 + 3_000,
+            "arguments": "{\"command\":\"swift test --filter ThermalWorkTests\"}",
+            "result": "Test Suite 'ThermalWorkTests' passed (6 tests in 2.88s)",
+            "diagnostics": "{}",
+            "commandPresentation": [
+                "label": "Swift",
+                "symbol": "swift",
+                "command": "swift test --filter ThermalWorkTests",
+                "summary": "Run ThermalWorkTests suite",
+            ] as [String: Any],
+        ]
+        let t3: [String: Any] = [
+            "messageId": "call-bash-1",
+            "chatId": "chat-demo",
+            "role": "tool",
+            "kind": "toolCall",
+            "toolName": "Bash",
+            "toolStatus": "success",
+            "timestamp": t0 + 3_000,
+            "toolCall": bashCall,
+        ]
+
+        let agentTask: [String: Any] = [
+            "id": "task-explore-1",
+            "type": "local_agent",
+            "title": "Compare V2MessageRow and NativeChatView",
+            "status": "completed",
+            "variant": "Explore",
+            "model": "claude-sonnet-4-6",
+            "harness": "claude-code",
+            "totalCount": 5,
+            "usage": "12.4k tokens · 5 tools · 8.2s",
+            "entries": [
+                ["kind": "tool", "label": "Read", "detail": "V2MessageRow.tsx"],
+                ["kind": "tool", "label": "Read", "detail": "UnifiedAgentQuestionPanelProviderReact.tsx"],
+            ] as [[String: Any]],
+        ]
+        let agentCall: [String: Any] = [
+            "id": "call-agent-1",
+            "toolName": "Agent",
+            "label": "Compare V2MessageRow and NativeChatView",
+            "rendererName": "Agent",
+            "symbol": "sparkles",
+            "status": "success",
+            "timestamp": t0 + 4_000,
+            "arguments": "{\"description\":\"Compare V2MessageRow and NativeChatView\"}",
+            "result": "Completed comparison",
+            "diagnostics": "{}",
+            "task": agentTask,
+        ]
+        let t4: [String: Any] = [
+            "messageId": "call-agent-1",
+            "chatId": "chat-demo",
+            "role": "tool",
+            "kind": "toolCall",
+            "toolName": "Agent",
+            "toolStatus": "success",
+            "timestamp": t0 + 4_000,
+            "toolCall": agentCall,
+        ]
+
+        let assistantMd = """
+        I've ported the web chat pipeline into **NativeChatView** with grouped tool strips, sub-agent task rows, and syntax-highlighted code blocks:
+
+        ```swift
+        public struct NativeChatView: View {
+            @ObservedObject private var store: NativeChatMessageStore
+            public var body: some View {
+                ForEach(store.rows) { row in
+                    rowView(for: row)
+                }
+            }
+        }
+        ```
+
+        Tap any tool lozenge above to inspect its full execution details.
+        """
+        let a1: [String: Any] = [
+            "messageId": "a-1",
+            "chatId": "chat-demo",
+            "role": "assistant",
+            "kind": "assistant",
+            "content": assistantMd,
+            "timestamp": t0 + 5_000,
+            "thinking": [
+                "content": "Checking how V2MessageRow groups consecutive tool calls into NativeToolStrip lozenges and renders sub-agent task runs underneath.",
+                "isStreaming": false,
+            ] as [String: Any],
+            "respondent": [
+                "label": "Opus 4.6",
+                "modelId": "claude-opus-4-6",
+                "provider": "anthropic",
+                "contextTokens": 48_200,
+                "contextWindow": 200_000,
+                "contextPercent": 24,
+                "inputTokens": 42_100,
+                "outputTokens": 1_850,
+                "cacheReadTokens": 38_000,
+                "toolCallCount": 4,
+                "durationMs": 6_400,
+                "costUsd": 0.0412,
+                "isRewindable": true,
+                "metaJson": "{\"model\":\"claude-opus-4-6\",\"tokens\":48200}",
+            ] as [String: Any],
+        ]
+        // Thinking with nothing else to say: its own row, not part of a reply.
+        let th1: [String: Any] = [
+            "messageId": "th-1",
+            "chatId": "chat-demo",
+            "role": "assistant",
+            "kind": "assistant",
+            "content": "",
+            "timestamp": t0 + 6_000,
+            "thinking": [
+                "content": "Deciding whether the strip should fold after twenty idle seconds.",
+                "isStreaming": false,
+            ] as [String: Any],
+        ]
+
+        return [u1, t1, t2, t3, t4, a1, th1]
+    }
+
+    private static func scene2Entries() -> [[String: Any]] {
+        let t0: Double = 1_729_765_000_000
+        let q1: [String: Any] = [
+            "messageId": "q-1",
+            "chatId": "chat-demo",
+            "role": "assistant",
+            "kind": "askUser",
+            "content": "",
+            "timestamp": t0,
+            "respondent": [
+                "label": "Opus 4.6",
+                "modelId": "claude-opus-4-6",
+                "provider": "anthropic",
+                "contextPercent": 31,
+            ] as [String: Any],
+            "askUser": [
+                "question": "Which rendering layout should we use for **multi-tool rows** on iPhone?",
+                "options": [
+                    ["label": "Badged Lozenge Strip (Recommended)", "value": "strip", "description": "Horizontal capsule strip with counts and 20s idle collapse"],
+                    ["label": "Expanded Stack", "value": "stack", "description": "Show every tool call on its own line"],
+                    ["label": "Compact Counter", "value": "counter", "description": "Single summary pill only"],
+                ] as [[String: Any]],
+                "multiSelect": false,
+                "completed": false,
+                "responseKey": "rk-layout",
+            ] as [String: Any],
+            "table": [
+                "columns": [
+                    ["key": "feature", "label": "Feature"],
+                    ["key": "web", "label": "Web Chat"],
+                    ["key": "native", "label": "Native Chat"],
+                ] as [[String: Any]],
+                "rows": [
+                    ["feature": "Tool Strip", "web": "NativeToolStrip", "native": "NativeToolStripContent"],
+                    ["feature": "Code Blocks", "web": "Prism / Shiki", "native": "HighlightSwift"],
+                    ["feature": "Question Cards", "web": "UnifiedAgentQuestion", "native": "NativeAskUser"],
+                ] as [[String: Any]],
+            ] as [String: Any],
+        ]
+        return [q1]
+    }
+
+    private static func scene3Entries() -> [[String: Any]] {
+        let t0: Double = 1_729_700_000_000
+        let tLater: Double = t0 + (4 * 3_600_000) // +4 hours -> conversation gap
+
+        let groupMsg: [String: Any] = [
+            "messageId": "g-1",
+            "chatId": "chat-demo",
+            "role": "user",
+            "kind": "user",
+            "content": "I pushed the updated schema to the feature branch.",
+            "timestamp": t0,
+            "senderLabel": "Alex Rivera",
+            "senderUserId": "user-alex",
+            "isGroupChat": true,
+            "isOwnMessage": false,
+        ]
+
+        let sysMsg: [String: Any] = [
+            "messageId": "sys-1",
+            "chatId": "chat-demo",
+            "role": "system",
+            "kind": "systemStatus",
+            "content": "Alex Rivera joined the room",
+            "timestamp": t0 + 1_000,
+            "systemStatus": [
+                "message": "Alex Rivera joined the room",
+                "severity": "info",
+                "isSharedEvent": true,
+            ] as [String: Any],
+        ]
+
+        let ownVoiceMsg: [String: Any] = [
+            "messageId": "u-voice",
+            "chatId": "chat-demo",
+            "role": "user",
+            "kind": "user",
+            "content": "Let's check the latest build status and artefact.",
+            "timestamp": tLater,
+            "senderLabel": "Peter Maude",
+            "isGroupChat": true,
+            "isOwnMessage": true,
+            "isVoice": true,
+        ]
+
+        let noteMsg: [String: Any] = [
+            "messageId": "note-1",
+            "chatId": "chat-demo",
+            "role": "user",
+            "kind": "userNote",
+            "content": "Remember to verify both light and dark appearance on iPhone 17 Pro Max simulator.",
+            "timestamp": tLater + 1_000,
+            "senderLabel": "Note",
+            "isNote": true,
+        ]
+
+        let artMsg: [String: Any] = [
+            "messageId": "art-1",
+            "chatId": "chat-demo",
+            "role": "user",
+            "kind": "userNote",
+            "content": "",
+            "timestamp": tLater + 2_000,
+            "artefactRef": [
+                "artefactId": "native-chat-architecture",
+                "revision": 3,
+                "surface": "page",
+            ] as [String: Any],
+        ]
+
+        let cliVcs: [String: Any] = [
+            "messageId": "cli-vcs",
+            "chatId": "chat-demo",
+            "role": "system",
+            "kind": "cliEvent",
+            "content": "",
+            "timestamp": tLater + 3_000,
+            "cliEvent": [
+                "kind": "vcs",
+                "label": "git commit",
+                "detail": "feat(ios): port web chat features to NativeChatView",
+                "accent": "success",
+                "chips": ["7fa91c2", "main"],
+            ] as [String: Any],
+        ]
+
+        let cliCompact: [String: Any] = [
+            "messageId": "cli-compact",
+            "chatId": "chat-demo",
+            "role": "system",
+            "kind": "cliEvent",
+            "content": "",
+            "timestamp": tLater + 4_000,
+            "cliEvent": [
+                "kind": "compact_boundary",
+                "label": "Context compacted",
+                "detail": "auto · 168k tokens",
+                "accent": "info",
+                "chips": [],
+            ] as [String: Any],
+        ]
+
+        let errMsg: [String: Any] = [
+            "messageId": "err-1",
+            "chatId": "chat-demo",
+            "role": "system",
+            "kind": "error",
+            "content": "Rate limit exceeded on upstream provider",
+            "timestamp": tLater + 5_000,
+            "errorInfo": [
+                "title": "Upstream Rate Limit (429)",
+                "message": "Retrying automatically in 2 seconds using fallback endpoint.",
+                "details": "HTTP 429 Too Many Requests\nRetry-After: 2",
+            ] as [String: Any],
+        ]
+
+        return [groupMsg, sysMsg, ownVoiceMsg, noteMsg, artMsg, cliVcs, cliCompact, errMsg]
     }
 }

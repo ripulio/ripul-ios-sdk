@@ -25,40 +25,47 @@ struct NativeToolCodeBlock: View {
     var numbered = false
     var firstLine = 1
     var syntax: NativeToolCodeSyntax?
+    var compact = false
+    var preservesSource = false
     var readLineNumbers = false
     var commandBreakLines: [Int] = []
     var commandPipeLines: [Int] = []
     var identifier = "NativeTool.code"
-    @State private var visibleLines = 80
-    @State private var wraps = false
+    @NativeRowState("code.visibleLines") private var visibleLines = 80
+    @NativeRowState("code.wraps") private var wraps = false
     @State private var textWidth: CGFloat = 0
     @State private var panelWidth: CGFloat = 0
     @State private var highlighted: AttributedString?
     @State private var highlightedRequest: NativeHighlightRequest?
     @Environment(\.colorScheme) private var colorScheme
 
+    var codeScopeKey: String { title ?? identifier }
+    var wrapsScopeKey: String { title ?? identifier }
+
     var body: some View {
-        let clean = syntax == nil || syntax == .automatic ? ToolValue.cleanTerminal(text) : text
+        let currentVisibleLines = _visibleLines.value(subscope: codeScopeKey)
+        let currentWraps = _wraps.value(subscope: wrapsScopeKey)
+        let clean = !preservesSource && (syntax == nil || syntax == .automatic) ? ToolValue.cleanTerminal(text) : text
         let lines = clean.components(separatedBy: "\n")
-        let visible = lines.prefix(visibleLines).joined(separator: "\n")
+        let visible = lines.prefix(currentVisibleLines).joined(separator: "\n")
         let request = NativeHighlightRequest(source: visible, language: syntax?.language ?? "plaintext", dark: colorScheme == .dark, readLineNumbers: readLineNumbers)
         let attributed = highlightedRequest == request ? (highlighted ?? AttributedString(visible)) : AttributedString(visible)
         let colouredLines = NativeSourceHighlighting.lines(attributed)
         let sectionStarts = [0] + Set(commandBreakLines.filter { $0 > 0 && $0 < colouredLines.count }).sorted()
         let lineCount = "\(lines.count) \(lines.count == 1 ? "line" : "lines")"
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: compact ? 4 : 10) {
             if let title { toolbar(title: title, font: titleFont, clean: clean) }
             VStack(alignment: .leading, spacing: 8) {
                 if title == nil { toolbar(title: lineCount, font: .ripul(.caption), clean: clean) }
-                else { Text(lineCount).font(.ripul(.caption)).foregroundStyle(.ripul(.textSecondary)) }
+                else if !compact { Text(lineCount).font(.ripul(.caption)).foregroundStyle(.ripul(.textSecondary)) }
                 if numbered {
                     wrapping {
                         LazyVStack(alignment: .leading, spacing: 2) {
-                            ForEach(Array(lines.prefix(visibleLines).enumerated()), id: \.offset) { index, line in
+                            ForEach(Array(lines.prefix(currentVisibleLines).enumerated()), id: \.offset) { index, line in
                                 HStack(alignment: .top, spacing: 10) {
                                     Text("\(firstLine + index)").foregroundStyle(.ripul(.textSecondary)).frame(minWidth: 28, alignment: .trailing)
                                     Text(line.isEmpty ? AttributedString(" ") : index < colouredLines.count ? colouredLines[index] : AttributedString(line))
-                                        .textSelection(.enabled).fixedSize(horizontal: !wraps, vertical: true)
+                                        .textSelection(.enabled).fixedSize(horizontal: !currentWraps, vertical: true)
                                         .frame(maxWidth: .infinity, alignment: .leading)
                                 }.font(.ripul(.caption, family: .code))
                             }
@@ -95,7 +102,7 @@ struct NativeToolCodeBlock: View {
                             wrapping {
                                 Text(colouredLines[(start + 1)..<end].reduce(colouredLines[start]) { $0 + AttributedString("\n") + $1 })
                                     .font(.ripul(.callout, family: .code)).textSelection(.enabled)
-                                    .fixedSize(horizontal: !wraps, vertical: true)
+                                    .fixedSize(horizontal: !currentWraps, vertical: true)
                                     .accessibilityIdentifier("\(identifier).part.\(index)")
                             }
                         }
@@ -106,12 +113,14 @@ struct NativeToolCodeBlock: View {
                     wrapping {
                         Text(attributed)
                             .font(.ripul(.callout, family: .code)).textSelection(.enabled)
-                            .fixedSize(horizontal: !wraps, vertical: true)
+                            .fixedSize(horizontal: !currentWraps, vertical: true)
                             .accessibilityIdentifier(identifier)
                     }
                 }
-                if lines.count > visibleLines {
-                    Button("Show more (\(lines.count - visibleLines) lines remaining)") { visibleLines += 200 }.font(.ripul(.callout))
+                if lines.count > currentVisibleLines {
+                    Button("Show more (\(lines.count - currentVisibleLines) lines remaining)") {
+                        _visibleLines.setValue(currentVisibleLines + 200, subscope: codeScopeKey)
+                    }.font(.ripul(.callout))
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -121,7 +130,7 @@ struct NativeToolCodeBlock: View {
                 // remains available while wrapping and responds to resizing/text updates.
                 HStack(alignment: .top, spacing: numbered ? 10 : 0) {
                     if numbered {
-                        Text("\(firstLine + min(lines.count, visibleLines) - 1)").frame(minWidth: 28)
+                        Text("\(firstLine + min(lines.count, currentVisibleLines) - 1)").frame(minWidth: 28)
                     }
                     Text(visible)
                 }
@@ -130,7 +139,7 @@ struct NativeToolCodeBlock: View {
                 .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { textWidth = $0 }
                 .hidden().accessibilityHidden(true).allowsHitTesting(false)
             }
-            .padding(12).background(.ripul(.textQuaternary).opacity(0.5), in: RoundedRectangle(cornerRadius: 10))
+            .padding(compact ? 10 : 12).background(.ripul(.textQuaternary).opacity(0.5), in: RoundedRectangle(cornerRadius: compact ? 6 : 10))
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .task(id: request) {
@@ -146,7 +155,7 @@ struct NativeToolCodeBlock: View {
             Text(title).font(font).accessibilityIdentifier("\(identifier).title")
             Spacer(minLength: 8)
             if panelWidth > 0 && textWidth > panelWidth + 0.5 {
-                Toggle("Wrap", isOn: $wraps)
+                Toggle("Wrap", isOn: _wraps.binding(subscope: wrapsScopeKey))
                     .toggleStyle(.switch).fixedSize().font(.ripul(.caption))
                     .accessibilityIdentifier("\(identifier).wrap")
             }
@@ -165,7 +174,7 @@ struct NativeToolCodeBlock: View {
 
     /// Scroll the text only, keeping its toolbar and command dividers in view.
     @ViewBuilder private func wrapping<Content: View>(@ViewBuilder content: () -> Content) -> some View {
-        if wraps {
+        if _wraps.value(subscope: wrapsScopeKey) {
             content().frame(maxWidth: .infinity, alignment: .leading)
         } else {
             ScrollView(.horizontal) {
@@ -184,7 +193,10 @@ struct NativeToolValueView: View {
     var identifier = "NativeTool.value"
     var textSyntax: NativeToolCodeSyntax?
     var narrative = true
-    @State private var visibleItems = 40
+    @NativeRowState("value.visibleItems") private var visibleItems = 40
+    @NativeRowState("value.disclosure") private var fieldDisclosure = false
+
+    private var valueScopeKey: String { title ?? identifier }
 
     var body: some View {
         let display = narrative && textSyntax == nil ? NativeToolNarrative.expanded(value) : value
@@ -210,44 +222,198 @@ struct NativeToolValueView: View {
         case .null: return AnyView(Text("No value").foregroundStyle(.ripul(.textSecondary)))
         case .array(let items):
             if items.isEmpty { return AnyView(Text("None").foregroundStyle(.ripul(.textSecondary))) }
+            let currentVisibleItems = _visibleItems.value(subscope: valueScopeKey)
             return AnyView(VStack(alignment: .leading, spacing: 12) {
-                ForEach(Array(items.prefix(visibleItems).enumerated()), id: \.offset) { index, item in
+                ForEach(Array(items.prefix(currentVisibleItems).enumerated()), id: \.offset) { index, item in
                     HStack(alignment: .top, spacing: 10) {
                         Text("\(index + 1)").font(.ripul(.caption)).foregroundStyle(.ripul(.textSecondary))
                         NativeToolValueView(value: item, textSyntax: textSyntax, narrative: narrative)
+                            .nativeChatRowStateScope("item:\(index)")
                     }
                     if index < items.count - 1 { Divider() }
                 }
-                if items.count > visibleItems { Button("Show more (\(items.count - visibleItems) remaining)") { visibleItems += 100 } }
+                if items.count > currentVisibleItems {
+                    Button("Show more (\(items.count - currentVisibleItems) remaining)") {
+                        _visibleItems.setValue(currentVisibleItems + 100, subscope: valueScopeKey)
+                    }
+                }
             })
         case .object(let object):
             if let source = NativeToolImage.source(object) { return AnyView(NativeToolImage(source: source)) }
             if object.isEmpty { return AnyView(Text("None").foregroundStyle(.ripul(.textSecondary))) }
+            let sortedKeys = object.keys.sorted()
+            let scalarKeys = sortedKeys.filter { key in
+                guard let item = object[key] else { return false }
+                return Self.isCompactFieldControl(key: key, item: item, textSyntax: textSyntax, narrative: narrative)
+            }
+            let blockKeys = sortedKeys.filter { key in
+                guard let item = object[key] else { return false }
+                return !Self.isCompactFieldControl(key: key, item: item, textSyntax: textSyntax, narrative: narrative)
+            }
             return AnyView(VStack(alignment: .leading, spacing: 12) {
-                ForEach(object.keys.sorted(), id: \.self) { key in
-                    if let item = object[key] {
-                        if item.objectValue != nil || item.toolArray != nil {
-                            DisclosureGroup(ToolValue.title(key)) { NativeToolValueView(value: item, textSyntax: textSyntax, narrative: narrative && !NativeToolNarrative.isLiteralField(key)).padding(.top, 8) }
-                        } else {
-                            let syntax = ["stdout", "stderr", "output", "text", "content"].contains(key) ? textSyntax : nil
-                            if let text = item.stringValue, NativeToolNarrative.isProse(text, field: key, enabled: narrative, hasSyntax: textSyntax != nil) {
-                                NativeToolSection(title: ToolValue.title(key)) { NativeToolProse(text: text) }
-                            } else if let text = item.stringValue, text.contains("\n") || (syntax != nil && !text.isEmpty) {
-                                NativeToolCodeBlock(text: text, title: ToolValue.title(key), titleFont: .ripul(.caption), syntax: syntax, identifier: "NativeTool.value")
-                            } else {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(ToolValue.title(key)).font(.ripul(.caption)).foregroundStyle(.ripul(.textSecondary))
+                if !scalarKeys.isEmpty {
+                    NativeToolFieldFlowLayout(spacing: 8) {
+                        ForEach(scalarKeys, id: \.self) { key in
+                            if let item = object[key] {
+                                let syntax = ["stdout", "stderr", "output", "text", "content"].contains(key) ? textSyntax : nil
+                                NativeToolFieldControl(label: ToolValue.title(key), isLiteral: NativeToolNarrative.isLiteralField(key)) {
                                     if let raw = item.stringValue, let url = URL(string: raw), ["https", "http"].contains(url.scheme) {
                                         Link(raw, destination: url).textSelection(.enabled)
                                     } else {
                                         NativeToolValueView(value: item, textSyntax: syntax, narrative: false)
+                                            .nativeChatRowStateScope("field:\(key)")
                                     }
                                 }
                             }
                         }
                     }
                 }
+                ForEach(blockKeys, id: \.self) { key in
+                    if let item = object[key] {
+                        if item.objectValue != nil || item.toolArray != nil {
+                            DisclosureGroup(
+                                ToolValue.title(key),
+                                isExpanded: _fieldDisclosure.binding(subscope: "\(valueScopeKey):\(key)")
+                            ) {
+                                NativeToolValueView(value: item, textSyntax: textSyntax, narrative: narrative && !NativeToolNarrative.isLiteralField(key))
+                                    .nativeChatRowStateScope("field:\(key)")
+                                    .padding(.top, 8)
+                            }
+                        } else {
+                            let syntax = ["stdout", "stderr", "output", "text", "content"].contains(key) ? textSyntax : nil
+                            if let text = item.stringValue, NativeToolNarrative.isProse(text, field: key, enabled: narrative, hasSyntax: textSyntax != nil) {
+                                NativeToolSection(title: ToolValue.title(key)) {
+                                    NativeToolProse(text: text).nativeChatRowStateScope("field:\(key)")
+                                }
+                            } else if let text = item.stringValue, text.contains("\n") || (syntax != nil && !text.isEmpty) {
+                                NativeToolCodeBlock(text: text, title: ToolValue.title(key), titleFont: .ripul(.caption), syntax: syntax, identifier: "NativeTool.value")
+                                    .nativeChatRowStateScope("field:\(key)")
+                            }
+                        }
+                    }
+                }
             })
+        }
+    }
+
+    static func isCompactFieldControl(key: String, item: CmsJSON, textSyntax: NativeToolCodeSyntax? = nil, narrative: Bool = true) -> Bool {
+        if item.objectValue != nil || item.toolArray != nil { return false }
+        let syntax = ["stdout", "stderr", "output", "text", "content"].contains(key) ? textSyntax : nil
+        if let text = item.stringValue {
+            if NativeToolNarrative.isProse(text, field: key, enabled: narrative, hasSyntax: textSyntax != nil) { return false }
+            if text.contains("\n") || (syntax != nil && !text.isEmpty) { return false }
+        }
+        return true
+    }
+}
+
+/// MUI-inspired read-only field box that tightly integrates its micro-label and
+/// value inside a differentiated surface container.
+struct NativeToolFieldControl<Content: View>: View {
+    let label: String
+    var isLiteral = false
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(label)
+                .font(.ripul(.caption2, weight: .semibold))
+                .foregroundStyle(.ripul(.textSecondary))
+                .lineLimit(1)
+            content
+                .font(isLiteral ? .ripul(.caption, family: .code) : .ripul(.subheadline, weight: .medium))
+                .foregroundStyle(.ripul(.text))
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity, alignment: .topLeading)
+        .background(Color.ripul(.textQuaternary).opacity(0.35), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(Color.ripul(.separator).opacity(0.75), lineWidth: 1)
+        )
+    }
+}
+
+/// Packs narrow field controls into shared horizontal rows (up to `maxPerRow`
+/// per row) while giving wider values their own full-width row and stretching
+/// fields within each row so leading and trailing edges align.
+struct NativeToolFieldFlowLayout: Layout {
+    var spacing: CGFloat = 8
+    var maxPerRow: Int = 3
+
+    struct RowItem: Equatable {
+        let index: Int
+        let width: CGFloat
+    }
+
+    static func packRows(idealWidths: [CGFloat], availableWidth: CGFloat, spacing: CGFloat = 8, maxPerRow: Int = 3) -> [[RowItem]] {
+        guard !idealWidths.isEmpty else { return [] }
+        let safeWidth = max(availableWidth, 120)
+        let shareThreshold = safeWidth * 0.62
+        var rawRows: [[(index: Int, ideal: CGFloat, raw: CGFloat)]] = []
+        var current: [(index: Int, ideal: CGFloat, raw: CGFloat)] = []
+        var currentSum: CGFloat = 0
+
+        for (index, raw) in idealWidths.enumerated() {
+            let clamped = max(min(raw, safeWidth), 64)
+            let canShare = raw <= shareThreshold && current.allSatisfy { $0.raw <= shareThreshold }
+            let nextWidth = currentSum + CGFloat(current.count) * spacing + clamped
+            if !current.isEmpty && canShare && current.count < maxPerRow && nextWidth <= safeWidth {
+                current.append((index, clamped, raw))
+                currentSum += clamped
+            } else {
+                if !current.isEmpty { rawRows.append(current) }
+                current = [(index, clamped, raw)]
+                currentSum = clamped
+            }
+        }
+        if !current.isEmpty { rawRows.append(current) }
+
+        return rawRows.map { row in
+            let totalSpacing = CGFloat(max(0, row.count - 1)) * spacing
+            let sumIdeal = row.reduce(CGFloat(0)) { $0 + $1.ideal }
+            let extra = max(0, safeWidth - totalSpacing - sumIdeal)
+            return row.map { item in
+                let share = sumIdeal > 0 ? extra * (item.ideal / sumIdeal) : extra / CGFloat(row.count)
+                return RowItem(index: item.index, width: item.ideal + share)
+            }
+        }
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard !subviews.isEmpty else { return .zero }
+        let availableWidth = proposal.width ?? 320
+        let idealWidths = subviews.map { $0.sizeThatFits(.unspecified).width }
+        let rows = Self.packRows(idealWidths: idealWidths, availableWidth: availableWidth, spacing: spacing, maxPerRow: maxPerRow)
+        var totalHeight: CGFloat = 0
+        for (rowIndex, row) in rows.enumerated() {
+            if rowIndex > 0 { totalHeight += spacing }
+            let rowHeight = row.map { subviews[$0.index].sizeThatFits(ProposedViewSize(width: $0.width, height: nil)).height }.max() ?? 0
+            totalHeight += rowHeight
+        }
+        return CGSize(width: availableWidth, height: totalHeight)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard !subviews.isEmpty else { return }
+        let availableWidth = bounds.width > 0 ? bounds.width : (proposal.width ?? 320)
+        let idealWidths = subviews.map { $0.sizeThatFits(.unspecified).width }
+        let rows = Self.packRows(idealWidths: idealWidths, availableWidth: availableWidth, spacing: spacing, maxPerRow: maxPerRow)
+        var y = bounds.minY
+        for row in rows {
+            let rowHeight = row.map { subviews[$0.index].sizeThatFits(ProposedViewSize(width: $0.width, height: nil)).height }.max() ?? 0
+            var x = bounds.minX
+            for item in row {
+                subviews[item.index].place(
+                    at: CGPoint(x: x, y: y),
+                    anchor: .topLeading,
+                    proposal: ProposedViewSize(width: item.width, height: rowHeight)
+                )
+                x += item.width + spacing
+            }
+            y += rowHeight + spacing
         }
     }
 }
@@ -256,10 +422,16 @@ struct NativeToolParameters: View {
     let args: [String: CmsJSON]
     var excluding: Set<String> = []
     var title = "Parameters"
+    @NativeRowState("params.expanded") private var isExpanded = false
+
     var body: some View {
         let fields = args.filter { !excluding.contains($0.key) && $0.value != .null }
         if !fields.isEmpty {
-            DisclosureGroup(title) { NativeToolValueView(value: .object(fields)).padding(.top, 8) }
+            DisclosureGroup(title, isExpanded: _isExpanded.binding(subscope: title)) {
+                NativeToolValueView(value: .object(fields))
+                    .nativeChatRowStateScope("params:\(title)")
+                    .padding(.top, 8)
+            }
         }
     }
 }

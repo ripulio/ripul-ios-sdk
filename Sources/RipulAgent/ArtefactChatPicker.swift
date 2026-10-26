@@ -8,20 +8,14 @@ struct ArtefactChatPicker: View {
     @Environment(\.dismiss) private var dismiss
     @State private var items: [Item] = []
     @State private var choice: Choice?
-    @State private var teams: [Team] = []
     @State private var search = ""
     @State private var surface = "widget"
-    @State private var teamID = ""
     @State private var presentationID = UUID().uuidString
     @State private var busy = false
     @State private var attempted = false
     @State private var error: String?
 
     private struct Item: Decodable, Identifiable { let id: String; let title: String; let latestRevision: Int }
-    private struct Team: Decodable, Identifiable {
-        let teamId: String; let teamName: String
-        var id: String { teamId }
-    }
     private struct Choice: Decodable {
         let id: String; let title: String; let revision: Int; let surfaces: [String]; let canShare: Bool
     }
@@ -41,12 +35,8 @@ struct ArtefactChatPicker: View {
                                     Text(value == "widget" ? "Interactive chat card" : "Full page").tag(value)
                                 }
                             }.disabled(busy || attempted)
-                            Picker("Access", selection: $teamID) {
-                                Text("Keep existing access").tag("")
-                                ForEach(teams) { team in Text("Allow \(team.teamName) to view and run").tag(team.teamId) }
-                            }.disabled(busy || attempted || !choice.canShare)
                         } footer: { RipulSectionFooter {
-                            Text("People need artefact access to open the card. Sharing with a team gives its members access across chats. Private scenarios and run history stay private.")
+                            Text("Adding a card shares nothing. Each person in this chat opens it with their own access; to give someone access, use Sharing on the artefact itself. Private scenarios and run history stay private.")
                         } }.ripulThemedListRows()
                         Section {
                             Button(attempted ? "Retry add to chat" : "Add to chat") { Task { await post(choice) } }
@@ -103,13 +93,12 @@ struct ArtefactChatPicker: View {
         catch { self.error = error.localizedDescription }
     }
     @MainActor private func select(_ item: Item) async {
-        busy = true; error = nil; teams = []; teamID = ""
+        busy = true; error = nil
         defer { busy = false }
         do {
             let selected = try decode(await call("choose", ["id":item.id]), as: Choice.self)
             choice = selected; surface = selected.surfaces.first ?? "page"
             presentationID = UUID().uuidString; attempted = false
-            if selected.canShare { teams = try decode(await call("teams"), as: [Team].self) }
         } catch { self.error = error.localizedDescription }
     }
     @MainActor private func post(_ choice: Choice) async {
@@ -117,10 +106,10 @@ struct ArtefactChatPicker: View {
         busy = true; error = nil; attempted = true
         defer { busy = false }
         do {
-            _ = try await call("post", ["artefactId":choice.id,"revision":choice.revision,"surface":surface,"presentationId":presentationID,"teamId":teamID])
+            _ = try await call("post", ["artefactId":choice.id,"revision":choice.revision,"surface":surface,"presentationId":presentationID])
             dismiss()
         } catch {
-            self.error = "Adding was not confirmed: \(error.localizedDescription) Retry to confirm the same card. Any team sharing already saved remains in place."
+            self.error = "Adding was not confirmed: \(error.localizedDescription) Retry to confirm the same card."
         }
     }
 }

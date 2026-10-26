@@ -32,6 +32,22 @@ public final class RipulComposerActionStore: ObservableObject {
     func clear() { byChat = [:] }
 }
 
+@MainActor
+public final class RipulComposerGoalStore: ObservableObject {
+    @Published private var byChat: [String: String] = [:]
+    public func goal(for chatId: String?) -> String? {
+        guard let chatId, let text = byChat[chatId]?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else { return nil }
+        return text
+    }
+    func update(chatId: String, goal: String?) {
+        let trimmed = goal?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let next = (trimmed?.isEmpty == false) ? trimmed : nil
+        guard byChat[chatId] != next else { return }
+        byChat[chatId] = next
+    }
+    func clear() { byChat = [:] }
+}
+
 /// Shared by all native composer layouts and platforms.
 struct ComposerActionButtons: View {
     let actions: [RipulComposerAction]

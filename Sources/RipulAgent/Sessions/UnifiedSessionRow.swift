@@ -70,7 +70,9 @@ struct SessionTitleLozenge: View {
                 .fill(Color.ripul(.textSecondary).opacity(0.12))
         )
         .uiKitIdentifier("SessionTitleLozenge.container")
-        // No animation on a new tool or count: see the row's subtitle.
+        // A new tool or count animates in: see the row's subtitle.
+        .animationWhileSessionListSeen(.easeInOut(duration: 0.175), value: iconName)
+        .animationWhileSessionListSeen(.easeInOut(duration: 0.175), value: label)
     }
 }
 
@@ -173,6 +175,9 @@ public struct UnifiedSessionRow: View {
     /// false means the row reads the store itself (the other screens).
     var attention: PendingAgentQuestion? = nil
     var attentionGiven = false
+    /// Passed separately so another mention redraws the row even when its
+    /// earliest attention item stays the same. Nil reads the store directly.
+    var unreadMentionCount: Int? = nil
 
     public init(
         sessionStore: SessionListStore,
@@ -199,7 +204,8 @@ public struct UnifiedSessionRow: View {
         startedChatsPutAway: [UnifiedSession] = [],
         onToggleStartedChats: (() -> Void)? = nil,
         onSessionAction: ((SessionRowAction) -> Void)? = nil,
-        attention: PendingAgentQuestion?? = .none
+        attention: PendingAgentQuestion?? = .none,
+        unreadMentionCount: Int? = nil
     ) {
         if case .some(let given) = attention {
             self.attention = given
@@ -229,6 +235,7 @@ public struct UnifiedSessionRow: View {
         self.startedChatsPutAway = startedChatsPutAway
         self.onToggleStartedChats = onToggleStartedChats
         self.onSessionAction = onSessionAction
+        self.unreadMentionCount = unreadMentionCount
     }
 
     /// How many of the chats put away under this one are mid-turn, each read
@@ -251,6 +258,10 @@ public struct UnifiedSessionRow: View {
     /// the set of names this row answers to.
     private var pendingAttention: PendingAgentQuestion? {
         attentionGiven ? attention : PendingQuestionStore.shared.first(anyOf: session.attentionKeys)
+    }
+
+    private var pendingMentionCount: Int {
+        unreadMentionCount ?? PendingQuestionStore.shared.unreadMentionCount(anyOf: session.attentionKeys)
     }
 
     /// Bold for an unread reply, and for a question or mention waiting on you.
@@ -344,6 +355,17 @@ public struct UnifiedSessionRow: View {
 
     // MARK: - Presentation metrics
 
+    /// How a new tool comes in, in the session list and the chat's top-bar
+    /// pill alike. See the subtitle.
+    private var toolChangeAnimation: Animation? { .easeInOut(duration: 0.175) }
+
+    /// True when both a plan is in progress AND a tool call is active —
+    /// determines whether the third row (inline tool line) is shown.
+    private var hasInlineToolActivity: Bool {
+        let state = SessionSubtitleState.resolve(activePlan: activePlan, listPlan: listPlan, latestToolActivity: latestToolActivity)
+        return state.planIsInProgress && latestToolActivity != nil
+    }
+
     private var iconSize: CGFloat { presentation.isLozenge ? 13 : 16 }
     private var iconWidth: CGFloat { presentation.isLozenge ? 20 : 28 }
     private var titleFont: Font {
@@ -371,17 +393,6 @@ public struct UnifiedSessionRow: View {
                     .uiKitIdentifier("UnifiedSessionRow.selectionCheckmark")
             }
 
-            // A chat another agent started hangs under the chat that started
-            // it. The turn of the arrow says so, where the title used to.
-            if familyDepth > 0, !presentation.isLozenge {
-                Image(systemName: "arrow.turn.down.right")
-                    .font(.ripulIcon(.caption, weight: .medium))
-                    .foregroundStyle(.ripul(.textTertiary))
-                    .frame(width: CGFloat(familyDepth) * 14, alignment: .trailing)
-                    .accessibilityLabel("Under the chat above")
-                    .uiKitIdentifier("UnifiedSessionRow.familyConnector")
-            }
-
             // Leading icon — tool icon while a tool activity event is
             // present (both toolStart and toolEnd); otherwise the model
             // family glyph (in the model's colour) when the model resolves,
@@ -403,7 +414,7 @@ public struct UnifiedSessionRow: View {
                             .font(.ripulIcon(size: iconSize))
                             .foregroundStyle(.ripul(.textSecondary))
                             .frame(width: iconWidth)
-                            .contentTransition(.symbolEffect(.replace))
+                            .modifier(SymbolReplaceWhileSessionListSeen())
                             .uiKitIdentifier("UnifiedSessionRow.leadingIcon")
                     } else if let identity = modelIdentity {
                         // Model-aligned: family glyph + colour, matching the
@@ -420,7 +431,7 @@ public struct UnifiedSessionRow: View {
                             .font(.ripulIcon(size: iconSize))
                             .foregroundStyle(providerColor)
                             .frame(width: iconWidth)
-                            .contentTransition(.symbolEffect(.replace))
+                            .modifier(SymbolReplaceWhileSessionListSeen())
                             .uiKitIdentifier("UnifiedSessionRow.leadingIcon")
                     }
 
@@ -459,6 +470,7 @@ public struct UnifiedSessionRow: View {
                         }
                     }
                 }
+                .animationWhileSessionListSeen(toolChangeAnimation, value: toolIcon)
 
                 // The label under the icon needs a second line the top-bar
                 // pill doesn't have; there the tool name stays in the subtitle.
@@ -468,10 +480,15 @@ public struct UnifiedSessionRow: View {
                         .foregroundStyle(.ripul(.textSecondary))
                         .lineLimit(1)
                         .frame(width: 32)
+                        .contentTransition(.opacity)
+                        .transition(.opacity)
                         .uiKitIdentifier("UnifiedSessionRow.toolLabel")
                 }
             }
             .frame(width: iconWidth)
+            .animationWhileSessionListSeen(toolChangeAnimation, value: latestToolActivity != nil)
+            // The name under the icon fades to the next tool's, with the icon.
+            .animationWhileSessionListSeen(toolChangeAnimation, value: latestToolActivity?.displayName)
             .modifier(StartedChatsToggle(
                 count: startedChats, isClosed: startedChatsClosed,
                 // Selecting rows owns the tap; the top-bar pill has no family to show.
@@ -513,6 +530,8 @@ public struct UnifiedSessionRow: View {
                     guard subtitleState.planIsInProgress else { return nil }
                     return latestToolActivity
                 }()
+
+                let subtitleKey = subtitleState.subtitleKey(inlineToolActivity: inlineToolActivity)
 
                 // Unread replies use a bold title alongside the envelope.
                 HStack(spacing: 6) {
@@ -663,13 +682,18 @@ public struct UnifiedSessionRow: View {
                         .truncationMode(.tail)
                     }
                 }
-                // A new tool swaps the icon, the lozenge and this line at once,
-                // not in 0.175 s animations. Each of those was about 20 frames
-                // of SwiftUI layout on a 120 Hz phone, for every tool event, in
-                // the list row and again in the chat's top-bar pill (whose
-                // width change morphed the bar's glass too). Peter's phone,
-                // 18 October 2026: 43-83 tool events a minute, and one row and
-                // the hidden top bar changing 7-13 times a second.
+                // A new tool animates the icon, the lozenge and this line
+                // (0.175 s): in the session list while it can be seen (on an
+                // iPhone it stays behind an open chat), and in the chat's
+                // top-bar pill. Both were off from 18 October 2026, when every
+                // tool changed the pill's width and morphed the bar's glass;
+                // the pill has filled its slot while the agent works since then,
+                // so its width no longer changes. Measured 23 October in the
+                // session families harness (--pill-demo), a tool every 0.75 s,
+                // the top of the 43-83 a minute a phone saw: animating the pill
+                // adds about 0.3 s of the app's processor in 30 (1%) and
+                // nothing measurable in the render server.
+                .animationWhileSessionListSeen(toolChangeAnimation, value: subtitleKey)
 
                 // Third row: only when a plan is driving the row AND a tool
                 // call is live underneath it. The top-bar pill is two lines
@@ -693,6 +717,13 @@ public struct UnifiedSessionRow: View {
                 }
             }
             .frame(maxWidth: presentation.isLozenge ? nil : .infinity, alignment: .leading)
+            // The divider under the row starts where the text does, not under
+            // the icon (Peter, 23 October 2026). Without this the list lines
+            // it up with the first text in the row, which is the model's
+            // glyph when the icon is one. A family's dividers read it too
+            // (`glassRowGroupDivider`).
+            .alignmentGuide(.listRowSeparatorLeading) { $0[.leading] }
+            .animationWhileSessionListSeen(toolChangeAnimation, value: hasInlineToolActivity)
 
             // List-only trailing chrome. The top-bar pill hugs its content and
             // sits between two 44pt buttons — there is no room for a running
@@ -721,6 +752,19 @@ public struct UnifiedSessionRow: View {
         #endif
     }
 
+    /// Color of the busy indicator: aligns with the model in use (or the CLI
+    /// provider fallback), matching the row's model identity so the pulsing
+    /// machine glyph communicates both which Mac is running and which model is
+    /// running. When the row itself is idle and only a put-away started chat is
+    /// running, uses that running child's model/provider color.
+    var runningIndicatorColor: Color {
+        if !sessionStore.isRunning(session),
+           let runningChild = startedChatsPutAway.first(where: { sessionStore.isRunning($0) }) {
+            return ModelIdentity.resolve(modelId: runningChild.model)?.color
+                ?? ProviderConstants.color(for: runningChild.provider, providerLabel: runningChild.providerLabel)
+        }
+        return modelIdentity?.color ?? providerColor
+    }
     /// The busy indicator, parked UNDER the timestamp instead of beside it.
     ///
     /// Stacked because it is the trailing column's *second* fact, not a
@@ -749,28 +793,40 @@ public struct UnifiedSessionRow: View {
         let ownRunning = sessionStore.isRunning(session)
         let startedRunning = startedChatsRunning
         let isRunning = ownRunning || startedRunning > 0
+        let count = pendingMentionCount
         HStack(spacing: 4) {
             if isRunning {
                 // Core Animation, not a SwiftUI symbol effect: see
                 // RenderServerPulsingSymbol for the per-frame cost that has.
-                RunningIndicatorSymbol(systemName: runningIndicatorIcon)
+                RunningIndicatorSymbol(systemName: runningIndicatorIcon, color: runningIndicatorColor)
                     .accessibilityElement()
                     .accessibilityLabel(ownRunning ? "Running"
                         : "\(startedRunning) \(startedRunning == 1 ? "chat" : "chats") under it running")
                     .transition(.opacity)
                     .uiKitIdentifier("UnifiedSessionRow.phaseIndicator.running")
             }
-            if isGroupChat {
-                Image(systemName: "person.2.fill")
-                    .font(.ripulIcon(.caption2))
-                    .foregroundStyle(.ripul(.textTertiary))
+            // A received human mention also proves this is a shared chat,
+            // even when its membership metadata is not available locally.
+            if count > 0 {
+                // A notification count replaces the group glyph. Use the
+                // system badge colours: onAccent is dark ink in the dark theme.
+                Text(count > 99 ? "99+" : "\(count)")
+                    .font(.ripul(size: 10, weight: .bold).monospacedDigit())
+                    .foregroundStyle(.ripul(system: .white))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+                    .padding(.horizontal, 2)
+                    .frame(width: 18, height: 18)
+                    .background(.ripul(system: .systemRed), in: Circle())
+                    .accessibilityLabel("Group chat, \(count) unread \(count == 1 ? "mention" : "mentions")")
+                    .uiKitIdentifier("UnifiedSessionRow.unreadMentionBadge")
+            } else if isGroupChat {
+                TrailingColumnSymbol(systemName: "person.2.fill", endsColumn: !isTeamShared)
                     .accessibilityLabel("Group chat")
                     .uiKitIdentifier("UnifiedSessionRow.groupChatIcon")
             }
             if isTeamShared {
-                Image(systemName: "person.3.fill")
-                    .font(.ripulIcon(.caption2))
-                    .foregroundStyle(.ripul(.textTertiary))
+                TrailingColumnSymbol(systemName: "person.3.fill", endsColumn: true)
                     .accessibilityLabel("Shared with team")
                     .uiKitIdentifier("UnifiedSessionRow.teamSharedIcon")
             }
@@ -832,11 +888,12 @@ public struct UnifiedSessionRow: View {
                     // Keep the time text in layout while opening (invisible) so
                     // the trailing slot's width is unchanged when the spinner
                     // replaces it — otherwise the whole row reflows around the
-                    // narrower spinner as it appears.
-                    ZStack {
-                        RelativeTimeText(date: effectiveLastActive)
-                            .font(.ripul(.caption2))
-                            .foregroundStyle(.ripul(.textTertiary))
+                    // narrower spinner as it appears. The spinner ends on the
+                    // edge the time and the icons below end on: centred over
+                    // the time's 28-point box, it stopped 7 points short of
+                    // them (Peter, 23 October 2026).
+                    ZStack(alignment: .trailing) {
+                        TrailingColumnTime(date: effectiveLastActive)
                             .opacity(isOpening ? 0 : 1)
                             .accessibilityHidden(isOpening)
                             .uiKitIdentifier("UnifiedSessionRow.timeText")
@@ -887,6 +944,48 @@ private struct StartedChatsToggle: ViewModifier {
     }
 }
 
+/// The time at the top of a row's trailing column, ending on the column's edge
+/// with its last letter rather than its box.
+///
+/// The column is lined up by what is drawn, not by boxes: a letter ends short
+/// of its box (0.64 to 0.99 points for "s", "m", "h" and "d" in the caption2
+/// system font, CoreText, 23 October 2026), and a symbol's image carries blank
+/// space of its own (`SymbolInk`). Lined up by their boxes, the icons under the
+/// times ended up to a point short of them on Peter's phone.
+/// Views of their own, so the row itself still reads nothing from the environment.
+private struct TrailingColumnTime: View {
+    let date: Date
+    /// Between the four letters' blanks, scaled with the text.
+    @ScaledMetric(relativeTo: .caption2) private var letterBlank: CGFloat = 0.85
+
+    var body: some View {
+        RelativeTimeText(date: date)
+            .font(.ripul(.caption2))
+            .foregroundStyle(.ripul(.textTertiary))
+            .padding(.trailing, -letterBlank)
+    }
+}
+
+/// A symbol under the time in a row's trailing column. The last one lets its
+/// image's blank hang past the column's edge, so what it draws ends there;
+/// see `TrailingColumnTime`.
+private struct TrailingColumnSymbol: View {
+    let systemName: String
+    /// Nothing follows it in the column.
+    let endsColumn: Bool
+    /// The size `.caption2` gives a symbol.
+    @ScaledMetric(relativeTo: .caption2) private var pointSize: CGFloat = 11
+    @Environment(\.layoutDirection) private var layoutDirection
+
+    var body: some View {
+        Image(systemName: systemName)
+            .font(.ripulIcon(.caption2))
+            .foregroundStyle(.ripul(.textTertiary))
+            .padding(.trailing, endsColumn
+                     ? -SymbolInk.trailingBlank(systemName, pointSize: pointSize, layoutDirection: layoutDirection) : 0)
+    }
+}
+
 /// The running indicator, pulsing only while the session list can be seen.
 ///
 /// On an iPhone the list stays in place behind an open chat. Its indicators
@@ -896,10 +995,48 @@ private struct StartedChatsToggle: ViewModifier {
 /// re-evaluates the indicators and not the rows.
 private struct RunningIndicatorSymbol: View {
     let systemName: String
+    let color: Color
     @Environment(\.ripulSessionListCanBeSeen) private var listCanBeSeen
 
     var body: some View {
-        RenderServerPulsingSymbol(systemName: systemName, color: .accentColor, animates: listCanBeSeen)
+        // On the trailing edge, under the time.
+        RenderServerPulsingSymbol(systemName: systemName, color: color, animates: listCanBeSeen, hugsTrailingEdge: true)
+    }
+}
+
+/// An animation that runs only while the session list can be seen: a new tool
+/// coming into a row, rows changing places. On an iPhone the list stays in
+/// place behind an open chat, where it would animate every tool event unseen
+/// (on 18 October 2026 a phone saw 43-83 a minute). A modifier of its own, so
+/// that the list being covered or uncovered re-evaluates this and not the rows.
+struct WhileSessionListSeenAnimation<Value: Equatable>: ViewModifier {
+    let animation: Animation?
+    let value: Value
+    @Environment(\.ripulSessionListCanBeSeen) private var listCanBeSeen
+
+    func body(content: Content) -> some View {
+        content.animation(listCanBeSeen ? animation : nil, value: value)
+    }
+}
+
+extension View {
+    /// `animation(_:value:)`, while the session list can be seen.
+    func animationWhileSessionListSeen<Value: Equatable>(_ animation: Animation?, value: Value) -> some View {
+        modifier(WhileSessionListSeenAnimation(animation: animation, value: value))
+    }
+}
+
+/// A symbol that changes replaces itself with the symbol effect, while the
+/// session list can be seen. The effect runs on every change whatever the
+/// transaction says, and behind an open chat on an iPhone it ran unseen on every
+/// tool event: in the families harness, three rows getting a tool every 0.75 s
+/// cost 2.2 s of the app's processor and 1.7 s of the render server's in 30 s
+/// (23 October 2026). A modifier of its own, like the animations above.
+struct SymbolReplaceWhileSessionListSeen: ViewModifier {
+    @Environment(\.ripulSessionListCanBeSeen) private var listCanBeSeen
+
+    func body(content: Content) -> some View {
+        content.contentTransition(listCanBeSeen ? .symbolEffect(.replace) : .identity)
     }
 }
 

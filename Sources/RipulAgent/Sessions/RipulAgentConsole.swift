@@ -130,23 +130,7 @@ public struct RipulAgentConsole: View {
             // Host-contributed dev tools are NOT registered here: they are
             // developer-tagged entries in `configuration.registry`, which this
             // `.developer` channel already projects.
-            bridge.registerBuiltInTools([
-                ConsoleLogsTool(bridge: bridge),
-                NetworkLogsTool(bridge: bridge),
-                InspectScreenTool(bridge: bridge),
-                TapElementTool(),
-                TouchTool(),
-                ScreenFrameTool(),
-                LiveStreamOfferTool(),
-                TypeTextTool(),
-                ScrollElementTool(),
-                WaitForElementTool(),
-                ExplorerProbeTool(),
-                ScreenAuditTool(),
-                ShareSheetTool(),
-                ExplorerConformanceTool(),
-                SetValueTool(),
-            ] + RipulDevToolCollectionTools.all(
+            bridge.registerBuiltInTools(bridge.developerBuiltInTools() + RipulDevToolCollectionTools.all(
                 isEnabled: true,
                 catalogs: { [configuration, bridge] in
                     configuration.registry.editorCatalogs()

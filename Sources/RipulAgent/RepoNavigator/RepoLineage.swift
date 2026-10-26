@@ -263,7 +263,10 @@ public enum RepoLineageBuilder {
         guard total > 0 else {
             return RepoLineage(repoPath: repoPath, trunk: nil, branches: [], truncated: truncated)
         }
-        let named = Dictionary(uniqueKeysWithValues: branches.enumerated().map { ($1.name, $0) })
+        let named = Dictionary(
+            branches.enumerated().map { ($1.name, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
         let trunk = [defaultBranch, "main", "master", currentBranch].compactMap { $0 }.compactMap { named[$0] }.first ?? -1
 
         // Every commit's parents, by index.

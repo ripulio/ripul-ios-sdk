@@ -59,6 +59,43 @@ private final class HeldPanelStackHeight {
     }
 }
 
+// MARK: - Filter Button
+
+/// The Sessions filter button's chrome. Beside the search field it takes the
+/// field's rounded rectangle, height and material, so the two read as one row;
+/// in the header it is Select's glass capsule, and stretches to Select's height
+/// (the header holds the two at one height). Tinted while a filter is on.
+private struct SessionsFilterChrome: ViewModifier {
+    let besideSearch: Bool
+    let active: Bool
+
+    func body(content: Content) -> some View {
+        if besideSearch {
+            content
+                .frame(minWidth: 22, minHeight: 22)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(.ripul(.accent).opacity(active ? 0.15 : 0), in: .rect(cornerRadius: 10)) // theme-mapping: the filter's accent tint, as the theme's accent
+                .background(.ultraThinMaterial, in: .rect(cornerRadius: 10))
+                .contentShape(.rect(cornerRadius: 10))
+        } else if active {
+            content
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .frame(maxHeight: .infinity)
+                .background(.ripul(.accent).opacity(0.15), in: Capsule()) // theme-mapping: the filter's accent tint, as the theme's accent
+                .contentShape(Capsule())
+        } else {
+            content
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .frame(maxHeight: .infinity)
+                .modifier(GlassCapsuleBackground())
+                .contentShape(Capsule())
+        }
+    }
+}
+
 // MARK: - Shared Callbacks
 
 public struct SessionsListCallbacks {
@@ -100,6 +137,31 @@ public struct RipulListedSession: Equatable {
 
     /// The most rows a host is told about.
     public static let limit = 100
+}
+
+/// Older Chats, the last row of the sessions list: each Mac lists only its
+/// newest chats and the ones open as tabs, and this fetches the rest a page at
+/// a time. Nil leaves the row out.
+public struct OlderChatsRow {
+    public enum State: Equatable {
+        /// A tap fetches the next page.
+        case more
+        case loading
+        /// Every reachable Mac has given all its chats.
+        case end
+    }
+    public let state: State
+    /// Why the last tap brought nothing: a Mac did not answer, or cannot list
+    /// older chats yet.
+    public let note: String?
+    /// Fetches the next page; given the list's search text while searching.
+    public let load: (_ search: String?) -> Void
+
+    public init(state: State, note: String?, load: @escaping (_ search: String?) -> Void) {
+        self.state = state
+        self.note = note
+        self.load = load
+    }
 }
 
 @available(iOS 26.0, macOS 26.0, *)
@@ -162,9 +224,10 @@ public struct GlassSessionsList: View {
     var machineIcons: [String: String] = [:]
     var restartingMachineId: String? = nil
     var restartSucceededId: String? = nil
-    /// The session whose chat is open alongside the list (master-detail layouts
-    /// like the Mac split) — its row renders persistently selected. The iPhone
-    /// navigates away on open, so it passes nil and no row stays highlighted.
+    /// The session whose chat is open alongside the list (a split layout: an
+    /// iPad, a wide Catalyst window, an open Duo, the Mac) — its row renders
+    /// persistently selected. Nil where the chat slides over the list (an
+    /// iPhone): no row is marked, not even by a tap.
     var selectedSessionId: String? = nil
     var onRefresh: (() async -> Void)? = nil
 
@@ -191,6 +254,7 @@ public struct GlassSessionsList: View {
     /// Optional universal-link opener (was DeepLinkHandler.shared).
     var onOpenUniversalLink: ((URL) -> Void)? = nil
     var onListedSessionsChanged: (([RipulListedSession]) -> Void)? = nil
+    var olderChats: OlderChatsRow? = nil
 
     @State private var needsAnswerOnly = false
     /// The tabs' host chat ids, for `attentionKeys`: rebuilt when the tabs change.
@@ -221,8 +285,13 @@ public struct GlassSessionsList: View {
     @State private var heldSessionOrder: [String]?
     @State private var sessionOrderRelease: Task<Void, Never>?
     @Environment(\.scenePhase) private var sessionListScenePhase
+    @Environment(\.ripulSessionListCanBeSeen) private var listCanBeSeen
     /// Heads of families whose started chats the person has put away by tapping the head's icon.
-    @State private var closedFamilies: Set<String> = []
+    @State private var closedFamilies: Set<String>
+    /// The same, kept for the next launch. Written once the family has finished
+    /// opening or closing, not as it starts: a write to the defaults store can
+    /// redraw every view reading that store, in the middle of the drawer.
+    @StoredDefault("ripulClosedSessionFamilies") private var storedClosedFamilies: Set<String> = []
     #if os(iOS)
     @Environment(\.ripulBottomBarFrame) private var bottomBar
     @State private var actionBarNavigationClearance: CGFloat = 0
@@ -302,6 +371,7 @@ public struct GlassSessionsList: View {
         emptyStateOverride: (() -> AnyView)? = nil,
         onListedSessionsChanged: (([RipulListedSession]) -> Void)? = nil,
         onOpenUniversalLink: ((URL) -> Void)? = nil,
+        olderChats: OlderChatsRow? = nil,
         searchText: Binding<String>,
         renamingSession: Binding<ChatSession?>,
         renameText: Binding<String>
@@ -354,11 +424,14 @@ public struct GlassSessionsList: View {
         self._renamingSession = renamingSession
         self._renameText = renameText
         self.onListedSessionsChanged = onListedSessionsChanged
+        self.olderChats = olderChats
         // Bind the @AppStorage stores to the injected cache so persisted keys
         // live in the host-chosen suite. Defaults + key strings preserved.
         _storedMachinesExpanded = StoredDefault(wrappedValue: true, "ripulMachinesPanelExpanded", store: cache.userDefaults)
         _defaultMachineId = StoredDefault(wrappedValue: "", "ripulDefaultMachineId", store: cache.userDefaults)
         _embeddedOnboardingDismissed = StoredDefault(wrappedValue: false, "ripul.embeddedOnboardingDismissed", store: cache.userDefaults)
+        _storedClosedFamilies = StoredDefault(wrappedValue: [], "ripulClosedSessionFamilies", store: cache.userDefaults)
+        _closedFamilies = State(initialValue: _storedClosedFamilies.wrappedValue)
     }
 
     private func machineExpandedBinding(for machine: RemoteMachine) -> Binding<Bool> {
@@ -453,6 +526,12 @@ public struct GlassSessionsList: View {
                 .padding(.vertical, 10)
                 .modifier(GlassPanelBackground())
                 .uiKitIdentifier("GlassSessionsList.machines.soloPanel")
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    #if os(iOS)
+                    UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                    #endif
+                }
         } else {
             GlassSectionPanel(
                 title: "Machines",
@@ -526,7 +605,17 @@ public struct GlassSessionsList: View {
     }
 
     private func sessionsPanel(sessions: [UnifiedSession], families: SessionFamilies) -> some View {
-        let rows = sessions
+        let rows = families.rowsWithFolds(sessions) + [olderChatsListRow(listing: sessions)].compactMap { $0 }
+        // What the row closure needs of the rows, not the rows: SwiftUI compares
+        // what the closure holds once a row on every update of the list, and
+        // the rows are a new array each time, compared chat by chat.
+        let nothingListed = sessions.isEmpty
+        // Two identities per row: the unified row's own id and its live web
+        // tab's. Collapsing them to one would stop highlighting every row that
+        // opened via a tab. Nil with no chat beside the list: see `selectedSessionId`.
+        let isActive: ((UnifiedSession) -> Bool)? = selectedSessionId.map { activeId in
+            { session in session.ripulSession?.id == activeId || session.id == activeId }
+        }
         return GlassSectionPanel(
             title: "Sessions",
             isExpanded: $sessionsExpanded,
@@ -535,47 +624,50 @@ public struct GlassSessionsList: View {
             // something.
             collapsible: false,
             followsContainerBottomCorners: true,
-            center: {
-                if hasGroupChats || availableProjects.count > 1 || !availableTags.isEmpty {
-                    projectFilterMenu
+            titleAccessory: {
+                if !PendingQuestionStore.shared.questions.isEmpty || needsAnswerOnly {
+                    attentionChip
                 }
             },
             trailing: {
-                if cloudFeatures {
-                GlassSelectButton(isSelecting: isSelecting) {
-                    if isSelecting {
-                        isSelecting = false
-                        selectedSessionIds.removeAll()
-                    } else {
-                        isSelecting = true
+                // No search field to sit at the end of: the filter waits by
+                // Select instead, at Select's height.
+                HStack(spacing: 8) {
+                    if showsFilterMenu && !showsSearchField {
+                        filterMenu(besideSearch: false)
+                    }
+                    if cloudFeatures {
+                        GlassSelectButton(isSelecting: isSelecting) {
+                            if isSelecting {
+                                isSelecting = false
+                                selectedSessionIds.removeAll()
+                            } else {
+                                isSelecting = true
+                            }
+                        }
+                        .uiKitIdentifier("GlassSessionsList.sessions.selectButton")
+                        .opacity(unifiedSessions.isEmpty ? 0 : 1)
+                        .disabled(unifiedSessions.isEmpty)
                     }
                 }
-                .uiKitIdentifier("GlassSessionsList.sessions.selectButton")
-                .opacity(unifiedSessions.isEmpty ? 0 : 1)
-                .disabled(unifiedSessions.isEmpty)
-                }
+                .fixedSize(horizontal: false, vertical: true)
             }
         ) {
             VStack(spacing: 8) {
-                if !PendingQuestionStore.shared.questions.isEmpty || needsAnswerOnly {
-                    Button {
-                        needsAnswerOnly.toggle()
-                    } label: {
-                        Label("\(PendingQuestionStore.shared.hasMentions ? "Needs your attention" : "Needs your answer") (\(PendingQuestionStore.shared.questions.count))",
-                              systemImage: needsAnswerOnly ? "checkmark.circle.fill" : "questionmark.bubble")
+                // Everything that narrows the list on one row: the search, and
+                // the filter at its end.
+                if showsSearchField {
+                    HStack(spacing: 8) {
+                        GlassSearchField("Search sessions", text: $searchText)
+                            .uiKitIdentifier("GlassSessionsList.sessions.searchField")
+                        if showsFilterMenu {
+                            filterMenu(besideSearch: true)
+                        }
                     }
-                    .buttonStyle(.glass)
                     .padding(.horizontal, 16)
-                    .uiKitIdentifier("GlassSessionsList.needsAnswerFilter")
                 }
                 if needsAnswerOnly {
                     unmatchedAttention
-                }
-                if unifiedSessions.count > 12 {
-                    GlassSearchField("Search sessions", text: $searchText)
-                        .uiKitIdentifier("GlassSessionsList.sessions.searchField")
-                        .padding(.horizontal, 16)
-                        .padding(.top, 4)
                 }
 
                 if let inviteJoinError {
@@ -594,25 +686,26 @@ public struct GlassSessionsList: View {
                     activity: activity(for:),
                     isSelecting: isSelecting,
                     selectedIds: selectedSessionIds,
-                    // Two identities per row: the unified row's own id and its
-                    // live web tab's. Collapsing them to one would stop
-                    // highlighting every row that opened via a tab.
-                    isActive: { session in
-                        guard let activeId = selectedSessionId else { return false }
-                        return session.ripulSession?.id == activeId || session.id == activeId
-                    },
+                    isActive: isActive,
                     activeToken: selectedSessionId,
                     onTap: { session in
-                        if let invite = invite(for: session) { joinInvite(invite) }
+                        if !selectedSessionIds.isEmpty { selectedSessionIds.removeAll() }
+                        if session.id == Self.olderChatsRowId { if olderChats?.state == .more { olderChats?.load(isSearching ? searchText : nil) } }
+                        else if let fold = families.fold(ofRow: session.id) { toggle(fold) }
+                        else if let invite = invite(for: session) { joinInvite(invite) }
                         else if needsAnswerOnly, let question = attention(for: session),
                            let open = PendingQuestionStore.shared.openQuestion { open(question) }
                         else { onOpenUnifiedSession(session) }
                     },
                     onToggleSelect: { session in
-                        guard invite(for: session) == nil else { return }
+                        guard invite(for: session) == nil, session.id != Self.olderChatsRowId,
+                              families.fold(ofRow: session.id) == nil else { return }
                         if selectedSessionIds.contains(session.id) {
                             selectedSessionIds.remove(session.id)
                         } else {
+                            if !isSelecting {
+                                isSelecting = true
+                            }
                             selectedSessionIds.insert(session.id)
                         }
                     },
@@ -620,7 +713,12 @@ public struct GlassSessionsList: View {
                         { await refresh(); await refreshGroupChats() }
                     },
                     row: { session in
-                      if let invite = invite(for: session) {
+                      if session.id == Self.olderChatsRowId, let olderChats {
+                        olderChatsRow(olderChats, nothingMatched: nothingListed)
+                      } else if let fold = SessionFamilies.foldDrawn(by: session) {
+                        // The end of a family with more started chats than it shows.
+                        SessionFamilyFoldButton(fold: fold) { families.fold(ofRow: session.id).map(toggle) }
+                      } else if let invite = invite(for: session) {
                         inviteRow(invite, session: session)
                       } else {
                       // The chats put away under this one: its row speaks for them.
@@ -658,23 +756,26 @@ public struct GlassSessionsList: View {
                             startedChatsNeedLooking: families.heads[session.id]?.needsLooking ?? false,
                             startedChatsPutAway: putAway,
                             onToggleStartedChats: {
-                                if closedFamilies.contains(session.id) { closedFamilies.remove(session.id) } else { closedFamilies.insert(session.id) }
+                                if families.heads[session.id]?.isClosed == true {
+                                    closedFamilies.subtract([session.id, session.metadataKey])
+                                } else {
+                                    closedFamilies.insert(session.id)
+                                    closedFamilies.insert(session.metadataKey)
+                                }
                             },
                             onSessionAction: { action in
                                 handleSessionAction(action, session: session)
                             },
-                            attention: .some(attention(for: session))
-                        )                        // The end of a family with more started chats than it shows.
-                        if let fold = families.folds[session.id] {
-                            SessionFamilyFoldButton(fold: fold) {
-                                if fold.isOpen { openFamilies.remove(fold.parentId) } else { openFamilies.insert(fold.parentId) }
-                            }
-                        }
+                            attention: .some(attention(for: session)),
+                            unreadMentionCount: PendingQuestionStore.shared.unreadMentionCount(anyOf: attentionKeys(for: session))
+                        )
                       }
                       }
                     },
                     swipe: { session in
-                        if let invite = invite(for: session) {
+                        if session.id == Self.olderChatsRowId || families.fold(ofRow: session.id) != nil {
+                        EmptyView()
+                        } else if let invite = invite(for: session) {
                         Button(role: .destructive) {
                             Task { await inviteManager?.dismissInvite(invite) }
                         } label: {
@@ -700,7 +801,9 @@ public struct GlassSessionsList: View {
                         }
                     },
                     rowMenu: { session in
-                        if let invite = invite(for: session) {
+                        if session.id == Self.olderChatsRowId || families.fold(ofRow: session.id) != nil {
+                            EmptyView()
+                        } else if let invite = invite(for: session) {
                             Button(invite.accepted == true ? "Open" : "Join", systemImage: "arrow.right.circle") { joinInvite(invite) }
                                 .uiKitIdentifier("GlassSessionsList.contextMenu.joinInviteButton")
                             Button(invite.accepted == true ? "Remove Invitation" : "Decline", systemImage: "xmark.circle", role: .destructive) {
@@ -714,15 +817,16 @@ public struct GlassSessionsList: View {
                 )
                 // A chat dropped on another goes under it: Put Under…, by hand.
                 .draggableRows(
-                    payload: { session in
-                        cloudFeatures && !session.isSharedGuest && invite(for: session) == nil ? SessionFamilies.dragPayload(for: session) : nil
-                    },
-                    canDrop: { carried, target in canDrop(carried, on: target) },
-                    onDrop: { carried, target in
-                        guard let id = SessionFamilies.draggedSessionId(carried),
-                              let dragged = unifiedSessions.first(where: { $0.id == id }) else { return }
-                        onPlaceSession(dragged, target, false)
-                    })
+                    payload: { session in dragPayload(for: session, in: families) },
+                    canDrop: { carried, target in canDrop(carried, on: target, in: families) },
+                    onDrop: { carried, target in drop(carried, on: target, in: families) })
+                .groupedRows({ families.groupSlice(ofRow: $0.id) }, joinsNext: { families.isJoinedToFold($0.id) })
+                // A family opened or closed, or its fold: its chats open and close
+                // like a drawer, moved by Core Animation, on a Mac as well. The
+                // drawer before it changed the rows' heights on every frame, which
+                // a Mac window showing many rows could not keep up with.
+                .revealsRowChanges(when: [closedFamilies, openFamilies])
+                .unhighlightedRows { $0.id == Self.olderChatsRowId || $0.id.hasPrefix(SessionFamilies.foldRowPrefix) }
                 .onContinuousHover { phase in
                     switch phase {
                     case .active:
@@ -730,16 +834,23 @@ public struct GlassSessionsList: View {
                         sessionOrderRelease?.cancel()
                         sessionOrderRelease = Task { @MainActor in
                             do { try await Task.sleep(for: .seconds(1)) } catch { return }
-                            heldSessionOrder = nil
+                            if !isSelecting && selectedSessionIds.isEmpty {
+                                heldSessionOrder = nil
+                            }
                             sessionOrderRelease = nil
                         }
                     case .ended:
-                        releaseSessionOrder()
+                        if !isSelecting && selectedSessionIds.isEmpty {
+                            releaseSessionOrder()
+                        }
                     }
                 }
                 .onDisappear { releaseSessionOrder() }
                 .onChange(of: sessionListScenePhase) { _, phase in
                     if phase != .active { releaseSessionOrder() }
+                }
+                .onChange(of: isSelecting) { _, selecting in
+                    if !selecting { releaseSessionOrder() }
                 }
                 .modifier(SessionsScrollClearance(actionBarHeight: hasBatchSelection ? actionBarHeight : 0))
             }
@@ -1016,11 +1127,12 @@ public struct GlassSessionsList: View {
         return QuickLaunchPreferences.showCircles(cache: cache)
     }
 
-    /// Quick-start shortcuts for the panel's default machine, on their own row
-    /// beneath the header while the panel is collapsed. It used to be the
-    /// header's trailing accessory, which squeezed the title and the machine-name
-    /// subtitle once the set became user-sized — and matches how each machine
-    /// row now carries its own strip.
+    /// Quick-start shortcuts for the panel's default machine, while the panel is
+    /// collapsed. `GlassSectionPanel` puts them on the header row, the machine
+    /// names truncating to make room (or left out in a narrow window), so the
+    /// closed panel is one row like each machine row with its pill. They take
+    /// their own row beneath the header only when they can't fit beside the
+    /// title at all: a long user-sized set of circles, or a very narrow window.
     ///
     /// The panel renders this only when collapsed, so no `machinesExpanded`
     /// check is needed here.
@@ -1042,9 +1154,6 @@ public struct GlassSessionsList: View {
             showCircles: quickLaunchShowCircles
         )
         }
-        .padding(.horizontal, 16)
-        .padding(.bottom, 10)
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     /// Distinct project names across all sessions, sorted case-insensitively.
@@ -1139,11 +1248,46 @@ public struct GlassSessionsList: View {
         if let keys = await bridge.getGroupChatIds() { groupChatKeys = keys }
     }
 
-    /// Filter shown centred in the Sessions panel header: a pill button
-    /// displaying the active selection (or "All Projects") that opens a menu to
-    /// switch. The caller hides it when there is nothing to choose between.
-    @ViewBuilder
-    private var projectFilterMenu: some View {
+    /// The search field shows once the list is long enough to need it.
+    private var showsSearchField: Bool { unifiedSessions.count > 12 }
+
+    /// The filter shows only when there is something to choose between.
+    private var showsFilterMenu: Bool { hasGroupChats || availableProjects.count > 1 || !availableTags.isEmpty }
+
+    /// What is waiting on you, beside the panel's title: a count that is also
+    /// the filter for it. Tapping it shows only those chats, and it fills, with
+    /// a tick, while it does. Select's size, at the other end of the row.
+    private var attentionChip: some View {
+        let store = PendingQuestionStore.shared
+        let count = store.questions.count
+        return Button {
+            needsAnswerOnly.toggle()
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: needsAnswerOnly ? "checkmark.circle.fill" : "questionmark.bubble")
+                    .font(.ripulIcon(.caption2, weight: .semibold)) // theme-mapping: a new control, nothing is replaced
+                Text(store.hasMentions ? "\(count) for you" : "\(count) to answer")
+                    .font(.ripul(.caption, weight: .semibold)) // theme-mapping: a new control, nothing is replaced
+                    .lineLimit(1)
+            }
+            .foregroundStyle(.ripul(.accent)) // theme-mapping: a new control, nothing is replaced
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(.ripul(.accent).opacity(needsAnswerOnly ? 0.28 : 0.12), in: Capsule()) // theme-mapping: a new control, nothing is replaced
+            .overlay(Capsule().strokeBorder(.ripul(.accent).opacity(needsAnswerOnly ? 0 : 0.4), lineWidth: 1)) // theme-mapping: a new control, nothing is replaced
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .fixedSize()
+        .accessibilityAddTraits(needsAnswerOnly ? .isSelected : [])
+        .uiKitIdentifier("GlassSessionsList.needsAnswerFilter")
+    }
+
+    /// The list's filter: chats, projects and tags. It sits at the end of the
+    /// search field, at the field's height and in its material, or by Select,
+    /// at Select's height, when the list is too short for a search field. Just
+    /// the icon until a filter is on; then it names the filter, in the accent.
+    private func filterMenu(besideSearch: Bool) -> some View {
         Menu { MenuIcons {
             if hasGroupChats {
                 Picker("Filter by Chats", selection: $groupChatsOnly) {
@@ -1176,32 +1320,21 @@ public struct GlassSessionsList: View {
         }} label: {
             HStack(spacing: 5) {
                 Image(systemName: "line.3.horizontal.decrease")
-                    .font(.ripulIcon(.caption2, weight: .bold))
-                Text(filterLabel)
-                    .font(.ripul(.subheadline, weight: .semibold))
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                Image(systemName: "chevron.down")
-                    .font(.ripulIcon(.caption2, weight: .bold))
+                    .font(.ripulIcon(besideSearch ? .caption : .caption2, weight: .bold)) // theme-mapping: sized for where it sits: the search field's, or Select's
+                if hasActiveFilter {
+                    Text(filterLabel)
+                        .font(besideSearch ? .ripul(.subheadline, weight: .semibold) : .ripul(.caption, weight: .medium)) // theme-mapping: sized for where it sits: the search field's, or Select's
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        // A long filter truncates; a short one keeps the button tight.
+                        .frame(maxWidth: 120)
+                        .fixedSize()
+                }
             }
-            .foregroundStyle(hasActiveFilter ? Color.accentColor : Color.ripul(.textSecondary))
-            .padding(.horizontal, 14)
-            .padding(.vertical, 7)
-            .background(
-                Capsule(style: .continuous)
-                    .fill(hasActiveFilter
-                        ? Color.accentColor.opacity(0.15)
-                        : Color.ripul(.text).opacity(0.06))
-            )
-            .overlay(
-                Capsule(style: .continuous)
-                    .stroke(hasActiveFilter
-                        ? Color.accentColor.opacity(0.4)
-                        : Color.ripul(.text).opacity(0.12), lineWidth: 1)
-            )
-            .frame(maxWidth: 220)
-            .contentShape(Capsule(style: .continuous))
+            .foregroundStyle(.ripul(hasActiveFilter ? .accent : .textSecondary)) // theme-mapping: the filter's accent, as the theme's accent
+            .modifier(SessionsFilterChrome(besideSearch: besideSearch, active: hasActiveFilter))
         }
+        .accessibilityLabel(hasActiveFilter ? "Filter: \(filterLabel)" : "Filter")
         .uiKitIdentifier("GlassSessionsList.sessions.projectFilterMenu")
     }
 
@@ -1212,7 +1345,7 @@ public struct GlassSessionsList: View {
         // sessions don't swap on every alternating tool call.
         // Pinned rows first, each group in recency order.
         let pinned = Set(base.filter { sessionStore.isPinned(anyOf: $0.readStateKeys) }.map(\.id))
-        let buckets = Dictionary(uniqueKeysWithValues: base.map { ($0.id, sortBucket(for: $0)) })
+        let buckets = Dictionary(base.map { ($0.id, sortBucket(for: $0)) }, uniquingKeysWith: max)
         return base.sorted { a, b in
             let pa = pinned.contains(a.id), pb = pinned.contains(b.id)
             if pa != pb { return pa }
@@ -1231,7 +1364,7 @@ public struct GlassSessionsList: View {
         // Invitations use the same recency ordering as chats. Keeping them in
         // this layout also preserves pinned rows and keeps chat families together.
         let base = matchingSessions + visibleInviteRows
-        let buckets = Dictionary(uniqueKeysWithValues: base.map { ($0.id, sortBucket(for: $0)) })
+        let buckets = Dictionary(base.map { ($0.id, sortBucket(for: $0)) }, uniquingKeysWith: max)
         return SessionFamilies.arrange(
             base,
             open: openFamilies,
@@ -1255,18 +1388,131 @@ public struct GlassSessionsList: View {
         return nil
     }
 
-    /// Whether the chat a drag carries may go under this one: a chat of this
+    private func canDrag(_ session: UnifiedSession, in families: SessionFamilies) -> Bool {
+        cloudFeatures && !session.isSharedGuest && invite(for: session) == nil
+            && session.id != Self.olderChatsRowId && families.fold(ofRow: session.id) == nil
+    }
+
+    /// What a row carries when picked up: all selected draggable rows if this
+    /// row is part of a multi-selection, or just this row by itself.
+    private func dragPayload(for session: UnifiedSession, in families: SessionFamilies) -> String? {
+        guard canDrag(session, in: families) else { return nil }
+        guard selectedSessionIds.contains(session.id), selectedSessionIds.count > 1 else {
+            return SessionFamilies.dragPayload(for: session)
+        }
+        var ordered: [UnifiedSession] = []
+        var seen = Set<String>()
+        for candidate in families.all + unifiedSessions where selectedSessionIds.contains(candidate.id) && canDrag(candidate, in: families) {
+            if seen.insert(candidate.id).inserted { ordered.append(candidate) }
+        }
+        return ordered.isEmpty ? SessionFamilies.dragPayload(for: session) : SessionFamilies.dragPayload(for: ordered)
+    }
+
+    /// The chat a drop on `target` places under: `target` itself, or a family's
+    /// head when the drop lands on its fold control at the foot of the group.
+    private func dropDestination(for target: UnifiedSession, in families: SessionFamilies) -> UnifiedSession? {
+        if let fold = families.fold(ofRow: target.id) {
+            return unifiedSessions.first { $0.id == fold.parentId }
+        }
+        guard !target.id.hasPrefix(SessionFamilies.foldRowPrefix) else { return nil }
+        return target
+    }
+
+    /// Whether the chat(s) a drag carries may go under this one: chats of this
     /// list, not this one itself, and not one this one is already under.
-    private func canDrop(_ carried: String, on target: UnifiedSession) -> Bool {
-        guard cloudFeatures, !target.isSharedGuest, let id = SessionFamilies.draggedSessionId(carried),
-              unifiedSessions.contains(where: { $0.id == id }) else { return false }
-        return everyFamily.canPlace(id, under: target.id)
+    private func canDrop(_ carried: String, on target: UnifiedSession, in families: SessionFamilies) -> Bool {
+        guard cloudFeatures,
+              let destination = dropDestination(for: target, in: families),
+              !destination.isSharedGuest,
+              destination.id != Self.olderChatsRowId else { return false }
+        let ids = SessionFamilies.draggedSessionIds(carried)
+        guard !ids.isEmpty,
+              ids.allSatisfy({ id in unifiedSessions.contains(where: { $0.id == id }) }) else { return false }
+        return everyFamily.canPlace(ids, under: destination.id)
+    }
+
+    private func drop(_ carried: String, on target: UnifiedSession, in families: SessionFamilies) {
+        guard let destination = dropDestination(for: target, in: families) else { return }
+        let ids = SessionFamilies.draggedSessionIds(carried)
+        let dragged = ids.compactMap { id in unifiedSessions.first(where: { $0.id == id }) }
+        guard !dragged.isEmpty, everyFamily.canPlace(dragged.map(\.id), under: destination.id) else { return }
+        for session in dragged {
+            onPlaceSession(session, destination, false)
+        }
+        if !selectedSessionIds.isEmpty { selectedSessionIds.removeAll() }
+        if isSelecting { isSelecting = false }
     }
 
     /// Every chat laid out, whatever a search or a filter is showing: what is
     /// under a chat is the same whichever of them match.
     private var everyFamily: SessionFamilies {
         SessionFamilies.arrange(unifiedSessions, folds: false, recency: { _ in 0 }, placedUnder: placement(of:))
+    }
+
+    // MARK: - Older Chats, the last row
+
+    private static let olderChatsRowId = "older-chats"
+
+    /// Opens a family's fold, or closes it again.
+    private func toggle(_ fold: SessionFamilies.Fold) {
+        if fold.isOpen { openFamilies.remove(fold.parentId) } else { openFamilies.insert(fold.parentId) }
+    }
+
+    /// The Older Chats row the list ends with: not while rows are being picked
+    /// or only chats waiting on an answer are shown, and not under an empty
+    /// list unless a search found nothing in what is loaded so far.
+    private func olderChatsListRow(listing sessions: [UnifiedSession]) -> UnifiedSession? {
+        guard let olderChats, !isSelecting, !needsAnswerOnly else { return nil }
+        if sessions.isEmpty && (!isSearching || olderChats.state == .end) { return nil }
+        return UnifiedSession(
+            id: Self.olderChatsRowId, title: "Older chats",
+            lastUsed: .distantPast, hasKnownActivity: false,
+            gitBranch: nil, messageCount: nil, projectName: nil, provider: nil, providerLabel: nil,
+            machineName: nil, matchKeys: [], cachedIsOpen: false, ripulSession: nil)
+    }
+
+    private func olderChatsRow(_ older: OlderChatsRow, nothingMatched: Bool) -> some View {
+        let title = switch older.state {
+        case .more: isSearching ? "Look in older chats" : "Older chats"
+        case .loading: "Loading older chats…"
+        case .end: "No older chats"
+        }
+        let detail = older.state == .more ? older.note : nil
+        return HStack(spacing: 12) {
+            Group {
+                if older.state == .loading {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Image(systemName: older.state == .end ? "checkmark.circle" : "clock.arrow.circlepath")
+                        .font(.ripulIcon(size: 16)) // theme-mapping: a new row, its icon as an invitation row's
+                        .foregroundStyle(.ripul(older.state == .end ? .textSecondary : .info)) // theme-mapping: a new row, in the invitation row's action colour
+                }
+            }
+            .frame(width: 28)
+            .uiKitIdentifier("GlassSessionsList.olderChats.icon")
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.ripul(.body)) // theme-mapping: a new row, its title as a chat row's
+                    .foregroundStyle(.ripul(older.state == .end ? .textSecondary : .info)) // theme-mapping: a new row, in the invitation row's action colour
+                    .uiKitIdentifier("GlassSessionsList.olderChats.title")
+                if nothingMatched {
+                    Text("No matches for \"\(searchText)\" in the chats loaded.")
+                        .font(.ripul(.caption)) // theme-mapping: a new row, its detail as an invitation row's
+                        .foregroundStyle(.ripul(.textSecondary)) // theme-mapping: a new row, its detail as an invitation row's
+                        .uiKitIdentifier("GlassSessionsList.olderChats.noMatches")
+                }
+                if let detail {
+                    Text(detail)
+                        .font(.ripul(.caption)) // theme-mapping: a new row, its detail as an invitation row's
+                        .foregroundStyle(.ripul(.warning)) // theme-mapping: a Mac that did not answer, as the invite join error
+                        .uiKitIdentifier("GlassSessionsList.olderChats.note")
+                }
+            }
+            Spacer(minLength: 8)
+        }
+        .padding(.vertical, 6)
+        .contentShape(Rectangle())
+        .uiKitIdentifier("GlassSessionsList.olderChats.row")
     }
 
     // MARK: - Invitations as rows
@@ -1290,8 +1536,12 @@ public struct GlassSessionsList: View {
         let listed = Set(unifiedSessions.flatMap { attentionKeys(for: $0) }.map(PendingQuestionStore.canonical))
         let dates = ISO8601DateFormatter()
         dates.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        var seenTokens = Set<String>()
         let unlisted = listedInvites
-            .filter { invite in invite.chatId.map { !listed.contains(PendingQuestionStore.canonical($0)) } ?? true }
+            .filter { invite in
+                seenTokens.insert(invite.token).inserted
+                    && (invite.chatId.map { !listed.contains(PendingQuestionStore.canonical($0)) } ?? true)
+            }
         return unlisted.map { invite in
             UnifiedSession(
                 id: Self.invitePrefix + invite.token, title: invite.displayLabel,
@@ -1709,7 +1959,7 @@ public struct GlassSessionsList: View {
                 // The glass reaches the display's curve. Home-indicator and
                 // tab-bar clearance belongs INSIDE the sessions scroller.
                 .padding(.bottom, SessionsPanelLayout.bottomGap)
-                .ignoresSafeArea(.container, edges: .bottom)
+                .ignoresSafeArea(edges: .bottom)
                 .onPreferenceChange(SessionsPanelStackHeightKey.self) { height in
                     // Never more than the window is tall. With the phone on its
                     // side this frame is not held to the container: it takes its
@@ -1744,8 +1994,7 @@ public struct GlassSessionsList: View {
         #endif
         .animation(.easeInOut(duration: 0.25), value: showOnboarding)
         .animation(.easeInOut(duration: 0.25), value: showConnectingPlaceholder)
-        .animation(.easeInOut(duration: 0.25), value: isSelecting)
-        .animation(.easeInOut(duration: 0.25), value: selectedSessionIds.count)
+        .animation(.easeInOut(duration: 0.25), value: hasBatchSelection)
         .onAppear {
             machinesExpanded = storedMachinesExpanded
             onListedSessionsChanged?(listedSessions)
@@ -1754,6 +2003,12 @@ public struct GlassSessionsList: View {
             onListedSessionsChanged?(rows)
         }
         .onChange(of: machinesExpanded) { _, new in storedMachinesExpanded = new }
+        .onChange(of: closedFamilies) { _, closed in
+            // After the drawer (0.3 s), and only the last of quick toggles.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                if closedFamilies == closed, storedClosedFamilies != closed { storedClosedFamilies = closed }
+            }
+        }
         // Drop a stale query when the list shrinks below the search threshold.
         // This used to be a `Color.clear.onAppear { searchText = "" }` sitting
         // in the panel body — a state write during body evaluation, which is
@@ -1762,9 +2017,14 @@ public struct GlassSessionsList: View {
             if count <= 12 && !searchText.isEmpty { searchText = "" }
         }
         .onChange(of: bridge.sessions.count) { _, _ in quickLaunchLoading = nil }
-        // Re-read who is in which chat when chats come or go (an accepted
-        // invite, a new chat); pull-to-refresh reads it too.
-        .task(id: unifiedSessions.count) { await refreshGroupChats() }
+        // Read membership when the list becomes visible or returns to the
+        // foreground. Row count changes do not invalidate membership.
+        .task(id: listCanBeSeen && sessionListScenePhase == .active) {
+            if listCanBeSeen && sessionListScenePhase == .active { await refreshGroupChats() }
+        }
+        .onChange(of: listedInvites) { _, _ in
+            if listCanBeSeen { Task { await refreshGroupChats() } }
+        }
         .onReceive(NotificationCenter.default.publisher(for: QuickLaunchPreferences.didChangeNotification)) { _ in
             quickLaunchRevision &+= 1
         }

@@ -281,10 +281,13 @@ enum CmsNavIcon {
         "layers": "square.3.stack.3d",
         "bookmark": "bookmark",
         "flag": "flag",
+        "checklist": "checklist",
+        "task": "checkmark.circle",
         "language": "globe",
         "business": "building.2",
         "work": "briefcase",
         "school": "graduationcap",
+        "security": "shield",
     ]
 
     static func symbol(for key: String?) -> String? {

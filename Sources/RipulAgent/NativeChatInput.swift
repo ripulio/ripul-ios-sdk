@@ -285,7 +285,7 @@ public struct NativeChatInput: View {
     @Environment(\.composerCollapse) private var composerCollapse
     @State private var composerFocused = false
     private var chromeInteraction: Bool {
-        composerFocused || isDictating || showPhotoPicker || showCamera || showTodoPicker || showHistorySheet
+        composerFocused || isDictating || showPhotoPicker || showCamera || showHistorySheet
             || showAtSuggestions || showSlashMenu
     }
     @Binding var text: String
@@ -293,7 +293,8 @@ public struct NativeChatInput: View {
     @Binding var selectedPhotos: [PhotosPickerItem]
     let isAgentRunning: Bool
     let isAgentPaused: Bool
-    let onSubmit: () -> Void
+    var waitingPlaceholder: String?
+    let onSubmit: (String) -> Void
     var onTypingChange: ((Bool) -> Void)?
     @ObservedObject var contextStore: RipulComposerContextStore
     var contextSessionID: String?
@@ -312,12 +313,8 @@ public struct NativeChatInput: View {
     let onNewChat: (() -> Void)?
     let onQuickCommands: (() -> Void)?
     let onAddArtefact: (() -> Void)?
-    let onAddTodoItem: (() -> Void)?
-    /// Fetches the user's todo items (with current-chat id for grouping) when
-    /// the "Pick to do" menu entry is tapped. A selected todo's text is appended
-    /// to this view's own `$text` binding — the native composer is the source
-    /// of truth, not the hidden web composer.
-    let onFetchTodoItems: (() async -> RipulTodoItemsResult)?
+    /// Send Later: the host asks when, then schedules the draft (SendLaterSheet).
+    var onSendLater: (() -> Void)?
     var messageHistory: MessageHistory?
     var chatInputGlassStyle: String?
     var chatInputLayout: String?
@@ -406,7 +403,6 @@ public struct NativeChatInput: View {
     @State private var hiddenClasses: Set<String> = Set(AtClassToggleSpec.all.filter { AtClassToggles.isHidden($0.key) }.map(\.key))
     @State private var showHistorySheet = false
     @State private var historyDraftAttachments: [NativeImageAttachment] = []
-    @State private var showTodoPicker = false
     @State private var showSlashMenu = false
     @State private var slashFilter = ""
     @State private var slashCommands: [SlashCommandInfo] = []
@@ -415,7 +411,7 @@ public struct NativeChatInput: View {
     /// Composer-visible alias → the `[context: …]` token it stands in for.
     @State private var contextAliases: [String: String] = [:]
 
-    private var isTwoRow: Bool { chatInputLayout == "twoRow" }
+    private var isTwoRow: Bool { (chatInputLayout ?? "twoRow") == "twoRow" }
     private var resolvedChatInputGlassStyle: String { chatInputGlassStyle ?? "clear" }
 
     public init(
@@ -424,7 +420,8 @@ public struct NativeChatInput: View {
         selectedPhotos: Binding<[PhotosPickerItem]>,
         isAgentRunning: Bool = false,
         isAgentPaused: Bool = false,
-        onSubmit: @escaping () -> Void,
+        waitingPlaceholder: String? = nil,
+        onSubmit: @escaping (String) -> Void,
         onTypingChange: ((Bool) -> Void)? = nil,
         onSubmitNote: (() -> Void)? = nil,
         conversationMode: String = "agent",
@@ -438,8 +435,7 @@ public struct NativeChatInput: View {
         onNewChat: (() -> Void)? = nil,
         onQuickCommands: (() -> Void)? = nil,
         onAddArtefact: (() -> Void)? = nil,
-        onAddTodoItem: (() -> Void)? = nil,
-        onFetchTodoItems: (() async -> RipulTodoItemsResult)? = nil,
+        onSendLater: (() -> Void)? = nil,
         messageHistory: MessageHistory? = nil,
         chatInputGlassStyle: String? = nil,
         chatInputLayout: String? = nil,
@@ -467,6 +463,7 @@ public struct NativeChatInput: View {
         self._selectedPhotos = selectedPhotos
         self.isAgentRunning = isAgentRunning
         self.isAgentPaused = isAgentPaused
+        self.waitingPlaceholder = waitingPlaceholder
         self.onSubmit = onSubmit
         self.onTypingChange = onTypingChange
         self.onSubmitNote = onSubmitNote
@@ -481,8 +478,7 @@ public struct NativeChatInput: View {
         self.onNewChat = onNewChat
         self.onQuickCommands = onQuickCommands
         self.onAddArtefact = onAddArtefact
-        self.onAddTodoItem = onAddTodoItem
-        self.onFetchTodoItems = onFetchTodoItems
+        self.onSendLater = onSendLater
         self.messageHistory = messageHistory
         self.chatInputGlassStyle = chatInputGlassStyle
         self.chatInputLayout = chatInputLayout
@@ -711,7 +707,10 @@ public struct NativeChatInput: View {
             dismissAtOverlay()
         }
         .onChange(of: text) { newValue in
-            if newValue.isEmpty { messageHistory?.composerModality = "keyboard" }
+            if newValue.isEmpty {
+                messageHistory?.composerModality = "keyboard"
+                contextAliases = [:]
+            }
             if isDictating && newValue.isEmpty {
                 dictationBase = ""
             }
@@ -747,16 +746,6 @@ public struct NativeChatInput: View {
                 }
             }
             .ignoresSafeArea()
-        }
-        .ripulSheet(isPresented: $showTodoPicker) {
-            TodoPickerSheet(
-                onFetch: onFetchTodoItems,
-                onSelect: { todoText in
-                    let separator = text.isEmpty || text.hasSuffix("\n") || text.hasSuffix(" ") ? "" : " "
-                    text = text + separator + todoText
-                    showTodoPicker = false
-                }
-            )
         }
     }
 
@@ -1038,16 +1027,14 @@ public struct NativeChatInput: View {
         text = collapsed
     }
 
-    /// Restore the `[context: …]` tokens the composer is displaying as aliases,
-    /// then hand off. `text` is a binding straight into the caller's state, so
-    /// the submit handler reads the expanded string.
+    /// Expand references for transport without changing the visible draft.
+    /// Delivery acknowledgement compares against that draft; rewriting it here
+    /// races the incoming-token collapse while the send is awaiting a reply.
     private func submitMessage() {
         onTypingChange?(false)
         guard !composerActionPending else { return }
         let expanded = ContextMentionAliasing.expand(text, using: contextAliases)
-        if expanded != text { text = expanded }
-        contextAliases = [:]
-        onSubmit()
+        onSubmit(expanded)
     }
 
     private func toggleClass(_ key: String) {
@@ -1801,24 +1788,17 @@ public struct NativeChatInput: View {
                 Label("Files", systemImage: "doc")
                 #endif
             }
-            if onFetchTodoItems != nil {
-                Button {
-                    dismissKeyboard()
-                    showTodoPicker = true
-                } label: {
-                    Label("Pick to do", systemImage: "list.bullet.clipboard")
-                }
-            }
             if let onAddArtefact {
                 Button(action: onAddArtefact) { Label("Artefact", systemImage: "square.stack.3d.up") }
             }
-            if onAddTodoItem != nil {
+            if let onSendLater {
                 Button {
                     dismissKeyboard()
-                    onAddTodoItem?()
+                    onSendLater()
                 } label: {
-                    Label("New to do", systemImage: "checklist")
+                    Label("Send Later…", systemImage: "clock")
                 }
+                .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
             if onQuickCommands != nil {
                 Button {
@@ -1934,12 +1914,15 @@ public struct NativeChatInput: View {
         .frame(maxWidth: .infinity, minHeight: textHeight + (36 - textHeight) * composerCollapse, maxHeight: textHeight + (36 - textHeight) * composerCollapse, alignment: .leading)
         .overlay(alignment: .topLeading) {
             if agentWaiting && text.isEmpty {
-                Text("Waiting on agent…").ripulText()
-                    .font(placeholderFont)
-                    .ripulShimmer(base: Color.ripul(system: .placeholderText))
-                    .padding(.leading, 12)
-                    .padding(.top, 8)
-                    .allowsHitTesting(false)
+                ComposerWaitingStatusLabel(
+                    text: waitingPlaceholder,
+                    base: Color.ripul(system: .placeholderText).opacity(0.45),
+                    highlight: Color.ripul(system: .placeholderText).opacity(0.85)
+                )
+                .padding(.leading, 12)
+                .padding(.trailing, 12)
+                .padding(.top, 9)
+                .allowsHitTesting(false)
             }
         }
     }
@@ -2207,7 +2190,8 @@ public struct NativeChatInput: View {
     @Binding var selectedPhotos: [PhotosPickerItem]
     let isAgentRunning: Bool
     let isAgentPaused: Bool
-    let onSubmit: () -> Void
+    var waitingPlaceholder: String?
+    let onSubmit: (String) -> Void
     var onTypingChange: ((Bool) -> Void)?
     @ObservedObject var contextStore: RipulComposerContextStore
     var contextSessionID: String?
@@ -2226,12 +2210,6 @@ public struct NativeChatInput: View {
     let onNewChat: (() -> Void)?
     let onQuickCommands: (() -> Void)?
     let onAddArtefact: (() -> Void)?
-    let onAddTodoItem: (() -> Void)?
-    /// Fetches the user's todo items (with current-chat id for grouping) when
-    /// the "Pick to do" menu entry is tapped. A selected todo's text is appended
-    /// to this view's own `$text` binding — the native composer is the source
-    /// of truth, not the hidden web composer.
-    let onFetchTodoItems: (() async -> RipulTodoItemsResult)?
     var messageHistory: MessageHistory?
     var chatInputGlassStyle: String?
     var chatInputLayout: String?
@@ -2278,7 +2256,6 @@ public struct NativeChatInput: View {
     @State private var atTriggerIndex: String.Index?
     @State private var showHistorySheet = false
     @State private var historyDraftAttachments: [NativeImageAttachment] = []
-    @State private var showTodoPicker = false
     @State private var showAtSuggestions = false
     @State private var allElementSuggestions: [ElementSuggestion] = []
     @State private var elementSuggestions: [ElementSuggestion] = []
@@ -2299,7 +2276,7 @@ public struct NativeChatInput: View {
     /// Composer-visible alias → the `[context: …]` token it stands in for.
     @State private var contextAliases: [String: String] = [:]
 
-    private var isTwoRow: Bool { chatInputLayout == "twoRow" }
+    private var isTwoRow: Bool { (chatInputLayout ?? "twoRow") == "twoRow" }
     private var resolvedChatInputGlassStyle: String { chatInputGlassStyle ?? "clear" }
 
     public init(
@@ -2308,7 +2285,8 @@ public struct NativeChatInput: View {
         selectedPhotos: Binding<[PhotosPickerItem]>,
         isAgentRunning: Bool = false,
         isAgentPaused: Bool = false,
-        onSubmit: @escaping () -> Void,
+        waitingPlaceholder: String? = nil,
+        onSubmit: @escaping (String) -> Void,
         onTypingChange: ((Bool) -> Void)? = nil,
         onSubmitNote: (() -> Void)? = nil,
         conversationMode: String = "agent",
@@ -2322,8 +2300,6 @@ public struct NativeChatInput: View {
         onNewChat: (() -> Void)? = nil,
         onQuickCommands: (() -> Void)? = nil,
         onAddArtefact: (() -> Void)? = nil,
-        onAddTodoItem: (() -> Void)? = nil,
-        onFetchTodoItems: (() async -> RipulTodoItemsResult)? = nil,
         messageHistory: MessageHistory? = nil,
         chatInputGlassStyle: String? = nil,
         chatInputLayout: String? = nil,
@@ -2347,6 +2323,7 @@ public struct NativeChatInput: View {
         self._selectedPhotos = selectedPhotos
         self.isAgentRunning = isAgentRunning
         self.isAgentPaused = isAgentPaused
+        self.waitingPlaceholder = waitingPlaceholder
         self.onSubmit = onSubmit
         self.onTypingChange = onTypingChange
         self.onSubmitNote = onSubmitNote
@@ -2361,8 +2338,6 @@ public struct NativeChatInput: View {
         self.onNewChat = onNewChat
         self.onQuickCommands = onQuickCommands
         self.onAddArtefact = onAddArtefact
-        self.onAddTodoItem = onAddTodoItem
-        self.onFetchTodoItems = onFetchTodoItems
         self.messageHistory = messageHistory
         self.chatInputGlassStyle = chatInputGlassStyle
         self.chatInputLayout = chatInputLayout
@@ -2630,16 +2605,14 @@ public struct NativeChatInput: View {
         text = collapsed
     }
 
-    /// Restore the `[context: …]` tokens the composer is displaying as aliases,
-    /// then hand off. `text` is a binding straight into the caller's state, so
-    /// the submit handler reads the expanded string.
+    /// Expand references for transport without changing the visible draft.
+    /// Delivery acknowledgement compares against that draft; rewriting it here
+    /// races the incoming-token collapse while the send is awaiting a reply.
     private func submitMessage() {
         onTypingChange?(false)
         guard !composerActionPending else { return }
         let expanded = ContextMentionAliasing.expand(text, using: contextAliases)
-        if expanded != text { text = expanded }
-        contextAliases = [:]
-        onSubmit()
+        onSubmit(expanded)
     }
 
     private func toggleClass(_ key: String) {
@@ -3028,7 +3001,10 @@ public struct NativeChatInput: View {
         }
         .animation(.easeInOut(duration: 0.2), value: isTwoRow)
         .onChange(of: text) { newValue in
-            if newValue.isEmpty { messageHistory?.composerModality = "keyboard" }
+            if newValue.isEmpty {
+                messageHistory?.composerModality = "keyboard"
+                contextAliases = [:]
+            }
             if isDictating && newValue.isEmpty {
                 dictationBase = ""
             }
@@ -3037,16 +3013,6 @@ public struct NativeChatInput: View {
         .animation(.easeInOut(duration: 0.2), value: showAtSuggestions)
         .modifier(SpeechInputWarningModifier(message: $microphoneWarning))
         .photosPicker(isPresented: $showPhotoPicker, selection: $selectedPhotos, maxSelectionCount: 4, matching: .images)
-        .ripulSheet(isPresented: $showTodoPicker) {
-            TodoPickerSheet(
-                onFetch: onFetchTodoItems,
-                onSelect: { todoText in
-                    let separator = text.isEmpty || text.hasSuffix("\n") || text.hasSuffix(" ") ? "" : " "
-                    text = text + separator + todoText
-                    showTodoPicker = false
-                }
-            )
-        }
         .onAppear {
             isFocused = true
         }
@@ -3259,22 +3225,8 @@ public struct NativeChatInput: View {
             } label: {
                 Label("Photos", systemImage: "photo")
             }
-            if onFetchTodoItems != nil {
-                Button {
-                    showTodoPicker = true
-                } label: {
-                    Label("Pick to do", systemImage: "list.bullet.clipboard")
-                }
-            }
             if let onAddArtefact {
                 Button(action: onAddArtefact) { Label("Artefact", systemImage: "square.stack.3d.up") }
-            }
-            if onAddTodoItem != nil {
-                Button {
-                    onAddTodoItem?()
-                } label: {
-                    Label("New to do", systemImage: "checklist")
-                }
             }
             if onQuickCommands != nil {
                 Button {
@@ -3316,10 +3268,14 @@ public struct NativeChatInput: View {
             .padding(.vertical, 8)
             .overlay(alignment: .leading) {
                 if agentWaiting && text.isEmpty {
-                    Text("Waiting on agent…").ripulText()
-                        .ripulShimmer(base: Color(nsColor: .placeholderTextColor))
-                        .padding(.leading, 12)
-                        .allowsHitTesting(false)
+                    ComposerWaitingStatusLabel(
+                        text: waitingPlaceholder,
+                        base: Color(nsColor: .placeholderTextColor).opacity(0.45),
+                        highlight: Color(nsColor: .placeholderTextColor).opacity(0.85)
+                    )
+                    .padding(.leading, 12)
+                    .padding(.trailing, 12)
+                    .allowsHitTesting(false)
                 }
             }
             .onSubmit {
@@ -3689,114 +3645,6 @@ struct HistorySheet: View {
     }
 }
 
-// MARK: - Todo Picker Sheet
-
-/// Native list picker for inserting an existing todo's text into the chat
-/// composer. Current chat's todos render in a "This chat" section on top;
-/// everything else falls into "Other chats". Fetches on appear via the
-/// supplied closure (which wraps `AgentBridge.listTodoItems()`).
-@available(iOS 16.0, macOS 14.0, *)
-struct TodoPickerSheet: View {
-    let onFetch: (() async -> RipulTodoItemsResult)?
-    let onSelect: (String) -> Void
-    @Environment(\.dismiss) private var dismiss
-    @State private var loading = true
-    @State private var items: [RipulTodoItem] = []
-    @State private var currentChatId: String? = nil
-
-    private var thisChatItems: [RipulTodoItem] {
-        guard let currentChatId else { return [] }
-        return items.filter { $0.chatId == currentChatId && !$0.completed }
-    }
-
-    private var otherChatItems: [RipulTodoItem] {
-        items.filter { ($0.chatId ?? "") != (currentChatId ?? "__none__") && !$0.completed }
-    }
-
-    var body: some View {
-        NavigationStack {
-            Group {
-                if loading {
-                    ProgressView()
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if thisChatItems.isEmpty && otherChatItems.isEmpty {
-                    VStack(spacing: 8) {
-                        Image(systemName: "list.bullet.clipboard")
-                            .font(.ripulIcon(.largeTitle))
-                            .foregroundStyle(.ripul(.textSecondary))
-                        Text("No to do items").ripulText()
-                            .font(.ripul(.headline))
-                        Text("Create one from the + menu to pick it later.")
-                            .font(.ripul(.caption))
-                            .foregroundStyle(.ripul(.textSecondary))
-                            .multilineTextAlignment(.center)
-                    }
-                    .padding()
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else {
-                    List {
-                        if !thisChatItems.isEmpty {
-                            Section(themed: "This chat") {
-                                ForEach(thisChatItems) { item in
-                                    todoRow(item, showChatName: false)
-                                }
-                            }.ripulThemedListRows()
-                        }
-                        if !otherChatItems.isEmpty {
-                            Section(themed: "Other chats") {
-                                ForEach(otherChatItems) { item in
-                                    todoRow(item, showChatName: true)
-                                }
-                            }.ripulThemedListRows()
-                        }
-                    }.ripulThemedList()
-                }
-            }
-            .navigationTitle("Pick to do")
-            #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
-            #endif
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Done") { dismiss() }
-                }
-            }
-        }
-        #if os(macOS)
-        .frame(minWidth: 400, minHeight: 400)
-        #else
-        .ripulSheet(.page, detents: [.medium, .large])
-        #endif
-        .task {
-            guard let onFetch else { loading = false; return }
-            let result = await onFetch()
-            items = result.items
-            currentChatId = result.currentChatId
-            loading = false
-        }
-    }
-
-    private func todoRow(_ item: RipulTodoItem, showChatName: Bool) -> some View {
-        Button {
-            onSelect(item.text)
-        } label: {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(item.text)
-                    .lineLimit(3)
-                    .foregroundStyle(.ripul(.text))
-                if showChatName, let chatName = item.chatName, !chatName.isEmpty {
-                    Text(chatName)
-                        .font(.ripul(.caption))
-                        .foregroundStyle(.ripul(.textSecondary))
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-    }
-}
-
 // MARK: - Waiting Glow Effect
 
 @available(iOS 15.0, macOS 14.0, *)
@@ -3821,9 +3669,33 @@ private struct WaitingGlowModifier: ViewModifier {
 
 // MARK: - Glass Background (cross-platform)
 
+/// How frosted the composer's clear glass is, from 0 (the bare glass, the chat
+/// showing through) to 1 (close to a solid card). Offered as a slider in the app's
+/// UX Settings and kept in the standard defaults, so every composer reads it itself.
+/// Until it is moved, the composer draws what it always has.
+public enum ComposerFrost {
+    public static let defaultsKey = "ripul.composerFrost"
+    /// Where the slider starts: the ultra-thin material at 0.6, as before the setting.
+    public static let standard = 0.3
+    /// The lower half of the slider fades the material in, from clear to fully
+    /// blurred; the upper half lays the theme's card colour over it, up to `maxCard`.
+    static let materialSpan = 0.5
+    static let maxCard = 0.9
+
+    static func materialOpacity(_ frost: Double) -> Double {
+        min(max(frost, 0) / materialSpan, 1)
+    }
+
+    static func cardOpacity(_ frost: Double) -> Double {
+        max(min(frost, 1) - materialSpan, 0) / (1 - materialSpan) * maxCard
+    }
+}
+
 @available(iOS 15.0, macOS 14.0, *)
 public struct GlassChatInputBackground: ViewModifier {
     public var glassStyle: String? // "regular", "clear", or "identity"
+    /// Read here, so a change in UX Settings reaches every composer at once.
+    @AppStorage(ComposerFrost.defaultsKey) private var frost = ComposerFrost.standard
 
     public init(glassStyle: String? = nil) {
         self.glassStyle = glassStyle
@@ -3840,11 +3712,7 @@ public struct GlassChatInputBackground: ViewModifier {
                     // Keep the readability blur inside the same shape as the
                     // composer glass, never across the surrounding chat lane.
                     .background {
-                        if glassStyle != "regular" {
-                            RoundedRectangle(cornerRadius: 22)
-                                .fill(.ultraThinMaterial)
-                                .opacity(0.6)
-                        }
+                        if glassStyle != "regular" { frosting }
                     }
                     .glassEffect(style, in: .rect(cornerRadius: 22))
             }
@@ -3857,6 +3725,20 @@ public struct GlassChatInputBackground: ViewModifier {
             .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22))
         #endif
     }
+
+    #if os(iOS)
+    /// The material, then the card colour, as far as the chosen frosting takes them.
+    /// A layer at nothing is left out, so clear glass carries no blur to draw.
+    @ViewBuilder private var frosting: some View {
+        let shape = RoundedRectangle(cornerRadius: 22)
+        let material = ComposerFrost.materialOpacity(frost)
+        let card = ComposerFrost.cardOpacity(frost)
+        ZStack {
+            if material > 0 { shape.fill(.ultraThinMaterial).opacity(material) }
+            if card > 0 { shape.fill(.ripul(.surface)).opacity(card) }
+        }
+    }
+    #endif
 }
 
 @available(iOS 15.0, macOS 14.0, *)

@@ -53,6 +53,10 @@ public struct RipulSessionsView: View {
     /// unified bar. Pass `false` only where no floating bar covers the list.
     /// The shared agent workspace has a list header even with docked metadata.
     private let reservesTopBarSpace: Bool
+    /// The open chat is on screen beside this list, so its row is marked as
+    /// selected. False wherever the chat takes the list's place (an iPhone, a
+    /// picker sheet): the mark would only be in the way on the way back.
+    private let highlightsActiveSession: Bool
     /// Pick mode: when set, tapping a session hands back its IDENTITY without
     /// opening it — no tab creation, no remote history import, no focus
     /// change. This is the sessions list as a picker (the link-to-plan sheet).
@@ -91,6 +95,7 @@ public struct RipulSessionsView: View {
         showingSidebar: Binding<Bool>? = nil,
         quickActionsEnabled: Bool = false,
         reservesTopBarSpace: Bool = true,
+        highlightsActiveSession: Bool = false,
         onListedSessionsChanged: (([RipulListedSession]) -> Void)? = nil,
         onPickUnifiedSession: ((UnifiedSession) -> Void)? = nil
     ) {
@@ -103,7 +108,7 @@ public struct RipulSessionsView: View {
                   allowRipulAgents: allowRipulAgents, inviteManager: inviteManager, model: model,
                   chooseMode: chooseMode, showsTitleLozenge: showsTitleLozenge,
                   showingSidebar: showingSidebar, quickActionsEnabled: quickActionsEnabled,
-                  reservesTopBarSpace: reservesTopBarSpace)
+                  reservesTopBarSpace: reservesTopBarSpace, highlightsActiveSession: highlightsActiveSession)
     }
 
     /// For a host that re-renders often (the agent screen, on every list/chat
@@ -123,7 +128,8 @@ public struct RipulSessionsView: View {
         showsTitleLozenge: Bool = true,
         showingSidebar: Binding<Bool>? = nil,
         quickActionsEnabled: Bool = false,
-        reservesTopBarSpace: Bool = true
+        reservesTopBarSpace: Bool = true,
+        highlightsActiveSession: Bool = false
     ) {
         self.bridge = bridge
         self.cache = cache
@@ -138,6 +144,7 @@ public struct RipulSessionsView: View {
         self.showingSidebar = showingSidebar
         self.quickActionsEnabled = quickActionsEnabled
         self.reservesTopBarSpace = reservesTopBarSpace
+        self.highlightsActiveSession = highlightsActiveSession
         _modelOwner = StateObject(wrappedValue: UnobservedOwner(model ?? RipulSessionListModel(
             bridge: bridge,
             tokenProvider: tokenProvider,
@@ -324,6 +331,17 @@ public struct RipulSessionsView: View {
         }, onDismiss: { if !restoring { onDismiss() } })
     }
 
+    /// Older Chats at the end of the list, or nil when no Mac can give any.
+    private var olderChatsRow: OlderChatsRow? {
+        let state: OlderChatsRow.State
+        if model.isLoadingOlderSessions { state = .loading }
+        else if model.hasMoreOlderSessions { state = .more }
+        else if model.hasLoadedAllOlderSessions { state = .end }
+        else { return nil }
+        let model = self.model
+        return OlderChatsRow(state: state, note: model.olderSessionsNote) { search in Task { await model.loadOlderSessions(matching: search) } }
+    }
+
     public var body: some View {
         let _ = ChatSlideProbe.markBody("RipulSessionsView") { Self._printChanges() }
         // Only this subtree follows the ~2s last-active ticks of a running agent.
@@ -369,7 +387,9 @@ public struct RipulSessionsView: View {
             machineIcons: machineIcons,
             restartingMachineId: model.restartingMachineId,
             restartSucceededId: model.restartSucceededId,
-            selectedSessionId: bridge.activeSessionId,
+            // Not read at all without a chat beside the list, so a change of
+            // chat does not redraw it.
+            selectedSessionId: highlightsActiveSession ? bridge.activeSessionId : nil,
             onRefresh: {
                 // The inbox is on this screen too, and `model.refresh()` leaves it
                 // to its manager. Not awaited: neither read should wait on the other.
@@ -399,6 +419,7 @@ public struct RipulSessionsView: View {
             inviteManager: onPickUnifiedSession == nil ? inviteManager : nil,
             emptyStateOverride: emptyStateOverride,
             onListedSessionsChanged: onListedSessionsChanged,
+            olderChats: olderChatsRow,
             searchText: $searchText,
             renamingSession: $renamingSession,
             renameText: $renameText
@@ -646,6 +667,7 @@ extension RipulSessionsView: Equatable {
                 && (lhs.showingSidebar == nil) == (rhs.showingSidebar == nil)
                 && lhs.quickActionsEnabled == rhs.quickActionsEnabled
                 && lhs.reservesTopBarSpace == rhs.reservesTopBarSpace
+                && lhs.highlightsActiveSession == rhs.highlightsActiveSession
         }
     }
 }

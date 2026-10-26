@@ -62,6 +62,13 @@ public final class ChatSlideProbe {
 
     private var watched: [ObjectIdentifier: AnyCancellable] = [:]
 
+    /// Optional listener used by `LayerMotionTracer` (`layer_animations` action
+    /// `trace`) so any animation trace captures SwiftUI `_printChanges()` body
+    /// evaluations and watched `ObservableObject` setter stacks.
+    var externalMarkSink: ((CFTimeInterval, String) -> Void)?
+
+    private var isRecording: Bool { link != nil || externalMarkSink != nil }
+
     /// Mark every `objectWillChange` of `object` that fires mid-slide, naming
     /// the setter that caused it. Views re-render because an object they
     /// observe published; this names which property it was, so a stall can be
@@ -75,7 +82,7 @@ public final class ChatSlideProbe {
             guard Thread.isMainThread else { return }
             MainThreadSampler.count("\(name).pub")
             MainActor.assumeIsolated {
-                guard ChatSlideProbe.shared.link != nil else { return }
+                guard ChatSlideProbe.shared.isRecording else { return }
                 ChatSlideProbe.shared.mark("\(name)<-\(Self.callerSummary())")
             }
         }
@@ -119,7 +126,7 @@ public final class ChatSlideProbe {
     }
 
     public static func mark(_ label: @autoclosure () -> String) {
-        guard shared.link != nil else { return }
+        guard shared.isRecording else { return }
         shared.mark(label())
     }
 
@@ -182,12 +189,12 @@ public final class ChatSlideProbe {
         // `-perfBodyChanges YES` at launch: every evaluation and its cause goes
         // to the log as `[BODY] …`, slide or no slide. For finding why one tap
         // (a tab switch) re-evaluates a screen several times.
-        if shared.link == nil, logsEveryBody {
+        if !shared.isRecording, logsEveryBody {
             NSLog("%@", "[BODY] \(name){\(changes(printChanges).prefix(300))}")
             return
         }
         #endif
-        guard shared.link != nil else { return }
+        guard shared.isRecording else { return }
         #if DEBUG
         var fds: [Int32] = [0, 0]
         fflush(stdout)
@@ -210,7 +217,11 @@ public final class ChatSlideProbe {
     }
 
     private func mark(_ label: String) {
-        marks.append((CACurrentMediaTime(), label))
+        let now = CACurrentMediaTime()
+        if link != nil {
+            marks.append((now, label))
+        }
+        externalMarkSink?(now, label)
     }
 
     private func relative(_ t: CFTimeInterval) -> String {

@@ -123,6 +123,34 @@ public enum SpeechPreferences {
     }
 
     public static let dictationProviderKey = "chatDictationProvider"
+    public static let ttsProviderKey = "ttsProvider"
+    public static let phononVoiceKey = "phononVoiceId"
+
+    /// "phonon" (on-device Phonon 31m) or "elevenlabs" (cloud).
+    /// Any legacy "apple" / "apple-native" TTS preference maps to "phonon".
+    public static var ttsProviderId: String {
+        let normalize: (String?) -> String? = { raw in
+            guard let raw, !raw.isEmpty else { return nil }
+            if raw == "apple" || raw == "apple-native" || raw == "phonon" { return "phonon" }
+            if raw == "elevenlabs" { return "elevenlabs" }
+            return nil
+        }
+        let fromProfile = normalize(activeProfile?.ttsProviderId)
+        let fromStore = normalize(store.string(forKey: ttsProviderKey))
+        return resolve(profile: fromProfile, stored: fromStore, fallback: "elevenlabs")
+    }
+
+    /// Selected Phonon voice name (default "Zoey").
+    public static var phononVoiceId: String {
+        let stored = store.string(forKey: phononVoiceKey) ?? ""
+        if !stored.isEmpty { return stored }
+        if let profileVoice = activeProfile?.voiceId,
+           !profileVoice.isEmpty,
+           profileVoice.first?.isUppercase == true {
+            return profileVoice
+        }
+        return "Zoey"
+    }
 
     /// Personal turn-taking preference, independent of the site's voice or
     /// provider configuration. Saved in this app on this device.

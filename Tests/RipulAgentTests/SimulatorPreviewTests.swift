@@ -1,6 +1,7 @@
 #if os(iOS)
 import XCTest
 import UIKit
+import SwiftUI
 import Combine
 @testable import RipulAgent
 
@@ -337,6 +338,91 @@ final class SimulatorPreviewTests: XCTestCase {
             XCTAssertNil(WindowPreviewAppearance(["cropPresetId": "device", "cornerRadiusFraction": radius]))
         }
         XCTAssertEqual(WindowPreviewAppearance(["cropPresetId": "device", "cornerRadiusFraction": 0.0])?.cornerRadiusFraction, 0)
+    }
+
+    func testEnsureCollapsedFABRestoresTheButtonAfterCloseWithoutExpanding() {
+        let state = SimulatorPreviewState()
+        state.open(target, machineId: "host", chatId: "chat")
+        state.close()
+        XCTAssertNil(state.selection)
+        state.ensureCollapsedFAB(target, machineId: "host", chatId: "chat")
+        XCTAssertEqual(state.selection?.target, target)
+        XCTAssertEqual(state.selection?.machineId, "host")
+        XCTAssertEqual(state.selection?.chatId, "chat")
+        XCTAssertTrue(state.collapsed)
+        XCTAssertEqual(state.targets, [target])
+    }
+
+    func testChromeFollowsSnapshotAndComputesChassisAspectRatio() async {
+        let state = SimulatorPreviewState()
+        state.open(target, machineId: "host", chatId: "chat")
+        var snapshot = frame()
+        let chromeDict: [String: Any] = [
+            "topLeftRadius": 62.0,
+            "topRightRadius": 62.0,
+            "bottomRightRadius": 62.0,
+            "bottomLeftRadius": 62.0,
+            "bezelTop": 14.0,
+            "bezelRight": 14.0,
+            "bezelBottom": 14.0,
+            "bezelLeft": 26.0,
+            "hingeEdge": "left",
+            "cutoutKind": "cornerHole",
+            "cutoutEdge": "topRight",
+            "quarterTurnsCCW": 0,
+        ]
+        snapshot["result"] = (snapshot["result"] as! [String: Any]).merging([
+            "width": 384,
+            "height": 830,
+            "chrome": chromeDict,
+        ]) { $1 }
+        await state.refresh { _, _, _, _ in snapshot }
+        XCTAssertEqual(state.chrome?.hingeEdge, "left")
+        XCTAssertEqual(state.chrome?.cutoutKind, "cornerHole")
+        XCTAssertEqual(state.logicalScreenSize, CGSize(width: 384, height: 830))
+        // Total chassis width = 384 + (26+4) + (14+4) = 432, height = 830 + (14+4) + (14+4) = 866
+        XCTAssertEqual(state.chassisAspectRatio, 432.0 / 866.0, accuracy: 0.001)
+        state.close()
+        XCTAssertNil(state.chrome)
+        XCTAssertEqual(state.logicalScreenSize, .zero)
+    }
+
+    func testMaximizingPausesStillsIgnoresAutomaticOpensAndRestoresCleanly() async {
+        let state = SimulatorPreviewState()
+        let other = SimulatorTarget(udid: "5F0C2B1E-7D3A-4C69-9E21-6A8B0D4E3F17")
+        state.open(target, machineId: "host", chatId: "chat")
+        // Without liveContent or fullScreenContent, maximize() does nothing.
+        state.maximize()
+        XCTAssertFalse(state.maximized)
+
+        state.fullScreenContent = { _, _ in AnyView(EmptyView()) }
+        state.collapsed = true
+        state.maximize()
+        XCTAssertTrue(state.maximized)
+        XCTAssertFalse(state.collapsed)
+
+        // Stills pause while maximized.
+        await state.refresh { _, _, _, _ in XCTFail("No stills while maximized"); return [:] }
+
+        // Automatic opens do not replace the maximized simulator.
+        state.open(other, machineId: "host", chatId: "chat", automatic: true)
+        XCTAssertEqual(state.selection?.target, target)
+        XCTAssertTrue(state.maximized)
+
+        // Folding while maximized refreshes fullScreenGeneration after foldSettles.
+        state.invoke = { _, _, _, _ in ["success": true] }
+        state.foldSettles = .milliseconds(1)
+        let beforeFold = state.fullScreenGeneration
+        await state.control("open")
+        XCTAssertNotEqual(state.fullScreenGeneration, beforeFold)
+        XCTAssertTrue(state.maximized)
+
+        // Restoring leaves maximized false and fetches a fresh still.
+        state.restoreFromMaximize()
+        XCTAssertFalse(state.maximized)
+        var refreshed = false
+        await state.refresh { _, _, _, _ in refreshed = true; return self.frame() }
+        XCTAssertTrue(refreshed)
     }
 }
 #endif

@@ -404,7 +404,8 @@ struct CmsFileLibraryBlockView: View {
             .background(runtime.theme.gradient, in: RoundedRectangle(cornerRadius: runtime.theme.cardRadius, style: .continuous))
             .cmsInspectorID("Cms.fileLibrary.period")
             if open {
-                ForEach(p.weeks) { weekCard($0, listing: listing, canUpload: canUpload) }
+                // Oldest week first, as the dots read (George, 23 Oct 2026: newest first looked funny).
+                ForEach(p.weeks.reversed()) { weekCard($0, listing: listing, canUpload: canUpload) }
             }
         }
     }
@@ -440,15 +441,25 @@ struct CmsFileLibraryBlockView: View {
             }
         }()
         let due = st == .due
+        let current = w.offset == 0 || w.offset == 1
         return VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 12) {
                 Image(systemName: mark).font(.system(size: 14, weight: .bold)).foregroundColor(color)
                     .frame(width: 34, height: 34).background(Circle().fill(color.opacity(0.12)))
                 VStack(alignment: .leading, spacing: 1) {
-                    if !tag.isEmpty { Text(tag.uppercased()).font(.system(size: 11, weight: .bold)).tracking(1.2).foregroundColor(runtime.theme.textSecondary) }
                     Text(w.label).font(.system(size: 16, weight: .heavy))
-                    Text(note).font(.system(size: 13))
-                        .foregroundColor(st == .missing || { if case .differences = st { return true } else { return false } }() ? color : runtime.theme.textSecondary)
+                    // This week, next week and last week carry a small pill leading the line
+                    // under the dates; every week is drawn alike, as on the web (George, 23 Oct 2026).
+                    HStack(spacing: 6) {
+                        if !tag.isEmpty {
+                            Text(tag).font(.system(size: 12, weight: .bold)).foregroundColor(runtime.theme.primary)
+                                .padding(.horizontal, 8).padding(.vertical, 1)
+                                .background(Capsule().fill(runtime.theme.tint))
+                                .fixedSize()
+                        }
+                        Text(note).font(.system(size: 13))
+                            .foregroundColor(st == .missing || { if case .differences = st { return true } else { return false } }() ? color : runtime.theme.textSecondary)
+                    }
                 }
                 Spacer()
                 if canUpload && (st == .due || st == .missing) {
@@ -456,7 +467,7 @@ struct CmsFileLibraryBlockView: View {
                         uploadWeek = w
                         importing = true
                     }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.bordered)
                     .controlSize(.small)
                     .tint(runtime.theme.primary)
                     .disabled(uploading != nil || runtime.isDesignMode)
@@ -468,9 +479,13 @@ struct CmsFileLibraryBlockView: View {
                 ForEach(w.files) { fileRow($0, week: w, listing: listing) }
             }
         }
-        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(due ? runtime.theme.tint : runtime.theme.paper))
+        // This week and next week carry a quiet outline, as on the web.
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous).fill(runtime.theme.paper)
+                .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(runtime.theme.primary.opacity(current ? 0.05 : 0)))
+        )
         .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
-            .strokeBorder(due ? runtime.theme.primary : runtime.theme.divider, style: StrokeStyle(lineWidth: due ? 2 : 1, dash: due ? [6, 4] : [])))
+            .strokeBorder(current ? runtime.theme.primary.opacity(0.5) : runtime.theme.divider, lineWidth: current ? 1.5 : 1))
         .cmsInspectorID("Cms.fileLibrary.week")
     }
 

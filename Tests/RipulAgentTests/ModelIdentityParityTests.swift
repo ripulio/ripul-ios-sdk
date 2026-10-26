@@ -1,4 +1,5 @@
 import XCTest
+import SwiftUI
 @testable import RipulAgent
 
 /// Model-identity parity with the web app's
@@ -118,5 +119,61 @@ final class ModelIdentityParityTests: XCTestCase {
         XCTAssertEqual(adopted.providerLabel, "Antigravity")
         XCTAssertEqual(adopted.model, "antigravity-cli-raw-gemini-4-argon")
         XCTAssertFalse(adopted.tabFactsDiffer(from: localTab))
+    }
+
+    @available(iOS 26.0, macOS 26.0, *)
+    @MainActor
+    func testRunningIndicatorColorAlignsWithModelAndProviderAndPutAwayChild() {
+        let now = Date()
+        let store = SessionListStore()
+
+        func makeSession(id: String, provider: String?, providerLabel: String? = nil, model: String? = nil, runningOnHost: Bool = false) -> UnifiedSession {
+            UnifiedSession(
+                id: id,
+                title: id,
+                lastUsed: now,
+                gitBranch: nil,
+                messageCount: nil,
+                projectName: nil,
+                provider: provider,
+                providerLabel: providerLabel,
+                model: model,
+                machineName: "Studio",
+                machineId: "mac-1",
+                runningOnHost: runningOnHost,
+                ripulSession: nil
+            )
+        }
+
+        // Provider fallbacks when no model family resolves: Claude (orange), Antigravity (blue), Codex (green).
+        let claudeRow = UnifiedSessionRow(sessionStore: store, session: makeSession(id: "c", provider: "claude-cli", runningOnHost: true))
+        XCTAssertEqual(claudeRow.runningIndicatorColor, Color(hex: ProviderConstants.claude.color))
+
+        let agyRow = UnifiedSessionRow(sessionStore: store, session: makeSession(id: "a", provider: "antigravity-cli", runningOnHost: true))
+        XCTAssertEqual(agyRow.runningIndicatorColor, Color(hex: ProviderConstants.antigravity.color))
+
+        let codexRow = UnifiedSessionRow(sessionStore: store, session: makeSession(id: "x", provider: "codex-shared-cli", runningOnHost: true))
+        XCTAssertEqual(codexRow.runningIndicatorColor, Color(hex: ProviderConstants.codexShared.color))
+
+        // Concrete model identity overrides the harness provider color (e.g. Kimi K3 or Sonnet inside Claude CLI).
+        let kimiRow = UnifiedSessionRow(sessionStore: store, session: makeSession(id: "k", provider: "claude-cli", model: "k3[1m]", runningOnHost: true))
+        XCTAssertEqual(kimiRow.runningIndicatorColor, ModelIdentity.resolve(modelId: "k3[1m]")?.color)
+
+        let overrideRow = UnifiedSessionRow(
+            sessionStore: store,
+            session: makeSession(id: "o", provider: "claude-cli", model: "claude-opus-4-6", runningOnHost: true),
+            modelIdOverride: "claude-sonnet-4-6"
+        )
+        XCTAssertEqual(overrideRow.runningIndicatorColor, ModelIdentity.resolve(modelId: "claude-sonnet-4-6")?.color)
+
+        // When the parent chat is idle and a put-away child chat is running, the busy computer icon reflects the running child's model/provider color.
+        let idleParent = makeSession(id: "parent", provider: "claude-cli", model: "claude-opus-4-6", runningOnHost: false)
+        let runningChild = makeSession(id: "child", provider: "codex-shared-cli", model: "gpt-5-codex", runningOnHost: true)
+        let familyRow = UnifiedSessionRow(
+            sessionStore: store,
+            session: idleParent,
+            startedChatsPutAway: [runningChild]
+        )
+        XCTAssertEqual(familyRow.runningIndicatorColor, ModelIdentity.resolve(modelId: "gpt-5-codex")?.color)
     }
 }

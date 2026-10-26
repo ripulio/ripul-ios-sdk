@@ -71,6 +71,7 @@ struct QuickLaunchStrip: View {
     /// the UI they have today.
     var onSwitchAccount: (() -> Void)? = nil
     var onSwitchCodexAccount: (() -> Void)? = nil
+    var onSwitchAntigravityAccount: (() -> Void)? = nil
 
     /// Targets we can actually launch given what the caller wired up. CLI and
     /// axis-2 subscription both need a host; only platform-API can start without.
@@ -135,7 +136,8 @@ struct QuickLaunchStrip: View {
                     labelled: !effectiveShowCircles,
                     isLaunching: isLaunching,
                     onSwitchAccount: onSwitchAccount,
-                    onSwitchCodexAccount: onSwitchCodexAccount
+                    onSwitchCodexAccount: onSwitchCodexAccount,
+                    onSwitchAntigravityAccount: onSwitchAntigravityAccount
                 )
             }
         }

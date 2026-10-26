@@ -5,7 +5,8 @@ struct CodingAccountPlanBadge: View {
     let name: String
 
     init?(usage: CodingAccountUsage?, plan: String?) {
-        guard let name = CodingAccountUsage.planName(usage?.plan ?? plan) else { return nil }
+        let raw = [usage?.plan, plan].compactMap { $0 }.first { $0.lowercased().contains("max_") } ?? usage?.plan ?? plan
+        guard let name = CodingAccountUsage.planName(raw) else { return nil }
         self.name = name
     }
 

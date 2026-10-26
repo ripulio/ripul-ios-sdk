@@ -22,6 +22,16 @@ public struct HostAlert: Decodable, Identifiable, Equatable {
 
     public var raisedDate: Date? { Self.dateFormatter.date(from: raisedAt) }
 
+    /// The Claude profile a sign-in alert is about (`claude-signin:<slug>`,
+    /// raised by the host's ClaudeSignInMonitor): its fix is signing in again,
+    /// which happens on the phone, not as an action on the Mac.
+    public var claudeSignInProfile: String? {
+        let prefix = "claude-signin:"
+        guard id.hasPrefix(prefix) else { return nil }
+        let slug = String(id.dropFirst(prefix.count))
+        return slug.isEmpty ? nil : slug
+    }
+
     var icon: String {
         switch severity {
         case .critical: return "exclamationmark.octagon.fill"
@@ -55,16 +65,20 @@ public struct HostAlertsSheet: View {
     let alerts: [HostAlert]
     /// Runs an alert's action on the host. Nil = the buttons are not offered.
     let onExecute: ((RemoteActionDescriptor) async -> [String: Any])?
+    /// Signs a Claude profile on this machine in again, for a sign-in alert.
+    let onSignIn: ((String) -> Void)?
     @Environment(\.dismiss) private var dismiss
     @State private var running: String?
     @State private var outcomes: [String: (text: String, ok: Bool)] = [:]
     @State private var confirming: HostAlert?
 
     public init(machineName: String, alerts: [HostAlert],
-                onExecute: ((RemoteActionDescriptor) async -> [String: Any])?) {
+                onExecute: ((RemoteActionDescriptor) async -> [String: Any])?,
+                onSignIn: ((String) -> Void)? = nil) {
         self.machineName = machineName
         self.alerts = alerts
         self.onExecute = onExecute
+        self.onSignIn = onSignIn
     }
 
     public var body: some View {
@@ -125,7 +139,14 @@ public struct HostAlertsSheet: View {
                     .font(.ripul(.caption))
                     .foregroundStyle(.ripul(.textSecondary))
             }
-            if let title = alert.actionTitle, alert.actionId != nil, onExecute != nil {
+            if let profile = alert.claudeSignInProfile, let onSignIn {
+                Button("Sign in again") {
+                    dismiss()
+                    onSignIn(profile)
+                }
+                .buttonStyle(.bordered)
+                .uiKitIdentifier("HostAlertsSheet.signIn")
+            } else if let title = alert.actionTitle, alert.actionId != nil, onExecute != nil {
                 HStack(spacing: 8) {
                     Button(title) { confirming = alert }
                         .buttonStyle(.bordered)

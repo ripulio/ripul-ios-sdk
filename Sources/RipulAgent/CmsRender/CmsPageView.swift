@@ -243,7 +243,8 @@ final class CmsPageLoader: ObservableObject {
                     self.runtime.membership = try? await client.fetchPortalMembership(siteKey: publishable)
                 }
                 self.runtime.queryDefs = Dictionary(
-                    uniqueKeysWithValues: (definition.queries ?? []).map { ($0.slug, $0) }
+                    (definition.queries ?? []).map { ($0.slug, $0) },
+                    uniquingKeysWith: { first, _ in first }
                 )
                 self.runtime.columnViews = Dictionary(
                     (definition.columnViews ?? []).map { ($0.slug, $0) },
@@ -369,7 +370,8 @@ final class CmsPageLoader: ObservableObject {
         runtime.themeConfig = cms.theme
         runtime.theme = CmsPortalTheme(config: cms.theme, effectiveDark: runtime.effectiveDark)
         runtime.queryDefs = Dictionary(
-            uniqueKeysWithValues: (cms.queries ?? []).map { ($0.slug, $0) }
+            (cms.queries ?? []).map { ($0.slug, $0) },
+            uniquingKeysWith: { first, _ in first }
         )
         runtime.columnViews = Dictionary(
             (cms.columnViews ?? []).map { ($0.slug, $0) },

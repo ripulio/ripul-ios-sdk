@@ -12,9 +12,27 @@ import Speech
 public final class SpeechService: NSObject, ObservableObject {
     public static let shared = SpeechService()
 
-    public struct Voice: Identifiable {
+    public struct Voice: Identifiable, Equatable, Sendable {
         public let id: String
         public let name: String
+        public let region: String?
+        public let gender: String?
+
+        public init(id: String, name: String, region: String? = nil, gender: String? = nil) {
+            self.id = id
+            self.name = name
+            self.region = region
+            self.gender = gender
+        }
+
+        /// Formatted label for voice dropdowns, e.g. `"Zoey (US · Female)"` or `"Alfie (UK · Male)"`.
+        public var displayLabel: String {
+            let parts = [region, gender]
+                .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+            guard !parts.isEmpty else { return name }
+            return "\(name) (\(parts.joined(separator: " · ")))"
+        }
     }
 
     public enum TranscriptionEvent {
@@ -42,6 +60,7 @@ public final class SpeechService: NSObject, ObservableObject {
         case microphoneDenied
         case recognizerUnavailable
         case localeUnsupported(String)
+        case ttsUnsupported
 
         public var errorDescription: String? {
             switch self {
@@ -49,6 +68,7 @@ public final class SpeechService: NSObject, ObservableObject {
             case .microphoneDenied: return "Microphone permission denied"
             case .recognizerUnavailable: return "Speech recognizer unavailable for this locale"
             case .localeUnsupported(let id): return "Transcription model unavailable for locale \(id)"
+            case .ttsUnsupported: return "Apple text-to-speech has been removed; use Phonon or ElevenLabs"
             }
         }
     }
@@ -64,8 +84,6 @@ public final class SpeechService: NSObject, ObservableObject {
     /// observes the @Published state instead.
     public var onTranscriptionEvent: ((TranscriptionEvent) -> Void)?
 
-    private let synthesizer = AVSpeechSynthesizer()
-    private var onSpeakingFinished: (() -> Void)?
     /// Permission answered "yes" once this process. Both requests are XPC
     /// round-trips even when already granted, and they sit directly in front of
     /// engine start — in the voice loop every listen re-paid them, widening the
@@ -81,64 +99,21 @@ public final class SpeechService: NSObject, ObservableObject {
 
     override private init() {
         super.init()
-        synthesizer.delegate = self
     }
 
-    // MARK: - TTS
+    // MARK: - TTS (Removed — use PhononNativeSpeechProvider or ElevenLabsNativeSpeechProvider)
 
-    /// Current-language voices first, higher quality first within a language.
-    public func listVoices() -> [Voice] {
-        let currentLanguage = Locale.current.language.languageCode?.identifier ?? "en"
-        return AVSpeechSynthesisVoice.speechVoices()
-            .sorted { a, b in
-                let aCurrent = a.language.hasPrefix(currentLanguage)
-                let bCurrent = b.language.hasPrefix(currentLanguage)
-                if aCurrent != bCurrent { return aCurrent }
-                if a.quality != b.quality { return a.quality.rawValue > b.quality.rawValue }
-                return a.name < b.name
-            }
-            .map { voice in
-                let quality: String
-                switch voice.quality {
-                case .premium: quality = " · premium"
-                case .enhanced: quality = " · enhanced"
-                default: quality = ""
-                }
-                return Voice(id: voice.identifier, name: "\(voice.name) (\(voice.language))\(quality)")
-            }
-    }
+    public func listVoices() -> [Voice] { [] }
 
-    /// Begins speaking immediately; returns once playback has started.
-    /// `onFinished` fires when the utterance completes naturally (not on
-    /// stopSpeaking(), which clears it).
     public func speak(text: String, voiceId: String?, onFinished: (() -> Void)? = nil) throws {
-        onSpeakingFinished = nil
-        synthesizer.stopSpeaking(at: .immediate)
-        onSpeakingFinished = onFinished
-        VoiceAudioSession.configureForPlayback()
-        let utterance = AVSpeechUtterance(string: text)
-        if let voiceId, let voice = AVSpeechSynthesisVoice(identifier: voiceId) {
-            utterance.voice = voice
-        } else if let regional = Self.defaultRegionalVoice() {
-            // Follow the device region — a UK phone speaks en-GB, not the
-            // synthesizer's en-US default.
-            utterance.voice = regional
-        }
-        synthesizer.speak(utterance)
-        isSpeaking = true
+        throw SpeechServiceError.ttsUnsupported
     }
 
-    public func pauseSpeaking() {
-        synthesizer.pauseSpeaking(at: .word)
-    }
+    public func pauseSpeaking() {}
 
-    public func continueSpeaking() {
-        synthesizer.continueSpeaking()
-    }
+    public func continueSpeaking() {}
 
     public func stopSpeaking() {
-        onSpeakingFinished = nil
-        synthesizer.stopSpeaking(at: .immediate)
         isSpeaking = false
     }
 
@@ -311,32 +286,6 @@ public final class SpeechService: NSObject, ObservableObject {
         return (sum / Float(frames)).squareRoot()
     }
 
-    /// Best installed voice for the device locale (language + region, e.g.
-    /// en-GB on a UK phone), preferring higher quality tiers (premium >
-    /// enhanced > compact). Nil leaves the synthesizer's default in place.
-    private static func defaultRegionalVoice() -> AVSpeechSynthesisVoice? {
-        let language = Locale.current.language.languageCode?.identifier ?? "en"
-        let voices = AVSpeechSynthesisVoice.speechVoices()
-        var candidates: [AVSpeechSynthesisVoice] = []
-        if let region = Locale.current.region?.identifier {
-            let target = "\(language)-\(region)"
-            candidates = voices.filter { $0.language.caseInsensitiveCompare(target) == .orderedSame }
-        }
-        if candidates.isEmpty {
-            candidates = voices.filter { $0.language.hasPrefix("\(language)-") }
-        }
-        // Deterministic winner: regions usually offer several voices at the
-        // SAME quality tier, and `.max` between ties is iteration-order
-        // dependent while speechVoices() order is not stable — which rotated
-        // the fallback voice between utterances. Break ties by identifier.
-        return candidates.sorted {
-            if $0.quality.rawValue != $1.quality.rawValue {
-                return $0.quality.rawValue > $1.quality.rawValue
-            }
-            return $0.identifier < $1.identifier
-        }.first
-    }
-
     /// Locale for transcription: the speech-language preference when set
     /// (mapped to a concrete region), otherwise the device locale.
     static func preferredTranscriptionLocale() -> Locale {
@@ -391,24 +340,5 @@ public final class SpeechService: NSObject, ObservableObject {
         guard granted else { throw SpeechServiceError.microphoneDenied }
         // Revocation kills the app, so a granted answer holds for the process.
         authorizationGranted = true
-    }
-}
-
-@available(iOS 26.0, macOS 26.0, *)
-extension SpeechService: AVSpeechSynthesizerDelegate {
-    public nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
-        Task { @MainActor in
-            self.isSpeaking = false
-            let callback = self.onSpeakingFinished
-            self.onSpeakingFinished = nil
-            callback?()
-        }
-    }
-
-    public nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
-        Task { @MainActor in
-            self.isSpeaking = false
-            self.onSpeakingFinished = nil
-        }
     }
 }

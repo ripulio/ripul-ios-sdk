@@ -100,6 +100,31 @@ struct DevToolsModifier: ViewModifier {
     }
 
     private func registerBuiltInTools() {
+        bridge.registerBuiltInTools(bridge.developerBuiltInTools())
+    }
+
+    private func present() {
+        #if os(iOS)
+        showSheet = true
+        #elseif os(macOS)
+        openDevToolsWindow(bridge: bridge)
+        #endif
+    }
+
+    private func dismiss() {
+        #if os(iOS)
+        showSheet = false
+        #elseif os(macOS)
+        closeDevToolsWindow()
+        #endif
+    }
+}
+
+extension AgentBridge {
+    /// The console UI and headless developer transport install the identical set.
+    @MainActor
+    func developerBuiltInTools() -> [NativeTool] {
+        let bridge = self
         var tools: [NativeTool] = [
             ConsoleLogsTool(bridge: bridge),
             NetworkLogsTool(bridge: bridge),
@@ -125,26 +150,15 @@ struct DevToolsModifier: ViewModifier {
             // The View Explorer's own readout as text, Appearance included: what a
             // person sees when they select an element, checked without a person.
             ExplorerProbeTool(),
+            ScreenAuditTool(),
+            ShareSheetTool(),
+            ExplorerConformanceTool(),
+            SetValueTool(),
         ]
         #endif
-        bridge.registerBuiltInTools(tools)
+        return tools
     }
 
-    private func present() {
-        #if os(iOS)
-        showSheet = true
-        #elseif os(macOS)
-        openDevToolsWindow(bridge: bridge)
-        #endif
-    }
-
-    private func dismiss() {
-        #if os(iOS)
-        showSheet = false
-        #elseif os(macOS)
-        closeDevToolsWindow()
-        #endif
-    }
 }
 
 // MARK: - macOS floating window

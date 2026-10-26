@@ -427,13 +427,40 @@ public struct UnifiedSession: Identifiable, Codable {
     private static let cacheKey = "ripulUnifiedSessionsCacheV2"
 
     public static func loadCached(cache: RipulSessionCache) -> [UnifiedSession] {
-        guard let data = cache.data(forKey: cacheKey) else { return [] }
-        return (try? JSONDecoder().decode([UnifiedSession].self, from: data)) ?? []
+        guard let data = cache.data(forKey: cacheKey),
+              let decoded = try? JSONDecoder().decode([UnifiedSession].self, from: data) else { return [] }
+        return deduplicatingById(decoded)
     }
 
     public static func saveToCache(_ sessions: [UnifiedSession], cache: RipulSessionCache) {
-        guard let data = try? JSONEncoder().encode(sessions) else { return }
+        guard let data = try? JSONEncoder().encode(deduplicatingById(sessions)) else { return }
         cache.set(data, forKey: cacheKey)
+    }
+
+    public static func clearCache(cache: RipulSessionCache) {
+        cache.removeObject(forKey: cacheKey)
+    }
+
+    /// Collapse duplicate row IDs so SwiftUI lists and ID-keyed dictionaries
+    /// never see two `UnifiedSession` values with the same `id`.
+    public static func deduplicatingById(_ sessions: [UnifiedSession]) -> [UnifiedSession] {
+        var indexById: [String: Int] = [:]
+        var unique: [UnifiedSession] = []
+        unique.reserveCapacity(sessions.count)
+        for session in sessions {
+            if let idx = indexById[session.id] {
+                let incumbent = unique[idx]
+                let challengerRank = (session.hasKnownActivity ? 1 : 0, session.provider != nil ? 1 : 0, session.runningOnHost ? 1 : 0, session.lastUsed)
+                let incumbentRank = (incumbent.hasKnownActivity ? 1 : 0, incumbent.provider != nil ? 1 : 0, incumbent.runningOnHost ? 1 : 0, incumbent.lastUsed)
+                if challengerRank > incumbentRank {
+                    unique[idx] = session
+                }
+            } else {
+                indexById[session.id] = unique.count
+                unique.append(session)
+            }
+        }
+        return unique
     }
 
     /// Resolved provider definition from shared/providers.json.
@@ -622,9 +649,10 @@ public struct UnifiedSession: Identifiable, Codable {
         // from the JSONL itself.
         //
         // An orphan exists to keep a chat visible while its machine can't be
-        // asked. When the machine DID answer and its full list doesn't include
-        // the chat, the chat was archived or deleted there (by an agent, or on
-        // the Mac) and this device was never told — so its leftover tab is not
+        // asked. When the machine DID answer and its list doesn't include the
+        // chat, the chat was archived or deleted there (by an agent, or on the
+        // Mac) and this device was never told, or it has been quiet for two
+        // weeks and is a page of Older Chats away — so its leftover tab is not
         // a row. Hidden, not closed: a wrong call undoes itself on the next
         // scan. A tab opened in the last few minutes is spared, since a chat
         // started from here may not be on the host's disk yet.
@@ -694,13 +722,14 @@ public struct UnifiedSession: Identifiable, Codable {
 
         NSLog("[UnifiedDedup] built %d rows (%d remote + %d orphan local) from %d local keys",
               result.count, remote.count, result.count - remote.count, localById.count)
-        return result.sorted { $0.lastUsed > $1.lastUsed }
+        return deduplicatingById(result.sorted { $0.lastUsed > $1.lastUsed })
     }
 }
 
 // MARK: - Equatable (display-relevant fields only)
 
 extension UnifiedSession: Equatable {
+    /// `hashDisplayedFields` hashes these same fields: a field added here goes there too.
     public static func == (lhs: UnifiedSession, rhs: UnifiedSession) -> Bool {
         lhs.id == rhs.id &&
         lhs.title == rhs.title &&
@@ -729,6 +758,29 @@ extension UnifiedSession: Equatable {
         lhs.projectPath == rhs.projectPath &&
         lhs.cachedIsOpen == rhs.cachedIsOpen &&
         lhs.ripulSession?.id == rhs.ripulSession?.id
+    }
+
+    /// The fields `==` compares, and only those: two chats `==` calls equal
+    /// hash the same. A field added to one goes in the other.
+    func hashDisplayedFields(into hasher: inout Hasher) {
+        hasher.combine(id)
+        hasher.combine(title)
+        hasher.combine(lastUsed)
+        hasher.combine(hasKnownActivity)
+        hasher.combine(machineName)
+        hasher.combine(machineId)
+        hasher.combine(provider)
+        hasher.combine(providerLabel)
+        hasher.combine(model)
+        hasher.combine(messageCount)
+        hasher.combine(projectName)
+        hasher.combine(gitBranch)
+        hasher.combine(tags)
+        hasher.combine(startedBy)
+        hasher.combine(runningOnHost)
+        hasher.combine(projectPath)
+        hasher.combine(cachedIsOpen)
+        hasher.combine(ripulSession?.id)
     }
 }
 

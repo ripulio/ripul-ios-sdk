@@ -21,10 +21,10 @@ struct NativeConsoleToolView: View {
 
 private struct NativeConsoleBrowser: View {
     let logs: NativeConsoleLogs
-    @State private var query = ""
-    @State private var level: String?
-    @State private var newestFirst = true
-    @State private var visibleRows = 100
+    @NativeRowState("console.query") private var query = ""
+    @NativeRowState("console.level") private var level: String? = nil
+    @NativeRowState("console.newestFirst") private var newestFirst = true
+    @NativeRowState("console.visibleRows") private var visibleRows = 100
     @State private var copied = false
     @FocusState private var searchFocused: Bool
 
@@ -151,9 +151,12 @@ private struct NativeConsoleBrowser: View {
 
 private struct NativeConsoleLogRow: View {
     let group: NativeToolLogGroup
-    @State private var expanded = false
+    @NativeRowState("console.row.expanded") private var expanded = false
+    @NativeRowState("console.row.stack") private var stackExpanded = false
 
     var body: some View {
+        let scopeId = "\(group.id)"
+        let isExpanded = _expanded.value(subscope: scopeId)
         let entry = group.entry
         let clean = ToolValue.cleanTerminal(entry.message)
         let long = clean.count > 320 || clean.components(separatedBy: "\n").count > 4
@@ -174,7 +177,7 @@ private struct NativeConsoleLogRow: View {
                         .help(date.formatted(date: .complete, time: .complete))
                 }
             }.font(.ripul(.caption))
-            if expanded {
+            if isExpanded {
                 NativeToolCodeBlock(text: entry.message, identifier: "NativeTool.logs.message.\(group.id)")
             } else {
                 Text(long ? preview + "…" : clean).font(.ripul(.caption, family: .code))
@@ -182,7 +185,9 @@ private struct NativeConsoleLogRow: View {
                     .accessibilityIdentifier("NativeTool.logs.message.\(group.id)")
             }
             if long {
-                Button(expanded ? "Show less" : "Show full message") { expanded.toggle() }
+                Button(isExpanded ? "Show less" : "Show full message") {
+                    _expanded.setValue(!isExpanded, subscope: scopeId)
+                }
                     .font(.ripul(.caption)).accessibilityIdentifier("NativeTool.logs.expand.\(group.id)")
             }
             if group.count > 1, let last = group.lastEntry.date, last != entry.date {
@@ -190,7 +195,7 @@ private struct NativeConsoleLogRow: View {
                     .font(.ripul(.caption2)).foregroundStyle(.ripul(.textSecondary))
             }
             if let stack = entry.stack, !stack.isEmpty {
-                DisclosureGroup("Stack trace") {
+                DisclosureGroup("Stack trace", isExpanded: _stackExpanded.binding(subscope: scopeId)) {
                     NativeToolCodeBlock(text: stack, identifier: "NativeTool.logs.stack.\(group.id)")
                 }.font(.ripul(.caption)).accessibilityIdentifier("NativeTool.logs.stackToggle.\(group.id)")
             }

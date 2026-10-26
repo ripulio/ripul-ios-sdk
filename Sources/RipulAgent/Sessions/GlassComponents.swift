@@ -8,21 +8,27 @@ import SwiftUI
 
 // MARK: - Glass Section Panel
 
-/// Collapsible container with a header row (chevron, title, optional
-/// subtitle, optional trailing actions) and a content slot.
+/// Collapsible container with a header row (chevron, title, optional chip
+/// beside the title, optional subtitle, optional trailing actions) and a
+/// content slot.
 /// On iOS 26+ renders with `.glassEffect`; on older versions uses
 /// `.ultraThinMaterial` with a rounded rect. Works on all iOS versions
 /// so call sites don't need `if #available` branching.
-public struct GlassSectionPanel<Content: View, Trailing: View, Center: View, CollapsedAccessory: View>: View {
+public struct GlassSectionPanel<Content: View, Trailing: View, TitleAccessory: View, CollapsedAccessory: View>: View {
     let title: String
     var subtitle: String? = nil
     @Binding var isExpanded: Bool
-    let center: Center
+    /// Right after the title: a small chip that belongs to it, such as a count
+    /// of what is waiting that also filters the panel to those.
+    let titleAccessory: TitleAccessory
     let trailing: Trailing
-    /// Rendered on its own row beneath the header while COLLAPSED. Use this for
-    /// controls that are too wide or too numerous to sit in `trailing` without
-    /// squeezing the title — it sits outside the header's tap target, so
-    /// tapping it doesn't toggle the panel.
+    /// Shown only while COLLAPSED. It rides the header row's trailing edge,
+    /// with the subtitle truncating to make room, or left out when too little
+    /// of it would show, so a closed panel is one row. Only when even the title
+    /// can't sit beside it (a long set of circles, a very narrow window) does
+    /// it take its own row beneath the header. On the header row it is inside
+    /// the header's tap target, but Button hit-testing takes the tap over the
+    /// header's onTapGesture, so using it never toggles the panel.
     let collapsedAccessory: CollapsedAccessory
     let content: Content
     /// A panel that is the screen's whole point has nothing to collapse FOR:
@@ -37,7 +43,7 @@ public struct GlassSectionPanel<Content: View, Trailing: View, Center: View, Col
         isExpanded: Binding<Bool>,
         collapsible: Bool = true,
         followsContainerBottomCorners: Bool = false,
-        @ViewBuilder center: () -> Center = { EmptyView() },
+        @ViewBuilder titleAccessory: () -> TitleAccessory = { EmptyView() },
         @ViewBuilder trailing: () -> Trailing = { EmptyView() },
         @ViewBuilder collapsedAccessory: () -> CollapsedAccessory = { EmptyView() },
         @ViewBuilder content: () -> Content
@@ -47,7 +53,7 @@ public struct GlassSectionPanel<Content: View, Trailing: View, Center: View, Col
         self._isExpanded = isExpanded
         self.collapsible = collapsible
         self.followsContainerBottomCorners = followsContainerBottomCorners
-        self.center = center()
+        self.titleAccessory = titleAccessory()
         self.trailing = trailing()
         self.collapsedAccessory = collapsedAccessory()
         self.content = content()
@@ -55,43 +61,24 @@ public struct GlassSectionPanel<Content: View, Trailing: View, Center: View, Col
 
     public var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 8) {
-                if collapsible {
-                    Image(systemName: "chevron.right")
-                        .font(.ripulIcon(.caption2, weight: .semibold))
-                        .foregroundStyle(.ripul(.textSecondary))
-                        .rotationEffect(.degrees(isExpanded ? 90 : 0))
-                        .animation(.easeInOut(duration: 0.2), value: isExpanded)
+            if CollapsedAccessory.self == EmptyView.self {
+                header(accessory: nil)
+            } else {
+                // The first view is chosen whenever it fits, open or closed, so
+                // the header keeps one identity and the chevron still turns.
+                ViewThatFits(in: .horizontal) {
+                    header(accessory: showsCollapsedAccessory ? collapsedAccessory : nil)
+                    header(accessory: showsCollapsedAccessory ? collapsedAccessory : nil, showsSubtitle: false)
+                    VStack(spacing: 0) {
+                        header(accessory: nil)
+                        if showsCollapsedAccessory {
+                            collapsedAccessory
+                                .padding(.horizontal, 16)
+                                .padding(.bottom, 10)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
                 }
-                Text(title)
-                    .font(.ripul(.subheadline, weight: .semibold))
-                    .foregroundStyle(.ripul(.textSecondary))
-                    .textCase(.uppercase)
-                if let subtitle, !subtitle.isEmpty, !isExpanded {
-                    Text(subtitle)
-                        .font(.ripul(.caption))
-                        .foregroundStyle(.ripul(.textTertiary))
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                }
-                Spacer(minLength: 8)
-                center
-                Spacer(minLength: 8)
-                trailing
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 10)
-            .contentShape(Rectangle())
-            .onTapGesture {
-                guard collapsible else { return }
-                #if os(iOS)
-                UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
-                #endif
-                withAnimation(.easeInOut(duration: 0.2)) { isExpanded.toggle() }
-            }
-
-            if !isExpanded && collapsible {
-                collapsedAccessory
             }
 
             if isExpanded || !collapsible {
@@ -102,6 +89,62 @@ public struct GlassSectionPanel<Content: View, Trailing: View, Center: View, Col
             }
         }
         .modifier(GlassPanelBackground(followsContainerBottomCorners: followsContainerBottomCorners))
+    }
+
+    private var showsCollapsedAccessory: Bool { !isExpanded && collapsible }
+
+    /// How much of the subtitle the one-row header keeps beside the accessory:
+    /// "Studio", or the start of a list of names. Any less and the subtitle is
+    /// left out rather than shown as an ellipsis.
+    private static var subtitleReserve: CGFloat { 48 }
+
+    private func header(accessory: CollapsedAccessory?, showsSubtitle: Bool = true) -> some View {
+        HStack(spacing: 8) {
+            if collapsible {
+                Image(systemName: "chevron.right")
+                    .font(.ripulIcon(.caption2, weight: .semibold)) // theme-mapping: unchanged, moved into header()
+                    .foregroundStyle(.ripul(.textSecondary)) // theme-mapping: unchanged, moved into header()
+                    .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                    .animation(.easeInOut(duration: 0.2), value: isExpanded)
+            }
+            Text(title)
+                .font(.ripul(.subheadline, weight: .semibold)) // theme-mapping: unchanged, moved into header()
+                .foregroundStyle(.ripul(.textSecondary)) // theme-mapping: unchanged, moved into header()
+                .textCase(.uppercase)
+            titleAccessory
+            if showsSubtitle, let subtitle, !subtitle.isEmpty, !isExpanded {
+                let label = Text(subtitle)
+                    .font(.ripul(.caption)) // theme-mapping: unchanged, moved into header()
+                    .foregroundStyle(.ripul(.textTertiary)) // theme-mapping: unchanged, moved into header()
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                if accessory != nil {
+                    // ViewThatFits measures this row at its ideal width, which
+                    // counts the subtitle at no more than the reserve, so a long
+                    // subtitle truncates beside the accessory instead of pushing
+                    // it onto its own row. Laid out, the frame is the text's own
+                    // width, or the room that is left.
+                    label.frame(minWidth: 0, idealWidth: Self.subtitleReserve, alignment: .leading)
+                } else {
+                    label
+                }
+            }
+            Spacer(minLength: 8)
+            trailing
+            if let accessory {
+                accessory
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            #if os(iOS)
+            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+            #endif
+            guard collapsible else { return }
+            withAnimation(.easeInOut(duration: 0.2)) { isExpanded.toggle() }
+        }
     }
 }
 
@@ -121,17 +164,24 @@ public struct GlassSearchField: View {
 
     public var body: some View {
         HStack(spacing: 8) {
-            Image(systemName: "magnifyingglass")
-                .font(.ripulIcon(.caption))
-                .foregroundStyle(.ripul(.textSecondary))
-            TextField(placeholder, text: $text)
-                .textFieldStyle(.plain)
-                .font(.ripul(.subheadline))
-                .autocorrectionDisabled()
-                #if os(iOS)
-                .textInputAutocapitalization(.never)
-                #endif
-                .focused($isFocused)
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass")
+                    .font(.ripulIcon(.caption))
+                    .foregroundStyle(.ripul(.textSecondary))
+                TextField(placeholder, text: $text)
+                    .textFieldStyle(.plain)
+                    .font(.ripul(.subheadline))
+                    .autocorrectionDisabled()
+                    #if os(iOS)
+                    .textInputAutocapitalization(.never)
+                    #endif
+                    .focused($isFocused)
+                    .frame(minHeight: 22)
+            }
+            .frame(maxWidth: .infinity, minHeight: 22, alignment: .leading)
+            .contentShape(Rectangle())
+            .onTapGesture { isFocused = true }
+
             if !text.isEmpty {
                 Button { text = "" } label: {
                     Image(systemName: "xmark.circle.fill")
@@ -142,11 +192,121 @@ public struct GlassSearchField: View {
                 .buttonStyle(.plain)
             }
         }
+        // Hold the row at 22pt minimum so UIKitTextField attaching UIFieldEditor
+        // on first focus (which recalculates intrinsic height for the custom
+        // theme font from 22pt to 15-18pt) never shrinks the search pill vertically.
+        .frame(minHeight: 22)
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
         .background(.ultraThinMaterial, in: .rect(cornerRadius: 10))
+        #if os(iOS)
+        .background(SearchFieldTapAwayInstaller(isFocused: $isFocused))
+        #endif
     }
 }
+
+#if os(iOS)
+/// Window-level tap observer scoped to a single `GlassSearchField`. While this
+/// search field is focused, a tap anywhere outside its pill ends editing and
+/// lowers the keyboard without swallowing or delaying the touch.
+private struct SearchFieldTapAwayInstaller: UIViewRepresentable {
+    @FocusState.Binding var isFocused: Bool
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeUIView(context: Context) -> InstallerView {
+        let view = InstallerView()
+        view.isUserInteractionEnabled = false
+        view.coordinator = context.coordinator
+        context.coordinator.installerView = view
+        return view
+    }
+
+    func updateUIView(_ uiView: InstallerView, context: Context) {
+        context.coordinator.installerView = uiView
+        context.coordinator.isFocused = isFocused
+        let unfocus: () -> Void = { isFocused = false }
+        context.coordinator.onDismiss = unfocus
+    }
+
+    static func dismantleUIView(_ uiView: InstallerView, coordinator: Coordinator) {
+        coordinator.attach(to: nil)
+    }
+
+    final class InstallerView: UIView {
+        weak var coordinator: Coordinator?
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            coordinator?.attach(to: window)
+        }
+    }
+
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        weak var installerView: InstallerView?
+        private weak var window: UIWindow?
+        var isFocused: Bool = false
+        var onDismiss: (() -> Void)?
+
+        private lazy var recognizer: UITapGestureRecognizer = {
+            let tap = UITapGestureRecognizer(target: self, action: #selector(tapped))
+            tap.cancelsTouchesInView = false
+            tap.delaysTouchesBegan = false
+            tap.delaysTouchesEnded = false
+            tap.delegate = self
+            return tap
+        }()
+
+        func attach(to window: UIWindow?) {
+            guard window !== self.window else { return }
+            self.window?.removeGestureRecognizer(recognizer)
+            self.window = window
+            window?.addGestureRecognizer(recognizer)
+        }
+
+        @objc private func tapped() {
+            onDismiss?()
+            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+            window?.endEditing(true)
+        }
+
+        private func isOwnTextFieldEditing() -> Bool {
+            if isFocused { return true }
+            guard let installerView, let window = installerView.window,
+                  let responder = Self.findFirstResponder(in: window) as? UITextField else {
+                return false
+            }
+            let responderCenter = responder.convert( CGPoint(x: responder.bounds.midX, y: responder.bounds.midY), to: installerView)
+            return installerView.bounds.insetBy(dx: -8, dy: -8).contains(responderCenter)
+        }
+
+        private static func findFirstResponder(in view: UIView) -> UIView? {
+            if view.isFirstResponder { return view }
+            for subview in view.subviews {
+                if let found = findFirstResponder(in: subview) { return found }
+            }
+            return nil
+        }
+
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+            guard isOwnTextFieldEditing(), let installerView else { return false }
+            // Taps inside the search pill itself (text field, clear button, icon)
+            // are for interacting with the search field, not leaving it.
+            let point = touch.location(in: installerView)
+            if installerView.bounds.contains(point) { return false }
+            // Taps into another text input let UIKit move first responder directly.
+            var view = touch.view
+            while let current = view {
+                if current is UITextField || current is UITextView { return false }
+                view = current.superview
+            }
+            return true
+        }
+
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                               shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
+    }
+}
+#endif
 
 // MARK: - Glass Select Button
 

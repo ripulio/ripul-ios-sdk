@@ -1,4 +1,5 @@
 #if os(iOS)
+import Combine
 import UIKit
 import SwiftUI
 import WebKit
@@ -28,6 +29,8 @@ final class NativeToolStripAnchorController {
     private var attachment: NativeSlotAttachment?
     private var geometry: NativeToolAnchorGeometry?
     private var retry: Task<Void, Never>?
+    /// A placement put off until the app is back in the foreground.
+    private var returnWait: AnyCancellable?
     /// Climbs a scroller-parented strip onto its row's layer after placement.
     private var upgrade: Task<Void, Never>?
     private var enabled = false
@@ -145,6 +148,13 @@ final class NativeToolStripAnchorController {
             var attempts = 0
             while true {
                 guard !Task.isCancelled, let self, self.enabled else { return }
+                // Nothing can be placed while the app is in the background:
+                // WebKit's layers are off the screen, and every try failed until
+                // the strip gave up. Start again once the app is back.
+                if NativeSlotAttachment.appIsInBackground() {
+                    self.placeOnReturn()
+                    return
+                }
                 MainThreadSampler.count("strip.retry")
                 let idle = self.canChangeLayout()
                 if idle {
@@ -159,6 +169,16 @@ final class NativeToolStripAnchorController {
                 catch { return }
             }
         }
+    }
+
+    private func placeOnReturn() {
+        guard returnWait == nil else { return }
+        returnWait = NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)
+            .first()
+            .sink { [weak self] _ in
+                self?.returnWait = nil
+                self?.schedulePlacement()
+            }
     }
 
     private func place() -> Bool {
@@ -248,6 +268,7 @@ final class NativeToolStripAnchorController {
         }
         retry?.cancel()
         retry = nil
+        returnWait = nil
         upgrade?.cancel()
         upgrade = nil
         host?.view.layer.removeAnimation(forKey: Self.appearanceAnimationKey)

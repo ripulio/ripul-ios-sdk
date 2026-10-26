@@ -5,13 +5,21 @@ import SwiftUI
 /// chat's header lozenge or takes it out.
 ///
 /// The agent keeps them (the `shortcut` tool). A person can add, pin and
-/// delete them here, and pinning marks the shortcut as theirs. The page's
+/// delete them here, and pinning marks the shortcut as theirs. A message
+/// pinned from its bubble is listed too: a tap jumps the chat to it.
+///
+/// In a chat that is someone else's the list is the chat's: its links are
+/// the owner's, and a member unpins only the messages they pinned. The page's
 /// `ShortcutsSection` is the web twin. Docs: chatShortcuts.md.
 @available(iOS 15.0, macOS 13.0, *)
 struct SessionShortcutsSection: View {
     let shortcuts: [AgentBridge.ChatShortcut]
     @Binding var isExpanded: Bool
     let patch: ([String: Any]) -> Void
+    /// False in a chat that is someone else's.
+    var canEditLinks = true
+    var canUnpin: (AgentBridge.ChatShortcut) -> Bool = { _ in true }
+    var onJump: (AgentBridge.MessageAnchor) -> Void = { _ in }
 
     @Environment(\.openURL) private var openURL
     @State private var adding = false
@@ -50,7 +58,7 @@ struct SessionShortcutsSection: View {
                     .foregroundStyle(.ripul(.textTertiary))
             }
             Spacer()
-            if !adding {
+            if !adding && canEditLinks {
                 Button {
                     title = ""
                     address = ""
@@ -88,7 +96,7 @@ struct SessionShortcutsSection: View {
             }
 
             if shortcuts.isEmpty && !adding {
-                Text("None yet. The agent keeps a link here when it makes an artefact or a page you will want again, and you can add your own.")
+                Text("None yet. The agent keeps a link here when it makes an artefact or a page you will want again. Add your own, or pin a message from its bubble.")
                     .font(.ripul(.caption))
                     .foregroundStyle(.ripul(.textTertiary))
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -153,44 +161,88 @@ struct SessionShortcutsSection: View {
 
     // MARK: - A shortcut
 
-    private func shortcutRow(_ shortcut: AgentBridge.ChatShortcut) -> some View {
-        HStack(spacing: 4) {
-            Button {
-                if !RipulSecureConnection.open(shortcut.url) { openURL(shortcut.url) }
-            } label: {
-                HStack(spacing: 10) {
-                    Image(systemName: shortcut.symbol)
-                        .font(.ripulIcon(.subheadline))
-                        .foregroundStyle(shortcut.isArtefact ? .ripul(.info) : .ripul(.textSecondary))
-                        .frame(width: 20)
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(shortcut.title).ripulText()
-                            .font(.ripul(.subheadline, weight: .semibold))
-                            .lineLimit(1)
-                        Text(shortcut.host)
-                            .font(.ripul(.caption))
-                            .foregroundStyle(.ripul(.textSecondary))
-                            .lineLimit(1)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .uiKitIdentifier("SessionMetadataPanel.shortcutRow")
+    private func open(_ shortcut: AgentBridge.ChatShortcut) {
+        if let anchor = shortcut.anchor { onJump(anchor); return }
+        if !RipulSecureConnection.open(shortcut.url) { openURL(shortcut.url) }
+    }
 
-            Button {
-                patch(["updateShortcut": ["id": shortcut.id, "key": !shortcut.key, "byPerson": true]])
-            } label: {
-                Image(systemName: shortcut.key ? "pin.fill" : "pin")
-                    .font(.ripulIcon(.caption))
-                    .foregroundStyle(shortcut.key ? .ripul(.info) : .ripul(.textTertiary))
-                    .frame(width: 32, height: 28)
-                    .contentShape(Rectangle())
+    @ViewBuilder
+    private func shortcutRow(_ shortcut: AgentBridge.ChatShortcut) -> some View {
+        if shortcut.isMessage {
+            messageRow(shortcut)
+        } else {
+            linkRow(shortcut)
+        }
+    }
+
+    private func label(_ shortcut: AgentBridge.ChatShortcut) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: shortcut.symbol)
+                .font(.ripulIcon(.subheadline))
+                .foregroundStyle(shortcut.isArtefact || shortcut.isMessage ? .ripul(.info) : .ripul(.textSecondary))
+                .frame(width: 20)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(shortcut.title).ripulText()
+                    .font(.ripul(.subheadline, weight: .semibold))
+                    .lineLimit(1)
+                Text(shortcut.subtitle)
+                    .font(.ripul(.caption))
+                    .foregroundStyle(.ripul(.textSecondary))
+                    .lineLimit(1)
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel(shortcut.key ? "Take out of the chat's header" : "Show in the chat's header")
-            .uiKitIdentifier("SessionMetadataPanel.shortcutRow.pin")
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .contentShape(Rectangle())
+    }
+
+    private func headerPin(_ shortcut: AgentBridge.ChatShortcut) -> some View {
+        Button {
+            patch(["updateShortcut": ["id": shortcut.id, "key": !shortcut.key, "byPerson": true]])
+        } label: {
+            Image(systemName: shortcut.key ? "pin.fill" : "pin")
+                .font(.ripulIcon(.caption))
+                .foregroundStyle(shortcut.key ? .ripul(.info) : .ripul(.textTertiary))
+                .frame(width: 32, height: 28)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(shortcut.key ? "Take out of the chat's header" : "Show in the chat's header")
+        .uiKitIdentifier("SessionMetadataPanel.shortcutRow.pin")
+    }
+
+    /// A pinned message: a tap jumps the chat to it.
+    private func messageRow(_ shortcut: AgentBridge.ChatShortcut) -> some View {
+        HStack(spacing: 4) {
+            Button { open(shortcut) } label: { label(shortcut) }
+                .buttonStyle(.plain)
+                .accessibilityHint("Jumps to the message")
+                .uiKitIdentifier("SessionMetadataPanel.pinnedMessageRow")
+            if canEditLinks { headerPin(shortcut) }
+        }
+        .padding(.leading, 16)
+        .padding(.trailing, 8)
+        .padding(.vertical, 8)
+        .contextMenu { MenuIcons {
+            Button { open(shortcut) } label: {
+                Label("Jump to Message", systemImage: "arrow.down.to.line")
+            }
+            if canUnpin(shortcut) {
+                Divider()
+                Button(role: .destructive) {
+                    patch(["removeShortcutId": shortcut.id])
+                } label: {
+                    Label("Unpin", systemImage: "pin.slash")
+                }
+            }
+        }}
+    }
+
+    private func linkRow(_ shortcut: AgentBridge.ChatShortcut) -> some View {
+        HStack(spacing: 4) {
+            Button { open(shortcut) } label: { label(shortcut) }
+                .buttonStyle(.plain)
+                .uiKitIdentifier("SessionMetadataPanel.shortcutRow")
+            if canEditLinks { headerPin(shortcut) }
         }
         .padding(.leading, 16)
         .padding(.trailing, 8)
@@ -211,14 +263,17 @@ struct SessionShortcutsSection: View {
             } label: {
                 Label("Copy Link", systemImage: "doc.on.doc")
             }
-            Divider()
-            Button(role: .destructive) {
-                patch(["removeShortcutId": shortcut.id])
-            } label: {
-                Label("Delete", systemImage: "trash")
+            if canEditLinks {
+                Divider()
+                Button(role: .destructive) {
+                    patch(["removeShortcutId": shortcut.id])
+                } label: {
+                    Label("Delete", systemImage: "trash")
+                }
             }
         }}
     }
+
 
     // MARK: - Actions
 

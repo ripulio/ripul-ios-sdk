@@ -76,6 +76,24 @@ final class EmbeddedComposerSubmissionTests: XCTestCase {
         XCTFail("The production composer must submit without a native session ID")
     }
 
+    func testContextMentionClearsOnAcceptanceWithoutRewritingVisibleDraft() async throws {
+        try await withComposer { _, input, web in
+            let token = "[context: ripul.chats/YWJj | Example chat]"
+            input.text = "Read \(token)"
+            input.delegate?.textViewDidChange?(input)
+            try await Task.sleep(for: .milliseconds(250))
+            XCTAssertEqual(input.text, "Read @Example chat")
+            try submit(input)
+            try await waitForSubmission(web)
+            let submissions = try await web.evaluateJavaScript("window.submissions") as? [String]
+            XCTAssertEqual(submissions, ["Read \(token)"])
+            XCTAssertEqual(input.text, "Read @Example chat")
+            _ = try await web.evaluateJavaScript("window.finishSubmission?.({success:true})")
+            try await Task.sleep(for: .milliseconds(250))
+            XCTAssertEqual(input.text, "")
+        }
+    }
+
     func testEmbeddedChatSendsWithoutNativeSessionAndClearsOnlyAfterAcceptance() async throws {
         try await withComposer { _, input, web in
             try submit(input)

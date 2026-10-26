@@ -199,10 +199,10 @@ page saw: [["__ripulCreateChat",[]],["__ripulGetSessions",[]]]
 nslog: [AgentBridge] → Starting new chat (prompt: no)
 nslog: [AgentBridge] New chat created: chat-new
 console: LOG [native] [AgentBridge] fetchSessions #1, sessions=0, cliSessions=0
-console: LOG [native] [AgentBridge] sessions changed (0→2) initialSync=1 skipAuto=0
-state: _sessions = [ChatSession(id: "tab-1", sourceChatId: "chat-1", displayName: "One", createdAt: <date>, remoteMachineName: nil, provider: "claude-cli", providerLabel: nil, model: nil, hostChatId: nil, sizeBytes: nil, displayNameSource: "user", displayNameRenamedAt: nil, projectName: nil, gitBranch: nil, isSharedGuest: nil), ChatSession(id: "tab-2", sourceChatId: "chat-2", displayName: "Two", createdAt: <date>, remoteMachineName: nil, provider: nil, providerLabel: nil, model: nil, hostChatId: nil, sizeBytes: nil, displayNameSource: nil, displayNameRenamedAt: nil, projectName: nil, gitBranch: nil, isSharedGues…(608 characters)
+state: _sessions = [ChatSession(id: "tab-1", sourceChatId: "chat-1", displayName: "One", createdAt: <date>, remoteMachineName: nil, remoteMachineId: nil, provider: "claude-cli", providerLabel: nil, model: nil, hostChatId: nil, sizeBytes: nil, displayNameSource: "user", displayNameRenamedAt: nil, projectName: nil, gitBranch: nil, isSharedGuest: nil, latestReplyAuthorName: nil, latestHumanReplyAt: nil, typingNames: []), ChatSession(id: "tab-2", sourceChatId: "chat-2", displayName: "Two", createdAt: <date>, remoteMachineName: nil, remoteMachineId: nil, provider: nil, providerLabel: nil, model: nil, hostChatId: nil,…(792 characters)
 state: _activeSessionId = "tab-2"
 state: pendingActiveSourceChatId = "chat-new"
+state: resolvedActiveChatIdentity = (sessionID: "tab-2", chatID: "chat-2")
 state: fetchSessionsCallCount = 1
 
 ## startNewChat / throwing
@@ -245,10 +245,10 @@ page saw: [["__ripulCreateChat",[]],["__ripulSubmitMessage",["it's \"quoted\" \\
 nslog: [AgentBridge] → Starting new chat (prompt: yes)
 nslog: [AgentBridge] New chat created: chat-new
 console: LOG [native] [AgentBridge] fetchSessions #1, sessions=0, cliSessions=0
-console: LOG [native] [AgentBridge] sessions changed (0→2) initialSync=1 skipAuto=0
-state: _sessions = [ChatSession(id: "tab-1", sourceChatId: "chat-1", displayName: "One", createdAt: <date>, remoteMachineName: nil, provider: "claude-cli", providerLabel: nil, model: nil, hostChatId: nil, sizeBytes: nil, displayNameSource: "user", displayNameRenamedAt: nil, projectName: nil, gitBranch: nil, isSharedGuest: nil), ChatSession(id: "tab-2", sourceChatId: "chat-2", displayName: "Two", createdAt: <date>, remoteMachineName: nil, provider: nil, providerLabel: nil, model: nil, hostChatId: nil, sizeBytes: nil, displayNameSource: nil, displayNameRenamedAt: nil, projectName: nil, gitBranch: nil, isSharedGues…(608 characters)
+state: _sessions = [ChatSession(id: "tab-1", sourceChatId: "chat-1", displayName: "One", createdAt: <date>, remoteMachineName: nil, remoteMachineId: nil, provider: "claude-cli", providerLabel: nil, model: nil, hostChatId: nil, sizeBytes: nil, displayNameSource: "user", displayNameRenamedAt: nil, projectName: nil, gitBranch: nil, isSharedGuest: nil, latestReplyAuthorName: nil, latestHumanReplyAt: nil, typingNames: []), ChatSession(id: "tab-2", sourceChatId: "chat-2", displayName: "Two", createdAt: <date>, remoteMachineName: nil, remoteMachineId: nil, provider: nil, providerLabel: nil, model: nil, hostChatId: nil,…(792 characters)
 state: _activeSessionId = "tab-2"
 state: pendingActiveSourceChatId = "chat-new"
+state: resolvedActiveChatIdentity = (sessionID: "tab-2", chatID: "chat-2")
 state: fetchSessionsCallCount = 1
 
 ## startNewChat.prompt / throwing
@@ -289,8 +289,8 @@ result: false
 page saw: [["__ripulSubmitMessage",["it's \"quoted\" \\ and\nsplit","<undefined>","<undefined>","<undefined>","send-1"]],["__ripulDiagnostics",["<undefined>"]]]
 console: WARN [SubmitMessage] no answer from the page (WKErrorDomain#4 JavaScriptExceptionOccurred) — finding out what became of the message
 console: ERROR [CONN_DIAG] __ripulSubmitMessage failed: WKErrorDomain#4 JavaScriptExceptionOccurred — probing web context
-console: WARN [CONN_DIAG] __ripulSubmitMessage probe=healthy path=/ ready=complete age=Ns globals=118 uaNative=false
-console: WARN [CONN_DIAG] __ripulSubmitMessage probe raw: {"callables":true,"crashed":false,"globals":118,"globalNames":["__ripulArchiveRemoteSession","__ripulCanEditModels","__ripulClearCommsLog","__ripulClearReplyTarget","__ripulCloseSession","__ripulCloseTabMirror","__ripulConnectToMachine","__ripulConnectToMachineWithProvider","__ripulConsoleExec","__ripulConsoleJobControl","__ripulCreateChat","__ripulDeleteArchivedSession"],"readyState":"complete","docAgeMs":N,"path":"/","nav":null,"uaNative":false,"bootPhase":null,"bootError":null,"bootHistory":null,"build":null}
+console: WARN [CONN_DIAG] __ripulSubmitMessage probe=healthy path=/ ready=complete age=Ns globals=120 uaNative=false
+console: WARN [CONN_DIAG] __ripulSubmitMessage probe raw: {"callables":true,"crashed":false,"globals":120,"globalNames":["__ripulArchiveRemoteSession","__ripulCanEditModels","__ripulClearCommsLog","__ripulClearReadingList","__ripulClearReplyTarget","__ripulCloseSession","__ripulCloseTabMirror","__ripulConnectToMachine","__ripulConnectToMachineWithProvider","__ripulConsoleExec","__ripulConsoleJobControl","__ripulCreateChat"],"readyState":"complete","docAgeMs":N,"path":"/","nav":null,"uaNative":false,"bootPhase":null,"bootError":null,"bootHistory":null,"build":null}
 state: _messageSubmissionError = "The chat did not confirm your message. Check the conversation before sending it again."
 state: jsErrorMessages = ["[CONN_DIAG] __ripulSubmitMessage failed: WKErrorDomain#4 JavaScriptExceptionOccurred — probing web context"]
 state: jsErrorDebounce = DispatchWorkItem(_block: (Function))
@@ -327,8 +327,8 @@ result: false
 page saw: [["__ripulSubmitMessage",["hi",[{"data":"AAAA","id":"i1","mediaType":"image/png"}],"<undefined>","<undefined>","send-1"]],["__ripulDiagnostics",["<undefined>"]]]
 console: WARN [SubmitMessage] no answer from the page (WKErrorDomain#4 JavaScriptExceptionOccurred) — finding out what became of the message
 console: ERROR [CONN_DIAG] __ripulSubmitMessage failed: WKErrorDomain#4 JavaScriptExceptionOccurred — probing web context
-console: WARN [CONN_DIAG] __ripulSubmitMessage probe=healthy path=/ ready=complete age=Ns globals=118 uaNative=false
-console: WARN [CONN_DIAG] __ripulSubmitMessage probe raw: {"callables":true,"crashed":false,"globals":118,"globalNames":["__ripulArchiveRemoteSession","__ripulCanEditModels","__ripulClearCommsLog","__ripulClearReplyTarget","__ripulCloseSession","__ripulCloseTabMirror","__ripulConnectToMachine","__ripulConnectToMachineWithProvider","__ripulConsoleExec","__ripulConsoleJobControl","__ripulCreateChat","__ripulDeleteArchivedSession"],"readyState":"complete","docAgeMs":N,"path":"/","nav":null,"uaNative":false,"bootPhase":null,"bootError":null,"bootHistory":null,"build":null}
+console: WARN [CONN_DIAG] __ripulSubmitMessage probe=healthy path=/ ready=complete age=Ns globals=120 uaNative=false
+console: WARN [CONN_DIAG] __ripulSubmitMessage probe raw: {"callables":true,"crashed":false,"globals":120,"globalNames":["__ripulArchiveRemoteSession","__ripulCanEditModels","__ripulClearCommsLog","__ripulClearReadingList","__ripulClearReplyTarget","__ripulCloseSession","__ripulCloseTabMirror","__ripulConnectToMachine","__ripulConnectToMachineWithProvider","__ripulConsoleExec","__ripulConsoleJobControl","__ripulCreateChat"],"readyState":"complete","docAgeMs":N,"path":"/","nav":null,"uaNative":false,"bootPhase":null,"bootError":null,"bootHistory":null,"build":null}
 state: _messageSubmissionError = "The chat did not confirm your message. Check the conversation before sending it again."
 state: jsErrorMessages = ["[CONN_DIAG] __ripulSubmitMessage failed: WKErrorDomain#4 JavaScriptExceptionOccurred — probing web context"]
 state: jsErrorDebounce = DispatchWorkItem(_block: (Function))
@@ -365,8 +365,8 @@ result: false
 page saw: [["__ripulSubmitMessage",["hi","<undefined>",["@a"],"voice","send-1"]],["__ripulDiagnostics",["<undefined>"]]]
 console: WARN [SubmitMessage] no answer from the page (WKErrorDomain#4 JavaScriptExceptionOccurred) — finding out what became of the message
 console: ERROR [CONN_DIAG] __ripulSubmitMessage failed: WKErrorDomain#4 JavaScriptExceptionOccurred — probing web context
-console: WARN [CONN_DIAG] __ripulSubmitMessage probe=healthy path=/ ready=complete age=Ns globals=118 uaNative=false
-console: WARN [CONN_DIAG] __ripulSubmitMessage probe raw: {"callables":true,"crashed":false,"globals":118,"globalNames":["__ripulArchiveRemoteSession","__ripulCanEditModels","__ripulClearCommsLog","__ripulClearReplyTarget","__ripulCloseSession","__ripulCloseTabMirror","__ripulConnectToMachine","__ripulConnectToMachineWithProvider","__ripulConsoleExec","__ripulConsoleJobControl","__ripulCreateChat","__ripulDeleteArchivedSession"],"readyState":"complete","docAgeMs":N,"path":"/","nav":null,"uaNative":false,"bootPhase":null,"bootError":null,"bootHistory":null,"build":null}
+console: WARN [CONN_DIAG] __ripulSubmitMessage probe=healthy path=/ ready=complete age=Ns globals=120 uaNative=false
+console: WARN [CONN_DIAG] __ripulSubmitMessage probe raw: {"callables":true,"crashed":false,"globals":120,"globalNames":["__ripulArchiveRemoteSession","__ripulCanEditModels","__ripulClearCommsLog","__ripulClearReadingList","__ripulClearReplyTarget","__ripulCloseSession","__ripulCloseTabMirror","__ripulConnectToMachine","__ripulConnectToMachineWithProvider","__ripulConsoleExec","__ripulConsoleJobControl","__ripulCreateChat"],"readyState":"complete","docAgeMs":N,"path":"/","nav":null,"uaNative":false,"bootPhase":null,"bootError":null,"bootHistory":null,"build":null}
 state: _messageSubmissionError = "The chat did not confirm your message. Check the conversation before sending it again."
 state: jsErrorMessages = ["[CONN_DIAG] __ripulSubmitMessage failed: WKErrorDomain#4 JavaScriptExceptionOccurred — probing web context"]
 state: jsErrorDebounce = DispatchWorkItem(_block: (Function))
@@ -403,8 +403,8 @@ result: false
 page saw: [["__ripulSubmitMessage",["hi",[{"data":"AAAA","id":"i1","mediaType":"image/png"}],["@a","@b"],"voice","send-1"]],["__ripulDiagnostics",["<undefined>"]]]
 console: WARN [SubmitMessage] no answer from the page (WKErrorDomain#4 JavaScriptExceptionOccurred) — finding out what became of the message
 console: ERROR [CONN_DIAG] __ripulSubmitMessage failed: WKErrorDomain#4 JavaScriptExceptionOccurred — probing web context
-console: WARN [CONN_DIAG] __ripulSubmitMessage probe=healthy path=/ ready=complete age=Ns globals=118 uaNative=false
-console: WARN [CONN_DIAG] __ripulSubmitMessage probe raw: {"callables":true,"crashed":false,"globals":118,"globalNames":["__ripulArchiveRemoteSession","__ripulCanEditModels","__ripulClearCommsLog","__ripulClearReplyTarget","__ripulCloseSession","__ripulCloseTabMirror","__ripulConnectToMachine","__ripulConnectToMachineWithProvider","__ripulConsoleExec","__ripulConsoleJobControl","__ripulCreateChat","__ripulDeleteArchivedSession"],"readyState":"complete","docAgeMs":N,"path":"/","nav":null,"uaNative":false,"bootPhase":null,"bootError":null,"bootHistory":null,"build":null}
+console: WARN [CONN_DIAG] __ripulSubmitMessage probe=healthy path=/ ready=complete age=Ns globals=120 uaNative=false
+console: WARN [CONN_DIAG] __ripulSubmitMessage probe raw: {"callables":true,"crashed":false,"globals":120,"globalNames":["__ripulArchiveRemoteSession","__ripulCanEditModels","__ripulClearCommsLog","__ripulClearReadingList","__ripulClearReplyTarget","__ripulCloseSession","__ripulCloseTabMirror","__ripulConnectToMachine","__ripulConnectToMachineWithProvider","__ripulConsoleExec","__ripulConsoleJobControl","__ripulCreateChat"],"readyState":"complete","docAgeMs":N,"path":"/","nav":null,"uaNative":false,"bootPhase":null,"bootError":null,"bootHistory":null,"build":null}
 state: _messageSubmissionError = "The chat did not confirm your message. Check the conversation before sending it again."
 state: jsErrorMessages = ["[CONN_DIAG] __ripulSubmitMessage failed: WKErrorDomain#4 JavaScriptExceptionOccurred — probing web context"]
 state: jsErrorDebounce = DispatchWorkItem(_block: (Function))
@@ -867,9 +867,9 @@ state: fetchSessionsCallCount = 1
 result: ()
 page saw: [["__ripulGetSessions",[]]]
 console: LOG [native] [AgentBridge] fetchSessions #1, sessions=0, cliSessions=0
-console: LOG [native] [AgentBridge] sessions changed (0→2) initialSync=1 skipAuto=0
-state: _sessions = [ChatSession(id: "tab-1", sourceChatId: "chat-1", displayName: "One", createdAt: <date>, remoteMachineName: nil, provider: "claude-cli", providerLabel: nil, model: nil, hostChatId: nil, sizeBytes: nil, displayNameSource: "user", displayNameRenamedAt: nil, projectName: nil, gitBranch: nil, isSharedGuest: nil), ChatSession(id: "tab-2", sourceChatId: "chat-2", displayName: "Two", createdAt: <date>, remoteMachineName: nil, provider: nil, providerLabel: nil, model: nil, hostChatId: nil, sizeBytes: nil, displayNameSource: nil, displayNameRenamedAt: nil, projectName: nil, gitBranch: nil, isSharedGues…(608 characters)
+state: _sessions = [ChatSession(id: "tab-1", sourceChatId: "chat-1", displayName: "One", createdAt: <date>, remoteMachineName: nil, remoteMachineId: nil, provider: "claude-cli", providerLabel: nil, model: nil, hostChatId: nil, sizeBytes: nil, displayNameSource: "user", displayNameRenamedAt: nil, projectName: nil, gitBranch: nil, isSharedGuest: nil, latestReplyAuthorName: nil, latestHumanReplyAt: nil, typingNames: []), ChatSession(id: "tab-2", sourceChatId: "chat-2", displayName: "Two", createdAt: <date>, remoteMachineName: nil, remoteMachineId: nil, provider: nil, providerLabel: nil, model: nil, hostChatId: nil,…(792 characters)
 state: _activeSessionId = "tab-2"
+state: resolvedActiveChatIdentity = (sessionID: "tab-2", chatID: "chat-2")
 state: fetchSessionsCallCount = 1
 
 ## fetchSessions / throwing
@@ -889,6 +889,7 @@ page saw: []
 console: LOG [STARTUP] focusSession START id=tab-2
 console: LOG [STARTUP] focusSession DONE (Nms)
 state: _activeSessionId = "tab-2"
+state: resolvedActiveChatIdentity = (sessionID: "tab-2", chatID: "chat-2")
 state: sessionFocusRevision = 1
 
 ## focusSession / null
@@ -897,6 +898,7 @@ page saw: [["__ripulFocusSession",["tab-2"]]]
 console: LOG [STARTUP] focusSession START id=tab-2
 console: LOG [STARTUP] focusSession DONE (Nms)
 state: _activeSessionId = "tab-2"
+state: resolvedActiveChatIdentity = (sessionID: "tab-2", chatID: "chat-2")
 state: sessionFocusRevision = 1
 
 ## focusSession / scalar
@@ -905,6 +907,7 @@ page saw: [["__ripulFocusSession",["tab-2"]]]
 console: LOG [STARTUP] focusSession START id=tab-2
 console: LOG [STARTUP] focusSession DONE (Nms)
 state: _activeSessionId = "tab-2"
+state: resolvedActiveChatIdentity = (sessionID: "tab-2", chatID: "chat-2")
 state: sessionFocusRevision = 1
 
 ## focusSession / refused
@@ -913,6 +916,7 @@ page saw: [["__ripulFocusSession",["tab-2"]]]
 console: LOG [STARTUP] focusSession START id=tab-2
 console: LOG [STARTUP] focusSession DONE (Nms)
 state: _activeSessionId = "tab-2"
+state: resolvedActiveChatIdentity = (sessionID: "tab-2", chatID: "chat-2")
 state: sessionFocusRevision = 1
 
 ## focusSession / answered
@@ -921,6 +925,7 @@ page saw: [["__ripulFocusSession",["tab-2"]]]
 console: LOG [STARTUP] focusSession START id=tab-2
 console: LOG [STARTUP] focusSession DONE (Nms)
 state: _activeSessionId = "tab-2"
+state: resolvedActiveChatIdentity = (sessionID: "tab-2", chatID: "chat-2")
 state: sessionFocusRevision = 1
 
 ## focusSession / throwing
@@ -929,6 +934,7 @@ page saw: [["__ripulFocusSession",["tab-2"]]]
 nslog: [AgentBridge] focusSession error: A JavaScript exception occurred
 console: LOG [STARTUP] focusSession START id=tab-2
 state: _activeSessionId = "tab-2"
+state: resolvedActiveChatIdentity = (sessionID: "tab-2", chatID: "chat-2")
 state: sessionFocusRevision = 1
 
 ## getSlashCommands / detached
@@ -993,32 +999,37 @@ result: ()
 ## closeSession / missing
 result: ()
 page saw: []
-state: _sessions = [ChatSession(id: "tab-2", sourceChatId: "chat-2", displayName: "Two", createdAt: <date>, remoteMachineName: nil, provider: nil, providerLabel: nil, model: nil, hostChatId: nil, sizeBytes: nil, displayNameSource: nil, displayNameRenamedAt: nil, projectName: nil, gitBranch: nil, isSharedGuest: nil)]
+state: _sessions = [ChatSession(id: "tab-2", sourceChatId: "chat-2", displayName: "Two", createdAt: <date>, remoteMachineName: nil, remoteMachineId: nil, provider: nil, providerLabel: nil, model: nil, hostChatId: nil, sizeBytes: nil, displayNameSource: nil, displayNameRenamedAt: nil, projectName: nil, gitBranch: nil, isSharedGuest: nil, latestReplyAuthorName: nil, latestHumanReplyAt: nil, typingNames: [])]
 state: _activeSessionId = "tab-2"
+state: resolvedActiveChatIdentity = (sessionID: "tab-2", chatID: "chat-2")
 
 ## closeSession / null
 result: ()
 page saw: [["__ripulCloseSession",["tab-1"]]]
-state: _sessions = [ChatSession(id: "tab-2", sourceChatId: "chat-2", displayName: "Two", createdAt: <date>, remoteMachineName: nil, provider: nil, providerLabel: nil, model: nil, hostChatId: nil, sizeBytes: nil, displayNameSource: nil, displayNameRenamedAt: nil, projectName: nil, gitBranch: nil, isSharedGuest: nil)]
+state: _sessions = [ChatSession(id: "tab-2", sourceChatId: "chat-2", displayName: "Two", createdAt: <date>, remoteMachineName: nil, remoteMachineId: nil, provider: nil, providerLabel: nil, model: nil, hostChatId: nil, sizeBytes: nil, displayNameSource: nil, displayNameRenamedAt: nil, projectName: nil, gitBranch: nil, isSharedGuest: nil, latestReplyAuthorName: nil, latestHumanReplyAt: nil, typingNames: [])]
 state: _activeSessionId = "tab-2"
+state: resolvedActiveChatIdentity = (sessionID: "tab-2", chatID: "chat-2")
 
 ## closeSession / scalar
 result: ()
 page saw: [["__ripulCloseSession",["tab-1"]]]
-state: _sessions = [ChatSession(id: "tab-2", sourceChatId: "chat-2", displayName: "Two", createdAt: <date>, remoteMachineName: nil, provider: nil, providerLabel: nil, model: nil, hostChatId: nil, sizeBytes: nil, displayNameSource: nil, displayNameRenamedAt: nil, projectName: nil, gitBranch: nil, isSharedGuest: nil)]
+state: _sessions = [ChatSession(id: "tab-2", sourceChatId: "chat-2", displayName: "Two", createdAt: <date>, remoteMachineName: nil, remoteMachineId: nil, provider: nil, providerLabel: nil, model: nil, hostChatId: nil, sizeBytes: nil, displayNameSource: nil, displayNameRenamedAt: nil, projectName: nil, gitBranch: nil, isSharedGuest: nil, latestReplyAuthorName: nil, latestHumanReplyAt: nil, typingNames: [])]
 state: _activeSessionId = "tab-2"
+state: resolvedActiveChatIdentity = (sessionID: "tab-2", chatID: "chat-2")
 
 ## closeSession / refused
 result: ()
 page saw: [["__ripulCloseSession",["tab-1"]]]
-state: _sessions = [ChatSession(id: "tab-2", sourceChatId: "chat-2", displayName: "Two", createdAt: <date>, remoteMachineName: nil, provider: nil, providerLabel: nil, model: nil, hostChatId: nil, sizeBytes: nil, displayNameSource: nil, displayNameRenamedAt: nil, projectName: nil, gitBranch: nil, isSharedGuest: nil)]
+state: _sessions = [ChatSession(id: "tab-2", sourceChatId: "chat-2", displayName: "Two", createdAt: <date>, remoteMachineName: nil, remoteMachineId: nil, provider: nil, providerLabel: nil, model: nil, hostChatId: nil, sizeBytes: nil, displayNameSource: nil, displayNameRenamedAt: nil, projectName: nil, gitBranch: nil, isSharedGuest: nil, latestReplyAuthorName: nil, latestHumanReplyAt: nil, typingNames: [])]
 state: _activeSessionId = "tab-2"
+state: resolvedActiveChatIdentity = (sessionID: "tab-2", chatID: "chat-2")
 
 ## closeSession / answered
 result: ()
 page saw: [["__ripulCloseSession",["tab-1"]]]
-state: _sessions = [ChatSession(id: "tab-2", sourceChatId: "chat-2", displayName: "Two", createdAt: <date>, remoteMachineName: nil, provider: nil, providerLabel: nil, model: nil, hostChatId: nil, sizeBytes: nil, displayNameSource: nil, displayNameRenamedAt: nil, projectName: nil, gitBranch: nil, isSharedGuest: nil)]
+state: _sessions = [ChatSession(id: "tab-2", sourceChatId: "chat-2", displayName: "Two", createdAt: <date>, remoteMachineName: nil, remoteMachineId: nil, provider: nil, providerLabel: nil, model: nil, hostChatId: nil, sizeBytes: nil, displayNameSource: nil, displayNameRenamedAt: nil, projectName: nil, gitBranch: nil, isSharedGuest: nil, latestReplyAuthorName: nil, latestHumanReplyAt: nil, typingNames: [])]
 state: _activeSessionId = "tab-2"
+state: resolvedActiveChatIdentity = (sessionID: "tab-2", chatID: "chat-2")
 
 ## closeSession / throwing
 result: ()
@@ -1047,8 +1058,9 @@ page saw: [["__ripulLeaveSharedChat",["tab-1"]]]
 ## leaveSharedChat / answered
 result: "(success: true, error: nil)"
 page saw: [["__ripulLeaveSharedChat",["tab-1"]]]
-state: _sessions = [ChatSession(id: "tab-2", sourceChatId: "chat-2", displayName: "Two", createdAt: <date>, remoteMachineName: nil, provider: nil, providerLabel: nil, model: nil, hostChatId: nil, sizeBytes: nil, displayNameSource: nil, displayNameRenamedAt: nil, projectName: nil, gitBranch: nil, isSharedGuest: nil)]
+state: _sessions = [ChatSession(id: "tab-2", sourceChatId: "chat-2", displayName: "Two", createdAt: <date>, remoteMachineName: nil, remoteMachineId: nil, provider: nil, providerLabel: nil, model: nil, hostChatId: nil, sizeBytes: nil, displayNameSource: nil, displayNameRenamedAt: nil, projectName: nil, gitBranch: nil, isSharedGuest: nil, latestReplyAuthorName: nil, latestHumanReplyAt: nil, typingNames: [])]
 state: _activeSessionId = "tab-2"
+state: resolvedActiveChatIdentity = (sessionID: "tab-2", chatID: "chat-2")
 
 ## leaveSharedChat / throwing
 result: "(success: false, error: "A JavaScript exception occurred")"
@@ -1077,9 +1089,9 @@ page saw: [["__ripulJoinShareLink",["tok"]]]
 result: ShareLinkJoinResult(tabId: "tab-shared", label: "Shared", error: nil)
 page saw: [["__ripulJoinShareLink",["tok"]],["__ripulGetSessions",[]]]
 console: LOG [native] [AgentBridge] fetchSessions #1, sessions=0, cliSessions=0
-console: LOG [native] [AgentBridge] sessions changed (0→2) initialSync=1 skipAuto=0
-state: _sessions = [ChatSession(id: "tab-1", sourceChatId: "chat-1", displayName: "One", createdAt: <date>, remoteMachineName: nil, provider: "claude-cli", providerLabel: nil, model: nil, hostChatId: nil, sizeBytes: nil, displayNameSource: "user", displayNameRenamedAt: nil, projectName: nil, gitBranch: nil, isSharedGuest: nil), ChatSession(id: "tab-2", sourceChatId: "chat-2", displayName: "Two", createdAt: <date>, remoteMachineName: nil, provider: nil, providerLabel: nil, model: nil, hostChatId: nil, sizeBytes: nil, displayNameSource: nil, displayNameRenamedAt: nil, projectName: nil, gitBranch: nil, isSharedGues…(608 characters)
+state: _sessions = [ChatSession(id: "tab-1", sourceChatId: "chat-1", displayName: "One", createdAt: <date>, remoteMachineName: nil, remoteMachineId: nil, provider: "claude-cli", providerLabel: nil, model: nil, hostChatId: nil, sizeBytes: nil, displayNameSource: "user", displayNameRenamedAt: nil, projectName: nil, gitBranch: nil, isSharedGuest: nil, latestReplyAuthorName: nil, latestHumanReplyAt: nil, typingNames: []), ChatSession(id: "tab-2", sourceChatId: "chat-2", displayName: "Two", createdAt: <date>, remoteMachineName: nil, remoteMachineId: nil, provider: nil, providerLabel: nil, model: nil, hostChatId: nil,…(792 characters)
 state: _activeSessionId = "tab-2"
+state: resolvedActiveChatIdentity = (sessionID: "tab-2", chatID: "chat-2")
 state: fetchSessionsCallCount = 1
 
 ## truncateSession / detached
@@ -1166,9 +1178,9 @@ result: true
 page saw: [["__ripulImportCliSession",[{"messages":[{"role":"user","text":"it's \"quoted\" \\ and\nsplit"}],"sessionId":"s1","title":"T"}]],["__ripulGetSessions",[]]]
 nslog: [AgentBridge] importCliSession: imported 1 messages + 0 sub-agents for session s1
 console: LOG [native] [AgentBridge] fetchSessions #1, sessions=0, cliSessions=0
-console: LOG [native] [AgentBridge] sessions changed (0→2) initialSync=1 skipAuto=0
-state: _sessions = [ChatSession(id: "tab-1", sourceChatId: "chat-1", displayName: "One", createdAt: <date>, remoteMachineName: nil, provider: "claude-cli", providerLabel: nil, model: nil, hostChatId: nil, sizeBytes: nil, displayNameSource: "user", displayNameRenamedAt: nil, projectName: nil, gitBranch: nil, isSharedGuest: nil), ChatSession(id: "tab-2", sourceChatId: "chat-2", displayName: "Two", createdAt: <date>, remoteMachineName: nil, provider: nil, providerLabel: nil, model: nil, hostChatId: nil, sizeBytes: nil, displayNameSource: nil, displayNameRenamedAt: nil, projectName: nil, gitBranch: nil, isSharedGues…(608 characters)
+state: _sessions = [ChatSession(id: "tab-1", sourceChatId: "chat-1", displayName: "One", createdAt: <date>, remoteMachineName: nil, remoteMachineId: nil, provider: "claude-cli", providerLabel: nil, model: nil, hostChatId: nil, sizeBytes: nil, displayNameSource: "user", displayNameRenamedAt: nil, projectName: nil, gitBranch: nil, isSharedGuest: nil, latestReplyAuthorName: nil, latestHumanReplyAt: nil, typingNames: []), ChatSession(id: "tab-2", sourceChatId: "chat-2", displayName: "Two", createdAt: <date>, remoteMachineName: nil, remoteMachineId: nil, provider: nil, providerLabel: nil, model: nil, hostChatId: nil,…(792 characters)
 state: _activeSessionId = "tab-2"
+state: resolvedActiveChatIdentity = (sessionID: "tab-2", chatID: "chat-2")
 state: fetchSessionsCallCount = 1
 
 ## importCliSession / throwing
@@ -1204,9 +1216,9 @@ result: true
 page saw: [["__ripulImportCliSession",[{"messages":[],"sessionId":"s1","subAgentSessions":[{"agentId":"a1","messages":[{"role":"assistant"}]}],"title":"T"}]],["__ripulGetSessions",[]]]
 nslog: [AgentBridge] importCliSession: imported 0 messages + 1 sub-agents for session s1
 console: LOG [native] [AgentBridge] fetchSessions #1, sessions=0, cliSessions=0
-console: LOG [native] [AgentBridge] sessions changed (0→2) initialSync=1 skipAuto=0
-state: _sessions = [ChatSession(id: "tab-1", sourceChatId: "chat-1", displayName: "One", createdAt: <date>, remoteMachineName: nil, provider: "claude-cli", providerLabel: nil, model: nil, hostChatId: nil, sizeBytes: nil, displayNameSource: "user", displayNameRenamedAt: nil, projectName: nil, gitBranch: nil, isSharedGuest: nil), ChatSession(id: "tab-2", sourceChatId: "chat-2", displayName: "Two", createdAt: <date>, remoteMachineName: nil, provider: nil, providerLabel: nil, model: nil, hostChatId: nil, sizeBytes: nil, displayNameSource: nil, displayNameRenamedAt: nil, projectName: nil, gitBranch: nil, isSharedGues…(608 characters)
+state: _sessions = [ChatSession(id: "tab-1", sourceChatId: "chat-1", displayName: "One", createdAt: <date>, remoteMachineName: nil, remoteMachineId: nil, provider: "claude-cli", providerLabel: nil, model: nil, hostChatId: nil, sizeBytes: nil, displayNameSource: "user", displayNameRenamedAt: nil, projectName: nil, gitBranch: nil, isSharedGuest: nil, latestReplyAuthorName: nil, latestHumanReplyAt: nil, typingNames: []), ChatSession(id: "tab-2", sourceChatId: "chat-2", displayName: "Two", createdAt: <date>, remoteMachineName: nil, remoteMachineId: nil, provider: nil, providerLabel: nil, model: nil, hostChatId: nil,…(792 characters)
 state: _activeSessionId = "tab-2"
+state: resolvedActiveChatIdentity = (sessionID: "tab-2", chatID: "chat-2")
 state: fetchSessionsCallCount = 1
 
 ## importCliSession.subAgents / throwing
@@ -1323,8 +1335,9 @@ nslog: [AgentBridge] deleteSession: success=false results= errors=
 result: "(success: true, results: ["local"], errors: [])"
 page saw: [["__ripulDeleteSession",["tab-1","m1","s1",false]]]
 nslog: [AgentBridge] deleteSession: success=true results=local errors=
-state: _sessions = [ChatSession(id: "tab-2", sourceChatId: "chat-2", displayName: "Two", createdAt: <date>, remoteMachineName: nil, provider: nil, providerLabel: nil, model: nil, hostChatId: nil, sizeBytes: nil, displayNameSource: nil, displayNameRenamedAt: nil, projectName: nil, gitBranch: nil, isSharedGuest: nil)]
+state: _sessions = [ChatSession(id: "tab-2", sourceChatId: "chat-2", displayName: "Two", createdAt: <date>, remoteMachineName: nil, remoteMachineId: nil, provider: nil, providerLabel: nil, model: nil, hostChatId: nil, sizeBytes: nil, displayNameSource: nil, displayNameRenamedAt: nil, projectName: nil, gitBranch: nil, isSharedGuest: nil, latestReplyAuthorName: nil, latestHumanReplyAt: nil, typingNames: [])]
 state: _activeSessionId = "tab-2"
+state: resolvedActiveChatIdentity = (sessionID: "tab-2", chatID: "chat-2")
 
 ## deleteSession / throwing
 result: "(success: false, results: [], errors: ["A JavaScript exception occurred"])"
@@ -1356,8 +1369,9 @@ nslog: [AgentBridge] deleteSession: success=false results= errors=
 result: "(success: true, results: ["local"], errors: [])"
 page saw: [["__ripulDeleteSession",["tab-1",null,null,true]]]
 nslog: [AgentBridge] deleteSession: success=true results=local errors=
-state: _sessions = [ChatSession(id: "tab-2", sourceChatId: "chat-2", displayName: "Two", createdAt: <date>, remoteMachineName: nil, provider: nil, providerLabel: nil, model: nil, hostChatId: nil, sizeBytes: nil, displayNameSource: nil, displayNameRenamedAt: nil, projectName: nil, gitBranch: nil, isSharedGuest: nil)]
+state: _sessions = [ChatSession(id: "tab-2", sourceChatId: "chat-2", displayName: "Two", createdAt: <date>, remoteMachineName: nil, remoteMachineId: nil, provider: nil, providerLabel: nil, model: nil, hostChatId: nil, sizeBytes: nil, displayNameSource: nil, displayNameRenamedAt: nil, projectName: nil, gitBranch: nil, isSharedGuest: nil, latestReplyAuthorName: nil, latestHumanReplyAt: nil, typingNames: [])]
 state: _activeSessionId = "tab-2"
+state: resolvedActiveChatIdentity = (sessionID: "tab-2", chatID: "chat-2")
 
 ## deleteSession.local / throwing
 result: "(success: false, results: [], errors: ["A JavaScript exception occurred"])"
@@ -1481,38 +1495,34 @@ result: nil
 ## renameSession / missing
 result: nil
 page saw: []
-nslog: [AgentBridge] renameSession: web did not confirm, result: Optional({
-state: _sessions = [ChatSession(id: "tab-1", sourceChatId: "chat-1", displayName: "New name", createdAt: <date>, remoteMachineName: nil, provider: nil, providerLabel: nil, model: nil, hostChatId: nil, sizeBytes: nil, displayNameSource: nil, displayNameRenamedAt: nil, projectName: nil, gitBranch: nil, isSharedGuest: nil), ChatSession(id: "tab-2", sourceChatId: "chat-2", displayName: "Two", createdAt: <date>, remoteMachineName: nil, provider: nil, providerLabel: nil, model: nil, hostChatId: nil, sizeBytes: nil, displayNameSource: nil, displayNameRenamedAt: nil, projectName: nil, gitBranch: nil, isSharedGuest: nil)…(601 characters)
+state: _lastSessionsError = "The title could not be saved"
 
 ## renameSession / null
 result: nil
 page saw: [["__ripulRenameSession",["chat-1","New name","tab-1"]]]
-nslog: [AgentBridge] renameSession: web did not confirm, result: Optional({
-state: _sessions = [ChatSession(id: "tab-1", sourceChatId: "chat-1", displayName: "New name", createdAt: <date>, remoteMachineName: nil, provider: nil, providerLabel: nil, model: nil, hostChatId: nil, sizeBytes: nil, displayNameSource: nil, displayNameRenamedAt: nil, projectName: nil, gitBranch: nil, isSharedGuest: nil), ChatSession(id: "tab-2", sourceChatId: "chat-2", displayName: "Two", createdAt: <date>, remoteMachineName: nil, provider: nil, providerLabel: nil, model: nil, hostChatId: nil, sizeBytes: nil, displayNameSource: nil, displayNameRenamedAt: nil, projectName: nil, gitBranch: nil, isSharedGuest: nil)…(601 characters)
+state: _lastSessionsError = "The title could not be saved"
 
 ## renameSession / scalar
 result: nil
 page saw: [["__ripulRenameSession",["chat-1","New name","tab-1"]]]
-nslog: [AgentBridge] renameSession: web did not confirm, result: Optional(7)
-state: _sessions = [ChatSession(id: "tab-1", sourceChatId: "chat-1", displayName: "New name", createdAt: <date>, remoteMachineName: nil, provider: nil, providerLabel: nil, model: nil, hostChatId: nil, sizeBytes: nil, displayNameSource: nil, displayNameRenamedAt: nil, projectName: nil, gitBranch: nil, isSharedGuest: nil), ChatSession(id: "tab-2", sourceChatId: "chat-2", displayName: "Two", createdAt: <date>, remoteMachineName: nil, provider: nil, providerLabel: nil, model: nil, hostChatId: nil, sizeBytes: nil, displayNameSource: nil, displayNameRenamedAt: nil, projectName: nil, gitBranch: nil, isSharedGuest: nil)…(601 characters)
+state: _lastSessionsError = "The title could not be saved"
 
 ## renameSession / refused
 result: nil
 page saw: [["__ripulRenameSession",["chat-1","New name","tab-1"]]]
-nslog: [AgentBridge] renameSession: web did not confirm, result: Optional({
-state: _sessions = [ChatSession(id: "tab-1", sourceChatId: "chat-1", displayName: "New name", createdAt: <date>, remoteMachineName: nil, provider: nil, providerLabel: nil, model: nil, hostChatId: nil, sizeBytes: nil, displayNameSource: nil, displayNameRenamedAt: nil, projectName: nil, gitBranch: nil, isSharedGuest: nil), ChatSession(id: "tab-2", sourceChatId: "chat-2", displayName: "Two", createdAt: <date>, remoteMachineName: nil, provider: nil, providerLabel: nil, model: nil, hostChatId: nil, sizeBytes: nil, displayNameSource: nil, displayNameRenamedAt: nil, projectName: nil, gitBranch: nil, isSharedGuest: nil)…(601 characters)
+state: _lastSessionsError = "refused"
 
 ## renameSession / answered
 result: nil
 page saw: [["__ripulRenameSession",["chat-1","New name","tab-1"]]]
 nslog: [AgentBridge] renameSession confirmed: Confirmed
-state: _sessions = [ChatSession(id: "tab-1", sourceChatId: "chat-1", displayName: "Confirmed", createdAt: <date>, remoteMachineName: nil, provider: nil, providerLabel: nil, model: nil, hostChatId: nil, sizeBytes: nil, displayNameSource: nil, displayNameRenamedAt: <large number>, projectName: nil, gitBranch: nil, isSharedGuest: nil), ChatSession(id: "tab-2", sourceChatId: "chat-2", displayName: "Two", createdAt: <date>, remoteMachineName: nil, provider: nil, providerLabel: nil, model: nil, hostChatId: nil, sizeBytes: nil, displayNameSource: nil, displayNameRenamedAt: nil, projectName: nil, gitBranch: nil, isShare…(613 characters)
+state: _sessions = [ChatSession(id: "tab-1", sourceChatId: "chat-1", displayName: "Confirmed", createdAt: <date>, remoteMachineName: nil, remoteMachineId: nil, provider: nil, providerLabel: nil, model: nil, hostChatId: nil, sizeBytes: nil, displayNameSource: "user", displayNameRenamedAt: <large number>, projectName: nil, gitBranch: nil, isSharedGuest: nil, latestReplyAuthorName: nil, latestHumanReplyAt: nil, typingNames: []), ChatSession(id: "tab-2", sourceChatId: "chat-2", displayName: "Two", createdAt: <date>, remoteMachineName: nil, remoteMachineId: nil, provider: nil, providerLabel: nil, model: nil, hostChat…(800 characters)
 
 ## renameSession / throwing
 result: nil
 page saw: [["__ripulRenameSession",["chat-1","New name","tab-1"]]]
 nslog: [AgentBridge] renameSession error: A JavaScript exception occurred
-state: _sessions = [ChatSession(id: "tab-1", sourceChatId: "chat-1", displayName: "New name", createdAt: <date>, remoteMachineName: nil, provider: nil, providerLabel: nil, model: nil, hostChatId: nil, sizeBytes: nil, displayNameSource: nil, displayNameRenamedAt: nil, projectName: nil, gitBranch: nil, isSharedGuest: nil), ChatSession(id: "tab-2", sourceChatId: "chat-2", displayName: "Two", createdAt: <date>, remoteMachineName: nil, provider: nil, providerLabel: nil, model: nil, hostChatId: nil, sizeBytes: nil, displayNameSource: nil, displayNameRenamedAt: nil, projectName: nil, gitBranch: nil, isSharedGuest: nil)…(601 characters)
+state: _lastSessionsError = "A JavaScript exception occurred"
 
 ## renameSession.backtick / detached
 result: nil
@@ -1520,38 +1530,34 @@ result: nil
 ## renameSession.backtick / missing
 result: nil
 page saw: []
-nslog: [AgentBridge] renameSession: web did not confirm, result: Optional({
-state: _sessions = [ChatSession(id: "tab-1", sourceChatId: "chat-1", displayName: "tick ` and \\ slash", createdAt: <date>, remoteMachineName: nil, provider: nil, providerLabel: nil, model: nil, hostChatId: nil, sizeBytes: nil, displayNameSource: nil, displayNameRenamedAt: nil, projectName: nil, gitBranch: nil, isSharedGuest: nil), ChatSession(id: "tab-2", sourceChatId: "chat-2", displayName: "Two", createdAt: <date>, remoteMachineName: nil, provider: nil, providerLabel: nil, model: nil, hostChatId: nil, sizeBytes: nil, displayNameSource: nil, displayNameRenamedAt: nil, projectName: nil, gitBranch: nil, isShared…(612 characters)
+state: _lastSessionsError = "The title could not be saved"
 
 ## renameSession.backtick / null
 result: nil
 page saw: [["__ripulRenameSession",["chat-1","tick ` and \\ slash","tab-1"]]]
-nslog: [AgentBridge] renameSession: web did not confirm, result: Optional({
-state: _sessions = [ChatSession(id: "tab-1", sourceChatId: "chat-1", displayName: "tick ` and \\ slash", createdAt: <date>, remoteMachineName: nil, provider: nil, providerLabel: nil, model: nil, hostChatId: nil, sizeBytes: nil, displayNameSource: nil, displayNameRenamedAt: nil, projectName: nil, gitBranch: nil, isSharedGuest: nil), ChatSession(id: "tab-2", sourceChatId: "chat-2", displayName: "Two", createdAt: <date>, remoteMachineName: nil, provider: nil, providerLabel: nil, model: nil, hostChatId: nil, sizeBytes: nil, displayNameSource: nil, displayNameRenamedAt: nil, projectName: nil, gitBranch: nil, isShared…(612 characters)
+state: _lastSessionsError = "The title could not be saved"
 
 ## renameSession.backtick / scalar
 result: nil
 page saw: [["__ripulRenameSession",["chat-1","tick ` and \\ slash","tab-1"]]]
-nslog: [AgentBridge] renameSession: web did not confirm, result: Optional(7)
-state: _sessions = [ChatSession(id: "tab-1", sourceChatId: "chat-1", displayName: "tick ` and \\ slash", createdAt: <date>, remoteMachineName: nil, provider: nil, providerLabel: nil, model: nil, hostChatId: nil, sizeBytes: nil, displayNameSource: nil, displayNameRenamedAt: nil, projectName: nil, gitBranch: nil, isSharedGuest: nil), ChatSession(id: "tab-2", sourceChatId: "chat-2", displayName: "Two", createdAt: <date>, remoteMachineName: nil, provider: nil, providerLabel: nil, model: nil, hostChatId: nil, sizeBytes: nil, displayNameSource: nil, displayNameRenamedAt: nil, projectName: nil, gitBranch: nil, isShared…(612 characters)
+state: _lastSessionsError = "The title could not be saved"
 
 ## renameSession.backtick / refused
 result: nil
 page saw: [["__ripulRenameSession",["chat-1","tick ` and \\ slash","tab-1"]]]
-nslog: [AgentBridge] renameSession: web did not confirm, result: Optional({
-state: _sessions = [ChatSession(id: "tab-1", sourceChatId: "chat-1", displayName: "tick ` and \\ slash", createdAt: <date>, remoteMachineName: nil, provider: nil, providerLabel: nil, model: nil, hostChatId: nil, sizeBytes: nil, displayNameSource: nil, displayNameRenamedAt: nil, projectName: nil, gitBranch: nil, isSharedGuest: nil), ChatSession(id: "tab-2", sourceChatId: "chat-2", displayName: "Two", createdAt: <date>, remoteMachineName: nil, provider: nil, providerLabel: nil, model: nil, hostChatId: nil, sizeBytes: nil, displayNameSource: nil, displayNameRenamedAt: nil, projectName: nil, gitBranch: nil, isShared…(612 characters)
+state: _lastSessionsError = "refused"
 
 ## renameSession.backtick / answered
 result: nil
 page saw: [["__ripulRenameSession",["chat-1","tick ` and \\ slash","tab-1"]]]
 nslog: [AgentBridge] renameSession confirmed: Confirmed
-state: _sessions = [ChatSession(id: "tab-1", sourceChatId: "chat-1", displayName: "Confirmed", createdAt: <date>, remoteMachineName: nil, provider: nil, providerLabel: nil, model: nil, hostChatId: nil, sizeBytes: nil, displayNameSource: nil, displayNameRenamedAt: <large number>, projectName: nil, gitBranch: nil, isSharedGuest: nil), ChatSession(id: "tab-2", sourceChatId: "chat-2", displayName: "Two", createdAt: <date>, remoteMachineName: nil, provider: nil, providerLabel: nil, model: nil, hostChatId: nil, sizeBytes: nil, displayNameSource: nil, displayNameRenamedAt: nil, projectName: nil, gitBranch: nil, isShare…(613 characters)
+state: _sessions = [ChatSession(id: "tab-1", sourceChatId: "chat-1", displayName: "Confirmed", createdAt: <date>, remoteMachineName: nil, remoteMachineId: nil, provider: nil, providerLabel: nil, model: nil, hostChatId: nil, sizeBytes: nil, displayNameSource: "user", displayNameRenamedAt: <large number>, projectName: nil, gitBranch: nil, isSharedGuest: nil, latestReplyAuthorName: nil, latestHumanReplyAt: nil, typingNames: []), ChatSession(id: "tab-2", sourceChatId: "chat-2", displayName: "Two", createdAt: <date>, remoteMachineName: nil, remoteMachineId: nil, provider: nil, providerLabel: nil, model: nil, hostChat…(800 characters)
 
 ## renameSession.backtick / throwing
 result: nil
 page saw: [["__ripulRenameSession",["chat-1","tick ` and \\ slash","tab-1"]]]
 nslog: [AgentBridge] renameSession error: A JavaScript exception occurred
-state: _sessions = [ChatSession(id: "tab-1", sourceChatId: "chat-1", displayName: "tick ` and \\ slash", createdAt: <date>, remoteMachineName: nil, provider: nil, providerLabel: nil, model: nil, hostChatId: nil, sizeBytes: nil, displayNameSource: nil, displayNameRenamedAt: nil, projectName: nil, gitBranch: nil, isSharedGuest: nil), ChatSession(id: "tab-2", sourceChatId: "chat-2", displayName: "Two", createdAt: <date>, remoteMachineName: nil, provider: nil, providerLabel: nil, model: nil, hostChatId: nil, sizeBytes: nil, displayNameSource: nil, displayNameRenamedAt: nil, projectName: nil, gitBranch: nil, isShared…(612 characters)
+state: _lastSessionsError = "A JavaScript exception occurred"
 
 ## renameSession.template / detached
 result: nil
@@ -1559,38 +1565,34 @@ result: nil
 ## renameSession.template / missing
 result: nil
 page saw: []
-nslog: [AgentBridge] renameSession: web did not confirm, result: Optional({
-state: _sessions = [ChatSession(id: "tab-1", sourceChatId: "chat-1", displayName: "cost ${1+1} today", createdAt: <date>, remoteMachineName: nil, provider: nil, providerLabel: nil, model: nil, hostChatId: nil, sizeBytes: nil, displayNameSource: nil, displayNameRenamedAt: nil, projectName: nil, gitBranch: nil, isSharedGuest: nil), ChatSession(id: "tab-2", sourceChatId: "chat-2", displayName: "Two", createdAt: <date>, remoteMachineName: nil, provider: nil, providerLabel: nil, model: nil, hostChatId: nil, sizeBytes: nil, displayNameSource: nil, displayNameRenamedAt: nil, projectName: nil, gitBranch: nil, isSharedGu…(610 characters)
+state: _lastSessionsError = "The title could not be saved"
 
 ## renameSession.template / null
 result: nil
 page saw: [["__ripulRenameSession",["chat-1","cost ${1+1} today","tab-1"]]]
-nslog: [AgentBridge] renameSession: web did not confirm, result: Optional({
-state: _sessions = [ChatSession(id: "tab-1", sourceChatId: "chat-1", displayName: "cost ${1+1} today", createdAt: <date>, remoteMachineName: nil, provider: nil, providerLabel: nil, model: nil, hostChatId: nil, sizeBytes: nil, displayNameSource: nil, displayNameRenamedAt: nil, projectName: nil, gitBranch: nil, isSharedGuest: nil), ChatSession(id: "tab-2", sourceChatId: "chat-2", displayName: "Two", createdAt: <date>, remoteMachineName: nil, provider: nil, providerLabel: nil, model: nil, hostChatId: nil, sizeBytes: nil, displayNameSource: nil, displayNameRenamedAt: nil, projectName: nil, gitBranch: nil, isSharedGu…(610 characters)
+state: _lastSessionsError = "The title could not be saved"
 
 ## renameSession.template / scalar
 result: nil
 page saw: [["__ripulRenameSession",["chat-1","cost ${1+1} today","tab-1"]]]
-nslog: [AgentBridge] renameSession: web did not confirm, result: Optional(7)
-state: _sessions = [ChatSession(id: "tab-1", sourceChatId: "chat-1", displayName: "cost ${1+1} today", createdAt: <date>, remoteMachineName: nil, provider: nil, providerLabel: nil, model: nil, hostChatId: nil, sizeBytes: nil, displayNameSource: nil, displayNameRenamedAt: nil, projectName: nil, gitBranch: nil, isSharedGuest: nil), ChatSession(id: "tab-2", sourceChatId: "chat-2", displayName: "Two", createdAt: <date>, remoteMachineName: nil, provider: nil, providerLabel: nil, model: nil, hostChatId: nil, sizeBytes: nil, displayNameSource: nil, displayNameRenamedAt: nil, projectName: nil, gitBranch: nil, isSharedGu…(610 characters)
+state: _lastSessionsError = "The title could not be saved"
 
 ## renameSession.template / refused
 result: nil
 page saw: [["__ripulRenameSession",["chat-1","cost ${1+1} today","tab-1"]]]
-nslog: [AgentBridge] renameSession: web did not confirm, result: Optional({
-state: _sessions = [ChatSession(id: "tab-1", sourceChatId: "chat-1", displayName: "cost ${1+1} today", createdAt: <date>, remoteMachineName: nil, provider: nil, providerLabel: nil, model: nil, hostChatId: nil, sizeBytes: nil, displayNameSource: nil, displayNameRenamedAt: nil, projectName: nil, gitBranch: nil, isSharedGuest: nil), ChatSession(id: "tab-2", sourceChatId: "chat-2", displayName: "Two", createdAt: <date>, remoteMachineName: nil, provider: nil, providerLabel: nil, model: nil, hostChatId: nil, sizeBytes: nil, displayNameSource: nil, displayNameRenamedAt: nil, projectName: nil, gitBranch: nil, isSharedGu…(610 characters)
+state: _lastSessionsError = "refused"
 
 ## renameSession.template / answered
 result: nil
 page saw: [["__ripulRenameSession",["chat-1","cost ${1+1} today","tab-1"]]]
 nslog: [AgentBridge] renameSession confirmed: Confirmed
-state: _sessions = [ChatSession(id: "tab-1", sourceChatId: "chat-1", displayName: "Confirmed", createdAt: <date>, remoteMachineName: nil, provider: nil, providerLabel: nil, model: nil, hostChatId: nil, sizeBytes: nil, displayNameSource: nil, displayNameRenamedAt: <large number>, projectName: nil, gitBranch: nil, isSharedGuest: nil), ChatSession(id: "tab-2", sourceChatId: "chat-2", displayName: "Two", createdAt: <date>, remoteMachineName: nil, provider: nil, providerLabel: nil, model: nil, hostChatId: nil, sizeBytes: nil, displayNameSource: nil, displayNameRenamedAt: nil, projectName: nil, gitBranch: nil, isShare…(613 characters)
+state: _sessions = [ChatSession(id: "tab-1", sourceChatId: "chat-1", displayName: "Confirmed", createdAt: <date>, remoteMachineName: nil, remoteMachineId: nil, provider: nil, providerLabel: nil, model: nil, hostChatId: nil, sizeBytes: nil, displayNameSource: "user", displayNameRenamedAt: <large number>, projectName: nil, gitBranch: nil, isSharedGuest: nil, latestReplyAuthorName: nil, latestHumanReplyAt: nil, typingNames: []), ChatSession(id: "tab-2", sourceChatId: "chat-2", displayName: "Two", createdAt: <date>, remoteMachineName: nil, remoteMachineId: nil, provider: nil, providerLabel: nil, model: nil, hostChat…(800 characters)
 
 ## renameSession.template / throwing
 result: nil
 page saw: [["__ripulRenameSession",["chat-1","cost ${1+1} today","tab-1"]]]
 nslog: [AgentBridge] renameSession error: A JavaScript exception occurred
-state: _sessions = [ChatSession(id: "tab-1", sourceChatId: "chat-1", displayName: "cost ${1+1} today", createdAt: <date>, remoteMachineName: nil, provider: nil, providerLabel: nil, model: nil, hostChatId: nil, sizeBytes: nil, displayNameSource: nil, displayNameRenamedAt: nil, projectName: nil, gitBranch: nil, isSharedGuest: nil), ChatSession(id: "tab-2", sourceChatId: "chat-2", displayName: "Two", createdAt: <date>, remoteMachineName: nil, provider: nil, providerLabel: nil, model: nil, hostChatId: nil, sizeBytes: nil, displayNameSource: nil, displayNameRenamedAt: nil, projectName: nil, gitBranch: nil, isSharedGu…(610 characters)
+state: _lastSessionsError = "A JavaScript exception occurred"
 
 ## forgetChat / detached
 result: nil
@@ -1651,34 +1653,6 @@ state: pendingActiveSourceChatId = "chat-p"
 result: nil
 page saw: [["__ripulStartNewChatWithPrompt",["it's \"quoted\" \\ and\nsplit"]]]
 nslog: [AgentBridge] startNewChatWithPrompt error: A JavaScript exception occurred
-
-## listTodoItems / detached
-result: RipulTodoItemsResult(items: [], currentChatId: nil)
-
-## listTodoItems / missing
-result: RipulTodoItemsResult(items: [], currentChatId: nil)
-page saw: []
-
-## listTodoItems / null
-result: RipulTodoItemsResult(items: [], currentChatId: nil)
-page saw: [["__ripulListTodoItems",[]]]
-
-## listTodoItems / scalar
-result: RipulTodoItemsResult(items: [], currentChatId: nil)
-page saw: [["__ripulListTodoItems",[]]]
-
-## listTodoItems / refused
-result: RipulTodoItemsResult(items: [], currentChatId: nil)
-page saw: [["__ripulListTodoItems",[]]]
-
-## listTodoItems / answered
-result: RipulTodoItemsResult(items: [RipulTodoItem(id: "t1", chatId: "chat-1", chatName: "One", text: "do", completed: true)], currentChatId: "chat-1")
-page saw: [["__ripulListTodoItems",[]]]
-
-## listTodoItems / throwing
-result: RipulTodoItemsResult(items: [], currentChatId: nil)
-page saw: [["__ripulListTodoItems",[]]]
-nslog: [AgentBridge] listTodoItems error: A JavaScript exception occurred
 
 ## prewarmNewChat / detached
 result: nil
@@ -2511,8 +2485,9 @@ page saw: [["__ripulConnectToMachine",["mac-1"]]]
 nslog: [AgentBridge] connectToMachine: paired to Studio, tab tab-c
 console: LOG [MODELSW] native.sticky REMEMBER cli provider=machine-default model=default machine=mac-1
 console: LOG [SESSION-START] stage=ios.creation_navigation_ready ts=N chatId=chat-c
-state: _sessions = [ChatSession(id: "tab-c", sourceChatId: "chat-c", displayName: "New Chat", createdAt: <date>, remoteMachineName: "Studio", provider: nil, providerLabel: nil, model: nil, hostChatId: "host-c", sizeBytes: nil, displayNameSource: "auto", displayNameRenamedAt: nil, projectName: nil, gitBranch: nil, isSharedGuest: nil)]
+state: _sessions = [ChatSession(id: "tab-c", sourceChatId: "chat-c", displayName: "New Chat", createdAt: <date>, remoteMachineName: "Studio", remoteMachineId: nil, provider: nil, providerLabel: nil, model: nil, hostChatId: "host-c", sizeBytes: nil, displayNameSource: "auto", displayNameRenamedAt: nil, projectName: nil, gitBranch: nil, isSharedGuest: nil, latestReplyAuthorName: nil, latestHumanReplyAt: nil, typingNames: [])]
 state: _activeSessionId = "tab-c"
+state: resolvedActiveChatIdentity = (sessionID: "tab-c", chatID: "chat-c")
 
 ## connectToMachineWithProvider / detached
 result: "(tabId: nil, error: "webView is nil")"
@@ -2549,9 +2524,10 @@ console: LOG [SESSION-START] stage=ios.connect_with_provider_js_end ts=N
 console: LOG [MODELSW] native.sticky REMEMBER cli provider=claude-cli model=default machine=mac-1
 console: LOG [MODELSW] native.sticky CLI no sessionCache - skipping raw-mode label
 console: LOG [SESSION-START] stage=ios.creation_navigation_ready ts=N chatId=chat-p
-state: _sessions = [ChatSession(id: "tab-p", sourceChatId: "chat-p", displayName: "New Chat", createdAt: <date>, remoteMachineName: "Studio", provider: "claude-cli", providerLabel: "Claude Code", model: "claude-cli-raw-sonnet", hostChatId: "host-p", sizeBytes: nil, displayNameSource: "auto", displayNameRenamedAt: nil, projectName: nil, gitBranch: nil, isSharedGuest: nil)]
+state: _sessions = [ChatSession(id: "tab-p", sourceChatId: "chat-p", displayName: "New Chat", createdAt: <date>, remoteMachineName: "Studio", remoteMachineId: nil, provider: "claude-cli", providerLabel: "Claude Code", model: "claude-cli-raw-sonnet", hostChatId: "host-p", sizeBytes: nil, displayNameSource: "auto", displayNameRenamedAt: nil, projectName: nil, gitBranch: nil, isSharedGuest: nil, latestReplyAuthorName: nil, latestHumanReplyAt: nil, typingNames: [])]
 state: _activeSessionId = "tab-p"
 state: _selectedModelId = "claude-cli-raw-sonnet"
+state: resolvedActiveChatIdentity = (sessionID: "tab-p", chatID: "chat-p")
 
 ## connectToMachineWithProvider.full / detached
 result: "(tabId: nil, error: "webView is nil")"
@@ -2588,9 +2564,10 @@ console: LOG [SESSION-START] stage=ios.connect_with_provider_js_end ts=N
 console: LOG [MODELSW] native.sticky REMEMBER cli provider=codex-cli model=gpt-x machine=mac-1
 console: LOG [MODELSW] native.sticky CLI no sessionCache - skipping raw-mode label
 console: LOG [SESSION-START] stage=ios.creation_navigation_ready ts=N chatId=chat-p
-state: _sessions = [ChatSession(id: "tab-p", sourceChatId: "chat-p", displayName: "New Chat", createdAt: <date>, remoteMachineName: "Studio", provider: "codex-cli", providerLabel: "Codex Legacy", model: "gpt-x", hostChatId: "host-p", sizeBytes: nil, displayNameSource: "auto", displayNameRenamedAt: nil, projectName: nil, gitBranch: nil, isSharedGuest: nil)]
+state: _sessions = [ChatSession(id: "tab-p", sourceChatId: "chat-p", displayName: "New Chat", createdAt: <date>, remoteMachineName: "Studio", remoteMachineId: nil, provider: "codex-cli", providerLabel: "Codex Legacy", model: "gpt-x", hostChatId: "host-p", sizeBytes: nil, displayNameSource: "auto", displayNameRenamedAt: nil, projectName: nil, gitBranch: nil, isSharedGuest: nil, latestReplyAuthorName: nil, latestHumanReplyAt: nil, typingNames: [])]
 state: _activeSessionId = "tab-p"
 state: _selectedModelId = "gpt-x"
+state: resolvedActiveChatIdentity = (sessionID: "tab-p", chatID: "chat-p")
 
 ## listMachines / detached
 result: []
@@ -2618,7 +2595,7 @@ page saw: [["__ripulGetMachines",[]]]
 nslog: [AgentBridge] listMachines: unexpected result type: Optional({
 
 ## listMachines / answered
-result: [RemoteMachine(machineId: "m1", displayName: "Studio", userId: "", roomId: "room-1", registeredAt: "2026-10-01T00:00:00Z", lastSeenAt: "2026-10-01T00:00:00Z", meta: ["os": "mac"], teamId: nil, teamName: nil, teamRole: nil, shared: true)]
+result: [RemoteMachine(machineId: "m1", displayName: "Studio", userId: "", roomId: "room-1", registeredAt: "2026-10-01T00:00:00Z", lastSeenAt: "2026-10-01T00:00:00Z", meta: ["os": "mac"], teamId: nil, teamName: nil, teamRole: nil, shared: true, teamAccess: nil)]
 page saw: [["__ripulGetMachines",[]]]
 nslog: [AgentBridge] listMachines: JS error: stale
 nslog: [AgentBridge] listMachines: 1 machines from web registry
@@ -2641,28 +2618,28 @@ console: LOG [AgentBridge] listRemoteSessions(mac-1) JS error: not ready
 
 ## listRemoteSessionsAnswer / null
 result: "(sessions: [], answered: false)"
-page saw: [["__ripulListRemoteSessions",["mac-1"]]]
+page saw: [["__ripulListRemoteSessions",["mac-1","<undefined>"]]]
 nslog: [AgentBridge] listRemoteSessions error: A JavaScript exception occurred
 
 ## listRemoteSessionsAnswer / scalar
 result: "(sessions: [], answered: false)"
-page saw: [["__ripulListRemoteSessions",["mac-1"]]]
+page saw: [["__ripulListRemoteSessions",["mac-1","<undefined>"]]]
 nslog: [AgentBridge] listRemoteSessions: unexpected result type: Optional(7)
 
 ## listRemoteSessionsAnswer / refused
 result: "(sessions: [], answered: false)"
-page saw: [["__ripulListRemoteSessions",["mac-1"]]]
+page saw: [["__ripulListRemoteSessions",["mac-1","<undefined>"]]]
 nslog: [AgentBridge] listRemoteSessions: unexpected result type: Optional({
 
 ## listRemoteSessionsAnswer / answered
-result: "(sessions: [RemoteSessionInfo(id: "s1", sourceChatId: "c1", displayName: "Remote", createdAt: date(1700000000.0), lastModified: date(1700000005.0), isRunning: true, projectName: "p", cwd: "/w", gitBranch: "main", messageCount: 3, provider: "claude-cli", providerLabel: "Claude", model: "m", hostChatId: "h1", machineId: "mac-1", teamVisibility: nil, creatorUserId: nil, startedBy: nil)], answered: true)"
-page saw: [["__ripulListRemoteSessions",["mac-1"]]]
+result: "(sessions: [RemoteSessionInfo(id: "s1", sourceChatId: "c1", displayName: "Remote", createdAt: date(1700000000.0), lastModified: date(1700000005.0), isRunning: true, projectName: "p", cwd: "/w", gitBranch: "main", messageCount: 3, provider: "claude-cli", providerLabel: "Claude", model: "m", hostChatId: "h1", machineId: "mac-1", teamVisibility: nil, creatorUserId: nil, startedBy: nil, customTitle: nil, customTitleRenamedAt: nil, aiTitle: nil)], answered: true)"
+page saw: [["__ripulListRemoteSessions",["mac-1","<undefined>"]]]
 nslog: [AgentBridge] listRemoteSessions: 1 sessions on mac-1
 console: LOG [relay] debug_timeline listRemoteSessions(mac-1): a | b
 
 ## listRemoteSessionsAnswer / throwing
 result: "(sessions: [], answered: false)"
-page saw: [["__ripulListRemoteSessions",["mac-1"]]]
+page saw: [["__ripulListRemoteSessions",["mac-1","<undefined>"]]]
 nslog: [AgentBridge] listRemoteSessions error: A JavaScript exception occurred
 
 ## fetchCliAccount / detached
@@ -2721,9 +2698,9 @@ result: "(tabId: "tab-o", provider: "claude-cli", providerLabel: "Claude", error
 page saw: [["__ripulOpenRemoteSession",["mac-1","s1","<undefined>",{"focus":true,"forceReimport":false}]],["__ripulGetSessions",[]]]
 nslog: [AgentBridge] openRemoteSession: opened s1 on mac-1, tab tab-o, provider claude-cli
 console: LOG [native] [AgentBridge] fetchSessions #1, sessions=0, cliSessions=0
-console: LOG [native] [AgentBridge] sessions changed (0→2) initialSync=1 skipAuto=0
-state: _sessions = [ChatSession(id: "tab-1", sourceChatId: "chat-1", displayName: "One", createdAt: <date>, remoteMachineName: nil, provider: "claude-cli", providerLabel: nil, model: nil, hostChatId: nil, sizeBytes: nil, displayNameSource: "user", displayNameRenamedAt: nil, projectName: nil, gitBranch: nil, isSharedGuest: nil), ChatSession(id: "tab-2", sourceChatId: "chat-2", displayName: "Two", createdAt: <date>, remoteMachineName: nil, provider: nil, providerLabel: nil, model: nil, hostChatId: nil, sizeBytes: nil, displayNameSource: nil, displayNameRenamedAt: nil, projectName: nil, gitBranch: nil, isSharedGues…(608 characters)
+state: _sessions = [ChatSession(id: "tab-1", sourceChatId: "chat-1", displayName: "One", createdAt: <date>, remoteMachineName: nil, remoteMachineId: nil, provider: "claude-cli", providerLabel: nil, model: nil, hostChatId: nil, sizeBytes: nil, displayNameSource: "user", displayNameRenamedAt: nil, projectName: nil, gitBranch: nil, isSharedGuest: nil, latestReplyAuthorName: nil, latestHumanReplyAt: nil, typingNames: []), ChatSession(id: "tab-2", sourceChatId: "chat-2", displayName: "Two", createdAt: <date>, remoteMachineName: nil, remoteMachineId: nil, provider: nil, providerLabel: nil, model: nil, hostChatId: nil,…(792 characters)
 state: _activeSessionId = "tab-2"
+state: resolvedActiveChatIdentity = (sessionID: "tab-2", chatID: "chat-2")
 state: fetchSessionsCallCount = 1
 
 ## openRemoteSession.full / detached
@@ -2751,9 +2728,9 @@ result: "(tabId: "tab-o", provider: "claude-cli", providerLabel: "Claude", error
 page saw: [["__ripulOpenRemoteSession",["mac-1","s1","Named",{"focus":false,"forceReimport":true}]],["__ripulGetSessions",[]]]
 nslog: [AgentBridge] openRemoteSession: opened s1 on mac-1, tab tab-o, provider claude-cli
 console: LOG [native] [AgentBridge] fetchSessions #1, sessions=0, cliSessions=0
-console: LOG [native] [AgentBridge] sessions changed (0→2) initialSync=1 skipAuto=0
-state: _sessions = [ChatSession(id: "tab-1", sourceChatId: "chat-1", displayName: "One", createdAt: <date>, remoteMachineName: nil, provider: "claude-cli", providerLabel: nil, model: nil, hostChatId: nil, sizeBytes: nil, displayNameSource: "user", displayNameRenamedAt: nil, projectName: nil, gitBranch: nil, isSharedGuest: nil), ChatSession(id: "tab-2", sourceChatId: "chat-2", displayName: "Two", createdAt: <date>, remoteMachineName: nil, provider: nil, providerLabel: nil, model: nil, hostChatId: nil, sizeBytes: nil, displayNameSource: nil, displayNameRenamedAt: nil, projectName: nil, gitBranch: nil, isSharedGues…(608 characters)
+state: _sessions = [ChatSession(id: "tab-1", sourceChatId: "chat-1", displayName: "One", createdAt: <date>, remoteMachineName: nil, remoteMachineId: nil, provider: "claude-cli", providerLabel: nil, model: nil, hostChatId: nil, sizeBytes: nil, displayNameSource: "user", displayNameRenamedAt: nil, projectName: nil, gitBranch: nil, isSharedGuest: nil, latestReplyAuthorName: nil, latestHumanReplyAt: nil, typingNames: []), ChatSession(id: "tab-2", sourceChatId: "chat-2", displayName: "Two", createdAt: <date>, remoteMachineName: nil, remoteMachineId: nil, provider: nil, providerLabel: nil, model: nil, hostChatId: nil,…(792 characters)
 state: _activeSessionId = "tab-2"
+state: resolvedActiveChatIdentity = (sessionID: "tab-2", chatID: "chat-2")
 state: fetchSessionsCallCount = 1
 
 ## repairConnection / detached
@@ -3656,31 +3633,31 @@ page saw: [["__ripulRemoteHostAuthCancel",["mac-1"]]]
 console: LOG [AgentBridge] cancelHostAuth(mac-1) error: A JavaScript exception occurred
 
 ## fetchClaudeAccounts / detached
-result: ClaudeAccountsListInfo(accounts: [], active: "default", error: "webView is nil")
+result: ClaudeAccountsListInfo(accounts: [], active: "default", error: "webView is nil", followsDefault: true)
 
 ## fetchClaudeAccounts / missing
-result: ClaudeAccountsListInfo(accounts: [], active: "default", error: "not ready")
+result: ClaudeAccountsListInfo(accounts: [], active: "default", error: "not ready", followsDefault: true)
 page saw: []
 
 ## fetchClaudeAccounts / null
-result: ClaudeAccountsListInfo(accounts: [], active: "default", error: "Unexpected result")
-page saw: [["__ripulRemoteClaudeAccountsList",["mac-1"]]]
+result: ClaudeAccountsListInfo(accounts: [], active: "default", error: "Unexpected result", followsDefault: true)
+page saw: [["__ripulRemoteClaudeAccountsList",["mac-1",null]]]
 
 ## fetchClaudeAccounts / scalar
-result: ClaudeAccountsListInfo(accounts: [], active: "default", error: "Unexpected result")
-page saw: [["__ripulRemoteClaudeAccountsList",["mac-1"]]]
+result: ClaudeAccountsListInfo(accounts: [], active: "default", error: "Unexpected result", followsDefault: true)
+page saw: [["__ripulRemoteClaudeAccountsList",["mac-1",null]]]
 
 ## fetchClaudeAccounts / refused
-result: ClaudeAccountsListInfo(accounts: [], active: "default", error: "refused")
-page saw: [["__ripulRemoteClaudeAccountsList",["mac-1"]]]
+result: ClaudeAccountsListInfo(accounts: [], active: "default", error: "refused", followsDefault: true)
+page saw: [["__ripulRemoteClaudeAccountsList",["mac-1",null]]]
 
 ## fetchClaudeAccounts / answered
-result: ClaudeAccountsListInfo(accounts: [ClaudeAccountProfile(slug: "default", name: "Default", email: nil, loggedIn: false, isDefault: false, plan: nil, usage: nil), ClaudeAccountProfile(slug: "work", name: "Work", email: "w@b.c", loggedIn: false, isDefault: false, plan: nil, usage: nil)], active: "work", error: nil)
-page saw: [["__ripulRemoteClaudeAccountsList",["mac-1"]]]
+result: ClaudeAccountsListInfo(accounts: [ClaudeAccountProfile(slug: "default", name: "Default", email: nil, loggedIn: false, isDefault: false, plan: nil, usage: nil, signInEndsAt: nil, signInEnded: false), ClaudeAccountProfile(slug: "work", name: "Work", email: "w@b.c", loggedIn: false, isDefault: false, plan: nil, usage: nil, signInEndsAt: nil, signInEnded: false)], active: "work", error: nil, followsDefault: true)
+page saw: [["__ripulRemoteClaudeAccountsList",["mac-1",null]]]
 
 ## fetchClaudeAccounts / throwing
-result: ClaudeAccountsListInfo(accounts: [], active: "default", error: "A JavaScript exception occurred")
-page saw: [["__ripulRemoteClaudeAccountsList",["mac-1"]]]
+result: ClaudeAccountsListInfo(accounts: [], active: "default", error: "A JavaScript exception occurred", followsDefault: true)
+page saw: [["__ripulRemoteClaudeAccountsList",["mac-1",null]]]
 console: LOG [AgentBridge] fetchClaudeAccounts(mac-1) error: A JavaScript exception occurred
 
 ## createClaudeAccount / detached
@@ -3720,23 +3697,23 @@ page saw: []
 
 ## switchClaudeAccount / null
 result: ClaudeAccountSwitchInfo(ok: false, active: nil, recycledSessions: [], deferredBusySessions: [], error: "Unexpected result")
-page saw: [["__ripulRemoteClaudeAccountSwitch",["mac-1","work"]]]
+page saw: [["__ripulRemoteClaudeAccountSwitch",["mac-1","work",null]]]
 
 ## switchClaudeAccount / scalar
 result: ClaudeAccountSwitchInfo(ok: false, active: nil, recycledSessions: [], deferredBusySessions: [], error: "Unexpected result")
-page saw: [["__ripulRemoteClaudeAccountSwitch",["mac-1","work"]]]
+page saw: [["__ripulRemoteClaudeAccountSwitch",["mac-1","work",null]]]
 
 ## switchClaudeAccount / refused
 result: ClaudeAccountSwitchInfo(ok: false, active: nil, recycledSessions: [], deferredBusySessions: [], error: "refused")
-page saw: [["__ripulRemoteClaudeAccountSwitch",["mac-1","work"]]]
+page saw: [["__ripulRemoteClaudeAccountSwitch",["mac-1","work",null]]]
 
 ## switchClaudeAccount / answered
 result: ClaudeAccountSwitchInfo(ok: true, active: "work", recycledSessions: ["s1"], deferredBusySessions: ["s2"], error: nil)
-page saw: [["__ripulRemoteClaudeAccountSwitch",["mac-1","work"]]]
+page saw: [["__ripulRemoteClaudeAccountSwitch",["mac-1","work",null]]]
 
 ## switchClaudeAccount / throwing
 result: ClaudeAccountSwitchInfo(ok: false, active: nil, recycledSessions: [], deferredBusySessions: [], error: "A JavaScript exception occurred")
-page saw: [["__ripulRemoteClaudeAccountSwitch",["mac-1","work"]]]
+page saw: [["__ripulRemoteClaudeAccountSwitch",["mac-1","work",null]]]
 console: LOG [AgentBridge] switchClaudeAccount(mac-1) error: A JavaScript exception occurred
 
 ## deleteClaudeAccount / detached
@@ -4119,7 +4096,7 @@ result: nil
 page saw: [["__ripulGetSessionMetadata",["s1"]]]
 
 ## getSessionMetadata / answered
-result: SessionMetadata(id: "s1", description: "d", notes: [NoteEntry(id: "n1", text: "note", createdAt: nil, timestamp: nil)], filesEdited: [], deployments: [], contributors: [], participants: [], model: "m", modelHistory: ["m"], createdAt: "c", updatedAt: "u", story: nil)
+result: SessionMetadata(id: "s1", description: "d", notes: [NoteEntry(id: "n1", text: "note", createdAt: nil, timestamp: nil)], filesEdited: [], deployments: [], contributors: [], participants: [], model: "m", modelHistory: ["m"], createdAt: "c", updatedAt: "u", story: nil, shortcuts: [ChatShortcut(id: "sc_l", title: "Site", url: url(https://example.com), kind: "url", key: true, persons: false, anchor: nil, sender: nil, pinnedBy: nil, pinnedById: nil), ChatShortcut(id: "sc_m", title: "Keys expire", url: url(ripul-message:m1?ts=1500), kind: "message", key: false, persons: true, anchor: MessageAnchor(correlationId: "m1", ts: 1500), sender: "Claude", pinnedBy: "Bob", pinnedById: "human-bob")], isChatMember: true, viewerId: "human-bob")
 page saw: [["__ripulGetSessionMetadata",["s1"]]]
 
 ## getSessionMetadata / throwing
@@ -4147,13 +4124,97 @@ result: nil
 page saw: [["__ripulPatchSessionMetadata",["s1",{"description":"it's \"quoted\" \\ and\nsplit"}]]]
 
 ## patchSessionMetadata / answered
-result: SessionMetadata(id: "s1", description: "patched", notes: [], filesEdited: [], deployments: [], contributors: [], participants: [], model: nil, modelHistory: [], createdAt: nil, updatedAt: nil, story: nil)
+result: SessionMetadata(id: "s1", description: "patched", notes: [], filesEdited: [], deployments: [], contributors: [], participants: [], model: nil, modelHistory: [], createdAt: nil, updatedAt: nil, story: nil, shortcuts: [], isChatMember: false, viewerId: nil)
 page saw: [["__ripulPatchSessionMetadata",["s1",{"description":"it's \"quoted\" \\ and\nsplit"}]]]
 
 ## patchSessionMetadata / throwing
 result: nil
 page saw: [["__ripulPatchSessionMetadata",["s1",{"description":"it's \"quoted\" \\ and\nsplit"}]]]
 nslog: [AgentBridge] patchSessionMetadata error: A JavaScript exception occurred
+
+## getReadingList / detached
+result: nil
+
+## getReadingList / missing
+result: nil
+page saw: []
+
+## getReadingList / null
+result: nil
+page saw: [["__ripulGetReadingList",["s1"]]]
+
+## getReadingList / scalar
+result: nil
+page saw: [["__ripulGetReadingList",["s1"]]]
+
+## getReadingList / refused
+result: nil
+page saw: [["__ripulGetReadingList",["s1"]]]
+
+## getReadingList / answered
+result: [ReadingItem(id: "rl_1", anchor: MessageAnchor(correlationId: "m1", ts: 1500), messageSender: "Claude", excerpt: "Keys expire", note: "@Bob look", fromName: "Peter", createdAt: date(1.0))]
+page saw: [["__ripulGetReadingList",["s1"]]]
+
+## getReadingList / throwing
+result: nil
+page saw: [["__ripulGetReadingList",["s1"]]]
+nslog: [AgentBridge] getReadingList error: A JavaScript exception occurred
+
+## clearReadingList / detached
+result: nil
+
+## clearReadingList / missing
+result: nil
+page saw: []
+
+## clearReadingList / null
+result: nil
+page saw: [["__ripulClearReadingList",["s1",["rl_1"]]]]
+
+## clearReadingList / scalar
+result: nil
+page saw: [["__ripulClearReadingList",["s1",["rl_1"]]]]
+
+## clearReadingList / refused
+result: nil
+page saw: [["__ripulClearReadingList",["s1",["rl_1"]]]]
+
+## clearReadingList / answered
+result: []
+page saw: [["__ripulClearReadingList",["s1",["rl_1"]]]]
+
+## clearReadingList / throwing
+result: nil
+page saw: [["__ripulClearReadingList",["s1",["rl_1"]]]]
+nslog: [AgentBridge] clearReadingList error: A JavaScript exception occurred
+
+## clearReadingList.all / detached
+result: nil
+
+## clearReadingList.all / missing
+result: nil
+page saw: []
+
+## clearReadingList.all / null
+result: nil
+page saw: [["__ripulClearReadingList",["s1",null]]]
+
+## clearReadingList.all / scalar
+result: nil
+page saw: [["__ripulClearReadingList",["s1",null]]]
+
+## clearReadingList.all / refused
+result: nil
+page saw: [["__ripulClearReadingList",["s1",null]]]
+
+## clearReadingList.all / answered
+result: []
+page saw: [["__ripulClearReadingList",["s1",null]]]
+
+## clearReadingList.all / throwing
+result: nil
+page saw: [["__ripulClearReadingList",["s1",null]]]
+nslog: [AgentBridge] clearReadingList error: A JavaScript exception occurred
 
 ## getSessionStorageBreakdown / detached
 result: nil

@@ -15,6 +15,7 @@ public struct ArchivedSessionFamilies {
     public let rows: [Archived]
     private let depthByKey: [String: Int]
     private let underByKey: [String: [Archived]]
+    private let groupSliceByKey: [String: GlassRowGroupSlice]
 
     /// How far under its starter a row sits: 0 for a chat by itself or at the
     /// head of a family, 1 for a chat it started, 2 for anything deeper.
@@ -23,6 +24,9 @@ public struct ArchivedSessionFamilies {
     /// The archived chats this one started, and theirs, in family order: what
     /// comes back with it.
     public func under(_ row: Archived) -> [Archived] { underByKey[Self.key(row)] ?? [] }
+
+    /// Where this row sits in a bordered family group, or nil when by itself.
+    public func groupSlice(of row: Archived) -> GlassRowGroupSlice? { groupSliceByKey[Self.key(row)] }
 
     /// An archive's id is only its own Mac's: a chat moved between Macs can be archived on both.
     private static func key(_ row: Archived) -> String { "\(row.machineId ?? "")|\(row.id)" }
@@ -50,6 +54,7 @@ public struct ArchivedSessionFamilies {
         return ArchivedSessionFamilies(
             rows: layout.all.compactMap { rowByKey[$0.id] },
             depthByKey: layout.depth,
-            underByKey: layout.under.mapValues { chats in chats.compactMap { rowByKey[$0.id] } })
+            underByKey: layout.under.mapValues { chats in chats.compactMap { rowByKey[$0.id] } },
+            groupSliceByKey: layout.groupSlices)
     }
 }

@@ -274,6 +274,8 @@ public struct RipulAgentScreen: View {
     @State private var showingWorkingDirectoryPicker = false
     /// Every id a group chat is listed under: decides whether the chat's menu offers Permissions.
     @State private var groupChatKeys: Set<String> = []
+    /// The thinking setting the menu's palette shows, for the menu key.
+    @State private var menuThinkingMode = ""
     /// Session the open working-directory picker will write to. Captured when
     /// the picker opens rather than read from `bridge.activeSessionId` at pick
     /// time, so a background session switch can't redirect the write.
@@ -490,7 +492,11 @@ public struct RipulAgentScreen: View {
             // The list has either the host's Agents/Plans bar or our Sessions
             // bar above it at every width. Docking metadata must not remove
             // that header's clearance and put Machines underneath its buttons.
-            reservesTopBarSpace: true
+            reservesTopBarSpace: true,
+            // The open chat's row is marked only while the chat is beside the
+            // list. Where the chat slides over it (an iPhone), you come back to
+            // a list with nothing marked.
+            highlightsActiveSession: showsSessionSplit
         )
         .equatable()
         // SessionChatColumns extends both panes through the vertical safe area
@@ -675,6 +681,11 @@ public struct RipulAgentScreen: View {
     public var body: some View {
         let _ = ChatSlideProbe.markBody("AgentScreen") { Self._printChanges() }
         decoratedLayout
+        .environment(\.ripulSessionListModel, model)
+        .onChange(of: showsSessionSplit || showingSessionList.wrappedValue, initial: true) { _, visible in
+            model.setListVisible(visible)
+        }
+        .onDisappear { model.setListVisible(false) }
         .onAppear {
             ChatSlideProbe.shared.watch(codexFastMode, as: "codexFastMode")
         }
@@ -703,8 +714,13 @@ public struct RipulAgentScreen: View {
             if let machine = model.machines.first(where: {
                 $0.machineId == session.remoteMachineName || $0.displayName == session.remoteMachineName
             }) {
-                ClaudeAccountSwitcherSheet(machine: machine, bridge: bridge,
-                    chatId: session.hostChatId ?? session.sourceChatId)
+                if session.provider == "antigravity-cli" {
+                    AntigravityAccountSwitcherSheet(machine: machine, bridge: bridge,
+                        chatId: session.hostChatId ?? session.sourceChatId)
+                } else {
+                    ClaudeAccountSwitcherSheet(machine: machine, bridge: bridge,
+                        chatId: session.hostChatId ?? session.sourceChatId)
+                }
             }
         }
         .ripulSheet(item: $modelPickerTarget) { target in
@@ -874,6 +890,12 @@ public struct RipulAgentScreen: View {
         }
     }
 
+    /// Open a key shortcut: a pinned message jumps the chat to it, a link opens.
+    private func openLozengeShortcut(_ url: URL) {
+        if let anchor = AgentBridge.messageAnchor(from: url) { bridge.scrollToMessage(anchor); return }
+        if !RipulSecureConnection.open(url) { openURL(url) }
+    }
+
     /// The key shortcuts as small buttons inside the title lozenge, after the
     /// chat's name. They stay mounted in both of the pill's states, so the
     /// morph only ever grows one view. Outside the header's tap gestures, so
@@ -885,11 +907,11 @@ public struct RipulAgentScreen: View {
             HStack(spacing: 0) {
                 ForEach(shortcuts) { shortcut in
                     Button {
-                        if !RipulSecureConnection.open(shortcut.url) { openURL(shortcut.url) }
+                        openLozengeShortcut(shortcut.url)
                     } label: {
                         Image(systemName: shortcut.symbol)
                             .font(.ripulIcon(size: 14, weight: .semibold))
-                            .foregroundStyle(shortcut.isArtefact ? .ripul(.info) : .ripul(.textSecondary))
+                            .foregroundStyle(shortcut.isArtefact || shortcut.isMessage ? .ripul(.info) : .ripul(.textSecondary))
                             .frame(width: 30, height: 30)
                             .contentShape(Circle())
                     }
@@ -1109,7 +1131,7 @@ public struct RipulAgentScreen: View {
         return ExpandedChatTitleContent(
             metadata: expandedTitleMetadata(session: session, unified: unified),
             shortcuts: keyShortcuts.map { .init(id: $0.id, title: $0.title, symbol: $0.symbol, url: $0.url) },
-            onOpenShortcut: { if !RipulSecureConnection.open($0) { openURL($0) } },
+            onOpenShortcut: { openLozengeShortcut($0) },
             onPreviousUserMessage: { bridge.scrollToUserMessage(direction: "up") },
             onNextUserMessage: { bridge.scrollToUserMessage(direction: "down") },
             onScrollToBottom: { bridge.scrollToBottom() }
@@ -1316,6 +1338,11 @@ public struct RipulAgentScreen: View {
             }
             .onReceive(NotificationCenter.default.publisher(for: .ripulChatMembershipChanged)) { _ in
                 Task { await refreshGroupChats() }
+            }
+            // The menu's Thinking palette reads the navigation store, which this
+            // screen does not observe; mirror it so the menu key moves with it.
+            .onReceive(bridge.navigationStore.$showThinkingMode) { mode in
+                if menuThinkingMode != mode { menuThinkingMode = mode }
             }
     }
 
@@ -1720,6 +1747,7 @@ public struct RipulAgentScreen: View {
             session?.remoteMachineName == nil ? "local" : "remote",
             (commitViewInfo != nil && session?.id == commitViewInfo?.tabId) ? "commit" : "-",
             showNativeChatScroller ? "native" : "web",
+            menuThinkingMode,
             session.map { rawModeSessions.contains($0.id) ? "raw" : "std" } ?? "-",
             favoriteDirectories.joined(separator: ","),
             sessionWorkingDirectory ?? "-",
@@ -1820,6 +1848,13 @@ public struct RipulAgentScreen: View {
             }
             .uiKitIdentifier("AgentScreen.contextMenu.claudeAccount")
         }
+        if let session, session.isSharedGuest != true,
+           session.provider == "antigravity-cli", codexModelMachineId(for: session) != nil {
+            Button { accountPickerSession = session } label: {
+                Label("Antigravity account", systemImage: "person.crop.circle")
+            }
+            .uiKitIdentifier("AgentScreen.contextMenu.antigravityAccount")
+        }
 
         // Reasoning effort (orthogonal to the model) — CLI sessions.
         if let session, session.isSharedGuest != true,
@@ -1879,6 +1914,19 @@ public struct RipulAgentScreen: View {
             Label("Native Chat (beta)", systemImage: "swift")
         }
         .uiKitIdentifier("AgentScreen.contextMenu.nativeChatToggle")
+
+        // How every chat shows thinking, the web's setting: the native chat
+        // and the web chat both follow it. The session list's menu has the same.
+        Picker(selection: Binding(
+            get: { bridge.navigationStore.thinkingDisplayMode.rawValue },
+            set: { mode in Task { await bridge.setShowThinking(mode) } }
+        ), label: Label("Thinking", systemImage: "brain.head.profile")) {
+            Text("None").tag(ThinkingDisplayMode.none.rawValue)
+            Text("Folded").tag(ThinkingDisplayMode.folded.rawValue)
+            Text("Open").tag(ThinkingDisplayMode.open.rawValue)
+        }
+        .pickerStyle(.palette)
+        .uiKitIdentifier("AgentScreen.contextMenu.thinkingPicker")
 
         if let session {
             #if os(iOS)

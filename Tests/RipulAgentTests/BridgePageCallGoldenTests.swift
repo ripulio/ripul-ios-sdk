@@ -99,7 +99,9 @@ final class BridgePageCallGoldenTests: XCTestCase {
         "__ripulGetRelayDiagnostics": "{available:true, rooms:[]}",
         "__ripulGetRemoteCliAccount": "{account:{email:'a@b.c', plan:'max'}, error:null}",
         "__ripulGetResolvedToolsForSession": "{tools:[{name:'t1', description:'d'},{name:'t2'},{}]}",
-        "__ripulGetSessionMetadata": "{metadata:{id:'s1', description:'d', notes:[{id:'n1', text:'note'}], filesEdited:[], deployments:[], contributors:[], participants:[], model:'m', modelHistory:['m'], createdAt:'c', updatedAt:'u'}}",
+        "__ripulGetSessionMetadata": "{metadata:{id:'s1', description:'d', notes:[{id:'n1', text:'note'}], filesEdited:[], deployments:[], contributors:[], participants:[], model:'m', modelHistory:['m'], createdAt:'c', updatedAt:'u', shortcuts:[{id:'sc_l', title:'Site', url:'https://example.com', kind:'url', key:true, author:'agent'}, {id:'sc_m', title:'Keys expire', kind:'message', anchor:{correlationId:'m1', ts:1500}, sender:'Claude', pinnedBy:'Bob', pinnedById:'human-bob', key:false, author:'person'}]}, chatRole:'member', viewerId:'human-bob'}",
+        "__ripulGetReadingList": "{items:[{id:'rl_1', messageId:'m1', messageTs:1500, messageSender:'Claude', excerpt:'Keys expire', note:'@Bob look', fromName:'Peter', createdAt:1000}, {id:'rl_bad'}]}",
+        "__ripulClearReadingList": "{items:[]}",
         "__ripulGetSessionStorageBreakdown": "{breakdown:{totalBytes:100, count:2, buckets:[{name:'actions', bytes:60, count:1},{bytes:1}]}}",
         "__ripulGetSessionTags": "{'tab-1':['a','b'], 'tab-2':['c', 5], 'tab-3':'no'}",
         "__ripulGetSessions": "{sessions:[{id:'tab-1', sourceChatId:'chat-1', displayName:'One', createdAt:1700000000000, provider:'claude-cli', displayNameSource:'user'},{id:'tab-2', sourceChatId:'chat-2', displayName:'Two', createdAt:1700000001000},{id:'bad'}], activeId:'tab-2'}",
@@ -271,7 +273,6 @@ final class BridgePageCallGoldenTests: XCTestCase {
         },
         Probe(name: "forgetChat") { await $0.forgetChat(tabId: "tab-1") },
         Probe(name: "startNewChatWithPrompt") { await $0.startNewChatWithPrompt(awkward) },
-        Probe(name: "listTodoItems") { await $0.listTodoItems() },
         Probe(name: "prewarmNewChat") { $0.prewarmNewChat(machineId: "mac-1"); return nil },
 
         // Models
@@ -415,6 +416,9 @@ final class BridgePageCallGoldenTests: XCTestCase {
         // Session metadata and tools
         Probe(name: "getSessionMetadata") { await $0.getSessionMetadata(sessionId: "s1") },
         Probe(name: "patchSessionMetadata") { await $0.patchSessionMetadata(sessionId: "s1", patch: ["description": awkward]) },
+        Probe(name: "getReadingList") { await $0.getReadingList(chatId: "s1") },
+        Probe(name: "clearReadingList") { await $0.clearReadingList(chatId: "s1", ids: ["rl_1"]) },
+        Probe(name: "clearReadingList.all") { await $0.clearReadingList(chatId: "s1", ids: nil) },
         Probe(name: "getSessionStorageBreakdown") { await $0.getSessionStorageBreakdown(sessionId: "s1") },
         Probe(name: "getSessionStorageBreakdown.buckets") { await $0.getSessionStorageBreakdown(sessionId: "s1", maxBuckets: 3) },
         Probe(name: "getResolvedCliTools") { await $0.getResolvedCliTools(sessionId: "s1") },
