@@ -59,5 +59,10 @@
     "sessionId": "8d53825d-b00a-4220-985d-861501e4ab60",
     "branch": "main",
     "title": "Ripul SDK dev helper site switching implementation"
+  },
+  "81682abbbebdf31c21daf0c45eb0421e5cd8ee33": {
+    "sessionId": "337e9ea6-84da-40b5-be6a-4ea7763afacf",
+    "branch": "main",
+    "title": "Ripul cross-account device access design"
   }
 }

@@ -1,0 +1,242 @@
+{
+  "commits": [
+    {
+      "repo": "member-device-share",
+      "sha": "404198bcec0510d1c4ad0b2aaf4f14de9d3ad8e2",
+      "subject": "A chat's object carries a member's device, shared for reading",
+      "timestamp": "2026-11-10T16:30:11.000Z"
+    },
+    {
+      "repo": "member-device-share",
+      "sha": "aa3bfb5d1d70f282780e6aa1ca4e6302a36aea06",
+      "subject": "A member can share their device with a chat for reading, and the owner's agent can read it",
+      "timestamp": "2026-11-10T16:40:12.000Z"
+    },
+    {
+      "repo": "member-device-share",
+      "sha": "a12274fb7461875d706d56d12e27b2103d97e914",
+      "subject": "The page tells the app which chat can read it, by the chat's name",
+      "timestamp": "2026-11-10T16:50:08.000Z"
+    },
+    {
+      "repo": "member-device-share",
+      "sha": "da8e5593a10a4a31ea8227f3af9fa34c3445e6f9",
+      "subject": "SDK: a tool says whether it only reads, and a shared device shows a pill with Stop",
+      "timestamp": "2026-11-10T16:50:08.000Z"
+    },
+    {
+      "repo": "member-device-share",
+      "sha": "5aaa7b86c9e128287b54074c5f857ca81649eb8a",
+      "subject": "docs: a member's device, shared with a chat for reading",
+      "timestamp": "2026-11-10T16:50:08.000Z"
+    },
+    {
+      "repo": "member-device-share",
+      "sha": "00714117f24958cb768f547fabe7a74dbabb0576",
+      "subject": "chore(sdk): stamp ripulSDKVersion 0.7.183",
+      "timestamp": "2026-11-10T16:52:31.000Z"
+    },
+    {
+      "repo": "ripul-ios-sdk",
+      "sha": "81682abbbebdf31c21daf0c45eb0421e5cd8ee33",
+      "subject": "Release v0.7.183 — sync from monorepo RipulAgent SDK",
+      "timestamp": "2026-11-10T16:53:32.000Z"
+    }
+  ],
+  "composerGoal": "Building phone sharing with a chat",
+  "contributors": [
+    {
+      "clientId": "web-user_3AONWcmlO5RS8dj3lRzQZtYXFxA",
+      "clientType": "web",
+      "displayName": "Peter Maude",
+      "firstSeenAt": "2026-11-10T15:31:10.614Z",
+      "lastSeenAt": "2026-11-10T16:38:14.765Z"
+    }
+  ],
+  "createdAt": "2026-11-10T15:31:10.643Z",
+  "deployments": [],
+  "filesEdited": [
+    {
+      "editCount": 3,
+      "fileName": "types.ts",
+      "filePath": "/Volumes/WD Black 4TB/Checkouts/member-device-share/chrome-extension/packages/api/src/sessionChannel/types.ts",
+      "firstSeenAt": "2026-11-10T16:25:59.041Z",
+      "lastSeenAt": "2026-11-10T16:25:59.299Z",
+      "toolName": "Edit"
+    },
+    {
+      "editCount": 4,
+      "fileName": "memberDevice.ts",
+      "filePath": "/Volumes/WD Black 4TB/Checkouts/member-device-share/chrome-extension/packages/api/src/sessionChannel/memberDevice.ts",
+      "firstSeenAt": "2026-11-10T16:26:45.868Z",
+      "lastSeenAt": "2026-11-10T16:27:17.247Z",
+      "toolName": "Edit"
+    },
+    {
+      "editCount": 6,
+      "fileName": "SessionChannel.ts",
+      "filePath": "/Volumes/WD Black 4TB/Checkouts/member-device-share/chrome-extension/packages/api/src/sessionChannel/SessionChannel.ts",
+      "firstSeenAt": "2026-11-10T16:27:47.108Z",
+      "lastSeenAt": "2026-11-10T16:27:47.818Z",
+      "toolName": "Edit"
+    },
+    {
+      "editCount": 3,
+      "fileName": "memberDevice.test.ts",
+      "filePath": "/Volumes/WD Black 4TB/Checkouts/member-device-share/chrome-extension/packages/api/src/sessionChannel/__tests__/memberDevice.test.ts",
+      "firstSeenAt": "2026-11-10T16:28:43.351Z",
+      "lastSeenAt": "2026-11-10T16:29:16.689Z",
+      "toolName": "Edit"
+    },
+    {
+      "editCount": 1,
+      "fileName": "memberDevice.test.ts",
+      "filePath": "/Volumes/WD Black 4TB/Checkouts/member-device-share/chrome-extension/packages/api/src/sessionChannel/memberDevice.test.ts",
+      "firstSeenAt": "2026-11-10T16:28:43.447Z",
+      "lastSeenAt": "2026-11-10T16:28:43.447Z",
+      "toolName": "Write"
+    },
+    {
+      "editCount": 2,
+      "fileName": "sessionChannelTypes.ts",
+      "filePath": "/Volumes/WD Black 4TB/Checkouts/member-device-share/chrome-extension/src/relay/sessionChannelTypes.ts",
+      "firstSeenAt": "2026-11-10T16:30:46.471Z",
+      "lastSeenAt": "2026-11-10T16:31:01.621Z",
+      "toolName": "Edit"
+    },
+    {
+      "editCount": 2,
+      "fileName": "memberDevice.ts",
+      "filePath": "/Volumes/WD Black 4TB/Checkouts/member-device-share/chrome-extension/src/relay/memberDevice.ts",
+      "firstSeenAt": "2026-11-10T16:32:58.748Z",
+      "lastSeenAt": "2026-11-10T16:33:45.572Z",
+      "toolName": "Edit"
+    },
+    {
+      "editCount": 2,
+      "fileName": "memberBrowserInstall.ts",
+      "filePath": "/Volumes/WD Black 4TB/Checkouts/member-device-share/chrome-extension/src/relay/memberBrowserInstall.ts",
+      "firstSeenAt": "2026-11-10T16:33:45.705Z",
+      "lastSeenAt": "2026-11-10T16:34:00.470Z",
+      "toolName": "Write"
+    },
+    {
+      "editCount": 2,
+      "fileName": "memberDevicePrompt.ts",
+      "filePath": "/Volumes/WD Black 4TB/Checkouts/member-device-share/chrome-extension/src/relay/memberDevicePrompt.ts",
+      "firstSeenAt": "2026-11-10T16:35:10.968Z",
+      "lastSeenAt": "2026-11-10T16:35:40.999Z",
+      "toolName": "Edit"
+    },
+    {
+      "editCount": 1,
+      "fileName": "memberDeviceRoute.ts",
+      "filePath": "/Volumes/WD Black 4TB/Checkouts/member-device-share/chrome-extension/src/frame-bridge/memberDeviceRoute.ts",
+      "firstSeenAt": "2026-11-10T16:37:00.058Z",
+      "lastSeenAt": "2026-11-10T16:37:00.058Z",
+      "toolName": "Write"
+    },
+    {
+      "editCount": 1,
+      "fileName": "memberDevice.test.ts",
+      "filePath": "/Volumes/WD Black 4TB/Checkouts/member-device-share/chrome-extension/src/relay/memberDevice.test.ts",
+      "firstSeenAt": "2026-11-10T16:39:28.466Z",
+      "lastSeenAt": "2026-11-10T16:39:28.466Z",
+      "toolName": "Write"
+    },
+    {
+      "editCount": 1,
+      "fileName": "memberDeviceRoute.test.ts",
+      "filePath": "/Volumes/WD Black 4TB/Checkouts/member-device-share/chrome-extension/src/frame-bridge/memberDeviceRoute.test.ts",
+      "firstSeenAt": "2026-11-10T16:39:28.573Z",
+      "lastSeenAt": "2026-11-10T16:39:28.573Z",
+      "toolName": "Write"
+    },
+    {
+      "editCount": 1,
+      "fileName": "DeviceSharingIndicator.swift",
+      "filePath": "/Volumes/WD Black 4TB/Checkouts/member-device-share/ripul-ios-sdk/Sources/RipulAgent/DeviceSharing/DeviceSharingIndicator.swift",
+      "firstSeenAt": "2026-11-10T16:43:47.906Z",
+      "lastSeenAt": "2026-11-10T16:43:47.906Z",
+      "toolName": "Write"
+    },
+    {
+      "editCount": 1,
+      "fileName": "server_theme_authority.md",
+      "filePath": "/Volumes/WD Black 4TB/Checkouts/wac-member-device-share/.ripul/memories/server_theme_authority.md",
+      "firstSeenAt": "2026-11-10T16:46:51.306Z",
+      "lastSeenAt": "2026-11-10T16:46:51.306Z",
+      "toolName": "Edit"
+    },
+    {
+      "editCount": 1,
+      "fileName": "sharing-a-device.md",
+      "filePath": "/Volumes/WD Black 4TB/Checkouts/member-device-share/ripul-ios-sdk/docs/sharing-a-device.md",
+      "firstSeenAt": "2026-11-10T16:49:38.805Z",
+      "lastSeenAt": "2026-11-10T16:49:38.805Z",
+      "toolName": "Write"
+    },
+    {
+      "editCount": 1,
+      "fileName": "memberDevices.md",
+      "filePath": "/Volumes/WD Black 4TB/Checkouts/member-device-share/chrome-extension/docs/architecture/memberDevices.md",
+      "firstSeenAt": "2026-11-10T16:49:38.948Z",
+      "lastSeenAt": "2026-11-10T16:49:38.948Z",
+      "toolName": "Write"
+    }
+  ],
+  "goal": "Eden shares their iPhone with your chat from wac; your agent runs theme_server status, diff and local_diff there and nothing that changes it",
+  "id": "cli_337e9ea6-84da-40b5-be6a-4ea7763afacf",
+  "milestones": [
+    {
+      "anchor": {
+        "ts": 1794324815612
+      },
+      "at": "2026-11-10T15:33:35.612Z",
+      "author": "agent",
+      "createdAt": "2026-11-10T15:33:35.648Z",
+      "detail": "How it works today, with citations, plus three options and a recommendation: share a phone with one chat, carried by the chat's own channel (the same path as \"Share my browser\"), with tools marked read-only and the check on the phone.",
+      "id": "ms_mwauo0ld_qfs5",
+      "kind": "delivered",
+      "title": "Proposal for reading a teammate's phone, ready for Peter",
+      "updatedAt": "2026-11-10T15:33:35.648Z"
+    },
+    {
+      "anchor": {
+        "correlationId": "user_msg_1794325665130_8bsewmfo7",
+        "ts": 1794325665130
+      },
+      "at": "2026-11-10T15:51:56.639Z",
+      "author": "agent",
+      "createdAt": "2026-11-10T15:51:56.657Z",
+      "detail": "Decided by Peter on 10 Nov 2026: a chat share for team members and support sessions (a code, then Allow) for customers; in store builds too; only while wac is open; the screen asked separately; only the owner's turns.",
+      "id": "ms_mwavbm5b_980o",
+      "kind": "decided",
+      "title": "Phone sharing decided: both routes, store builds, app open, owner only",
+      "updatedAt": "2026-11-10T15:56:21.393Z"
+    }
+  ],
+  "modelHistory": [],
+  "notes": [],
+  "participants": [
+    {
+      "displayName": "Peter Maude",
+      "firstSeenAt": "2026-11-10T15:31:10.786Z",
+      "group": "web",
+      "id": "human-user_3AONWcmlO5RS8dj3lRzQZtYXFxA",
+      "kind": "human",
+      "lastSeenAt": "2026-11-10T16:38:14.861Z"
+    },
+    {
+      "displayName": "Claude",
+      "firstSeenAt": "2026-11-10T15:47:47.243Z",
+      "group": "Local · Claude Code CLI",
+      "id": "claude-cli-raw-synthetic",
+      "kind": "agent",
+      "lastSeenAt": "2026-11-10T15:47:47.243Z"
+    }
+  ],
+  "shortcuts": [],
+  "tags": [],
+  "updatedAt": "2026-11-10T16:53:39.635Z"
+}
