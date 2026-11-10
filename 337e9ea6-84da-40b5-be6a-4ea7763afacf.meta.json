@@ -41,6 +41,12 @@
       "sha": "81682abbbebdf31c21daf0c45eb0421e5cd8ee33",
       "subject": "Release v0.7.183 — sync from monorepo RipulAgent SDK",
       "timestamp": "2026-11-10T16:53:32.000Z"
+    },
+    {
+      "repo": "member-device-share",
+      "sha": "dfd1d92d2426e9d0519c3c7e38ff8f6cde9fb55c",
+      "subject": "Android SDK: a tool says whether it only reads, and the app can show a shared device's banner",
+      "timestamp": "2026-11-10T16:54:00.000Z"
     }
   ],
   "composerGoal": "Building phone sharing with a chat",
@@ -238,5 +244,5 @@
   ],
   "shortcuts": [],
   "tags": [],
-  "updatedAt": "2026-11-10T16:53:39.635Z"
+  "updatedAt": "2026-11-10T16:54:10.688Z"
 }
